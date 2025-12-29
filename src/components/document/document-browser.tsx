@@ -4,6 +4,8 @@ import { type Db, ObjectId } from 'mongodb';
 import { DocumentProvider, useDocument } from '../../context/document-context.tsx';
 import { useFocus } from '../../context/focus-context.tsx';
 import { findDocuments, updateDocument } from '../../services/document.ts';
+import { getCollectionStats } from '../../services/collection.ts';
+import type { CollectionStats } from '../../types/index.ts';
 import { colors } from '../../theme/index.ts';
 import { DocumentList } from './document-list.tsx';
 import { flattenVisiblePaths, getValueAtPath, isExpandable } from './json-tree.tsx';
@@ -20,6 +22,7 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
   const { setActiveZone } = useFocus();
   const [commandBuffer, setCommandBuffer] = useState('');
   const [isTypingCommand, setIsTypingCommand] = useState(false);
+  const [stats, setStats] = useState<CollectionStats | null>(null);
   const loadedCollectionRef = useRef<string | null>(null);
   const isInitialLoadRef = useRef(true);
 
@@ -42,8 +45,6 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
   } = state;
 
   const totalPages = Math.ceil(totalCount / pageSize);
-  const startIndex = (currentPage - 1) * pageSize + 1;
-  const endIndex = Math.min(currentPage * pageSize, totalCount);
 
   const loadDocuments = useCallback(async () => {
     dispatch({ type: 'SET_LOADING', payload: true });
@@ -62,14 +63,25 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
     }
   }, [db, collectionName, state.filter, currentPage, pageSize, dispatch]);
 
+  const loadStats = useCallback(async () => {
+    try {
+      const collStats = await getCollectionStats(db, collectionName);
+      setStats(collStats);
+    } catch {
+      setStats(null);
+    }
+  }, [db, collectionName]);
+
   useEffect(() => {
     if (loadedCollectionRef.current !== collectionName) {
       loadedCollectionRef.current = collectionName;
       isInitialLoadRef.current = true;
       dispatch({ type: 'RESET' });
+      setStats(null);
       void loadDocuments();
+      void loadStats();
     }
-  }, [collectionName, dispatch, loadDocuments]);
+  }, [collectionName, dispatch, loadDocuments, loadStats]);
 
   useEffect(() => {
     if (isInitialLoadRef.current) {
@@ -375,9 +387,9 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
       }
     } else if (key.name === 'i') {
       handleEnterTreeNavigation();
-    } else if (key.name === '[') {
+    } else if (key.sequence === '<' || (key.shift && key.name === ',')) {
       prevPage();
-    } else if (key.name === ']') {
+    } else if (key.sequence === '>' || (key.shift && key.name === '.')) {
       nextPage();
     } else if (key.name === ':' && hasUnsavedChanges) {
       setIsTypingCommand(true);
@@ -408,19 +420,26 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         <text fg={colors.foreground}>COLLECTION: {collectionName}</text>
         <box flexGrow={1} />
         <text fg={modeColor}>{modeLabel}</text>
-        <text fg={colors.muted}>
-          {' '}
-          [{startIndex}-{endIndex} of {totalCount}]
-        </text>
+      </box>
+
+      {/* Stats row */}
+      <box flexDirection="row" paddingLeft={1} paddingRight={1}>
+        {stats ? (
+          <text fg={colors.muted}>
+            {stats.documentCount} docs | {stats.totalSize} | {stats.indexCount} indexes
+          </text>
+        ) : (
+          <text fg={colors.muted}>Loading stats...</text>
+        )}
       </box>
 
       {/* Filter row */}
-      <box flexDirection="row" paddingLeft={1} paddingRight={1} paddingTop={1}>
+      <box flexDirection="row" paddingLeft={1} paddingRight={1}>
         <text fg={colors.muted}>Filter: </text>
         <text fg={colors.foreground}>{state.filter || '{ }'}</text>
       </box>
 
-      {/* Document list */}
+      {/* Document list - takes remaining space */}
       <box flexDirection="column" flexGrow={1} paddingTop={1}>
         {isLoading ? (
           <box paddingLeft={1}>
@@ -435,8 +454,8 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         )}
       </box>
 
-      {/* Footer */}
-      <box flexDirection="row" paddingLeft={1} paddingRight={1} paddingTop={1}>
+      {/* Footer - always at bottom */}
+      <box flexDirection="row" paddingLeft={1} paddingRight={1}>
         {isTypingCommand ? (
           <text fg={colors.foreground}>{commandBuffer}</text>
         ) : editingPath ? (
@@ -450,10 +469,10 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         ) : (
           <>
             <text fg={colors.muted}>
-              [◀ Prev] Page {currentPage} of {totalPages} [Next ▶]
+              {'<'}Prev Page {currentPage}/{totalPages} Next{'>'}
             </text>
             <box flexGrow={1} />
-            <text fg={colors.muted}>i/→=enter tree n=new d=delete</text>
+            <text fg={colors.muted}>i/→=tree</text>
           </>
         )}
       </box>

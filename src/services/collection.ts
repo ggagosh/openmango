@@ -10,27 +10,13 @@ function formatBytes(bytes: number): string {
 }
 
 export async function getCollectionStats(db: Db, collName: string): Promise<CollectionStats> {
-  const coll = db.collection(collName);
-  const stats = await coll.aggregate([{ $collStats: { storageStats: {} } }]).toArray();
-  const indexes = await coll.indexes();
+  const stats = await db.command({ collStats: collName });
 
-  if (stats.length > 0 && stats[0]?.storageStats) {
-    const storage = stats[0].storageStats;
-    return {
-      documentCount: storage.count ?? 0,
-      avgDocumentSize: formatBytes(storage.avgObjSize ?? 0),
-      totalSize: formatBytes(storage.size ?? 0),
-      indexCount: indexes.length,
-    };
-  }
-
-  // Fallback for older MongoDB or when collStats fails
-  const count = await coll.countDocuments();
   return {
-    documentCount: count,
-    avgDocumentSize: 'N/A',
-    totalSize: 'N/A',
-    indexCount: indexes.length,
+    documentCount: stats.count ?? 0,
+    avgDocumentSize: formatBytes(stats.avgObjSize ?? 0),
+    totalSize: formatBytes(stats.size ?? 0),
+    indexCount: stats.nindexes ?? 0,
   };
 }
 
