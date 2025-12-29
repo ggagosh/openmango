@@ -11,10 +11,21 @@ interface DocumentState {
   filter: string;
   selectedIndex: number;
   expandedIds: Set<string>;
+  // Tree navigation state
+  treeNavigationActive: boolean;
+  treeExpandedPaths: Set<string>;
+  selectedPath: string | null;
+  // Field editing state
+  editingPath: string | null;
+  editingValue: string;
+  // Pending changes (staged, not saved to MongoDB yet)
+  pendingDocument: Document | null;
+  hasUnsavedChanges: boolean;
+  // Legacy (for backwards compat)
   editingId: string | null;
   editBuffer: string;
   originalDoc: Document | null;
-  hasUnsavedChanges: boolean;
+  // Loading state
   isLoading: boolean;
   error: string | null;
 }
@@ -25,11 +36,27 @@ type DocumentAction =
   | { type: 'SET_FILTER'; payload: string }
   | { type: 'SELECT_INDEX'; payload: number }
   | { type: 'TOGGLE_EXPAND'; payload: string }
+  // Tree navigation
+  | { type: 'ENTER_TREE_NAVIGATION'; payload: { docId: string } }
+  | { type: 'EXIT_TREE_NAVIGATION' }
+  | { type: 'SELECT_PATH'; payload: string }
+  | { type: 'TOGGLE_TREE_PATH'; payload: string }
+  // Field editing
+  | { type: 'START_FIELD_EDIT'; payload: { path: string; value: string } }
+  | { type: 'UPDATE_FIELD_VALUE'; payload: string }
+  | { type: 'APPLY_FIELD_EDIT'; payload: { path: string; newValue: unknown } }
+  | { type: 'CANCEL_FIELD_EDIT' }
+  // Document changes
+  | { type: 'SET_PENDING_DOCUMENT'; payload: Document }
+  | { type: 'SAVE_DOCUMENT_SUCCESS'; payload: WithId<Document> }
+  | { type: 'DISCARD_DOCUMENT_CHANGES' }
+  // Legacy edit mode
   | { type: 'ENTER_EDIT_MODE'; payload: { id: string; content: string; original: Document } }
   | { type: 'EXIT_EDIT_MODE' }
   | { type: 'UPDATE_EDIT_BUFFER'; payload: string }
   | { type: 'SAVE_SUCCESS' }
   | { type: 'DISCARD_CHANGES' }
+  // Loading
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'RESET' };
@@ -43,10 +70,21 @@ const defaultState: DocumentState = {
   filter: '',
   selectedIndex: 0,
   expandedIds: new Set(),
+  // Tree navigation
+  treeNavigationActive: false,
+  treeExpandedPaths: new Set(['root']),
+  selectedPath: 'root',
+  // Field editing
+  editingPath: null,
+  editingValue: '',
+  // Pending changes
+  pendingDocument: null,
+  hasUnsavedChanges: false,
+  // Legacy
   editingId: null,
   editBuffer: '',
   originalDoc: null,
-  hasUnsavedChanges: false,
+  // Loading
   isLoading: false,
   error: null,
 };
@@ -85,6 +123,109 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
       return { ...state, expandedIds: newExpanded };
     }
 
+    // Tree navigation actions
+    case 'ENTER_TREE_NAVIGATION':
+      return {
+        ...state,
+        treeNavigationActive: true,
+        editingId: action.payload.docId,
+        selectedPath: 'root',
+        treeExpandedPaths: new Set(['root']),
+        pendingDocument: null,
+        hasUnsavedChanges: false,
+      };
+
+    case 'EXIT_TREE_NAVIGATION':
+      return {
+        ...state,
+        treeNavigationActive: false,
+        editingId: null,
+        selectedPath: null,
+        editingPath: null,
+        editingValue: '',
+      };
+
+    case 'SELECT_PATH':
+      return { ...state, selectedPath: action.payload };
+
+    case 'TOGGLE_TREE_PATH': {
+      const newTreeExpanded = new Set(state.treeExpandedPaths);
+      if (newTreeExpanded.has(action.payload)) {
+        newTreeExpanded.delete(action.payload);
+      } else {
+        newTreeExpanded.add(action.payload);
+      }
+      return { ...state, treeExpandedPaths: newTreeExpanded };
+    }
+
+    // Field editing actions
+    case 'START_FIELD_EDIT':
+      return {
+        ...state,
+        editingPath: action.payload.path,
+        editingValue: action.payload.value,
+      };
+
+    case 'UPDATE_FIELD_VALUE':
+      return { ...state, editingValue: action.payload };
+
+    case 'APPLY_FIELD_EDIT': {
+      // Get the document being edited
+      const doc = state.pendingDocument ?? state.documents[state.selectedIndex];
+      if (!doc) return { ...state, editingPath: null, editingValue: '' };
+
+      // Apply the change to create a new pending document
+      const parts = action.payload.path.split('.').slice(1); // Remove 'root'
+      const newDoc = JSON.parse(JSON.stringify(doc)) as Document;
+      let current: Record<string, unknown> = newDoc as Record<string, unknown>;
+
+      for (let i = 0; i < parts.length - 1; i++) {
+        current = current[parts[i]!] as Record<string, unknown>;
+      }
+      current[parts[parts.length - 1]!] = action.payload.newValue;
+
+      return {
+        ...state,
+        pendingDocument: newDoc,
+        hasUnsavedChanges: true,
+        editingPath: null,
+        editingValue: '',
+      };
+    }
+
+    case 'CANCEL_FIELD_EDIT':
+      return { ...state, editingPath: null, editingValue: '' };
+
+    case 'SET_PENDING_DOCUMENT':
+      return { ...state, pendingDocument: action.payload, hasUnsavedChanges: true };
+
+    case 'SAVE_DOCUMENT_SUCCESS': {
+      // Update the document in the list
+      const updatedDocs = state.documents.map((doc) =>
+        doc._id.toString() === action.payload._id.toString() ? action.payload : doc
+      );
+      return {
+        ...state,
+        documents: updatedDocs,
+        pendingDocument: null,
+        hasUnsavedChanges: false,
+        treeNavigationActive: false,
+        editingId: null,
+      };
+    }
+
+    case 'DISCARD_DOCUMENT_CHANGES':
+      return {
+        ...state,
+        pendingDocument: null,
+        hasUnsavedChanges: false,
+        treeNavigationActive: false,
+        editingId: null,
+        editingPath: null,
+        editingValue: '',
+      };
+
+    // Legacy edit mode (keeping for backwards compat)
     case 'ENTER_EDIT_MODE':
       return {
         ...state,
@@ -96,17 +237,10 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
       };
 
     case 'EXIT_EDIT_MODE':
-      return {
-        ...state,
-        mode: 'view',
-      };
+      return { ...state, mode: 'view' };
 
     case 'UPDATE_EDIT_BUFFER':
-      return {
-        ...state,
-        editBuffer: action.payload,
-        hasUnsavedChanges: true,
-      };
+      return { ...state, editBuffer: action.payload, hasUnsavedChanges: true };
 
     case 'SAVE_SUCCESS':
       return {
@@ -116,6 +250,8 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         editBuffer: '',
         originalDoc: null,
         hasUnsavedChanges: false,
+        pendingDocument: null,
+        treeNavigationActive: false,
       };
 
     case 'DISCARD_CHANGES':
@@ -126,6 +262,8 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         editBuffer: '',
         originalDoc: null,
         hasUnsavedChanges: false,
+        pendingDocument: null,
+        treeNavigationActive: false,
       };
 
     case 'SET_LOADING':

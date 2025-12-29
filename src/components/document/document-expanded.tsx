@@ -1,8 +1,6 @@
-import { useState, useCallback } from 'react';
 import type { Document, WithId } from 'mongodb';
+import { useDocument } from '../../context/document-context.tsx';
 import { colors } from '../../theme/index.ts';
-import { highlightJson } from '../../utils/json-highlighter.ts';
-import { formatDocument } from '../../utils/json-formatter.ts';
 import { JsonTree } from './json-tree.tsx';
 
 interface DocumentExpandedProps {
@@ -12,75 +10,63 @@ interface DocumentExpandedProps {
   hasChanges?: boolean;
 }
 
-export function DocumentExpanded({
-  document,
-  isEditing,
-  editBuffer,
-  hasChanges,
-}: DocumentExpandedProps) {
-  // Expand root by default
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['root']));
+export function DocumentExpanded({ document }: DocumentExpandedProps) {
+  const { state, dispatch } = useDocument();
+  const {
+    treeExpandedPaths,
+    selectedPath,
+    editingPath,
+    editingValue,
+    pendingDocument,
+    treeNavigationActive,
+    editingId,
+    hasUnsavedChanges,
+  } = state;
 
-  const handleToggle = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
+  // Check if this document is the one being navigated
+  const isThisDocActive = editingId === document._id.toString();
 
-  // Edit mode uses flat text representation
-  if (isEditing) {
-    const jsonString = editBuffer !== undefined ? editBuffer : formatDocument(document);
-    const lines = jsonString.split('\n');
+  // Use pending document if this is the active document and we have pending changes
+  const displayDoc = isThisDocActive && pendingDocument ? pendingDocument : document;
 
-    return (
-      <box
-        flexDirection="column"
-        border
-        borderStyle="rounded"
-        borderColor={colors.warning}
-        marginLeft={2}
-        marginRight={1}
-      >
-        {lines.map((line, lineIndex) => {
-          const segments = highlightJson(line);
-          const lineKey = `line-${lineIndex}-${line.slice(0, 20)}`;
-          return (
-            <box key={lineKey} flexDirection="row" paddingLeft={1}>
-              {segments.map((segment, segIndex) => (
-                <text key={`${lineKey}-seg-${segIndex}`} fg={segment.color}>
-                  {segment.text}
-                </text>
-              ))}
-            </box>
-          );
-        })}
-        {hasChanges && (
-          <box paddingLeft={1} paddingTop={1}>
-            <text fg={colors.warning}>* unsaved changes</text>
-          </box>
-        )}
-      </box>
-    );
+  const handleToggle = (path: string) => {
+    dispatch({ type: 'TOGGLE_TREE_PATH', payload: path });
+  };
+
+  const handleEditChange = (value: string) => {
+    dispatch({ type: 'UPDATE_FIELD_VALUE', payload: value });
+  };
+
+  // Determine border color based on state
+  let borderColor = colors.sectionBorder;
+  if (isThisDocActive && treeNavigationActive) {
+    borderColor = hasUnsavedChanges ? colors.warning : colors.primary;
   }
 
-  // View mode uses collapsible JSON tree
   return (
     <box
       flexDirection="column"
       border
       borderStyle="rounded"
-      borderColor={colors.sectionBorder}
+      borderColor={borderColor}
       marginLeft={2}
       marginRight={1}
       paddingLeft={1}
     >
-      <JsonTree data={document} expandedPaths={expandedPaths} onToggle={handleToggle} />
+      <JsonTree
+        data={displayDoc}
+        expandedPaths={isThisDocActive ? treeExpandedPaths : new Set(['root'])}
+        selectedPath={isThisDocActive && treeNavigationActive ? selectedPath : null}
+        editingPath={isThisDocActive ? editingPath : null}
+        editingValue={isThisDocActive ? editingValue : ''}
+        onToggle={handleToggle}
+        onEditChange={handleEditChange}
+      />
+      {isThisDocActive && hasUnsavedChanges && (
+        <box paddingTop={1}>
+          <text fg={colors.warning}>* unsaved changes</text>
+        </box>
+      )}
     </box>
   );
 }
