@@ -1,7 +1,8 @@
 import type { TreeNodeData } from '../../types/index.ts';
 import { useModal } from '../../context/modal-context.tsx';
-import { ActionRow, Section, StatRow } from '../shared/section.tsx';
 import { useKeyboard } from '@opentui/react';
+import { mongoService } from '../../services/mongodb.ts';
+import { DocumentBrowser } from '../document/index.ts';
 
 interface CollectionDetailsProps {
   node: TreeNodeData;
@@ -25,32 +26,22 @@ export function CollectionDetails({ node, focused }: CollectionDetailsProps) {
     }
   });
 
-  const stats = {
-    avgDocumentSize: '2.3 KB',
-    documents: 45123,
-    indexes: 4,
-    totalSize: '104 MB',
-  };
+  const db =
+    node.connectionId && node.databaseName
+      ? mongoService.getDb(node.connectionId, node.databaseName)
+      : undefined;
+
+  if (!db) {
+    return (
+      <box flexGrow={1} justifyContent="center" alignItems="center">
+        <text>Not connected</text>
+      </box>
+    );
+  }
 
   return (
-    <box flexDirection="column" gap={1}>
-      <Section title="Stats">
-        <StatRow label="Database" value={node.databaseName ?? ''} />
-        <StatRow label="Connection" value={node.connectionId ?? ''} />
-        <StatRow label="Documents" value={stats.documents.toLocaleString()} />
-        <StatRow label="Avg. Size" value={stats.avgDocumentSize} />
-        <StatRow label="Total Size" value={stats.totalSize} />
-        <StatRow label="Indexes" value={stats.indexes} />
-      </Section>
-
-      <Section title="Actions">
-        <ActionRow
-          actions={[
-            { key: 'C', label: 'Copy' },
-            { key: 'Del', label: 'Drop' },
-          ]}
-        />
-      </Section>
+    <box flexDirection="column" flexGrow={1}>
+      <DocumentBrowser db={db} collectionName={node.name} focused={focused} />
     </box>
   );
 }

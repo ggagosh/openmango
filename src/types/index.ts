@@ -88,3 +88,14 @@ export interface CollectionStats {
   totalSize: string;
   indexCount: number;
 }
+
+// Re-export document types
+export type {
+  EditorMode,
+  MongoDocument,
+  DocumentBrowserState,
+  FindDocumentsOptions,
+  FindDocumentsResult,
+  JsonToken,
+  HighlightedSegment,
+} from './document.ts';

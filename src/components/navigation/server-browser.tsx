@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useEffect } from 'react';
 import { useKeyboard, useTerminalDimensions } from '@opentui/react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useApp } from '../../context/app-context.tsx';
+import { useFocus } from '../../context/focus-context.tsx';
 import { useModal } from '../../context/modal-context.tsx';
 import { useConnection } from '../../hooks/use-connection.ts';
 import { TreeNode } from './tree-node.tsx';
@@ -65,6 +66,7 @@ function findParent(nodes: TreeNodeData[], childId: string): TreeNodeData | null
 
 export function ServerBrowser({ focused }: ServerBrowserProps) {
   const { state, dispatch } = useApp();
+  const { setActiveZone } = useFocus();
   const { openModal } = useModal();
   const { connect, loadCollections } = useConnection();
   const { height: terminalHeight } = useTerminalDimensions();
@@ -183,6 +185,10 @@ export function ServerBrowser({ focused }: ServerBrowserProps) {
             selectedNode.id
           );
         }
+        // Collection - switch to panel (drill into documents)
+        else if (selectedNode.type === 'collection') {
+          setActiveZone('panel');
+        }
       }
     }
     if (key.name === 'left' || key.name === 'h') {
@@ -220,6 +226,10 @@ export function ServerBrowser({ focused }: ServerBrowserProps) {
           } else {
             dispatch({ payload: selectedNode.id, type: 'TOGGLE_EXPAND' });
           }
+        }
+        // Handle collections - switch focus to panel
+        else if (selectedNode.type === 'collection') {
+          setActiveZone('panel');
         }
       }
     }
