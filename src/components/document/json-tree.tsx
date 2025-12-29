@@ -6,6 +6,7 @@ interface JsonTreeProps {
   selectedPath: string | null;
   editingPath: string | null;
   editingValue: string;
+  editingValueType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other' | null;
   onToggle: (path: string) => void;
   onEditChange: (value: string) => void;
 }
@@ -19,6 +20,7 @@ interface JsonNodeProps {
   selectedPath: string | null;
   editingPath: string | null;
   editingValue: string;
+  editingValueType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other' | null;
   onToggle: (path: string) => void;
   onEditChange: (value: string) => void;
   isLast: boolean;
@@ -39,12 +41,24 @@ function getIndent(depth: number): string {
   return '  '.repeat(depth);
 }
 
+function formatKeyName(name: string): string {
+  return JSON.stringify(name);
+}
+
+function formatKeyPreview(name: string): string {
+  const json = JSON.stringify(name);
+  if (json.length >= 2 && json.startsWith('"') && json.endsWith('"')) {
+    return json.slice(1, -1);
+  }
+  return name;
+}
+
 function formatValue(value: unknown): { text: string; color: string } {
   if (value === null) {
     return { text: 'null', color: jsonColors.null };
   }
   if (typeof value === 'string') {
-    return { text: `"${value}"`, color: jsonColors.string };
+    return { text: JSON.stringify(value), color: jsonColors.string };
   }
   if (typeof value === 'number') {
     return { text: String(value), color: jsonColors.number };
@@ -82,12 +96,48 @@ export function isExpandable(value: unknown): boolean {
   return true;
 }
 
+function updateValueAtPath(data: unknown, parts: string[], newValue: unknown): unknown {
+  if (parts.length === 0) return newValue;
+
+  const [head, ...rest] = parts;
+
+  if (Array.isArray(data)) {
+    const index = Number(head);
+    if (!Number.isFinite(index)) return data;
+    const current = data[index];
+    const updated = updateValueAtPath(current, rest, newValue);
+    if (updated === current) return data;
+    const copy = data.slice();
+    copy[index] = updated;
+    return copy;
+  }
+
+  if (head !== undefined && data && typeof data === 'object' && isExpandable(data)) {
+    const record = data as Record<string, unknown>;
+    const current = record[head];
+    const updated = updateValueAtPath(current, rest, newValue);
+    if (updated === current) return data;
+    return { ...record, [head]: updated };
+  }
+
+  return data;
+}
+
 function getCollapsedPreview(value: unknown): string {
   if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    if (value.length <= 3) {
+      const items = value.map((v) => (typeof v === 'object' ? '{...}' : JSON.stringify(v)));
+      return `[${items.join(', ')}]`;
+    }
     return `[${value.length} items]`;
   }
-  const keys = Object.keys(value as object);
-  return `{${keys.length} fields}`;
+  const keys = Object.keys(value as object).map(formatKeyPreview);
+  if (keys.length === 0) return '{}';
+  if (keys.length <= 2) {
+    return `{ ${keys.join(', ')} }`;
+  }
+  return `{ ${keys.slice(0, 2).join(', ')}, ... }`;
 }
 
 /**
@@ -142,18 +192,7 @@ export function getValueAtPath(data: unknown, path: string): unknown {
  */
 export function setValueAtPath(data: unknown, path: string, newValue: unknown): unknown {
   const parts = path.split('.').slice(1); // Remove 'root'
-  if (parts.length === 0) return newValue;
-
-  const result = JSON.parse(JSON.stringify(data)) as Record<string, unknown>;
-  let current: Record<string, unknown> = result;
-
-  for (let i = 0; i < parts.length - 1; i++) {
-    const key = parts[i]!;
-    current = current[key] as Record<string, unknown>;
-  }
-
-  current[parts[parts.length - 1]!] = newValue;
-  return result;
+  return updateValueAtPath(data, parts, newValue);
 }
 
 function JsonNode({
@@ -165,6 +204,7 @@ function JsonNode({
   selectedPath,
   editingPath,
   editingValue,
+  editingValueType,
   onToggle,
   onEditChange,
   isLast,
@@ -175,6 +215,7 @@ function JsonNode({
   const isExpanded = expandedPaths.has(path);
   const isSelected = path === selectedPath;
   const isEditing = path === editingPath;
+  const isEditingString = isEditing && editingValueType === 'string';
 
   // Selection highlight colors
   const bgColor = isSelected ? colors.selected : undefined;
@@ -182,17 +223,18 @@ function JsonNode({
 
   // Editing mode for primitive values
   if (isEditing && !expandable) {
+    const displayValue = isEditingString ? JSON.stringify(editingValue) : editingValue;
     return (
       <box flexDirection="row" backgroundColor={bgColor}>
         <text fg={colors.primary}>{selectedIndicator}</text>
         <text fg={colors.foreground}>{indent}</text>
         {keyName !== null && (
           <>
-            <text fg={jsonColors.key}>"{keyName}"</text>
+            <text fg={jsonColors.key}>{formatKeyName(keyName)}</text>
             <text fg={jsonColors.bracket}>: </text>
           </>
         )}
-        <text fg={colors.warning}>{editingValue}</text>
+        <text fg={colors.warning}>{displayValue}</text>
         <text fg={colors.dim}>_</text>
         <text fg={jsonColors.bracket}>{comma}</text>
       </box>
@@ -208,7 +250,7 @@ function JsonNode({
         <text fg={colors.foreground}>{indent}</text>
         {keyName !== null && (
           <>
-            <text fg={jsonColors.key}>"{keyName}"</text>
+            <text fg={jsonColors.key}>{formatKeyName(keyName)}</text>
             <text fg={jsonColors.bracket}>: </text>
           </>
         )}
@@ -235,7 +277,7 @@ function JsonNode({
         <text fg={colors.muted}>{'>'} </text>
         {keyName !== null && (
           <>
-            <text fg={jsonColors.key}>"{keyName}"</text>
+            <text fg={jsonColors.key}>{formatKeyName(keyName)}</text>
             <text fg={jsonColors.bracket}>: </text>
           </>
         )}
@@ -256,7 +298,7 @@ function JsonNode({
         <text fg={colors.muted}>{'v'} </text>
         {keyName !== null && (
           <>
-            <text fg={jsonColors.key}>"{keyName}"</text>
+            <text fg={jsonColors.key}>{formatKeyName(keyName)}</text>
             <text fg={jsonColors.bracket}>: </text>
           </>
         )}
@@ -273,6 +315,7 @@ function JsonNode({
           selectedPath={selectedPath}
           editingPath={editingPath}
           editingValue={editingValue}
+          editingValueType={editingValueType}
           onToggle={onToggle}
           onEditChange={onEditChange}
           isLast={i === entries.length - 1}
@@ -293,6 +336,7 @@ export function JsonTree({
   selectedPath,
   editingPath,
   editingValue,
+  editingValueType,
   onToggle,
   onEditChange,
 }: JsonTreeProps) {
@@ -311,6 +355,7 @@ export function JsonTree({
       selectedPath={selectedPath}
       editingPath={editingPath}
       editingValue={editingValue}
+      editingValueType={editingValueType}
       onToggle={onToggle}
       onEditChange={onEditChange}
       isLast={true}

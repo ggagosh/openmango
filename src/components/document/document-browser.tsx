@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useKeyboard } from '@opentui/react';
-import type { Db } from 'mongodb';
+import { type Db, ObjectId } from 'mongodb';
 import { DocumentProvider, useDocument } from '../../context/document-context.tsx';
 import { useFocus } from '../../context/focus-context.tsx';
 import { findDocuments, updateDocument } from '../../services/document.ts';
@@ -36,7 +36,9 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
     selectedPath,
     editingPath,
     editingValue,
+    editingValueType,
     hasUnsavedChanges,
+    editingId,
   } = state;
 
   const totalPages = Math.ceil(totalCount / pageSize);
@@ -89,6 +91,10 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
 
     const docId = doc._id.toString();
 
+    if (hasUnsavedChanges && editingId && editingId !== docId) {
+      return;
+    }
+
     // Auto-expand document if not expanded
     if (!state.expandedIds.has(docId)) {
       dispatch({ type: 'TOGGLE_EXPAND', payload: docId });
@@ -96,22 +102,26 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
 
     // Enter tree navigation mode
     dispatch({ type: 'ENTER_TREE_NAVIGATION', payload: { docId } });
-  }, [documents, selectedIndex, state.expandedIds, dispatch]);
+  }, [documents, selectedIndex, state.expandedIds, dispatch, hasUnsavedChanges, editingId]);
 
   const handleSaveDocument = useCallback(async () => {
-    if (!state.pendingDocument || !currentDoc) return;
+    if (!state.pendingDocument) return;
+    const targetDoc = editingId
+      ? documents.find((doc) => doc._id.toString() === editingId)
+      : currentDoc;
+    if (!targetDoc) return;
 
     try {
       const success = await updateDocument(
         db,
         collectionName,
-        currentDoc._id,
+        targetDoc._id,
         state.pendingDocument
       );
       if (success) {
         dispatch({
           type: 'SAVE_DOCUMENT_SUCCESS',
-          payload: { ...state.pendingDocument, _id: currentDoc._id },
+          payload: { ...state.pendingDocument, _id: targetDoc._id },
         });
         void loadDocuments(); // Reload to get fresh data
       }
@@ -121,7 +131,16 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         payload: e instanceof Error ? e.message : 'Failed to save document',
       });
     }
-  }, [db, collectionName, currentDoc, state.pendingDocument, dispatch, loadDocuments]);
+  }, [
+    db,
+    collectionName,
+    currentDoc,
+    documents,
+    editingId,
+    state.pendingDocument,
+    dispatch,
+    loadDocuments,
+  ]);
 
   const handleCommand = useCallback(
     (cmd: string) => {
@@ -139,16 +158,71 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
   );
 
   // Helper to parse edit value to proper type
-  const parseEditValue = (value: string): unknown => {
+  const formatEditValue = (value: unknown): string => {
+    if (value === null) return 'null';
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (value instanceof Date) {
+      return `ISODate("${value.toISOString()}")`;
+    }
+    if (typeof value === 'object' && value && '_bsontype' in value) {
+      const bsonType = (value as { _bsontype: string })._bsontype;
+      if (bsonType === 'ObjectId') {
+        const id = (value as { toString(): string }).toString();
+        return `ObjectId("${id}")`;
+      }
+      if (bsonType === 'Date') {
+        const dateStr = (value as unknown as Date).toISOString();
+        return `ISODate("${dateStr}")`;
+      }
+    }
+    return JSON.stringify(value) ?? '';
+  };
+
+  const parseEditValue = (
+    value: string,
+    expectedType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other' | null
+  ): unknown => {
+    if (expectedType === 'string') {
+      return value;
+    }
+
     const trimmed = value.trim();
+    if (trimmed === 'undefined') return undefined;
     if (trimmed === 'null') return null;
     if (trimmed === 'true') return true;
     if (trimmed === 'false') return false;
     if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
     if (/^-?\d+\.\d+$/.test(trimmed)) return parseFloat(trimmed);
-    // Remove quotes for strings
+    if (trimmed.startsWith('ObjectId("') && trimmed.endsWith('")')) {
+      const hex = trimmed.slice(10, -2);
+      if (ObjectId.isValid(hex)) {
+        return new ObjectId(hex);
+      }
+    }
+    if (trimmed.startsWith('ISODate("') && trimmed.endsWith('")')) {
+      const iso = trimmed.slice(9, -2);
+      const date = new Date(iso);
+      if (!Number.isNaN(date.getTime())) {
+        return date;
+      }
+    }
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        // Fall through to string parsing
+      }
+    }
     if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-      return trimmed.slice(1, -1);
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return trimmed.slice(1, -1);
+      }
     }
     return trimmed;
   };
@@ -178,12 +252,14 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
     if (editingPath) {
       if (key.name === 'return') {
         // Apply the edit
-        const newValue = parseEditValue(editingValue);
+        const newValue = parseEditValue(editingValue, editingValueType);
         dispatch({ type: 'APPLY_FIELD_EDIT', payload: { path: editingPath, newValue } });
       } else if (key.name === 'escape') {
         dispatch({ type: 'CANCEL_FIELD_EDIT' });
       } else if (key.name === 'backspace') {
         dispatch({ type: 'UPDATE_FIELD_VALUE', payload: editingValue.slice(0, -1) });
+      } else if (key.name === 'space') {
+        dispatch({ type: 'UPDATE_FIELD_VALUE', payload: editingValue + ' ' });
       } else if (key.name && key.name.length === 1 && !key.ctrl && !key.meta) {
         dispatch({ type: 'UPDATE_FIELD_VALUE', payload: editingValue + key.name });
       }
@@ -216,6 +292,9 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         const value = getValueAtPath(docToDisplay, selectedPath);
         if (isExpandable(value) && treeExpandedPaths.has(selectedPath)) {
           dispatch({ type: 'TOGGLE_TREE_PATH', payload: selectedPath });
+        } else if (selectedPath === 'root') {
+          // At root level with nothing to collapse - exit tree navigation
+          dispatch({ type: 'EXIT_TREE_NAVIGATION' });
         } else {
           // Move to parent
           const parts = selectedPath.split('.');
@@ -233,17 +312,32 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         // Start editing current field (only for primitives)
         const value = getValueAtPath(docToDisplay, selectedPath);
         if (!isExpandable(value)) {
-          let valueStr: string;
+          let valueType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other' =
+            'other';
           if (value === null) {
-            valueStr = 'null';
+            valueType = 'null';
           } else if (typeof value === 'string') {
-            valueStr = `"${value}"`;
-          } else if (typeof value === 'number' || typeof value === 'boolean') {
-            valueStr = String(value);
-          } else {
-            valueStr = JSON.stringify(value) ?? '';
+            valueType = 'string';
+          } else if (typeof value === 'number') {
+            valueType = 'number';
+          } else if (typeof value === 'boolean') {
+            valueType = 'boolean';
+          } else if (value instanceof Date) {
+            valueType = 'date';
+          } else if (typeof value === 'object' && value && '_bsontype' in value) {
+            const bsonType = (value as { _bsontype: string })._bsontype;
+            if (bsonType === 'ObjectId') {
+              valueType = 'objectId';
+            } else if (bsonType === 'Date') {
+              valueType = 'date';
+            }
           }
-          dispatch({ type: 'START_FIELD_EDIT', payload: { path: selectedPath, value: valueStr } });
+
+          const valueStr = valueType === 'string' ? (value as string) : formatEditValue(value);
+          dispatch({
+            type: 'START_FIELD_EDIT',
+            payload: { path: selectedPath, value: valueStr, valueType },
+          });
         }
       } else if (key.name === 'escape') {
         if (hasUnsavedChanges) {
@@ -285,6 +379,9 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
       prevPage();
     } else if (key.name === ']') {
       nextPage();
+    } else if (key.name === ':' && hasUnsavedChanges) {
+      setIsTypingCommand(true);
+      setCommandBuffer(':');
     }
   });
 
@@ -299,6 +396,9 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
       modeLabel = hasUnsavedChanges ? '[TREE *]' : '[TREE]';
       modeColor = hasUnsavedChanges ? colors.warning : colors.primary;
     }
+  } else if (hasUnsavedChanges) {
+    modeLabel = '[VIEW *]';
+    modeColor = colors.warning;
   }
 
   return (
@@ -345,6 +445,8 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
           <text fg={colors.muted}>
             j/k=nav h/l=collapse/expand i=edit Esc=exit :w=save :q=discard
           </text>
+        ) : hasUnsavedChanges ? (
+          <text fg={colors.warning}>Unsaved changes: i=resume :w=save :q=discard</text>
         ) : (
           <>
             <text fg={colors.muted}>

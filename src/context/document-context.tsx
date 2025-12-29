@@ -18,6 +18,7 @@ interface DocumentState {
   // Field editing state
   editingPath: string | null;
   editingValue: string;
+  editingValueType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other' | null;
   // Pending changes (staged, not saved to MongoDB yet)
   pendingDocument: Document | null;
   hasUnsavedChanges: boolean;
@@ -42,7 +43,14 @@ type DocumentAction =
   | { type: 'SELECT_PATH'; payload: string }
   | { type: 'TOGGLE_TREE_PATH'; payload: string }
   // Field editing
-  | { type: 'START_FIELD_EDIT'; payload: { path: string; value: string } }
+  | {
+      type: 'START_FIELD_EDIT';
+      payload: {
+        path: string;
+        value: string;
+        valueType: 'string' | 'number' | 'boolean' | 'null' | 'date' | 'objectId' | 'other';
+      };
+    }
   | { type: 'UPDATE_FIELD_VALUE'; payload: string }
   | { type: 'APPLY_FIELD_EDIT'; payload: { path: string; newValue: unknown } }
   | { type: 'CANCEL_FIELD_EDIT' }
@@ -77,6 +85,7 @@ const defaultState: DocumentState = {
   // Field editing
   editingPath: null,
   editingValue: '',
+  editingValueType: null,
   // Pending changes
   pendingDocument: null,
   hasUnsavedChanges: false,
@@ -88,6 +97,42 @@ const defaultState: DocumentState = {
   isLoading: false,
   error: null,
 };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return false;
+  if (value instanceof Date) return false;
+  if ('_bsontype' in (value as object)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function updateValueAtPath(data: unknown, parts: string[], newValue: unknown): unknown {
+  if (parts.length === 0) return newValue;
+
+  const [head, ...rest] = parts;
+
+  if (Array.isArray(data)) {
+    const index = Number(head);
+    if (!Number.isFinite(index)) return data;
+    const current = data[index];
+    const updated = updateValueAtPath(current, rest, newValue);
+    if (updated === current) return data;
+    const copy = data.slice();
+    copy[index] = updated;
+    return copy;
+  }
+
+  if (head !== undefined && isPlainObject(data)) {
+    const record = data as Record<string, unknown>;
+    const current = record[head];
+    const updated = updateValueAtPath(current, rest, newValue);
+    if (updated === current) return data;
+    return { ...record, [head]: updated };
+  }
+
+  return data;
+}
 
 function documentReducer(state: DocumentState, action: DocumentAction): DocumentState {
   switch (action.type) {
@@ -124,18 +169,30 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
     }
 
     // Tree navigation actions
-    case 'ENTER_TREE_NAVIGATION':
+    case 'ENTER_TREE_NAVIGATION': {
+      const isSameDoc = state.editingId === action.payload.docId;
+      const shouldPreservePending = isSameDoc && state.pendingDocument && state.hasUnsavedChanges;
       return {
         ...state,
         treeNavigationActive: true,
         editingId: action.payload.docId,
-        selectedPath: 'root',
-        treeExpandedPaths: new Set(['root']),
-        pendingDocument: null,
-        hasUnsavedChanges: false,
+        selectedPath: isSameDoc && state.selectedPath ? state.selectedPath : 'root',
+        treeExpandedPaths: isSameDoc ? state.treeExpandedPaths : new Set(['root']),
+        pendingDocument: shouldPreservePending ? state.pendingDocument : null,
+        hasUnsavedChanges: shouldPreservePending ? state.hasUnsavedChanges : false,
       };
+    }
 
     case 'EXIT_TREE_NAVIGATION':
+      if (state.hasUnsavedChanges) {
+        return {
+          ...state,
+          treeNavigationActive: false,
+          editingPath: null,
+          editingValue: '',
+          editingValueType: null,
+        };
+      }
       return {
         ...state,
         treeNavigationActive: false,
@@ -143,6 +200,7 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         selectedPath: null,
         editingPath: null,
         editingValue: '',
+        editingValueType: null,
       };
 
     case 'SELECT_PATH':
@@ -164,6 +222,7 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         ...state,
         editingPath: action.payload.path,
         editingValue: action.payload.value,
+        editingValueType: action.payload.valueType,
       };
 
     case 'UPDATE_FIELD_VALUE':
@@ -174,15 +233,17 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
       const doc = state.pendingDocument ?? state.documents[state.selectedIndex];
       if (!doc) return { ...state, editingPath: null, editingValue: '' };
 
-      // Apply the change to create a new pending document
+      // Apply the change without losing BSON types
       const parts = action.payload.path.split('.').slice(1); // Remove 'root'
-      const newDoc = JSON.parse(JSON.stringify(doc)) as Document;
-      let current: Record<string, unknown> = newDoc as Record<string, unknown>;
+      const newDoc = updateValueAtPath(doc, parts, action.payload.newValue) as Document;
 
-      for (let i = 0; i < parts.length - 1; i++) {
-        current = current[parts[i]!] as Record<string, unknown>;
+      if (newDoc === doc) {
+        return {
+          ...state,
+          editingPath: null,
+          editingValue: '',
+        };
       }
-      current[parts[parts.length - 1]!] = action.payload.newValue;
 
       return {
         ...state,
@@ -190,11 +251,12 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         hasUnsavedChanges: true,
         editingPath: null,
         editingValue: '',
+        editingValueType: null,
       };
     }
 
     case 'CANCEL_FIELD_EDIT':
-      return { ...state, editingPath: null, editingValue: '' };
+      return { ...state, editingPath: null, editingValue: '', editingValueType: null };
 
     case 'SET_PENDING_DOCUMENT':
       return { ...state, pendingDocument: action.payload, hasUnsavedChanges: true };
@@ -223,6 +285,7 @@ function documentReducer(state: DocumentState, action: DocumentAction): Document
         editingId: null,
         editingPath: null,
         editingValue: '',
+        editingValueType: null,
       };
 
     // Legacy edit mode (keeping for backwards compat)

@@ -17,6 +17,7 @@ export function DocumentExpanded({ document }: DocumentExpandedProps) {
     selectedPath,
     editingPath,
     editingValue,
+    editingValueType,
     pendingDocument,
     treeNavigationActive,
     editingId,
@@ -39,8 +40,12 @@ export function DocumentExpanded({ document }: DocumentExpandedProps) {
 
   // Determine border color based on state
   let borderColor = colors.sectionBorder;
-  if (isThisDocActive && treeNavigationActive) {
-    borderColor = hasUnsavedChanges ? colors.warning : colors.primary;
+  if (isThisDocActive) {
+    if (hasUnsavedChanges) {
+      borderColor = colors.warning;
+    } else if (treeNavigationActive) {
+      borderColor = colors.primary;
+    }
   }
 
   return (
@@ -59,6 +64,7 @@ export function DocumentExpanded({ document }: DocumentExpandedProps) {
         selectedPath={isThisDocActive && treeNavigationActive ? selectedPath : null}
         editingPath={isThisDocActive ? editingPath : null}
         editingValue={isThisDocActive ? editingValue : ''}
+        editingValueType={isThisDocActive ? editingValueType : null}
         onToggle={handleToggle}
         onEditChange={handleEditChange}
       />
