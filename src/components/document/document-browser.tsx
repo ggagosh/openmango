@@ -3,28 +3,42 @@ import { useKeyboard } from '@opentui/react';
 import { type Db, ObjectId } from 'mongodb';
 import { DocumentProvider, useDocument } from '../../context/document-context.tsx';
 import { useFocus } from '../../context/focus-context.tsx';
+import { useModal } from '../../context/modal-context.tsx';
 import { findDocuments, updateDocument } from '../../services/document.ts';
 import { getCollectionStats } from '../../services/collection.ts';
+import { getCollectionFields } from '../../services/field-index.ts';
 import type { CollectionStats } from '../../types/index.ts';
 import { colors } from '../../theme/index.ts';
 import { DocumentList } from './document-list.tsx';
+import { FilterInput } from './filter-input.tsx';
 import { flattenVisiblePaths, getValueAtPath, isExpandable } from './json-tree.tsx';
 
 interface DocumentBrowserProps {
   db: Db;
   collectionName: string;
+  connectionId?: string;
   focused: boolean;
 }
 
-function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowserProps) {
+function DocumentBrowserContent({
+  db,
+  collectionName,
+  connectionId,
+  focused,
+}: DocumentBrowserProps) {
   const { state, dispatch, selectNext, selectPrev, toggleSelected, nextPage, prevPage } =
     useDocument();
   const { setActiveZone } = useFocus();
+  const { openModal } = useModal();
   const [commandBuffer, setCommandBuffer] = useState('');
   const [isTypingCommand, setIsTypingCommand] = useState(false);
   const [stats, setStats] = useState<CollectionStats | null>(null);
+  const [fields, setFields] = useState<string[]>([]);
+  const [isFilterFocused, setIsFilterFocused] = useState(false);
   const loadedCollectionRef = useRef<string | null>(null);
   const isInitialLoadRef = useRef(true);
+  const filterCacheRef = useRef<Map<string, string>>(new Map());
+  const currentFilterRef = useRef(state.filter);
 
   const {
     documents,
@@ -72,16 +86,46 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
     }
   }, [db, collectionName]);
 
+  const loadFields = useCallback(async () => {
+    try {
+      const collFields = await getCollectionFields(db, collectionName);
+      setFields(collFields);
+    } catch {
+      setFields([]);
+    }
+  }, [db, collectionName]);
+
+  // Keep filter ref in sync
+  useEffect(() => {
+    currentFilterRef.current = state.filter;
+  }, [state.filter]);
+
   useEffect(() => {
     if (loadedCollectionRef.current !== collectionName) {
+      // Save current filter for old collection before switching
+      if (loadedCollectionRef.current && currentFilterRef.current) {
+        filterCacheRef.current.set(loadedCollectionRef.current, currentFilterRef.current);
+      }
+
       loadedCollectionRef.current = collectionName;
       isInitialLoadRef.current = true;
+
+      // Restore cached filter for new collection
+      const cachedFilter = filterCacheRef.current.get(collectionName) || '';
+
       dispatch({ type: 'RESET' });
+      // Apply cached filter after reset
+      if (cachedFilter) {
+        dispatch({ type: 'SET_FILTER', payload: cachedFilter });
+      }
+
       setStats(null);
+      setFields([]);
       void loadDocuments();
       void loadStats();
+      void loadFields();
     }
-  }, [collectionName, dispatch, loadDocuments, loadStats]);
+  }, [collectionName, dispatch, loadDocuments, loadStats, loadFields]);
 
   useEffect(() => {
     if (isInitialLoadRef.current) {
@@ -167,6 +211,17 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
       setIsTypingCommand(false);
     },
     [dispatch, handleSaveDocument]
+  );
+
+  const handleFilterApply = useCallback(
+    (filter: string) => {
+      const trimmed = filter.trim();
+      // Treat empty or "{ }" as no filter
+      const newFilter = trimmed === '' || trimmed === '{ }' || trimmed === '{}' ? '' : trimmed;
+      dispatch({ type: 'SET_FILTER', payload: newFilter });
+      setIsFilterFocused(false);
+    },
+    [dispatch]
   );
 
   // Helper to parse edit value to proper type
@@ -256,6 +311,15 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
         }
       } else if (key.name && key.name.length === 1 && !key.ctrl && !key.meta) {
         setCommandBuffer((prev) => prev + key.name);
+      }
+      return;
+    }
+
+    // Filter input mode - let FilterInput handle keys
+    if (isFilterFocused) {
+      // Only handle Escape here to unfocus filter without applying
+      if (key.name === 'escape') {
+        setIsFilterFocused(false);
       }
       return;
     }
@@ -394,6 +458,18 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
     } else if (key.name === ':' && hasUnsavedChanges) {
       setIsTypingCommand(true);
       setCommandBuffer(':');
+    } else if (key.name === '/' && !isFilterFocused) {
+      setIsFilterFocused(true);
+    } else if (key.name === 'backspace' && state.filter) {
+      // Clear filter with Backspace
+      dispatch({ type: 'SET_FILTER', payload: '' });
+    } else if (key.name === 'c' && key.shift && connectionId) {
+      // Open copy collection modal (Shift+C)
+      openModal('copy-collection', {
+        sourceConnection: connectionId,
+        sourceDatabase: db.databaseName,
+        sourceName: collectionName,
+      });
     }
   });
 
@@ -434,9 +510,13 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
       </box>
 
       {/* Filter row */}
-      <box flexDirection="row" paddingLeft={1} paddingRight={1}>
-        <text fg={colors.muted}>Filter: </text>
-        <text fg={colors.foreground}>{state.filter || '{ }'}</text>
+      <box paddingLeft={1} paddingRight={1}>
+        <FilterInput
+          value={state.filter}
+          fields={fields}
+          focused={focused && !treeNavigationActive && !isTypingCommand && isFilterFocused}
+          onApply={handleFilterApply}
+        />
       </box>
 
       {/* Document list - takes remaining space */}
@@ -466,13 +546,15 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
           </text>
         ) : hasUnsavedChanges ? (
           <text fg={colors.warning}>Unsaved changes: i=resume :w=save :q=discard</text>
+        ) : isFilterFocused ? (
+          <text fg={colors.muted}>Type filter, Tab=complete, Enter=apply, Esc=cancel</text>
         ) : (
           <>
             <text fg={colors.muted}>
               {'<'}Prev Page {currentPage}/{totalPages} Next{'>'}
             </text>
             <box flexGrow={1} />
-            <text fg={colors.muted}>i/→=tree</text>
+            <text fg={colors.muted}>/=filter{state.filter ? ' ⌫=clear' : ''} i/→=tree</text>
           </>
         )}
       </box>
@@ -480,10 +562,20 @@ function DocumentBrowserContent({ db, collectionName, focused }: DocumentBrowser
   );
 }
 
-export function DocumentBrowser(props: DocumentBrowserProps) {
+export function DocumentBrowser({
+  db,
+  collectionName,
+  connectionId,
+  focused,
+}: DocumentBrowserProps) {
   return (
     <DocumentProvider>
-      <DocumentBrowserContent {...props} />
+      <DocumentBrowserContent
+        db={db}
+        collectionName={collectionName}
+        connectionId={connectionId}
+        focused={focused}
+      />
     </DocumentProvider>
   );
 }

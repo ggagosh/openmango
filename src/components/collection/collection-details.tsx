@@ -1,6 +1,4 @@
 import type { TreeNodeData } from '../../types/index.ts';
-import { useModal } from '../../context/modal-context.tsx';
-import { useKeyboard } from '@opentui/react';
 import { mongoService } from '../../services/mongodb.ts';
 import { DocumentBrowser } from '../document/index.ts';
 
@@ -10,22 +8,6 @@ interface CollectionDetailsProps {
 }
 
 export function CollectionDetails({ node, focused }: CollectionDetailsProps) {
-  const { openModal } = useModal();
-
-  useKeyboard((key) => {
-    if (!focused) {
-      return;
-    }
-
-    if (key.name === 'c' && key.shift) {
-      openModal('copy-collection', {
-        sourceConnection: node.connectionId,
-        sourceDatabase: node.databaseName,
-        sourceName: node.name,
-      });
-    }
-  });
-
   const db =
     node.connectionId && node.databaseName
       ? mongoService.getDb(node.connectionId, node.databaseName)
@@ -41,7 +23,12 @@ export function CollectionDetails({ node, focused }: CollectionDetailsProps) {
 
   return (
     <box flexDirection="column" flexGrow={1}>
-      <DocumentBrowser db={db} collectionName={node.name} focused={focused} />
+      <DocumentBrowser
+        db={db}
+        collectionName={node.name}
+        connectionId={node.connectionId}
+        focused={focused}
+      />
     </box>
   );
 }

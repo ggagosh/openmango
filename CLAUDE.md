@@ -21,6 +21,20 @@ bun install
 
 # Run with hot reload (development)
 bun dev
+
+# Type checking
+bun typecheck
+
+# Linting (oxlint)
+bun lint
+bun lint:fix
+
+# Formatting (oxfmt)
+bun format
+bun format:check
+
+# Build
+bun build
 ```
 
 ## Architecture
