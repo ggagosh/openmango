@@ -87,6 +87,12 @@ export function MainLayout() {
   const hintsZone = hasModal ? 'modal' : activeZone;
   const breadcrumb = getBreadcrumb(state.navigationTree, state.selectedNodeId);
 
+  // Get connection status for hints
+  const connectionStatus =
+    selectedNode?.type === 'connection'
+      ? state.connections.find((c) => c.id === selectedNode.connectionId)?.status
+      : undefined;
+
   const flatNodes = flattenTree(state.navigationTree);
   const itemCount = flatNodes.length;
   const selectedIndex = state.selectedNodeId
@@ -112,6 +118,7 @@ export function MainLayout() {
         activeZone={hintsZone}
         hasSelection={Boolean(selectedNode)}
         selectionType={selectionType}
+        connectionStatus={connectionStatus}
       />
     </box>
   );

@@ -42,17 +42,19 @@ export function StatRow({ label, value }: StatRowProps) {
 }
 
 interface ActionRowProps {
-  actions: { key: string; label: string }[];
+  actions: { key: string; label: string; disabled?: boolean }[];
 }
 
 export function ActionRow({ actions }: ActionRowProps) {
   return (
     <box flexDirection="row" gap={2}>
-      {actions.map((action) => (
-        <text key={action.key} fg={colors.foreground}>
-          <span fg={colors.primary}>[{action.key}]</span> {action.label}
-        </text>
-      ))}
+      {actions
+        .filter((action) => !action.disabled)
+        .map((action) => (
+          <text key={action.key} fg={colors.foreground}>
+            <span fg={colors.primary}>[{action.key}]</span> {action.label}
+          </text>
+        ))}
     </box>
   );
 }

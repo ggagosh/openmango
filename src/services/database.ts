@@ -14,22 +14,12 @@ export async function getDatabaseStats(
   dbName: string
 ): Promise<DatabaseStats> {
   const db = client.db(dbName);
-  const [stats, collections] = await Promise.all([db.stats(), db.listCollections().toArray()]);
-
-  const countPromises = collections.map(async (coll) => {
-    try {
-      return await db.collection(coll.name).countDocuments();
-    } catch {
-      return 0;
-    }
-  });
-  const counts = await Promise.all(countPromises);
-  const totalDocs = counts.reduce((sum, count) => sum + count, 0);
+  const stats = await db.stats();
 
   return {
     sizeOnDisk: formatBytes(stats.dataSize + stats.indexSize),
-    collectionCount: collections.length,
-    documentCount: totalDocs,
+    collectionCount: stats.collections,
+    documentCount: stats.objects,
   };
 }
 

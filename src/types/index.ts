@@ -46,6 +46,7 @@ export type FocusZone = 'sidebar' | 'panel' | 'modal';
 // Modal types
 export type ModalType =
   | 'add-connection'
+  | 'edit-connection'
   | 'create-database'
   | 'create-collection'
   | 'copy-database'
@@ -88,3 +89,14 @@ export interface CollectionStats {
   totalSize: string;
   indexCount: number;
 }
+
+// Re-export document types
+export type {
+  EditorMode,
+  MongoDocument,
+  DocumentBrowserState,
+  FindDocumentsOptions,
+  FindDocumentsResult,
+  JsonToken,
+  HighlightedSegment,
+} from './document.ts';

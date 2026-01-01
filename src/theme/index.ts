@@ -20,6 +20,9 @@ export const colors = {
   selected: '#2563eb',
   selectedText: '#ffffff',
 
+  // Action keys (bottom bar)
+  actionKey: '#48baff', // rgb(72, 186, 255)
+
   // Semantic colors
   primary: '#3b82f6',
   danger: '#ef4444',

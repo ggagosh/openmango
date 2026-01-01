@@ -23,3 +23,11 @@ export {
   updateConnection,
   getConfigPath,
 } from './persistence.ts';
+export {
+  findDocuments,
+  getDocument,
+  insertDocument,
+  updateDocument,
+  deleteDocument,
+  duplicateDocument,
+} from './document.ts';

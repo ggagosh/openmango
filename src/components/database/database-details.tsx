@@ -1,6 +1,9 @@
-import type { TreeNodeData } from '../../types/index.ts';
-import { useModal } from '../../context/modal-context.tsx';
+import { useCallback, useEffect, useState } from 'react';
 import { useKeyboard } from '@opentui/react';
+import type { TreeNodeData, DatabaseStats } from '../../types/index.ts';
+import { useModal } from '../../context/modal-context.tsx';
+import { mongoService } from '../../services/mongodb.ts';
+import { getDatabaseStats } from '../../services/database.ts';
 import { ActionRow, Section, StatRow } from '../shared/section.tsx';
 
 interface DatabaseDetailsProps {
@@ -10,6 +13,25 @@ interface DatabaseDetailsProps {
 
 export function DatabaseDetails({ node, focused }: DatabaseDetailsProps) {
   const { openModal } = useModal();
+  const [stats, setStats] = useState<DatabaseStats | null>(null);
+
+  const loadStats = useCallback(async () => {
+    if (!node.connectionId || !node.name) return;
+    const client = mongoService.getClient(node.connectionId);
+    if (!client) return;
+
+    try {
+      const dbStats = await getDatabaseStats(client, node.name);
+      setStats(dbStats);
+    } catch {
+      setStats(null);
+    }
+  }, [node.connectionId, node.name]);
+
+  useEffect(() => {
+    setStats(null);
+    void loadStats();
+  }, [loadStats]);
 
   useKeyboard((key) => {
     if (!focused) {
@@ -30,21 +52,16 @@ export function DatabaseDetails({ node, focused }: DatabaseDetailsProps) {
     }
   });
 
-  const stats = {
-    collections: node.children.length,
-    documents: 145892,
-    indexes: 12,
-    sizeOnDisk: '256 MB',
-  };
-
   return (
     <box flexDirection="column" gap={1}>
       <Section title="Stats">
         <StatRow label="Connection" value={node.connectionId ?? ''} />
-        <StatRow label="Collections" value={stats.collections} />
-        <StatRow label="Documents" value={stats.documents.toLocaleString()} />
-        <StatRow label="Size on Disk" value={stats.sizeOnDisk} />
-        <StatRow label="Indexes" value={stats.indexes} />
+        <StatRow label="Collections" value={node.children.length} />
+        <StatRow
+          label="Documents"
+          value={stats ? stats.documentCount.toLocaleString() : 'Loading...'}
+        />
+        <StatRow label="Size on Disk" value={stats?.sizeOnDisk ?? 'Loading...'} />
       </Section>
 
       <Section title="Actions">

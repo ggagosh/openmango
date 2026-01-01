@@ -1,5 +1,6 @@
 import { useModal } from '../../context/modal-context.tsx';
 import { AddConnectionModal } from '../connection/add-connection-modal.tsx';
+import { EditConnectionModal } from '../connection/edit-connection-modal.tsx';
 import { CreateDatabaseModal } from '../database/create-database-modal.tsx';
 import { CreateCollectionModal } from '../collection/create-collection-modal.tsx';
 import { CopyDatabaseModal } from '../database/copy-database-modal.tsx';
@@ -18,6 +19,11 @@ export function ModalRenderer() {
   switch (currentModal.type) {
     case 'add-connection':
       return <AddConnectionModal onClose={closeModal} />;
+
+    case 'edit-connection':
+      return (
+        <EditConnectionModal connectionId={props.connectionId as string} onClose={closeModal} />
+      );
 
     case 'create-database':
       return (
