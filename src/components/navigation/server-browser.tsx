@@ -5,6 +5,7 @@ import { useApp } from '../../context/app-context.tsx';
 import { useFocus } from '../../context/focus-context.tsx';
 import { useModal } from '../../context/modal-context.tsx';
 import { useConnection } from '../../hooks/use-connection.ts';
+import { removeConnection } from '../../services/index.ts';
 import { TreeNode } from './tree-node.tsx';
 import { TreeLeaf } from './tree-leaf.tsx';
 import { SearchInput } from '../shared/search-input.tsx';
@@ -68,7 +69,7 @@ export function ServerBrowser({ focused }: ServerBrowserProps) {
   const { state, dispatch } = useApp();
   const { setActiveZone } = useFocus();
   const { openModal } = useModal();
-  const { connect, loadCollections } = useConnection();
+  const { connect, disconnect, loadCollections } = useConnection();
   const { height: terminalHeight } = useTerminalDimensions();
   const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 
@@ -234,6 +235,11 @@ export function ServerBrowser({ focused }: ServerBrowserProps) {
       }
     }
 
+    // 'a' always adds a new connection
+    if (key.name === 'a') {
+      openModal('add-connection');
+    }
+
     if (key.name === 'n') {
       if (selectedNode?.type === 'connection') {
         openModal('create-database', { connectionAlias: selectedNode.name });
@@ -242,8 +248,37 @@ export function ServerBrowser({ focused }: ServerBrowserProps) {
           connectionAlias: selectedNode.connectionId,
           databaseName: selectedNode.name,
         });
-      } else if (!selectedNode) {
+      } else {
+        // No selection or collection selected - add connection
         openModal('add-connection');
+      }
+    }
+
+    // Connection actions (c/d/e/x)
+    if (selectedNode?.type === 'connection' && selectedNode.connectionId) {
+      const connId = selectedNode.connectionId;
+      const conn = state.connections.find((c) => c.id === connId);
+
+      if (key.name === 'c' && conn?.status === 'disconnected') {
+        void connect(connId);
+      } else if (key.name === 'd' && conn?.status === 'connected') {
+        void disconnect(connId);
+      } else if (key.name === 'e') {
+        openModal('edit-connection', { connectionId: connId });
+      } else if (key.name === 'x') {
+        openModal('confirm', {
+          title: 'Remove Connection',
+          message: `Remove connection "${conn?.alias ?? selectedNode.name}"?`,
+          confirmLabel: 'Remove',
+          destructive: true,
+          onConfirm: async () => {
+            if (conn?.status === 'connected') {
+              await disconnect(connId);
+            }
+            await removeConnection(connId);
+            dispatch({ type: 'REMOVE_CONNECTION', payload: connId });
+          },
+        });
       }
     }
   });

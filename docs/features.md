@@ -401,3 +401,80 @@ flowchart LR
 - [ ] Collection: compare, sync, filtered clone
 - [ ] Document: undo, inline edit, schema hints
 - [ ] Global: theming, keymap customization, audit logs
+
+---
+
+## Implementation Status Matrix
+
+**Status Legend:** ✅ Implemented | ⚠️ Partial | ❌ Not implemented
+
+### 1. Connection Features
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| Add connection | P0 | ✅ | Full modal with validation |
+| Test connection | P0 | ✅ | Error categorization, latency |
+| Connect/Disconnect | P0 | ✅ | Keyboard shortcuts c/d |
+| List databases | P0 | ✅ | Auto-loads on connect |
+| Connection status | P0 | ✅ | Visual indicators |
+| Error display | P0 | ✅ | Shows in details panel |
+| Edit connection | P1 | ✅ | Modal with e key |
+| Remove connection | P1 | ✅ | x key with confirm |
+| Connection profiles | P1 | ⚠️ | Types exist, no UI |
+| Tagging/Favorites | P1 | ❌ | Not implemented |
+| Import/Export connections | P1 | ❌ | Not implemented |
+| Health ping | P2 | ✅ | Latency in test |
+| Server info | P2 | ⚠️ | Version only, no topology UI |
+| Read-only mode | P2 | ❌ | Not implemented |
+
+### 2. Database Features
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| List collections | P0 | ✅ | In tree navigation |
+| Create database | P0 | ✅ | Modal with n key |
+| Drop database | P0 | ⚠️ | Service exists, no UI trigger |
+| Refresh | P0 | ⚠️ | Connection level only |
+| Database stats | P0 | ✅ | Collection/doc count, size |
+| Copy database | P1 | ⚠️ | Modal exists, not wired |
+| Rename database | P1 | ❌ | Not implemented |
+| Copy options | P1 | ⚠️ | UI exists, not functional |
+
+### 3. Collection Features
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| List collections | P0 | ✅ | With doc counts |
+| Create collection | P0 | ⚠️ | Modal exists, create commented out |
+| Drop collection | P0 | ❌ | Service exists, no UI |
+| Rename collection | P0 | ❌ | Service exists, no UI |
+| Collection stats | P0 | ✅ | Doc count, size, indexes |
+| Open document browser | P0 | ✅ | Full implementation |
+| Copy collection | P1 | ✅ | Full modal with options |
+| List indexes | P1 | ⚠️ | Service exists, no UI |
+| Create/Drop index | P1 | ❌ | Not implemented |
+| Import/Export | P1 | ❌ | Not implemented |
+| Aggregation editor | P1 | ❌ | Not implemented |
+
+### 4. Document Features
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| Find with filter | P0 | ✅ | With autocomplete |
+| View document | P0 | ✅ | JSON tree view |
+| Insert document | P0 | ⚠️ | Service exists, no UI |
+| Edit document | P0 | ✅ | Tree navigation mode |
+| Delete document | P0 | ⚠️ | Service exists, no UI |
+| Projection | P1 | ⚠️ | Service only, no UI |
+| Sort | P1 | ⚠️ | Service only, no UI |
+| Pagination | P1 | ✅ | Full UI with <> keys |
+| Duplicate document | P1 | ⚠️ | Service exists, no UI |
+
+### 5. Global Features
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| Keyboard navigation | P0 | ✅ | Vim-style controls |
+| Destructive confirmations | P0 | ✅ | Confirm dialog |
+| Status bar | P0 | ✅ | Bottom action hints |
+| Error display | P0 | ✅ | In panels and modals |

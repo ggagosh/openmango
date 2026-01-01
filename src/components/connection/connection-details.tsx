@@ -1,6 +1,8 @@
 import type { TreeNodeData } from '../../types/index.ts';
 import { useApp } from '../../context/app-context.tsx';
 import { useModal } from '../../context/modal-context.tsx';
+import { useConnection } from '../../hooks/use-connection.ts';
+import { removeConnection } from '../../services/index.ts';
 import { useKeyboard } from '@opentui/react';
 import { colors, icons } from '../../theme/index.ts';
 import { ActionRow, Section, StatRow } from '../shared/section.tsx';
@@ -11,18 +13,43 @@ interface ConnectionDetailsProps {
 }
 
 export function ConnectionDetails({ node, focused }: ConnectionDetailsProps) {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
   const { openModal } = useModal();
+  const { connect, disconnect } = useConnection();
 
   const connection = state.connections.find((c) => c.id === node.connectionId);
+  const connectionId = node.connectionId;
+
+  const handleRemove = async () => {
+    if (!connectionId) return;
+    // Disconnect if connected
+    if (connection?.status === 'connected') {
+      await disconnect(connectionId);
+    }
+    // Remove from persistence and state
+    await removeConnection(connectionId);
+    dispatch({ type: 'REMOVE_CONNECTION', payload: connectionId });
+  };
 
   useKeyboard((key) => {
-    if (!focused) {
-      return;
-    }
+    if (!focused || !connectionId) return;
 
     if (key.name === 'n') {
       openModal('create-database', { connectionAlias: node.name });
+    } else if (key.name === 'c' && connection?.status === 'disconnected') {
+      void connect(connectionId);
+    } else if (key.name === 'd' && connection?.status === 'connected') {
+      void disconnect(connectionId);
+    } else if (key.name === 'e') {
+      openModal('edit-connection', { connectionId });
+    } else if (key.name === 'x') {
+      openModal('confirm', {
+        title: 'Remove Connection',
+        message: `Remove connection "${connection?.alias ?? node.name}"?`,
+        confirmLabel: 'Remove',
+        destructive: true,
+        onConfirm: handleRemove,
+      });
     }
   });
 
@@ -64,8 +91,10 @@ export function ConnectionDetails({ node, focused }: ConnectionDetailsProps) {
         <ActionRow
           actions={[
             { key: 'n', label: 'New Database' },
-            { key: 'c', label: 'Connect' },
-            { key: 'd', label: 'Disconnect' },
+            { key: 'c', label: 'Connect', disabled: connection?.status === 'connected' },
+            { key: 'd', label: 'Disconnect', disabled: connection?.status !== 'connected' },
+            { key: 'e', label: 'Edit' },
+            { key: 'x', label: 'Remove' },
           ]}
         />
       </Section>
