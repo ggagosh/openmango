@@ -1,0 +1,68 @@
+<svg
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  xmlns="http://www.w3.org/2000/svg"
+  role="img"
+  aria-label="OpenMango logo"
+>
+  <defs>
+    <!-- Mango gradient -->
+    <linearGradient id="mangoGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFB74D"/>
+      <stop offset="100%" stop-color="#FF7A1A"/>
+    </linearGradient>
+
+    <!-- Leaf gradient -->
+    <linearGradient id="leafGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4BE27C"/>
+      <stop offset="100%" stop-color="#1E8A43"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mango body (geometric, app-icon friendly) -->
+  <path
+    fill="url(#mangoGradient)"
+    d="
+      M512 120
+      C330 120 220 310 220 500
+      C220 710 370 880 512 880
+      C654 880 804 710 804 500
+      C804 310 694 120 512 120
+      Z
+    "
+  />
+
+  <!-- Database rings (negative-space feel, subtle, scalable) -->
+  <g
+    fill="none"
+    stroke="rgba(255,255,255,0.38)"
+    stroke-width="20"
+    stroke-linecap="round"
+  >
+    <ellipse cx="512" cy="440" rx="180" ry="36"/>
+    <ellipse cx="512" cy="520" rx="180" ry="36"/>
+    <ellipse cx="512" cy="600" rx="180" ry="36"/>
+  </g>
+
+  <!-- Leaf (abstract, non-Mongo, minimal) -->
+  <path
+    fill="url(#leafGradient)"
+    d="
+      M560 92
+      C650 40 760 60 800 120
+      C700 120 620 170 590 230
+      C585 180 575 130 560 92
+      Z
+    "
+  />
+
+  <!-- Stem (very subtle) -->
+  <path
+    d="M548 112 C556 78 582 52 612 44"
+    stroke="#6B4A2B"
+    stroke-width="14"
+    stroke-linecap="round"
+    fill="none"
+  />
+</svg>

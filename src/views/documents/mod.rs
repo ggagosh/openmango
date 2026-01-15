@@ -1,0 +1,898 @@
+//! Document/Collection view component.
+
+mod document_tree;
+mod header;
+mod node_meta;
+mod pagination;
+mod tree_content;
+mod types;
+mod view_model;
+
+use crate::components::{Button, open_confirm_dialog};
+use crate::state::{
+    AppCommands, AppEvent, AppState, CollectionStats, CollectionSubview, SessionKey,
+};
+use crate::bson::bson_value_preview;
+use crate::theme::{colors, spacing};
+use gpui::*;
+use gpui_component::Sizable as _;
+use gpui_component::input::{InputEvent, InputState};
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::spinner::Spinner;
+use gpui_component::tree::tree;
+use mongodb::IndexModel;
+use mongodb::bson::Document;
+use view_model::DocumentViewModel;
+
+use tree_content::render_tree_row;
+
+/// View for browsing documents in a collection
+pub struct CollectionView {
+    state: Entity<AppState>,
+    view_model: DocumentViewModel,
+    filter_state: Option<Entity<InputState>>,
+    sort_state: Option<Entity<InputState>>,
+    projection_state: Option<Entity<InputState>>,
+    input_session: Option<SessionKey>,
+    filter_subscription: Option<Subscription>,
+    sort_subscription: Option<Subscription>,
+    projection_subscription: Option<Subscription>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl CollectionView {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let mut subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+
+        let current_session = {
+            let state_ref = state.read(cx);
+            let session = state_ref.current_session_key();
+            if let Some(session_key) = session.clone() {
+                let should_load = match state_ref.session(&session_key) {
+                    Some(session_state) => session_state.data.items.is_empty(),
+                    None => true,
+                };
+                if should_load {
+                    AppCommands::load_documents_for_session(state.clone(), session_key, cx);
+                }
+            }
+            session
+        };
+
+        let mut view_model = DocumentViewModel::new(cx);
+        view_model.set_current_session(current_session.clone(), &state, cx);
+
+        subscriptions.push(cx.subscribe(&state, |this, state, event, cx| match event {
+            AppEvent::ViewChanged | AppEvent::Connected(_) => {
+                let state_ref = state.read(cx);
+                let next_session = state_ref.current_session_key();
+                let should_load = next_session
+                    .as_ref()
+                    .map(|session| match state_ref.session(session) {
+                        Some(session_state) => session_state.data.items.is_empty(),
+                        None => true,
+                    })
+                    .unwrap_or(false);
+                if this.view_model.set_current_session(next_session.clone(), &state, cx) {
+                    if let Some(session) = next_session {
+                        if should_load {
+                            AppCommands::load_documents_for_session(state.clone(), session, cx);
+                        } else {
+                            this.view_model.rebuild_tree(&state, cx);
+                        }
+                    }
+                    cx.notify();
+                }
+            }
+            AppEvent::DocumentsLoaded { session, .. } => {
+                if !this.view_model.is_current_session(session) {
+                    return;
+                }
+                this.view_model.clear_inline_edit();
+                this.view_model.rebuild_tree(&state, cx);
+                this.view_model.sync_dirty_state(&state, cx);
+                cx.notify();
+            }
+            AppEvent::DocumentSaved { session, document } => {
+                if !this.view_model.is_current_session(session) {
+                    return;
+                }
+                if this.view_model.is_editing_doc(document) {
+                    this.view_model.clear_inline_edit();
+                }
+                this.view_model.rebuild_tree(&state, cx);
+                this.view_model.sync_dirty_state(&state, cx);
+                cx.notify();
+            }
+            AppEvent::DocumentDeleted { session, document } => {
+                if !this.view_model.is_current_session(session) {
+                    return;
+                }
+                if this.view_model.is_editing_doc(document) {
+                    this.view_model.clear_inline_edit();
+                }
+                this.view_model.rebuild_tree(&state, cx);
+                this.view_model.sync_dirty_state(&state, cx);
+                cx.notify();
+            }
+            AppEvent::DocumentSaveFailed { session, .. } => {
+                if this.view_model.is_current_session(session) {
+                    cx.notify();
+                }
+            }
+            AppEvent::DocumentDeleteFailed { session, .. } => {
+                if this.view_model.is_current_session(session) {
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }));
+
+        Self {
+            state,
+            view_model,
+            filter_state: None,
+            sort_state: None,
+            projection_state: None,
+            input_session: None,
+            filter_subscription: None,
+            sort_subscription: None,
+            projection_subscription: None,
+            _subscriptions: subscriptions,
+        }
+    }
+}
+
+impl Render for CollectionView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state_ref = self.state.read(cx);
+        let collection_name =
+            state_ref.conn.selected_collection.clone().unwrap_or_else(|| "Unknown".to_string());
+        let db_name =
+            state_ref.conn.selected_database.clone().unwrap_or_else(|| "Unknown".to_string());
+        let session_key = self.view_model.current_session();
+        let (
+            documents,
+            total,
+            page,
+            per_page,
+            is_loading,
+            selected_doc,
+            dirty_selected,
+            filter_raw,
+            sort_raw,
+            projection_raw,
+            query_options_open,
+            subview,
+            stats,
+            stats_loading,
+            stats_error,
+            indexes,
+            indexes_loading,
+            indexes_error,
+        ) = if let Some(session_key) = session_key.as_ref()
+            && let Some(session) = state_ref.session(session_key)
+        {
+            let selected_doc = session.view.selected_doc.clone();
+            let dirty_selected =
+                selected_doc.as_ref().is_some_and(|key| session.view.dirty.contains(key));
+            (
+                session.data.items.clone(),
+                session.data.total,
+                session.data.page,
+                session.data.per_page,
+                session.data.is_loading,
+                selected_doc,
+                dirty_selected,
+                session.data.filter_raw.clone(),
+                session.data.sort_raw.clone(),
+                session.data.projection_raw.clone(),
+                session.view.query_options_open,
+                session.view.subview,
+                session.data.stats.clone(),
+                session.data.stats_loading,
+                session.data.stats_error.clone(),
+                session.data.indexes.clone(),
+                session.data.indexes_loading,
+                session.data.indexes_error.clone(),
+            )
+        } else {
+            (
+                Vec::new(),
+                0,
+                0,
+                50,
+                false,
+                None,
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+                false,
+                CollectionSubview::Documents,
+                None::<CollectionStats>,
+                false,
+                None,
+                None,
+                false,
+                None,
+            )
+        };
+        let filter_active = !matches!(filter_raw.trim(), "" | "{}");
+        let sort_active = !matches!(sort_raw.trim(), "" | "{}");
+        let projection_active = !matches!(projection_raw.trim(), "" | "{}");
+
+        let per_page_u64 = per_page.max(1) as u64;
+        let total_pages = total.div_ceil(per_page_u64).max(1);
+        let display_page = page.min(total_pages.saturating_sub(1));
+        let range_start = if total == 0 { 0 } else { display_page * per_page_u64 + 1 };
+        let range_end = if total == 0 { 0 } else { ((display_page + 1) * per_page_u64).min(total) };
+
+        let view = cx.entity();
+        let node_meta = self.view_model.node_meta();
+        let editing_node_id = self.view_model.editing_node_id();
+        let tree_state = self.view_model.tree_state();
+        let inline_state = self.view_model.inline_state();
+
+        if let Some(session_key) = session_key.clone() {
+            if subview == CollectionSubview::Indexes
+                && indexes.is_none()
+                && !indexes_loading
+                && indexes_error.is_none()
+            {
+                AppCommands::load_collection_indexes(
+                    self.state.clone(),
+                    session_key.clone(),
+                    false,
+                    cx,
+                );
+            }
+
+            if subview == CollectionSubview::Stats
+                && stats.is_none()
+                && !stats_loading
+                && stats_error.is_none()
+            {
+                AppCommands::load_collection_stats(self.state.clone(), session_key, cx);
+            }
+        }
+
+        if self.filter_state.is_none() {
+            let filter_state = cx.new(|cx| {
+                let mut state =
+                    InputState::new(window, cx).placeholder("Filter (JSON)").clean_on_escape();
+                state.set_value("{}".to_string(), window, cx);
+                state
+            });
+            let subscription =
+                cx.subscribe_in(&filter_state, window, move |view, state, event, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { .. } => {
+                            if let Some(session_key) = view.view_model.current_session()
+                                && let Some(filter_state) = view.filter_state.clone()
+                            {
+                                CollectionView::apply_filter(
+                                    view.state.clone(),
+                                    session_key,
+                                    filter_state,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                        InputEvent::Blur => {
+                            let current = state.read(cx).value().to_string();
+                            if current.trim().is_empty() {
+                                state.update(cx, |input, cx| {
+                                    input.set_value("{}".to_string(), window, cx);
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            self.filter_state = Some(filter_state);
+            self.filter_subscription = Some(subscription);
+        }
+
+        if self.sort_state.is_none() {
+            let sort_state = cx.new(|cx| {
+                let mut state =
+                    InputState::new(window, cx).placeholder("Sort (JSON)").clean_on_escape();
+                state.set_value("{}".to_string(), window, cx);
+                state
+            });
+            let subscription =
+                cx.subscribe_in(&sort_state, window, move |view, state, event, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { .. } => {
+                            if let Some(session_key) = view.view_model.current_session()
+                                && let (Some(sort_state), Some(projection_state)) =
+                                    (view.sort_state.clone(), view.projection_state.clone())
+                            {
+                                CollectionView::apply_query_options(
+                                    view.state.clone(),
+                                    session_key,
+                                    sort_state,
+                                    projection_state,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                        InputEvent::Blur => {
+                            let current = state.read(cx).value().to_string();
+                            if current.trim().is_empty() {
+                                state.update(cx, |input, cx| {
+                                    input.set_value("{}".to_string(), window, cx);
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            self.sort_state = Some(sort_state);
+            self.sort_subscription = Some(subscription);
+        }
+
+        if self.projection_state.is_none() {
+            let projection_state = cx.new(|cx| {
+                let mut state =
+                    InputState::new(window, cx).placeholder("Projection (JSON)").clean_on_escape();
+                state.set_value("{}".to_string(), window, cx);
+                state
+            });
+            let subscription =
+                cx.subscribe_in(&projection_state, window, move |view, state, event, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { .. } => {
+                            if let Some(session_key) = view.view_model.current_session()
+                                && let (Some(sort_state), Some(projection_state)) =
+                                    (view.sort_state.clone(), view.projection_state.clone())
+                            {
+                                CollectionView::apply_query_options(
+                                    view.state.clone(),
+                                    session_key,
+                                    sort_state,
+                                    projection_state,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                        InputEvent::Blur => {
+                            let current = state.read(cx).value().to_string();
+                            if current.trim().is_empty() {
+                                state.update(cx, |input, cx| {
+                                    input.set_value("{}".to_string(), window, cx);
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            self.projection_state = Some(projection_state);
+            self.projection_subscription = Some(subscription);
+        }
+
+        if self.input_session != session_key {
+            self.input_session = session_key.clone();
+            if let Some(filter_state) = self.filter_state.clone() {
+                filter_state.update(cx, |state, cx| {
+                    if filter_raw.trim().is_empty() {
+                        state.set_value("{}".to_string(), window, cx);
+                    } else {
+                        state.set_value(filter_raw.clone(), window, cx);
+                    }
+                });
+            }
+            if let Some(sort_state) = self.sort_state.clone() {
+                sort_state.update(cx, |state, cx| {
+                    if sort_raw.trim().is_empty() {
+                        state.set_value("{}".to_string(), window, cx);
+                    } else {
+                        state.set_value(sort_raw.clone(), window, cx);
+                    }
+                });
+            }
+            if let Some(projection_state) = self.projection_state.clone() {
+                projection_state.update(cx, |state, cx| {
+                    if projection_raw.trim().is_empty() {
+                        state.set_value("{}".to_string(), window, cx);
+                    } else {
+                        state.set_value(projection_raw.clone(), window, cx);
+                    }
+                });
+            }
+        }
+
+        let filter_state = self.filter_state.clone();
+        let sort_state = self.sort_state.clone();
+        let projection_state = self.projection_state.clone();
+
+        let state_for_prev = self.state.clone();
+        let state_for_next = self.state.clone();
+
+        let mut root = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .bg(colors::bg_app())
+            .child(self.render_header(
+                &collection_name,
+                &db_name,
+                total,
+                session_key.clone(),
+                selected_doc,
+                dirty_selected,
+                is_loading,
+                filter_state,
+                filter_active,
+                sort_state,
+                projection_state,
+                sort_active,
+                projection_active,
+                query_options_open,
+                subview,
+                stats_loading,
+                window,
+                cx,
+            ));
+
+        match subview {
+            CollectionSubview::Documents => {
+                let documents_view = div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .px(spacing::lg())
+                                    .py(spacing::xs())
+                                    .bg(colors::bg_header())
+                                    .border_b_1()
+                                    .border_color(colors::border())
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .text_xs()
+                                            .text_color(colors::text_muted())
+                                            .child("Key"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .text_xs()
+                                            .text_color(colors::text_muted())
+                                            .child("Value"),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(120.0))
+                                            .text_xs()
+                                            .text_color(colors::text_muted())
+                                            .child("Type"),
+                                    ),
+                            )
+                            .child(
+                                div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(
+                                    if is_loading {
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap(spacing::sm())
+                                            .child(Spinner::new().small())
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(colors::text_muted())
+                                                    .child("Loading documents..."),
+                                            )
+                                            .into_any_element()
+                                    } else if documents.is_empty() {
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(colors::text_muted())
+                                                    .child("No documents found"),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        tree(&tree_state, {
+                                            let view = view.clone();
+                                            let node_meta = node_meta.clone();
+                                            let editing_node_id = editing_node_id.clone();
+                                            let inline_state = inline_state.clone();
+                                            let tree_state = tree_state.clone();
+                                            let state_clone = self.state.clone();
+                                            let session_key = session_key.clone();
+
+                                            move |ix, entry, selected, _window, _cx| {
+                                                render_tree_row(
+                                                    ix,
+                                                    entry,
+                                                    selected,
+                                                    &node_meta,
+                                                    &editing_node_id,
+                                                    &inline_state,
+                                                    view.clone(),
+                                                    tree_state.clone(),
+                                                    state_clone.clone(),
+                                                    session_key.clone(),
+                                                )
+                                            }
+                                        })
+                                        .into_any_element()
+                                    },
+                                ),
+                            ),
+                    );
+
+                root = root.child(documents_view).child(Self::render_pagination(
+                    display_page,
+                    total_pages,
+                    range_start,
+                    range_end,
+                    total,
+                    is_loading,
+                    session_key,
+                    state_for_prev,
+                    state_for_next,
+                ));
+            }
+            CollectionSubview::Indexes => {
+                root = root.child(self.render_indexes_view(
+                    indexes,
+                    indexes_loading,
+                    indexes_error,
+                    session_key,
+                ));
+            }
+            CollectionSubview::Stats => {
+                root = root.child(self.render_stats_view(
+                    stats,
+                    stats_loading,
+                    stats_error,
+                    session_key,
+                ));
+            }
+        }
+
+        root
+    }
+}
+
+impl CollectionView {
+    fn render_indexes_view(
+        &self,
+        indexes: Option<Vec<IndexModel>>,
+        indexes_loading: bool,
+        indexes_error: Option<String>,
+        session_key: Option<SessionKey>,
+    ) -> AnyElement {
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .bg(colors::bg_app());
+
+        if indexes_loading {
+            return content
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap(spacing::sm())
+                        .child(Spinner::new().small())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors::text_muted())
+                                .child("Loading indexes..."),
+                        ),
+                )
+                .into_any_element();
+        }
+
+        if let Some(error) = indexes_error {
+            return content
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap(spacing::sm())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors::text_error())
+                                .child(error),
+                        )
+                        .child(
+                            Button::new("retry-indexes")
+                                .ghost()
+                                .label("Retry")
+                                .disabled(session_key.is_none())
+                                .on_click({
+                                    let session_key = session_key.clone();
+                                    let state = self.state.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        let Some(session_key) = session_key.clone() else {
+                                            return;
+                                        };
+                                        AppCommands::load_collection_indexes(
+                                            state.clone(),
+                                            session_key,
+                                            true,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                        ),
+                )
+                .into_any_element();
+        }
+
+        let indexes = indexes.unwrap_or_default();
+        if indexes.is_empty() {
+            return content
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(colors::text_muted())
+                        .child("No indexes found"),
+                )
+                .into_any_element();
+        }
+
+        let header_row = div()
+            .flex()
+            .items_center()
+            .px(spacing::lg())
+            .py(spacing::xs())
+            .bg(colors::bg_header())
+            .border_b_1()
+            .border_color(colors::border())
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child("Name"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child("Keys"),
+            )
+            .child(
+                div()
+                    .w(px(200.0))
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child("Flags"),
+            )
+            .child(
+                div()
+                    .w(px(90.0))
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child("Actions"),
+            );
+
+        let rows = indexes
+            .into_iter()
+            .enumerate()
+            .map(|(index, model)| {
+                let name = index_name(&model);
+                let name_label = name.clone().unwrap_or_else(|| "Unnamed".to_string());
+                let keys_label = index_keys_preview(&model.keys);
+                let flags_label = index_flags(&model, &name_label);
+                let can_drop = name.as_ref().is_some_and(|n| n != "_id_");
+
+                let state = self.state.clone();
+                let session_key = session_key.clone();
+                let drop_name = name.clone();
+
+                div()
+                    .flex()
+                    .items_center()
+                    .px(spacing::lg())
+                    .py(spacing::xs())
+                    .border_b_1()
+                    .border_color(colors::border_subtle())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(colors::text_primary())
+                            .child(name_label),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(colors::text_secondary())
+                            .child(keys_label),
+                    )
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .text_sm()
+                            .text_color(colors::text_muted())
+                            .child(flags_label),
+                    )
+                    .child(
+                        div().w(px(90.0)).child(
+                            Button::new(("drop-index", index))
+                                .danger()
+                                .compact()
+                                .label("Drop")
+                                .disabled(!can_drop || session_key.is_none())
+                                .on_click({
+                                    let state = state.clone();
+                                    let session_key = session_key.clone();
+                                    let drop_name = drop_name.clone();
+                                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        let Some(session_key) = session_key.clone() else {
+                                            return;
+                                        };
+                                        let Some(drop_name) = drop_name.clone() else {
+                                            return;
+                                        };
+                                        if drop_name == "_id_" {
+                                            return;
+                                        }
+                                        let message = format!(
+                                            "Drop index {}? This cannot be undone.",
+                                            drop_name
+                                        );
+                                        open_confirm_dialog(
+                                            window,
+                                            cx,
+                                            "Drop index",
+                                            message,
+                                            "Drop",
+                                            true,
+                                            {
+                                                let state = state.clone();
+                                                let session_key = session_key.clone();
+                                                let drop_name = drop_name.clone();
+                                                move |_window, cx| {
+                                                    AppCommands::drop_collection_index(
+                                                        state.clone(),
+                                                        session_key.clone(),
+                                                        drop_name.clone(),
+                                                        cx,
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    }
+                                }),
+                        ),
+                    )
+            })
+            .collect::<Vec<_>>();
+
+        content = content.child(header_row).child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_y_scrollbar()
+                .children(rows),
+        );
+
+        content.into_any_element()
+    }
+
+    fn render_stats_view(
+        &self,
+        stats: Option<CollectionStats>,
+        stats_loading: bool,
+        stats_error: Option<String>,
+        session_key: Option<SessionKey>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_y_scrollbar()
+            .p(spacing::lg())
+            .child(Self::render_stats_row(
+                stats,
+                stats_loading,
+                stats_error,
+                session_key,
+                self.state.clone(),
+            ))
+            .into_any_element()
+    }
+}
+
+fn index_name(model: &IndexModel) -> Option<String> {
+    model.options.as_ref().and_then(|options| options.name.clone())
+}
+
+fn index_keys_preview(keys: &Document) -> String {
+    let parts: Vec<String> = keys
+        .iter()
+        .map(|(key, value)| format!("{key}:{}", bson_value_preview(value, 16)))
+        .collect();
+    if parts.is_empty() {
+        "—".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn index_flags(model: &IndexModel, name: &str) -> String {
+    let Some(options) = model.options.as_ref() else {
+        return if name == "_id_" { "default".to_string() } else { "—".to_string() };
+    };
+
+    let mut flags = Vec::new();
+    if name == "_id_" {
+        flags.push("default".to_string());
+    }
+    if options.unique.unwrap_or(false) {
+        flags.push("unique".to_string());
+    }
+    if options.sparse.unwrap_or(false) {
+        flags.push("sparse".to_string());
+    }
+    if let Some(expire_after) = options.expire_after {
+        flags.push(format!("ttl {}s", expire_after.as_secs()));
+    }
+    if options.partial_filter_expression.is_some() {
+        flags.push("partial".to_string());
+    }
+    if options.hidden.unwrap_or(false) {
+        flags.push("hidden".to_string());
+    }
+
+    if flags.is_empty() { "—".to_string() } else { flags.join(", ") }
+}

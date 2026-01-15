@@ -1,0 +1,1322 @@
+use crate::components::Button;
+use crate::components::ConnectionDialog;
+use gpui::prelude::{FluentBuilder as _, StatefulInteractiveElement as _};
+use gpui::*;
+use gpui_component::WindowExt as _;
+use gpui_component::dialog::Dialog;
+use gpui_component::input::{Input, InputState};
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::spinner::Spinner;
+use gpui_component::{Icon, IconName, Sizable as _};
+use std::collections::HashSet;
+use uuid::Uuid;
+
+use crate::components::{ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
+use crate::models::{ActiveConnection, SavedConnection};
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
+use crate::theme::{colors, sizing, spacing};
+
+// =============================================================================
+// App Component
+// =============================================================================
+
+pub struct AppRoot {
+    state: Entity<AppState>,
+    sidebar: Entity<Sidebar>,
+    content_area: Entity<ContentArea>,
+}
+
+impl AppRoot {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Create the app state entity
+        let state = cx.new(|_| AppState::new());
+
+        // Create sidebar with state reference
+        let sidebar = cx.new(|cx| Sidebar::new(state.clone(), window, cx));
+
+        // Create content area with state reference
+        let content_area = cx.new(|cx| ContentArea::new(state.clone(), cx));
+
+        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+
+        Self { state, sidebar, content_area }
+    }
+}
+
+impl Render for AppRoot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Read state for StatusBar props
+        let state = self.state.read(cx);
+        let is_connected = state.conn.active.is_some();
+        let connection_name = state.conn.active.as_ref().map(|c| c.config.name.clone());
+        let status_message = state.status_message.clone();
+
+        // Render dialog layer (Context derefs to App)
+        use gpui_component::Root;
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(crate::theme::bg_app())
+            .text_color(crate::theme::text_primary())
+            .font_family(crate::theme::fonts::ui())
+            .child(
+                // Main content area: Sidebar + Content
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(self.sidebar.clone())
+                    .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
+            )
+            .child(StatusBar::new(is_connected, connection_name, status_message))
+            .children(dialog_layer)
+    }
+}
+
+// =============================================================================
+// Sidebar Component
+// =============================================================================
+
+pub struct Sidebar {
+    state: Entity<AppState>,
+    connecting_connection: Option<Uuid>,
+    loading_databases: HashSet<TreeNodeId>,
+    expanded_nodes: HashSet<TreeNodeId>,
+    selected_tree_id: Option<TreeNodeId>,
+    entries: Vec<SidebarEntry>,
+    scroll_handle: UniformListScrollHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug)]
+struct SidebarEntry {
+    id: TreeNodeId,
+    label: String,
+    depth: usize,
+    is_folder: bool,
+    is_expanded: bool,
+}
+
+impl Sidebar {
+    pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (connections, active) = {
+            let state_ref = state.read(cx);
+            (state_ref.connections.clone(), state_ref.conn.active.clone())
+        };
+        let entries = Self::build_entries(&connections, active.as_ref(), &HashSet::new());
+
+        let mut subscriptions = vec![];
+
+        // Subscribe to AppState events for targeted tree updates (Phase 5.5)
+        subscriptions.push(cx.subscribe(&state, move |this, _, event, cx| match event {
+            AppEvent::ConnectionAdded
+            | AppEvent::ConnectionUpdated
+            | AppEvent::ConnectionRemoved
+            | AppEvent::DatabasesLoaded(_) => {
+                this.refresh_tree(cx);
+            }
+            AppEvent::CollectionsLoaded(_) => {
+                this.loading_databases.clear();
+                this.refresh_tree(cx);
+            }
+            AppEvent::CollectionsFailed(_) => {
+                this.loading_databases.clear();
+                cx.notify();
+            }
+            AppEvent::Connecting(connection_id) => {
+                this.connecting_connection = Some(*connection_id);
+                cx.notify();
+            }
+            AppEvent::Connected(connection_id) => {
+                if this.connecting_connection == Some(*connection_id) {
+                    this.connecting_connection = None;
+                }
+                this.loading_databases.clear();
+                if this.state.read(cx).workspace_restore_pending
+                    && this.state.read(cx).workspace.last_connection_id == Some(*connection_id)
+                {
+                    this.state.update(cx, |state, cx| {
+                        state.restore_workspace_after_connect(cx);
+                    });
+                    this.restore_workspace_expansion(cx);
+                }
+                this.refresh_tree(cx);
+            }
+            AppEvent::Disconnected(connection_id) => {
+                if this.connecting_connection == Some(*connection_id) {
+                    this.connecting_connection = None;
+                }
+                this.loading_databases.clear();
+                this.selected_tree_id = None;
+                this.refresh_tree(cx);
+            }
+            AppEvent::ConnectionFailed(_) => {
+                this.connecting_connection = None;
+                this.loading_databases.clear();
+                this.selected_tree_id = None;
+                cx.notify();
+            }
+            AppEvent::DocumentsLoaded { .. }
+            | AppEvent::DocumentInserted
+            | AppEvent::DocumentInsertFailed { .. }
+            | AppEvent::DocumentSaved { .. }
+            | AppEvent::DocumentSaveFailed { .. }
+            | AppEvent::DocumentDeleted { .. }
+            | AppEvent::DocumentDeleteFailed { .. }
+            | AppEvent::IndexesLoaded { .. }
+            | AppEvent::IndexesLoadFailed { .. }
+            | AppEvent::IndexDropped { .. }
+            | AppEvent::IndexDropFailed { .. } => {}
+            AppEvent::ViewChanged => {
+                this.sync_selection_from_state(cx);
+            }
+        }));
+
+        subscriptions.push(cx.observe_window_bounds(_window, |this, window, cx| {
+            this.state.update(cx, |state, _cx| {
+                state.set_workspace_window_bounds(window.window_bounds());
+            });
+        }));
+
+        let sidebar = Self {
+            state,
+            connecting_connection: None,
+            loading_databases: HashSet::new(),
+            expanded_nodes: HashSet::new(),
+            selected_tree_id: None,
+            entries,
+            scroll_handle: UniformListScrollHandle::default(),
+            _subscriptions: subscriptions,
+        };
+
+        if let Some(connection_id) = sidebar.state.read(cx).workspace_autoconnect_id() {
+            AppCommands::connect(sidebar.state.clone(), connection_id, cx);
+        }
+
+        sidebar
+    }
+
+    fn refresh_tree(&mut self, cx: &mut Context<Self>) {
+        let (connections, active) = {
+            let state_ref = self.state.read(cx);
+            (state_ref.connections.clone(), state_ref.conn.active.clone())
+        };
+
+        if self.selected_tree_id.is_none() {
+            let state_ref = self.state.read(cx);
+            if let Some(active_conn) = active.as_ref()
+                && let Some(db) = state_ref.conn.selected_database.as_ref()
+            {
+                if let Some(col) = state_ref.conn.selected_collection.as_ref() {
+                    self.selected_tree_id =
+                        Some(TreeNodeId::collection(active_conn.config.id, db, col));
+                } else {
+                    self.selected_tree_id = Some(TreeNodeId::database(active_conn.config.id, db));
+                }
+            }
+        }
+
+        self.entries = Self::build_entries(&connections, active.as_ref(), &self.expanded_nodes);
+        if let Some(node_id) = &self.selected_tree_id
+            && let Some(ix) = self.entries.iter().position(|entry| &entry.id == node_id)
+        {
+            self.scroll_handle.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
+    fn sync_selection_from_state(&mut self, cx: &mut Context<Self>) {
+        let (connection_id, selected_db, selected_col) = {
+            let state_ref = self.state.read(cx);
+            let Some(active) = state_ref.conn.active.as_ref() else {
+                return;
+            };
+            (
+                active.config.id,
+                state_ref.conn.selected_database.clone(),
+                state_ref.conn.selected_collection.clone(),
+            )
+        };
+
+        if let Some(db) = selected_db.as_ref() {
+            self.expanded_nodes
+                .insert(TreeNodeId::connection(connection_id));
+            if selected_col.is_some() {
+                self.expanded_nodes
+                    .insert(TreeNodeId::database(connection_id, db));
+            }
+        }
+
+        self.selected_tree_id = match (selected_db.as_ref(), selected_col.as_ref()) {
+            (Some(db), Some(col)) => Some(TreeNodeId::collection(
+                connection_id,
+                db.to_string(),
+                col.to_string(),
+            )),
+            (Some(db), None) => Some(TreeNodeId::database(connection_id, db.to_string())),
+            _ => None,
+        };
+
+        self.persist_expanded_nodes(cx);
+        self.refresh_tree(cx);
+    }
+
+    fn persist_expanded_nodes(&mut self, cx: &mut Context<Self>) {
+        let mut nodes: Vec<String> = self.expanded_nodes.iter().map(|id| id.to_tree_id()).collect();
+        nodes.sort();
+        self.state.update(cx, |state, _cx| {
+            state.set_workspace_expanded_nodes(nodes);
+        });
+    }
+
+    fn restore_workspace_expansion(&mut self, cx: &mut Context<Self>) {
+        let (connection_id, selected_db, expanded) = {
+            let state_ref = self.state.read(cx);
+            let Some(active) = state_ref.conn.active.as_ref() else {
+                return;
+            };
+            let mut expanded: HashSet<TreeNodeId> = state_ref
+                .workspace
+                .expanded_nodes
+                .iter()
+                .filter_map(|id| TreeNodeId::from_tree_id(id))
+                .filter(|node| node.connection_id() == active.config.id)
+                .collect();
+
+            let selected_db = state_ref.conn.selected_database.clone();
+            if let Some(db) = selected_db.as_ref() {
+                expanded.insert(TreeNodeId::connection(active.config.id));
+                expanded.insert(TreeNodeId::database(active.config.id, db));
+            }
+
+            (active.config.id, selected_db, expanded)
+        };
+
+        self.expanded_nodes = expanded;
+        if selected_db.is_some() {
+            self.expanded_nodes.insert(TreeNodeId::connection(connection_id));
+        }
+        self.selected_tree_id = None;
+        self.refresh_tree(cx);
+        self.load_expanded_databases(cx);
+    }
+
+    fn load_expanded_databases(&mut self, cx: &mut Context<Self>) {
+        let (connection_id, collections) = {
+            let state_ref = self.state.read(cx);
+            let Some(conn) = state_ref.conn.active.as_ref() else {
+                return;
+            };
+            (conn.config.id, conn.collections.clone())
+        };
+
+        for node in self.expanded_nodes.iter() {
+            let TreeNodeId::Database { connection, database } = node else {
+                continue;
+            };
+            if *connection != connection_id {
+                continue;
+            }
+            if collections.contains_key(database) || self.loading_databases.contains(node) {
+                continue;
+            }
+            self.loading_databases.insert(node.clone());
+            AppCommands::load_collections(self.state.clone(), database.clone(), cx);
+        }
+    }
+
+    fn build_entries(
+        connections: &[SavedConnection],
+        active: Option<&ActiveConnection>,
+        expanded: &HashSet<TreeNodeId>,
+    ) -> Vec<SidebarEntry> {
+        let mut items = Vec::new();
+        for conn in connections {
+            let conn_node_id = TreeNodeId::connection(conn.id);
+            let conn_expanded = expanded.contains(&conn_node_id);
+            let active_conn = active.filter(|active_conn| active_conn.config.id == conn.id);
+            let conn_is_folder = active_conn.is_some();
+            items.push(SidebarEntry {
+                id: conn_node_id,
+                label: conn.name.clone(),
+                depth: 0,
+                is_folder: conn_is_folder,
+                is_expanded: conn_expanded,
+            });
+
+            if let Some(active_conn) = active_conn
+                && conn_expanded
+            {
+                for db_name in &active_conn.databases {
+                    let db_node_id = TreeNodeId::database(conn.id, db_name);
+                    let db_expanded = expanded.contains(&db_node_id);
+                    items.push(SidebarEntry {
+                        id: db_node_id.clone(),
+                        label: db_name.clone(),
+                        depth: 1,
+                        is_folder: true,
+                        is_expanded: db_expanded,
+                    });
+
+                    if db_expanded && let Some(collections) = active_conn.collections.get(db_name) {
+                        for col_name in collections {
+                            let col_node_id = TreeNodeId::collection(conn.id, db_name, col_name);
+                            items.push(SidebarEntry {
+                                id: col_node_id,
+                                label: col_name.clone(),
+                                depth: 2,
+                                is_folder: false,
+                                is_expanded: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    fn open_add_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
+        ConnectionDialog::open(state, window, cx);
+    }
+}
+
+impl Render for Sidebar {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state_ref = self.state.read(cx);
+        let active_id = state_ref.conn.active.as_ref().map(|c| c.config.id);
+        let connecting_id = self.connecting_connection;
+
+        let state = self.state.clone();
+        let state_for_tree = self.state.clone();
+        let sidebar_entity = cx.entity();
+        let scroll_handle = self.scroll_handle.clone();
+
+        div()
+            .flex()
+            .flex_col()
+            .w(sizing::sidebar_width())
+            .min_w(sizing::sidebar_width())
+            .flex_shrink_0()
+            .h_full()
+            .bg(colors::bg_sidebar())
+            .border_r_1()
+            .border_color(colors::border())
+            .child(
+                // Header with "+" button
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(spacing::md())
+                    .h(sizing::header_height())
+                    .border_b_1()
+                    .border_color(colors::border())
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(colors::text_secondary())
+                            .child("CONNECTIONS"),
+                    )
+                    .child(
+                        // Add button
+                        div()
+                            .id("add-connection-btn")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(sizing::icon_lg())
+                            .h(sizing::icon_lg())
+                            .rounded(crate::theme::borders::radius_sm())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(colors::bg_hover()))
+                            .text_color(colors::text_primary())
+                            .child(Icon::new(IconName::Plus).xsmall())
+                            .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                Sidebar::open_add_dialog(state.clone(), window, cx);
+                            }),
+                    ),
+            )
+            .child(
+                // Connection tree
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .child(if self.entries.is_empty() {
+                        div()
+                            .p(spacing::md())
+                            .text_sm()
+                            .text_color(colors::text_muted())
+                            .child("No connections yet")
+                            .into_any_element()
+                    } else {
+                        uniform_list("sidebar-rows", self.entries.len(), {
+                            let state_clone = state_for_tree.clone();
+                            let sidebar_entity = sidebar_entity.clone();
+                            cx.processor(
+                                move |sidebar,
+                                      visible_range: std::ops::Range<usize>,
+                                      _window,
+                                      _cx| {
+                                    let mut items = Vec::with_capacity(visible_range.len());
+                                    let active_id = active_id;
+                                    let connecting_id = connecting_id;
+
+                                    for ix in visible_range {
+                                        let Some(entry) = sidebar.entries.get(ix) else {
+                                            continue;
+                                        };
+                                        let node_id = entry.id.clone();
+                                        let depth = entry.depth;
+                                        let is_folder = entry.is_folder;
+                                        let is_expanded = entry.is_expanded;
+                                        let label = entry.label.clone();
+
+                                        let is_connection = node_id.is_connection();
+                                        let is_database = node_id.is_database();
+                                        let is_collection = node_id.is_collection();
+
+                                        let connection_id = node_id.connection_id();
+                                        let is_connected = is_connection && active_id == Some(connection_id);
+                                        let is_connecting =
+                                            is_connection && connecting_id == Some(connection_id);
+                                        let is_loading_db =
+                                            is_database && sidebar.loading_databases.contains(&node_id);
+
+                                        let db_name =
+                                            node_id.database_name().map(|db| db.to_string());
+                                        let selected_db = db_name.clone();
+                                        let selected_col =
+                                            node_id.collection_name().map(|col| col.to_string());
+
+                                        let selected =
+                                            sidebar.selected_tree_id.as_ref() == Some(&node_id);
+
+                                        let row = div()
+                                            .id(("sidebar-row", ix))
+                                            .flex()
+                                            .items_center()
+                                            .w_full()
+                                            .gap(px(4.0))
+                                            .pl(px(8.0 + 12.0 * depth as f32))
+                                            .py(px(2.0))
+                                            .on_click({
+                                                let node_id = node_id.clone();
+                                                let state_clone = state_clone.clone();
+                                                let db_name = db_name.clone();
+                                                let selected_db = selected_db.clone();
+                                                let selected_col = selected_col.clone();
+                                                let sidebar_entity = sidebar_entity.clone();
+                                                move |event: &ClickEvent,
+                                                      _window: &mut Window,
+                                                      cx: &mut App| {
+                                                    _window.blur();
+                                                    cx.stop_propagation();
+
+                                                    let is_double_click =
+                                                        sidebar_entity.update(cx, |sidebar, cx| {
+                                                            sidebar.selected_tree_id =
+                                                                Some(node_id.clone());
+                                                            cx.notify();
+                                                            event.click_count() >= 2
+                                                        });
+
+                                                    if is_double_click {
+                                                        // Double-click on connection to connect (expand only)
+                                                        if is_connection {
+                                                            let should_expand = if is_connecting
+                                                            {
+                                                                true
+                                                            } else if is_connected {
+                                                                !is_expanded
+                                                            } else {
+                                                                true
+                                                            };
+                                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                                if should_expand {
+                                                                    sidebar
+                                                                        .expanded_nodes
+                                                                        .insert(node_id.clone());
+                                                                } else {
+                                                                    sidebar.expanded_nodes.remove(
+                                                                        &node_id,
+                                                                    );
+                                                                }
+                                                                sidebar.persist_expanded_nodes(cx);
+                                                                sidebar.refresh_tree(cx);
+                                                            });
+
+                                                            if is_connected || is_connecting {
+                                                                return;
+                                                            }
+                                                            AppCommands::connect(
+                                                                state_clone.clone(),
+                                                                node_id.connection_id(),
+                                                                cx,
+                                                            );
+                                                        }
+                                                        // Double-click on database to load collections (expand only)
+                                                        else if is_database
+                                                            && let Some(ref db) = db_name
+                                                        {
+                                                            let should_expand = !is_expanded;
+                                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                                if should_expand {
+                                                                    sidebar
+                                                                        .expanded_nodes
+                                                                        .insert(node_id.clone());
+                                                                } else {
+                                                                    sidebar.expanded_nodes.remove(
+                                                                        &node_id,
+                                                                    );
+                                                                }
+                                                                sidebar.persist_expanded_nodes(cx);
+                                                                sidebar.refresh_tree(cx);
+                                                            });
+
+                                                            if !should_expand || is_loading_db {
+                                                                return;
+                                                            }
+                                                            let should_load = state_clone
+                                                                .read(cx)
+                                                                .conn
+                                                                .active
+                                                                .as_ref()
+                                                                .is_some_and(|conn| {
+                                                                    !conn
+                                                                        .collections
+                                                                        .contains_key(db)
+                                                                });
+                                                            if should_load {
+                                                                sidebar_entity.update(
+                                                                    cx,
+                                                                    |sidebar, cx| {
+                                                                        sidebar
+                                                                            .loading_databases
+                                                                            .insert(node_id.clone());
+                                                                        cx.notify();
+                                                                    },
+                                                                );
+                                                                AppCommands::load_collections(
+                                                                    state_clone.clone(),
+                                                                    db.clone(),
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        }
+                                                        // Double-click on collection to open
+                                                        else if is_collection
+                                                            && let (Some(db), Some(col)) =
+                                                                (&selected_db, &selected_col)
+                                                        {
+                                                            state_clone.update(cx, |state, cx| {
+                                                                state.select_collection(
+                                                                    db.clone(),
+                                                                    col.clone(),
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        }
+                                                    }
+                                                    // Single click: select database or preview collection
+                                                    else if is_database
+                                                        && let Some(db) = &db_name
+                                                    {
+                                                        state_clone.update(cx, |state, cx| {
+                                                            state.select_database(db.clone(), cx);
+                                                        });
+                                                    } else if is_collection
+                                                        && let (Some(db), Some(col)) =
+                                                            (&selected_db, &selected_col)
+                                                    {
+                                                        state_clone.update(cx, |state, cx| {
+                                                            state.preview_collection(
+                                                                db.clone(),
+                                                                col.clone(),
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }
+                                            })
+                                            .hover(|s| s.bg(colors::list_hover()))
+                                            .when(selected, |s| s.bg(colors::list_selected()))
+                                            .cursor_pointer()
+                                            // Chevron for expandable items
+                                            .when(is_folder, |this| {
+                                                this.child(
+                                                    Icon::new(if is_expanded {
+                                                        IconName::ChevronDown
+                                                    } else {
+                                                        IconName::ChevronRight
+                                                    })
+                                                    .size(sizing::icon_sm())
+                                                    .text_color(colors::text_muted()),
+                                                )
+                                            })
+                                            // Spacer for non-folders (align with chevron)
+                                            .when(!is_folder, |this| {
+                                                this.child(div().w(sizing::icon_sm()))
+                                            })
+                                            // Connection: status dot + server icon
+                                            .when(is_connection, |this| {
+                                                this.child(
+                                                    div()
+                                                        .w(sizing::status_dot())
+                                                        .h(sizing::status_dot())
+                                                        .rounded_full()
+                                                        .bg(if is_connected {
+                                                            colors::status_success()
+                                                        } else if is_connecting {
+                                                            colors::status_warning()
+                                                        } else {
+                                                            colors::text_muted()
+                                                        }),
+                                                )
+                                                .child(
+                                                    Icon::new(IconName::Globe)
+                                                        .size(sizing::icon_md())
+                                                        .text_color(if is_connected {
+                                                            colors::text_primary()
+                                                        } else {
+                                                            colors::text_secondary()
+                                                        }),
+                                                )
+                                            })
+                                            // Database: folder icon
+                                            .when(is_database, |this| {
+                                                this.child(
+                                                    Icon::new(IconName::Folder)
+                                                        .size(sizing::icon_md())
+                                                        .text_color(colors::text_secondary()),
+                                                )
+                                            })
+                                            // Collection: file icon
+                                            .when(is_collection, |this| {
+                                                this.child(
+                                                    Icon::new(IconName::File)
+                                                        .size(sizing::icon_md())
+                                                        .text_color(colors::text_muted()),
+                                                )
+                                            })
+                                            // Label
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(if selected {
+                                                        colors::text_primary()
+                                                    } else {
+                                                        colors::text_secondary()
+                                                    })
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .child(label),
+                                            )
+                                            .when(is_connecting || is_loading_db, |this| {
+                                                this.child(Spinner::new().xsmall())
+                                            });
+
+                                        let row = row.context_menu({
+                                            let menu_node_id = node_id.clone();
+                                            let state = state_clone.clone();
+                                            let sidebar_entity = sidebar_entity.clone();
+                                            move |menu, _window, cx| {
+                                                match menu_node_id.clone() {
+                                                    TreeNodeId::Connection(connection_id) => {
+                                                        build_connection_menu(
+                                                            menu,
+                                                            state.clone(),
+                                                            sidebar_entity.clone(),
+                                                            connection_id,
+                                                            connecting_id,
+                                                            cx,
+                                                        )
+                                                    }
+                                                    TreeNodeId::Database {
+                                                        connection,
+                                                        database,
+                                                    } => {
+                                                        let node_id = TreeNodeId::database(
+                                                            connection,
+                                                            database.clone(),
+                                                        );
+                                                        build_database_menu(
+                                                            menu,
+                                                            state.clone(),
+                                                            sidebar_entity.clone(),
+                                                            node_id,
+                                                            database.clone(),
+                                                            is_loading_db,
+                                                            cx,
+                                                        )
+                                                    }
+                                                    TreeNodeId::Collection {
+                                                        connection,
+                                                        database,
+                                                        collection,
+                                                    } => build_collection_menu(
+                                                        menu,
+                                                        state.clone(),
+                                                        connection,
+                                                        database.clone(),
+                                                        collection.clone(),
+                                                        cx,
+                                                    ),
+                                                }
+                                            }
+                                        });
+
+                                        items.push(row);
+                                    }
+
+                                    items
+                                },
+                            )
+                        })
+                        .flex_grow()
+                        .size_full()
+                        .track_scroll(scroll_handle)
+                        .with_sizing_behavior(ListSizingBehavior::Auto)
+                        .into_any_element()
+                    }),
+            )
+    }
+}
+
+fn build_connection_menu(
+    mut menu: PopupMenu,
+    state: Entity<AppState>,
+    sidebar: Entity<Sidebar>,
+    connection_id: Uuid,
+    connecting_id: Option<Uuid>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let is_connected =
+        state.read(cx).conn.active.as_ref().is_some_and(|conn| conn.config.id == connection_id);
+    let is_connecting = connecting_id == Some(connection_id);
+
+    menu = menu
+        .item(PopupMenuItem::new("Connect").disabled(is_connected || is_connecting).on_click({
+            let state = state.clone();
+            let sidebar = sidebar.clone();
+            move |_, _window, cx| {
+                if state
+                    .read(cx)
+                    .conn
+                    .active
+                    .as_ref()
+                    .is_some_and(|conn| conn.config.id == connection_id)
+                {
+                    return;
+                }
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.expanded_nodes.insert(TreeNodeId::connection(connection_id));
+                    sidebar.persist_expanded_nodes(cx);
+                    sidebar.refresh_tree(cx);
+                });
+
+                AppCommands::connect(state.clone(), connection_id, cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Edit Connection...").on_click({
+            let state = state.clone();
+            move |_, window, cx| {
+                if let Some(conn) = state
+                    .read(cx)
+                    .connections
+                    .iter()
+                    .find(|conn| conn.id == connection_id)
+                    .cloned()
+                {
+                    ConnectionDialog::open_edit(state.clone(), conn, window, cx);
+                }
+            }
+        }))
+        .item(PopupMenuItem::new("Remove Connection...").on_click({
+            let state = state.clone();
+            move |_, window, cx| {
+                let name = state
+                    .read(cx)
+                    .connections
+                    .iter()
+                    .find(|conn| conn.id == connection_id)
+                    .map(|conn| conn.name.clone())
+                    .unwrap_or_else(|| "this connection".to_string());
+                let message = format!("Remove connection \"{name}\"? This cannot be undone.");
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Remove connection",
+                    message,
+                    "Remove",
+                    true,
+                    {
+                        let state = state.clone();
+                        move |_window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.remove_connection(connection_id, cx);
+                            });
+                        }
+                    },
+                );
+            }
+        }))
+        .item(PopupMenuItem::new("Disconnect").disabled(!is_connected).on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                if state
+                    .read(cx)
+                    .conn
+                    .active
+                    .as_ref()
+                    .is_none_or(|conn| conn.config.id != connection_id)
+                {
+                    return;
+                }
+                AppCommands::disconnect(state.clone(), cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Refresh Databases").disabled(!is_connected).on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                AppCommands::refresh_databases(state.clone(), cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Create Database...").disabled(!is_connected).on_click({
+            let state = state.clone();
+            move |_, window, cx| {
+                open_create_database_dialog(state.clone(), window, cx);
+            }
+        }))
+        .separator()
+        .item(PopupMenuItem::new("Copy Name").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                if let Some(conn) =
+                    state.read(cx).connections.iter().find(|conn| conn.id == connection_id)
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(conn.name.clone()));
+                }
+            }
+        }))
+        .item(PopupMenuItem::new("Copy URI").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                if let Some(conn) =
+                    state.read(cx).connections.iter().find(|conn| conn.id == connection_id)
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(conn.uri.clone()));
+                }
+            }
+        }));
+
+    menu
+}
+
+fn build_database_menu(
+    mut menu: PopupMenu,
+    state: Entity<AppState>,
+    sidebar: Entity<Sidebar>,
+    node_id: TreeNodeId,
+    database: String,
+    is_loading: bool,
+    _cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let database_for_select = database.clone();
+    let database_for_create = database.clone();
+    let database_for_refresh = database.clone();
+    let database_for_drop = database.clone();
+    let database_for_copy = database;
+
+    menu = menu
+        .item(PopupMenuItem::new("Select Database").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                state.update(cx, |state, cx| {
+                    state.select_database(database_for_select.clone(), cx);
+                });
+            }
+        }))
+        .item(PopupMenuItem::new("Create Collection...").on_click({
+            let state = state.clone();
+            let database = database_for_create.clone();
+            move |_, window, cx| {
+                open_create_collection_dialog(state.clone(), database.clone(), window, cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Refresh Collections").disabled(is_loading).on_click({
+            let state = state.clone();
+            let sidebar = sidebar.clone();
+            let node_id = node_id.clone();
+            move |_, _window, cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.loading_databases.insert(node_id.clone());
+                    cx.notify();
+                });
+                AppCommands::load_collections(state.clone(), database_for_refresh.clone(), cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Drop Database...").on_click({
+            let state = state.clone();
+            let database = database_for_drop.clone();
+            move |_, window, cx| {
+                let message = format!("Drop database \"{database}\"? This cannot be undone.");
+                open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
+                    let state = state.clone();
+                    let database = database.clone();
+                    move |_window, cx| {
+                        AppCommands::drop_database(state.clone(), database.clone(), cx);
+                    }
+                });
+            }
+        }))
+        .separator()
+        .item(PopupMenuItem::new("Copy Name").on_click({
+            move |_, _window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(database_for_copy.clone()));
+            }
+        }));
+
+    menu
+}
+
+fn build_collection_menu(
+    mut menu: PopupMenu,
+    state: Entity<AppState>,
+    connection_id: Uuid,
+    database: String,
+    collection: String,
+    _cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let database_for_open = database.clone();
+    let collection_for_open = collection.clone();
+    let database_for_preview = database.clone();
+    let collection_for_preview = collection.clone();
+    let session_key = SessionKey::new(connection_id, database.clone(), collection.clone());
+    let label = format!("{}/{}", database, collection);
+
+    menu = menu
+        .item(PopupMenuItem::new("Open").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                state.update(cx, |state, cx| {
+                    state.select_collection(
+                        database_for_open.clone(),
+                        collection_for_open.clone(),
+                        cx,
+                    );
+                });
+            }
+        }))
+        .item(PopupMenuItem::new("Open Preview").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                state.update(cx, |state, cx| {
+                    state.preview_collection(
+                        database_for_preview.clone(),
+                        collection_for_preview.clone(),
+                        cx,
+                    );
+                });
+            }
+        }))
+        .item(PopupMenuItem::new("Refresh Documents").on_click({
+            let state = state.clone();
+            move |_, _window, cx| {
+                AppCommands::load_documents_for_session(state.clone(), session_key.clone(), cx);
+            }
+        }))
+        .item(PopupMenuItem::new("Rename Collection...").on_click({
+            let state = state.clone();
+            let database = database.clone();
+            let collection = collection.clone();
+            move |_, window, cx| {
+                open_rename_collection_dialog(
+                    state.clone(),
+                    database.clone(),
+                    collection.clone(),
+                    window,
+                    cx,
+                );
+            }
+        }))
+        .item(PopupMenuItem::new("Drop Collection...").on_click({
+            let state = state.clone();
+            let database = database.clone();
+            let collection = collection.clone();
+            move |_, window, cx| {
+                let message =
+                    format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
+                open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_window, cx| {
+                        AppCommands::drop_collection(
+                            state.clone(),
+                            database.clone(),
+                            collection.clone(),
+                            cx,
+                        );
+                    }
+                });
+            }
+        }))
+        .separator()
+        .item(PopupMenuItem::new("Copy Name").on_click({
+            move |_, _window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(label.clone()));
+            }
+        }));
+
+    menu
+}
+
+fn open_create_database_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
+    let db_state =
+        cx.new(|cx| InputState::new(window, cx).placeholder("database_name").default_value(""));
+    let col_state = cx.new(|cx| {
+        InputState::new(window, cx).placeholder("collection_name").default_value("default")
+    });
+
+    let db_state_save = db_state.clone();
+    let col_state_save = col_state.clone();
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+        dialog
+            .title("Create Database")
+            .min_w(px(420.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .p(spacing::md())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(spacing::xs())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Database name"),
+                            )
+                            .child(Input::new(&db_state)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(spacing::xs())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Initial collection"),
+                            )
+                            .child(Input::new(&col_state)),
+                    ),
+            )
+            .footer({
+                let state = state.clone();
+                let db_state = db_state_save.clone();
+                let col_state = col_state_save.clone();
+                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
+                    let state = state.clone();
+                    let db_state = db_state.clone();
+                    let col_state = col_state.clone();
+                    vec![
+                        Button::new("cancel-db")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            })
+                            .into_any_element(),
+                        Button::new("create-db")
+                            .primary()
+                            .label("Create")
+                            .on_click({
+                                let state = state.clone();
+                                let db_state = db_state.clone();
+                                let col_state = col_state.clone();
+                                move |_, window, cx| {
+                                    let db = db_state.read(cx).value().to_string();
+                                    let col = col_state.read(cx).value().to_string();
+                                    if db.trim().is_empty() || col.trim().is_empty() {
+                                        return;
+                                    }
+                                    AppCommands::create_database(
+                                        state.clone(),
+                                        db.trim().to_string(),
+                                        col.trim().to_string(),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    ]
+                }
+            })
+    });
+}
+
+fn open_create_collection_dialog(
+    state: Entity<AppState>,
+    database: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let col_state =
+        cx.new(|cx| InputState::new(window, cx).placeholder("collection_name").default_value(""));
+    let col_state_save = col_state.clone();
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+        dialog
+            .title(format!("Create Collection in {database}"))
+            .min_w(px(420.0))
+            .child(
+                div().flex().flex_col().gap(spacing::md()).p(spacing::md()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::xs())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors::text_primary())
+                                .child("Collection name"),
+                        )
+                        .child(Input::new(&col_state)),
+                ),
+            )
+            .footer({
+                let state = state.clone();
+                let database = database.clone();
+                let col_state = col_state_save.clone();
+                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
+                    let state = state.clone();
+                    let database = database.clone();
+                    let col_state = col_state.clone();
+                    vec![
+                        Button::new("cancel-collection")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            })
+                            .into_any_element(),
+                        Button::new("create-collection")
+                            .primary()
+                            .label("Create")
+                            .on_click({
+                                let state = state.clone();
+                                let database = database.clone();
+                                let col_state = col_state.clone();
+                                move |_, window, cx| {
+                                    let col = col_state.read(cx).value().to_string();
+                                    if col.trim().is_empty() {
+                                        return;
+                                    }
+                                    AppCommands::create_collection(
+                                        state.clone(),
+                                        database.clone(),
+                                        col.trim().to_string(),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    ]
+                }
+            })
+    });
+}
+
+fn open_rename_collection_dialog(
+    state: Entity<AppState>,
+    database: String,
+    collection: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let name_state = cx.new(|cx| {
+        InputState::new(window, cx).placeholder("collection_name").default_value(collection.clone())
+    });
+    let name_state_save = name_state.clone();
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+        dialog
+            .title(format!("Rename Collection {database}.{collection}"))
+            .min_w(px(420.0))
+            .child(
+                div().flex().flex_col().gap(spacing::md()).p(spacing::md()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::xs())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors::text_primary())
+                                .child("New collection name"),
+                        )
+                        .child(Input::new(&name_state)),
+                ),
+            )
+            .footer({
+                let state = state.clone();
+                let database = database.clone();
+                let collection = collection.clone();
+                let name_state = name_state_save.clone();
+                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    let name_state = name_state.clone();
+                    vec![
+                        Button::new("cancel-rename-collection")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            })
+                            .into_any_element(),
+                        Button::new("rename-collection")
+                            .primary()
+                            .label("Rename")
+                            .on_click({
+                                let state = state.clone();
+                                let database = database.clone();
+                                let collection = collection.clone();
+                                let name_state = name_state.clone();
+                                move |_, window, cx| {
+                                    let new_name = name_state.read(cx).value().to_string();
+                                    let new_name = new_name.trim();
+                                    if new_name.is_empty() || new_name == collection.as_str() {
+                                        return;
+                                    }
+                                    AppCommands::rename_collection(
+                                        state.clone(),
+                                        database.clone(),
+                                        collection.clone(),
+                                        new_name.to_string(),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    ]
+                }
+            })
+    });
+}

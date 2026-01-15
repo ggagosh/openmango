@@ -1,0 +1,8 @@
+# Build optimizations for macOS
+# Requires: brew install llvm (for lld linker)
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

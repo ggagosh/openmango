@@ -1,0 +1,31 @@
+# Build
+target/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# Debug
+debug/
+
+# Generated
+*.bak
+
+# Claude
+.claude/settings.local.json
+refs/
+certs/

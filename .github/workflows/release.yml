@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure scripts executable
+        run: chmod +x scripts/release_macos.sh
+
+      - name: Disable lld linker flags for CI
+        run: rm -f .cargo/config.toml
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          if [[ -z "${MACOS_CERTIFICATE:-}" ]]; then
+            echo "No signing certificate provided, skipping codesign import."
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          if base64 --help 2>&1 | grep -q -- "-d"; then
+            echo "$MACOS_CERTIFICATE" | base64 -d > "$CERT_PATH"
+          else
+            echo "$MACOS_CERTIFICATE" | base64 -D > "$CERT_PATH"
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+
+      - name: Build and package (macOS)
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
+          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
+        run: scripts/release_macos.sh
+
+      - name: Upload release asset (macOS)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/OpenMango-*-macos.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure scripts executable
+        run: chmod +x scripts/release_linux.sh
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libgl1-mesa-dev \
+            libgtk-3-dev
+
+      - name: Build and package (Linux)
+        run: scripts/release_linux.sh
+
+      - name: Upload release asset (Linux)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/OpenMango-*-linux.tar.gz

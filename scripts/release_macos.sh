@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_NAME="OpenMango"
+BUNDLE_ID="com.openmango.app"
+VERSION="$(grep '^version = ' "$ROOT_DIR/Cargo.toml" | head -1 | cut -d '"' -f2)"
+
+DIST_DIR="$ROOT_DIR/dist"
+APP_DIR="$DIST_DIR/${APP_NAME}.app"
+BIN_PATH="$ROOT_DIR/target/release/openmango"
+ICON_ICNS="$ROOT_DIR/assets/logo/openmango.icns"
+
+mkdir -p "$DIST_DIR"
+
+cargo build --release --features mimalloc
+
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+
+cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
+chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+
+HAS_ICON=false
+if [[ -f "$ICON_ICNS" ]]; then
+    cp "$ICON_ICNS" "$APP_DIR/Contents/Resources/openmango.icns"
+    HAS_ICON=true
+else
+    echo "Warning: $ICON_ICNS not found. App will use the default icon."
+fi
+
+cat > "$APP_DIR/Contents/Info.plist" <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>${APP_NAME}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${APP_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${BUNDLE_ID}</string>
+    <key>CFBundleVersion</key>
+    <string>${VERSION}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleExecutable</key>
+    <string>${APP_NAME}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+EOF2
+
+if [[ "$HAS_ICON" == true ]]; then
+cat >> "$APP_DIR/Contents/Info.plist" <<EOF2
+    <key>CFBundleIconFile</key>
+    <string>openmango</string>
+EOF2
+fi
+
+cat >> "$APP_DIR/Contents/Info.plist" <<EOF2
+</dict>
+</plist>
+EOF2
+
+SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+    echo "Codesigning app with identity: $SIGNING_IDENTITY"
+    codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"
+    codesign --verify --deep --strict "$APP_DIR"
+fi
+
+ZIP_PATH="$DIST_DIR/${APP_NAME}-${VERSION}-macos.zip"
+rm -f "$ZIP_PATH"
+
+ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
+
+if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]; then
+    NOTARY_KEY_PATH="${APPLE_API_KEY_PATH:-"$DIST_DIR/AuthKey.p8"}"
+    if [[ -n "${APPLE_API_KEY:-}" ]]; then
+        if base64 --help 2>&1 | grep -q -- "-d"; then
+            echo "$APPLE_API_KEY" | base64 -d > "$NOTARY_KEY_PATH"
+        else
+            echo "$APPLE_API_KEY" | base64 -D > "$NOTARY_KEY_PATH"
+        fi
+    fi
+    if [[ ! -f "$NOTARY_KEY_PATH" ]]; then
+        echo "Notarization key not found at $NOTARY_KEY_PATH"
+        exit 1
+    fi
+    echo "Submitting for notarization..."
+    xcrun notarytool submit "$ZIP_PATH" \
+        --key "$NOTARY_KEY_PATH" \
+        --key-id "$APPLE_API_KEY_ID" \
+        --issuer "$APPLE_API_ISSUER_ID" \
+        --wait
+    echo "Stapling notarization ticket..."
+    xcrun stapler staple "$APP_DIR"
+fi
+
+echo "Built: $APP_DIR"
+echo "Packaged: $ZIP_PATH"
