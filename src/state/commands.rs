@@ -1330,6 +1330,162 @@ impl AppCommands {
         .detach();
     }
 
+    /// Update a single document by _id.
+    pub fn update_document_by_key(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        doc_key: DocumentKey,
+        update: Document,
+        cx: &mut App,
+    ) {
+        let (client, database, collection, id) = {
+            let state_ref = state.read(cx);
+            let Some(conn) = &state_ref.conn.active else {
+                return;
+            };
+            let Some(doc) = state_ref
+                .session(&session_key)
+                .and_then(|session| session.view.drafts.get(&doc_key).cloned())
+                .or_else(|| state_ref.document_for_key(&session_key, &doc_key))
+            else {
+                return;
+            };
+            let id = doc.get("_id").cloned();
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone(), id)
+        };
+
+        let Some(id) = id else {
+            state.update(cx, |state, cx| {
+                state.status_message =
+                    Some(StatusMessage::error("Document missing _id; cannot update."));
+                cx.notify();
+            });
+            return;
+        };
+
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            let update = update.clone();
+            async move {
+                let manager = get_connection_manager();
+                manager.update_one(&client, &database, &collection, doc! { "_id": id }, update)
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            let doc_key = doc_key.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<mongodb::results::UpdateResult, crate::error::Error> =
+                    task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(result) => {
+                        state.update(cx, |state, cx| {
+                            state.clear_draft(&session_key, &doc_key);
+                            let event = AppEvent::DocumentsUpdated {
+                                session: session_key.clone(),
+                                matched: result.matched_count,
+                                modified: result.modified_count,
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to update document: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::DocumentsUpdateFailed {
+                                session: session_key.clone(),
+                                error: e.to_string(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Update multiple documents by filter.
+    pub fn update_documents_by_filter(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        filter: Document,
+        update: Document,
+        cx: &mut App,
+    ) {
+        let (client, database, collection) = {
+            let state = state.read(cx);
+            let Some(conn) = &state.conn.active else {
+                return;
+            };
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
+        };
+
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            let update = update.clone();
+            async move {
+                let manager = get_connection_manager();
+                manager.update_many(&client, &database, &collection, filter, update)
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<mongodb::results::UpdateResult, crate::error::Error> =
+                    task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(result) => {
+                        state.update(cx, |state, cx| {
+                            state.clear_all_drafts(&session_key);
+                            let event = AppEvent::DocumentsUpdated {
+                                session: session_key.clone(),
+                                matched: result.matched_count,
+                                modified: result.modified_count,
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to update documents: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::DocumentsUpdateFailed {
+                                session: session_key.clone(),
+                                error: e.to_string(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Delete a document by _id in MongoDB.
     pub fn delete_document(
         state: Entity<AppState>,

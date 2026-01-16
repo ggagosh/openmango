@@ -5,6 +5,7 @@ mod header;
 mod index_create;
 mod node_meta;
 mod pagination;
+mod property_dialog;
 mod tree_content;
 mod types;
 mod view_model;

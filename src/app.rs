@@ -173,7 +173,9 @@ impl Sidebar {
             | AppEvent::IndexDropped { .. }
             | AppEvent::IndexDropFailed { .. }
             | AppEvent::IndexCreated { .. }
-            | AppEvent::IndexCreateFailed { .. } => {}
+            | AppEvent::IndexCreateFailed { .. }
+            | AppEvent::DocumentsUpdated { .. }
+            | AppEvent::DocumentsUpdateFailed { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }

@@ -86,6 +86,20 @@ impl AppState {
                 self.status_message =
                     Some(StatusMessage::error(format!("Create index failed: {error}")));
             }
+            AppEvent::DocumentsUpdated { matched, modified, .. } => {
+                let message = if *matched == 0 {
+                    "No documents matched the update.".to_string()
+                } else if *modified == 0 {
+                    format!("Matched {matched} documents; no changes applied.")
+                } else {
+                    format!("Updated {modified} of {matched} documents")
+                };
+                self.status_message = Some(StatusMessage::info(message));
+            }
+            AppEvent::DocumentsUpdateFailed { error, .. } => {
+                self.status_message =
+                    Some(StatusMessage::error(format!("Update failed: {error}")));
+            }
             _ => {}
         }
     }

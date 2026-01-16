@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use mongodb::Client;
 use mongodb::bson::doc;
 use mongodb::IndexModel;
-use mongodb::results::CollectionSpecification;
+use mongodb::results::{CollectionSpecification, UpdateResult};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -344,6 +344,48 @@ impl ConnectionManager {
                 client.database(&database).collection::<mongodb::bson::Document>(&collection);
             coll.drop_index(name).await?;
             Ok(())
+        })
+    }
+
+    /// Update a single document (runs in Tokio runtime)
+    pub fn update_one(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        filter: mongodb::bson::Document,
+        update: mongodb::bson::Document,
+    ) -> Result<UpdateResult> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let result = coll.update_one(filter, update).await?;
+            Ok(result)
+        })
+    }
+
+    /// Update multiple documents (runs in Tokio runtime)
+    pub fn update_many(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        filter: mongodb::bson::Document,
+        update: mongodb::bson::Document,
+    ) -> Result<UpdateResult> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let result = coll.update_many(filter, update).await?;
+            Ok(result)
         })
     }
 

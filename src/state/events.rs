@@ -35,6 +35,8 @@ pub enum AppEvent {
     IndexDropFailed { error: String },
     IndexCreated { session: SessionKey, name: Option<String> },
     IndexCreateFailed { session: SessionKey, error: String },
+    DocumentsUpdated { session: SessionKey, matched: u64, modified: u64 },
+    DocumentsUpdateFailed { session: SessionKey, error: String },
 
     // View navigation
     ViewChanged,

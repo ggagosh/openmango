@@ -152,6 +152,13 @@ impl AppState {
         }
     }
 
+    pub fn clear_all_drafts(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.drafts.clear();
+            session.view.dirty.clear();
+        }
+    }
+
     pub fn update_draft_value(
         &mut self,
         session_key: &SessionKey,
