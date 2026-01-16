@@ -13,13 +13,14 @@ use crate::state::{
     AppCommands, AppEvent, AppState, CollectionStats, CollectionSubview, SessionKey,
 };
 use crate::bson::bson_value_preview;
-use crate::theme::{colors, spacing};
+use crate::theme::{borders, colors, spacing};
 use gpui::*;
-use gpui_component::Sizable as _;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::tree::tree;
+use gpui_component::{Icon, IconName, Sizable as _};
 use mongodb::IndexModel;
 use mongodb::bson::Document;
 use view_model::DocumentViewModel;
@@ -30,13 +31,20 @@ use tree_content::render_tree_row;
 pub struct CollectionView {
     state: Entity<AppState>,
     view_model: DocumentViewModel,
+    documents_focus: FocusHandle,
     filter_state: Option<Entity<InputState>>,
     sort_state: Option<Entity<InputState>>,
     projection_state: Option<Entity<InputState>>,
+    search_state: Option<Entity<InputState>>,
+    search_visible: bool,
+    search_matches: Vec<String>,
+    search_index: Option<usize>,
+    keystroke_subscription: Option<Subscription>,
     input_session: Option<SessionKey>,
     filter_subscription: Option<Subscription>,
     sort_subscription: Option<Subscription>,
     projection_subscription: Option<Subscription>,
+    search_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -81,6 +89,7 @@ impl CollectionView {
                             this.view_model.rebuild_tree(&state, cx);
                         }
                     }
+                    this.update_search_results(cx);
                     cx.notify();
                 }
             }
@@ -91,6 +100,7 @@ impl CollectionView {
                 this.view_model.clear_inline_edit();
                 this.view_model.rebuild_tree(&state, cx);
                 this.view_model.sync_dirty_state(&state, cx);
+                this.update_search_results(cx);
                 cx.notify();
             }
             AppEvent::DocumentSaved { session, document } => {
@@ -102,6 +112,7 @@ impl CollectionView {
                 }
                 this.view_model.rebuild_tree(&state, cx);
                 this.view_model.sync_dirty_state(&state, cx);
+                this.update_search_results(cx);
                 cx.notify();
             }
             AppEvent::DocumentDeleted { session, document } => {
@@ -113,6 +124,7 @@ impl CollectionView {
                 }
                 this.view_model.rebuild_tree(&state, cx);
                 this.view_model.sync_dirty_state(&state, cx);
+                this.update_search_results(cx);
                 cx.notify();
             }
             AppEvent::DocumentSaveFailed { session, .. } => {
@@ -131,13 +143,20 @@ impl CollectionView {
         Self {
             state,
             view_model,
+            documents_focus: cx.focus_handle(),
             filter_state: None,
             sort_state: None,
             projection_state: None,
+            search_state: None,
+            search_visible: false,
+            search_matches: Vec::new(),
+            search_index: None,
+            keystroke_subscription: None,
             input_session: None,
             filter_subscription: None,
             sort_subscription: None,
             projection_subscription: None,
+            search_subscription: None,
             _subscriptions: subscriptions,
         }
     }
@@ -145,6 +164,71 @@ impl CollectionView {
 
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.search_state.is_none() {
+            let search_state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Find in values (Cmd/Ctrl+F)")
+                    .clean_on_escape()
+            });
+            let subscription = cx.subscribe_in(
+                &search_state,
+                window,
+                move |view, _state, event, _window, cx| match event {
+                    InputEvent::Change => {
+                        view.update_search_results(cx);
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        view.next_match(cx);
+                        cx.notify();
+                    }
+                    _ => {}
+                },
+            );
+            self.search_state = Some(search_state);
+            self.search_subscription = Some(subscription);
+        }
+
+        if self.keystroke_subscription.is_none() {
+            let weak_view = cx.entity().downgrade();
+            let subscription = cx.intercept_keystrokes(move |event, window, cx| {
+                let is_find = event.keystroke.modifiers.secondary()
+                    && event.keystroke.key.eq_ignore_ascii_case("f");
+                let is_escape = event.keystroke.key.eq_ignore_ascii_case("escape");
+                if !is_find && !is_escape {
+                    return;
+                }
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    let state_ref = this.state.read(cx);
+                    if state_ref.current_view != crate::state::View::Documents {
+                        return;
+                    }
+                    let Some(session_key) = this.view_model.current_session() else {
+                        return;
+                    };
+                    let Some(session) = state_ref.session(&session_key) else {
+                        return;
+                    };
+                    if session.view.subview != CollectionSubview::Documents {
+                        return;
+                    }
+
+                    if is_find {
+                        this.show_search_bar(window, cx);
+                        cx.stop_propagation();
+                    } else if is_escape && this.search_visible {
+                        this.close_search(window, cx);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                });
+            });
+            self.keystroke_subscription = Some(subscription);
+        }
+
         let state_ref = self.state.read(cx);
         let collection_name =
             state_ref.conn.selected_collection.clone().unwrap_or_else(|| "Unknown".to_string());
@@ -221,6 +305,11 @@ impl Render for CollectionView {
         let filter_active = !matches!(filter_raw.trim(), "" | "{}");
         let sort_active = !matches!(sort_raw.trim(), "" | "{}");
         let projection_active = !matches!(projection_raw.trim(), "" | "{}");
+        let search_query = self.current_search_query(cx);
+        let current_match_id = self
+            .search_index
+            .and_then(|index| self.search_matches.get(index))
+            .cloned();
 
         let per_page_u64 = per_page.max(1) as u64;
         let total_pages = total.div_ceil(per_page_u64).max(1);
@@ -442,13 +531,40 @@ impl Render for CollectionView {
 
         match subview {
             CollectionSubview::Documents => {
+                let show_search = self.search_visible || search_query.is_some();
+                let match_total = self.search_matches.len();
+                let match_position = self.search_index.map(|ix| ix + 1).unwrap_or(0);
+                let match_label = if match_total == 0 {
+                    "0/0".to_string()
+                } else {
+                    format!("{}/{}", match_position, match_total)
+                };
+
                 let documents_view = div()
                     .flex()
                     .flex_1()
                     .min_w(px(0.0))
                     .overflow_hidden()
+                    .track_focus(&self.documents_focus)
+                    .on_key_down({
+                        let view = view.clone();
+                        move |event, window, cx| {
+                            if event.is_held {
+                                return;
+                            }
+                            if event.keystroke.modifiers.secondary()
+                                && event.keystroke.key.eq_ignore_ascii_case("f")
+                            {
+                                cx.stop_propagation();
+                                view.update(cx, |this, cx| {
+                                    this.show_search_bar(window, cx);
+                                });
+                            }
+                        }
+                    })
                     .child(
                         div()
+                            .relative()
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -528,6 +644,9 @@ impl Render for CollectionView {
                                             let tree_state = tree_state.clone();
                                             let state_clone = self.state.clone();
                                             let session_key = session_key.clone();
+                                            let search_query = search_query.clone();
+                                            let current_match_id = current_match_id.clone();
+                                            let documents_focus = self.documents_focus.clone();
 
                                             move |ix, entry, selected, _window, _cx| {
                                                 render_tree_row(
@@ -541,13 +660,96 @@ impl Render for CollectionView {
                                                     tree_state.clone(),
                                                     state_clone.clone(),
                                                     session_key.clone(),
+                                                    search_query.as_deref(),
+                                                    current_match_id.as_deref(),
+                                                    documents_focus.clone(),
                                                 )
                                             }
                                         })
                                         .into_any_element()
                                     },
                                 ),
-                            ),
+                            )
+                            .child(if show_search {
+                                let search_state = self.search_state.clone();
+                                let view = view.clone();
+                                div()
+                                    .absolute()
+                                    .top(px(8.0))
+                                    .right(px(12.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::xs())
+                                    .px(spacing::sm())
+                                    .py(px(4.0))
+                                    .rounded(borders::radius_sm())
+                                    .bg(colors::bg_header())
+                                    .border_1()
+                                    .border_color(colors::border())
+                                    .child(if let Some(search_state) = search_state {
+                                        Input::new(&search_state)
+                                            .w(px(220.0))
+                                            .into_any_element()
+                                    } else {
+                                        div().into_any_element()
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors::text_muted())
+                                            .child(match_label.clone()),
+                                    )
+                                    .child(
+                                        Button::new("search-prev")
+                                            .ghost()
+                                            .compact()
+                                            .icon(Icon::new(IconName::ChevronLeft).xsmall())
+                                            .disabled(match_total == 0)
+                                            .on_click({
+                                                let view = view.clone();
+                                                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                                    view.update(cx, |this, cx| {
+                                                        this.prev_match(cx);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("search-next")
+                                            .ghost()
+                                            .compact()
+                                            .icon(Icon::new(IconName::ChevronRight).xsmall())
+                                            .disabled(match_total == 0)
+                                            .on_click({
+                                                let view = view.clone();
+                                                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                                    view.update(cx, |this, cx| {
+                                                        this.next_match(cx);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("search-close")
+                                            .ghost()
+                                            .compact()
+                                            .icon(Icon::new(IconName::Close).xsmall())
+                                            .on_click({
+                                                let view = view.clone();
+                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                                    view.update(cx, |this, cx| {
+                                                        this.close_search(window, cx);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }),
                     );
 
                 root = root.child(documents_view).child(Self::render_pagination(
@@ -850,6 +1052,136 @@ impl CollectionView {
                 self.state.clone(),
             ))
             .into_any_element()
+    }
+
+    fn current_search_query(&self, cx: &mut Context<Self>) -> Option<String> {
+        let raw = self
+            .search_state
+            .as_ref()
+            .map(|state| state.read(cx).value().to_string())
+            .unwrap_or_default();
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_lowercase())
+        }
+    }
+
+    fn show_search_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_visible = true;
+        if let Some(search_state) = self.search_state.clone() {
+            search_state.update(cx, |state, cx| {
+                state.focus(window, cx);
+            });
+        }
+        self.update_search_results(cx);
+        cx.notify();
+    }
+
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_visible = false;
+        window.blur();
+        if let Some(search_state) = self.search_state.clone() {
+            search_state.update(cx, |state, cx| {
+                state.set_value(String::new(), window, cx);
+            });
+        }
+        self.search_matches.clear();
+        self.search_index = None;
+    }
+
+    fn update_search_results(&mut self, cx: &mut Context<Self>) {
+        let Some(query) = self.current_search_query(cx) else {
+            self.search_matches.clear();
+            self.search_index = None;
+            return;
+        };
+
+        let node_meta = self.view_model.node_meta();
+        let mut matches = Vec::new();
+        for node_id in self.view_model.tree_order_all() {
+            let Some(meta) = node_meta.get(node_id) else {
+                continue;
+            };
+            if meta.path.is_empty() {
+                continue;
+            }
+            if meta.value_label.to_lowercase().contains(&query) {
+                matches.push(node_id.clone());
+            }
+        }
+
+        self.search_matches = matches;
+        if self.search_matches.is_empty() {
+            self.search_index = None;
+            return;
+        }
+
+        self.search_index = Some(0);
+        let view = cx.entity();
+        cx.defer(move |cx| {
+            view.update(cx, |this, cx| {
+                this.go_to_match(0, cx);
+                cx.notify();
+            });
+        });
+    }
+
+    fn next_match(&mut self, cx: &mut Context<Self>) {
+        let total = self.search_matches.len();
+        if total == 0 {
+            return;
+        }
+        let next = match self.search_index {
+            Some(index) => (index + 1) % total,
+            None => 0,
+        };
+        self.search_index = Some(next);
+        self.go_to_match(next, cx);
+    }
+
+    fn prev_match(&mut self, cx: &mut Context<Self>) {
+        let total = self.search_matches.len();
+        if total == 0 {
+            return;
+        }
+        let prev = match self.search_index {
+            Some(0) | None => total.saturating_sub(1),
+            Some(index) => index - 1,
+        };
+        self.search_index = Some(prev);
+        self.go_to_match(prev, cx);
+    }
+
+    fn go_to_match(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(match_id) = self.search_matches.get(index).cloned() else {
+            return;
+        };
+        let node_meta = self.view_model.node_meta();
+        let Some(meta) = node_meta.get(&match_id).cloned() else {
+            return;
+        };
+        let Some(session_key) = self.view_model.current_session() else {
+            return;
+        };
+
+        self.state.update(cx, |state, cx| {
+            state.expand_path(&session_key, &meta.doc_key, &meta.path);
+            state.set_selected_node(&session_key, meta.doc_key.clone(), match_id.clone());
+            cx.notify();
+        });
+
+        self.view_model.rebuild_tree(&self.state, cx);
+
+        let tree_state = self.view_model.tree_state();
+        let order = self.view_model.tree_order();
+        if let Some(ix) = order.iter().position(|entry| entry == &match_id) {
+            tree_state.update(cx, |tree, cx| {
+                tree.set_selected_index(Some(ix), cx);
+                tree.scroll_to_item(ix, ScrollStrategy::Center);
+            });
+        }
     }
 }
 

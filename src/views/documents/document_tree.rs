@@ -192,3 +192,11 @@ pub fn flatten_tree_order(item: &TreeItem, order: &mut Vec<String>) {
         }
     }
 }
+
+/// Flatten the tree order for all nodes, regardless of expanded state.
+pub fn flatten_tree_order_all(item: &TreeItem, order: &mut Vec<String>) {
+    order.push(item.id.to_string());
+    for child in &item.children {
+        flatten_tree_order_all(child, order);
+    }
+}

@@ -10,7 +10,7 @@ use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
 use crate::state::{AppState, SessionKey};
-use crate::views::documents::document_tree::build_documents_tree;
+use crate::views::documents::document_tree::{build_documents_tree, flatten_tree_order_all};
 use crate::views::documents::node_meta::NodeMeta;
 use crate::views::documents::types::InlineEditor;
 
@@ -21,6 +21,7 @@ pub struct DocumentViewModel {
     current_session: Option<SessionKey>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
     tree_order: Vec<String>,
+    tree_order_all: Vec<String>,
     inline_editor_state: Option<InlineEditor>,
     inline_editor_subscription: Option<Subscription>,
     editing_node_id: Option<String>,
@@ -36,6 +37,7 @@ impl DocumentViewModel {
             current_session: None,
             node_meta: Arc::new(HashMap::new()),
             tree_order: Vec::new(),
+            tree_order_all: Vec::new(),
             inline_editor_state: None,
             inline_editor_subscription: None,
             editing_node_id: None,
@@ -51,6 +53,14 @@ impl DocumentViewModel {
 
     pub fn node_meta(&self) -> Arc<HashMap<String, NodeMeta>> {
         self.node_meta.clone()
+    }
+
+    pub fn tree_order_all(&self) -> &[String] {
+        &self.tree_order_all
+    }
+
+    pub fn tree_order(&self) -> &[String] {
+        &self.tree_order
     }
 
     pub fn editing_node_id(&self) -> Option<String> {
@@ -95,6 +105,7 @@ impl DocumentViewModel {
     pub fn reset_view_state(&mut self, cx: &mut Context<CollectionView>) {
         self.node_meta = Arc::new(HashMap::new());
         self.tree_order.clear();
+        self.tree_order_all.clear();
         self.inline_editor_state = None;
         self.inline_editor_subscription = None;
         self.clear_inline_edit();
@@ -119,6 +130,10 @@ impl DocumentViewModel {
             &session.view.drafts,
             &session.view.expanded_nodes,
         );
+        let mut full_order = Vec::new();
+        for item in &items {
+            flatten_tree_order_all(item, &mut full_order);
+        }
 
         let selected_index = session
             .view
@@ -128,6 +143,7 @@ impl DocumentViewModel {
 
         self.node_meta = Arc::new(meta);
         self.tree_order = order;
+        self.tree_order_all = full_order;
 
         self.tree_state.update(cx, |tree, cx| {
             tree.set_items(items, cx);

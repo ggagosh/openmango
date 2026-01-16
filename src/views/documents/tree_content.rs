@@ -38,6 +38,9 @@ pub fn render_tree_row(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
+    search_query: Option<&str>,
+    current_match_id: Option<&str>,
+    documents_focus: FocusHandle,
 ) -> ListItem {
     let item_id = entry.item().id.to_string();
     let meta = node_meta.get(&item_id);
@@ -70,6 +73,7 @@ pub fn render_tree_row(
     let row_state = state.clone();
     let row_tree = tree_state.clone();
     let row_item_id = item_id.clone();
+    let row_focus = documents_focus.clone();
 
     let row = div()
         .flex()
@@ -84,7 +88,7 @@ pub fn render_tree_row(
             let row_state = row_state.clone();
             let row_tree = row_tree.clone();
             move |_, window, cx| {
-                window.blur();
+                window.focus(&row_focus);
                 cx.stop_propagation();
                 row_tree.update(cx, |tree, cx| {
                     tree.set_selected_index(Some(ix), cx);
@@ -114,6 +118,7 @@ pub fn render_tree_row(
             tree_state.clone(),
             state.clone(),
             session_key.clone(),
+            documents_focus.clone(),
         ))
         .child(render_value_column(
             ix,
@@ -129,6 +134,9 @@ pub fn render_tree_row(
             tree_state.clone(),
             state.clone(),
             session_key.clone(),
+            search_query,
+            current_match_id,
+            documents_focus.clone(),
         ))
         .child(
             div()
@@ -193,9 +201,11 @@ fn render_key_column(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
+    documents_focus: FocusHandle,
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
     let key_label = key_label.to_string();
+    let focus_handle = documents_focus.clone();
 
     div()
         .flex()
@@ -207,7 +217,7 @@ fn render_key_column(
         .on_mouse_down(MouseButton::Left, {
             let item_id = item_id.clone();
             move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                window.blur();
+                window.focus(&focus_handle);
                 cx.stop_propagation();
                 tree_state.update(cx, |tree, cx| {
                     tree.set_selected_index(Some(ix), cx);
@@ -268,9 +278,16 @@ fn render_value_column(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
+    search_query: Option<&str>,
+    current_match_id: Option<&str>,
+    documents_focus: FocusHandle,
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
     let value_label = value_label.to_string();
+    let query = search_query.unwrap_or("").trim();
+    let is_match = !query.is_empty() && value_label.to_lowercase().contains(query);
+    let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
+    let focus_handle = documents_focus.clone();
 
     div()
         .flex()
@@ -280,6 +297,16 @@ fn render_value_column(
         .min_w(px(0.0))
         .when(is_dirty && !selected, |s: Div| {
             s.bg(colors::bg_dirty()).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+        })
+        .when(is_match && !is_dirty && !selected, |s: Div| {
+            s.bg(colors::bg_dirty()).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+        })
+        .when(is_current_match && !selected, |s: Div| {
+            s.border_1()
+                .border_color(colors::accent())
+                .rounded(borders::radius_sm())
+                .px(spacing::xs())
+                .py(px(1.0))
         })
         .when(!is_editing, {
             let item_id = item_id.clone();
@@ -291,7 +318,7 @@ fn render_value_column(
                 this.on_mouse_down(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                        window.blur();
+                        window.focus(&focus_handle);
                         cx.stop_propagation();
                         tree_state.update(cx, |tree, cx| {
                             tree.set_selected_index(Some(ix), cx);
