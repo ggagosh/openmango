@@ -26,19 +26,6 @@ Non-exhaustive highlights; see each section below for full status.
 
 ---
 
-## 0.1 release checklist (suggested)
-
-- [ ] CRUD sanity: insert, edit (inline + JSON), delete, refresh
-- [ ] Query sanity: filter, sort, projection, pagination
-- [ ] Indexes: list + drop (create is out of scope)
-- [ ] Stats: database + collection stats load and refresh
-- [ ] Search: Cmd/Ctrl+F in documents view (client-side)
-- [ ] Stability pass: no panics in common flows, recover from errors
-- [ ] Release artifacts: macOS + Linux build from GitHub Actions
-- [ ] README: quickstart + troubleshooting, mention current gaps
-
----
-
 ## 1. Connections & Sessions
 
 - [x] P0: Add connection (URI input with validation)

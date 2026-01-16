@@ -357,12 +357,38 @@ impl Default for ConnectionManager {
 mod tests {
     use super::*;
     use std::env;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use mongodb::bson::{Bson, Document};
+
+    struct DbCleanup<'a> {
+        manager: &'a ConnectionManager,
+        client: Client,
+        database: String,
+    }
+
+    impl<'a> Drop for DbCleanup<'a> {
+        fn drop(&mut self) {
+            let _ = self.manager.drop_database(&self.client, &self.database);
+        }
+    }
+
+    fn test_uri() -> Option<String> {
+        env::var("MONGO_URI").ok().filter(|value| !value.trim().is_empty())
+    }
+
+    fn unique_db_name(prefix: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let suffix = format!("{}_{}", std::process::id(), now.as_millis());
+        format!("om_smoke_{prefix}_{suffix}")
+    }
 
     #[test]
     fn smoke_core_flows() -> Result<()> {
-        let uri = match env::var("MONGO_URI") {
-            Ok(value) if !value.trim().is_empty() => value,
-            _ => {
+        let uri = match test_uri() {
+            Some(value) => value,
+            None => {
                 eprintln!("Skipping smoke_core_flows: MONGO_URI not set.");
                 return Ok(());
             }
@@ -402,6 +428,296 @@ mod tests {
                 limit: 1,
             },
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn crud_sanity() -> Result<()> {
+        let uri = match test_uri() {
+            Some(value) => value,
+            None => {
+                eprintln!("Skipping crud_sanity: MONGO_URI not set.");
+                return Ok(());
+            }
+        };
+
+        let manager = get_connection_manager();
+        let connection = SavedConnection::new("Smoke CRUD".to_string(), uri);
+        manager.test_connection(&connection, Duration::from_secs(5))?;
+        let client = manager.connect(&connection)?;
+
+        let database = unique_db_name("crud");
+        let collection = "docs";
+        let _cleanup = DbCleanup {
+            manager,
+            client: client.clone(),
+            database: database.clone(),
+        };
+
+        let doc_a = doc! { "_id": "a", "name": "first", "n": 1 };
+        let doc_b = doc! { "_id": "b", "name": "second", "n": 2 };
+        manager.insert_document(&client, &database, collection, doc_a)?;
+        manager.insert_document(&client, &database, collection, doc_b)?;
+
+        let (docs, total) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 10,
+            },
+        )?;
+        if total < 2 || docs.len() < 2 {
+            return Err(Error::Timeout("CRUD insert failed".to_string()));
+        }
+
+        let updated = doc! { "_id": "a", "name": "updated", "n": 10 };
+        manager.replace_document(&client, &database, collection, &Bson::String("a".into()), updated)?;
+
+        let (docs, _) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: Some(doc! { "_id": "a" }),
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 1,
+            },
+        )?;
+        let updated_name = docs
+            .get(0)
+            .and_then(|doc| doc.get_str("name").ok())
+            .unwrap_or_default();
+        if updated_name != "updated" {
+            return Err(Error::Timeout("CRUD update failed".to_string()));
+        }
+
+        manager.delete_document(&client, &database, collection, &Bson::String("b".into()))?;
+
+        let (_, total) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 10,
+            },
+        )?;
+        if total != 1 {
+            return Err(Error::Timeout("CRUD delete failed".to_string()));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_sanity() -> Result<()> {
+        let uri = match test_uri() {
+            Some(value) => value,
+            None => {
+                eprintln!("Skipping query_sanity: MONGO_URI not set.");
+                return Ok(());
+            }
+        };
+
+        let manager = get_connection_manager();
+        let connection = SavedConnection::new("Smoke Query".to_string(), uri);
+        manager.test_connection(&connection, Duration::from_secs(5))?;
+        let client = manager.connect(&connection)?;
+
+        let database = unique_db_name("query");
+        let collection = "docs";
+        let _cleanup = DbCleanup {
+            manager,
+            client: client.clone(),
+            database: database.clone(),
+        };
+
+        let docs = vec![
+            doc! { "_id": 1, "value": "b", "n": 2 },
+            doc! { "_id": 2, "value": "a", "n": 1 },
+            doc! { "_id": 3, "value": "c", "n": 3 },
+        ];
+        for doc in docs {
+            manager.insert_document(&client, &database, collection, doc)?;
+        }
+
+        let (filtered, total) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: Some(doc! { "value": "a" }),
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 10,
+            },
+        )?;
+        if total != 1 || filtered.len() != 1 {
+            return Err(Error::Timeout("Query filter failed".to_string()));
+        }
+
+        let (sorted, _) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: Some(doc! { "n": 1 }),
+                projection: None,
+                skip: 0,
+                limit: 3,
+            },
+        )?;
+        let first_n = sorted
+            .get(0)
+            .and_then(|doc| doc.get_i32("n").ok())
+            .unwrap_or_default();
+        if first_n != 1 {
+            return Err(Error::Timeout("Query sort failed".to_string()));
+        }
+
+        let (paged, _) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: Some(doc! { "n": 1 }),
+                projection: None,
+                skip: 1,
+                limit: 1,
+            },
+        )?;
+        let paged_n = paged
+            .get(0)
+            .and_then(|doc| doc.get_i32("n").ok())
+            .unwrap_or_default();
+        if paged_n != 2 {
+            return Err(Error::Timeout("Query pagination failed".to_string()));
+        }
+
+        let (projected, _) = manager.find_documents(
+            &client,
+            &database,
+            collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: Some(doc! { "value": 1, "_id": 0 }),
+                skip: 0,
+                limit: 1,
+            },
+        )?;
+        let projected_doc = projected.get(0).ok_or_else(|| Error::Timeout("Projection failed".to_string()))?;
+        if projected_doc.get("_id").is_some() || projected_doc.get("value").is_none() {
+            return Err(Error::Timeout("Query projection failed".to_string()));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn indexes_sanity() -> Result<()> {
+        let uri = match test_uri() {
+            Some(value) => value,
+            None => {
+                eprintln!("Skipping indexes_sanity: MONGO_URI not set.");
+                return Ok(());
+            }
+        };
+
+        let manager = get_connection_manager();
+        let connection = SavedConnection::new("Smoke Indexes".to_string(), uri);
+        manager.test_connection(&connection, Duration::from_secs(5))?;
+        let client = manager.connect(&connection)?;
+
+        let database = unique_db_name("indexes");
+        let collection = "docs";
+        let _cleanup = DbCleanup {
+            manager,
+            client: client.clone(),
+            database: database.clone(),
+        };
+
+        manager.insert_document(&client, &database, collection, doc! { "_id": 1, "n": 1 })?;
+
+        let index = IndexModel::builder().keys(doc! { "n": 1 }).build();
+
+        manager.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(collection);
+            coll.create_index(index).await.map(|_| ())
+        })?;
+
+        let indexes = manager.list_indexes(&client, &database, collection)?;
+        let created = indexes.iter().find(|model| model.keys == doc! { "n": 1 });
+        let Some(created) = created else {
+            return Err(Error::Timeout("Index list failed".to_string()));
+        };
+        let Some(name) = created
+            .options
+            .as_ref()
+            .and_then(|options| options.name.as_ref())
+        else {
+            return Err(Error::Timeout("Index name missing".to_string()));
+        };
+
+        manager.drop_index(&client, &database, collection, name)?;
+
+        let indexes = manager.list_indexes(&client, &database, collection)?;
+        let still_has_index = indexes.iter().any(|model| model.keys == doc! { "n": 1 });
+        if still_has_index {
+            return Err(Error::Timeout("Index drop failed".to_string()));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn stats_sanity() -> Result<()> {
+        let uri = match test_uri() {
+            Some(value) => value,
+            None => {
+                eprintln!("Skipping stats_sanity: MONGO_URI not set.");
+                return Ok(());
+            }
+        };
+
+        let manager = get_connection_manager();
+        let connection = SavedConnection::new("Smoke Stats".to_string(), uri);
+        manager.test_connection(&connection, Duration::from_secs(5))?;
+        let client = manager.connect(&connection)?;
+
+        let database = unique_db_name("stats");
+        let collection = "docs";
+        let _cleanup = DbCleanup {
+            manager,
+            client: client.clone(),
+            database: database.clone(),
+        };
+
+        manager.insert_document(&client, &database, collection, doc! { "_id": 1, "n": 1 })?;
+
+        let db_stats = manager.database_stats(&client, &database)?;
+        if db_stats.get("db").is_none() {
+            return Err(Error::Timeout("Database stats missing".to_string()));
+        }
+
+        let coll_stats = manager.collection_stats(&client, &database, collection)?;
+        if coll_stats.get("count").is_none() {
+            return Err(Error::Timeout("Collection stats missing".to_string()));
+        }
 
         Ok(())
     }
