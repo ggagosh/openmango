@@ -13,6 +13,32 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 
 ---
 
+## Known gaps (current build)
+
+Non-exhaustive highlights; see each section below for full status.
+
+- No index creation UI (list/drop only)
+- No import/export flows (data or connections)
+- No aggregation pipeline editor, query history, or saved queries
+- No duplicate document or bulk ops tooling
+- No read-only/safe mode or connection profiles
+- No multi-window/split views; keyboard navigation deferred
+
+---
+
+## 0.1 release checklist (suggested)
+
+- [ ] CRUD sanity: insert, edit (inline + JSON), delete, refresh
+- [ ] Query sanity: filter, sort, projection, pagination
+- [ ] Indexes: list + drop (create is out of scope)
+- [ ] Stats: database + collection stats load and refresh
+- [ ] Search: Cmd/Ctrl+F in documents view (client-side)
+- [ ] Stability pass: no panics in common flows, recover from errors
+- [ ] Release artifacts: macOS + Linux build from GitHub Actions
+- [ ] README: quickstart + troubleshooting, mention current gaps
+
+---
+
 ## 1. Connections & Sessions
 
 - [x] P0: Add connection (URI input with validation)
@@ -37,7 +63,7 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 - [x] P0: Create database
 - [x] P0: Drop database (with confirmation)
 - [x] P0: Refresh databases
-- [ ] P0: Database stats
+- [x] P0: Database stats
 - [ ] P1: Rename database
 - [ ] P1: Copy database
 - [ ] P2: User/Role management
@@ -52,7 +78,8 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 - [x] P0: Open document browser
 - [x] P0: Refresh documents
 - [ ] P1: Collection stats (extended)
-- [ ] P1: Index management (list/create/drop)
+- [x] P1: Index management (list/drop)
+- [ ] P1: Index management (create)
 - [ ] P1: Import (JSON/CSV)
 - [ ] P1: Export (JSON/CSV/BSON)
 - [ ] P2: Schema analysis / explorer
@@ -65,11 +92,12 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 - [x] P0: Edit document (inline + JSON editor)
 - [x] P0: Delete document (with confirmation)
 - [x] P0: Pagination
-- [ ] P0: Insert document
-- [ ] P1: Sort
-- [ ] P1: Projection (field selection)
+- [x] P0: Insert document
+- [x] P1: Sort
+- [x] P1: Projection (field selection)
 - [ ] P1: Duplicate document
 - [ ] P2: Bulk operations
+- [x] P2: Client-side find in results (Cmd/Ctrl+F)
 
 ## 5. Query & Aggregation
 
@@ -92,7 +120,7 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 - [x] P0: Destructive action confirmations
 - [x] P0: Status bar
 - [x] P0: Error display (banner)
-- [ ] P0: Keyboard navigation
+- [ ] P3: Keyboard navigation
 - [ ] P1: Multi-window support
 - [ ] P1: Split views / side-by-side tabs
 - [ ] P2: Theming

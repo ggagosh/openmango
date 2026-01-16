@@ -352,3 +352,57 @@ impl Default for ConnectionManager {
 }
 
 // No public server info returned yet.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn smoke_core_flows() -> Result<()> {
+        let uri = match env::var("MONGO_URI") {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => {
+                eprintln!("Skipping smoke_core_flows: MONGO_URI not set.");
+                return Ok(());
+            }
+        };
+
+        let manager = get_connection_manager();
+        let connection = SavedConnection::new("Smoke Test".to_string(), uri);
+
+        manager.test_connection(&connection, Duration::from_secs(5))?;
+        let client = manager.connect(&connection)?;
+
+        let databases = manager.list_databases(&client)?;
+        if databases.is_empty() {
+            return Ok(());
+        }
+
+        let db_name = env::var("MONGO_DB").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| databases[0].clone());
+        let collections = manager.list_collections(&client, &db_name)?;
+        if collections.is_empty() {
+            return Ok(());
+        }
+
+        let collection = env::var("MONGO_COLLECTION")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| collections[0].clone());
+
+        let _ = manager.find_documents(
+            &client,
+            &db_name,
+            &collection,
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 1,
+            },
+        )?;
+
+        Ok(())
+    }
+}
