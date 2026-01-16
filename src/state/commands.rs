@@ -1096,6 +1096,152 @@ impl AppCommands {
         .detach();
     }
 
+    /// Create an index for a collection session.
+    pub fn create_collection_index(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        index_doc: Document,
+        cx: &mut App,
+    ) {
+        let (client, database, collection) = {
+            let state = state.read(cx);
+            let Some(conn) = &state.conn.active else {
+                return;
+            };
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
+        };
+
+        let index_name = index_doc.get_str("name").ok().map(|value| value.to_string());
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            let index_doc = index_doc.clone();
+            async move {
+                let manager = get_connection_manager();
+                manager.create_index(&client, &database, &collection, index_doc)
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            let index_name = index_name.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<(), crate::error::Error> = task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(()) => {
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::IndexCreated {
+                                session: session_key.clone(),
+                                name: index_name.clone(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_collection_indexes(
+                            state.clone(),
+                            session_key.clone(),
+                            true,
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create index: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::IndexCreateFailed {
+                                session: session_key.clone(),
+                                error: e.to_string(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Replace an index by dropping the old name and creating a new one.
+    pub fn replace_collection_index(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        old_name: String,
+        index_doc: Document,
+        cx: &mut App,
+    ) {
+        let (client, database, collection) = {
+            let state = state.read(cx);
+            let Some(conn) = &state.conn.active else {
+                return;
+            };
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
+        };
+
+        let new_name = index_doc.get_str("name").ok().map(|value| value.to_string());
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            let old_name = old_name.clone();
+            let new_name = new_name.clone();
+            let index_doc = index_doc.clone();
+            async move {
+                let manager = get_connection_manager();
+                if new_name.as_deref() == Some(old_name.as_str()) {
+                    manager.drop_index(&client, &database, &collection, &old_name)?;
+                    manager.create_index(&client, &database, &collection, index_doc)?;
+                } else {
+                    manager.create_index(&client, &database, &collection, index_doc)?;
+                    manager.drop_index(&client, &database, &collection, &old_name)?;
+                }
+                Ok::<(), crate::error::Error>(())
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            let new_name = new_name.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<(), crate::error::Error> = task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(()) => {
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::IndexCreated {
+                                session: session_key.clone(),
+                                name: new_name.clone(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_collection_indexes(
+                            state.clone(),
+                            session_key.clone(),
+                            true,
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to replace index: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::IndexCreateFailed {
+                                session: session_key.clone(),
+                                error: e.to_string(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Save a document by replacing it in MongoDB.
     pub fn save_document(
         state: Entity<AppState>,

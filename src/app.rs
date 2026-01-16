@@ -171,7 +171,9 @@ impl Sidebar {
             | AppEvent::IndexesLoaded { .. }
             | AppEvent::IndexesLoadFailed { .. }
             | AppEvent::IndexDropped { .. }
-            | AppEvent::IndexDropFailed { .. } => {}
+            | AppEvent::IndexDropFailed { .. }
+            | AppEvent::IndexCreated { .. }
+            | AppEvent::IndexCreateFailed { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }

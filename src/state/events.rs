@@ -33,6 +33,8 @@ pub enum AppEvent {
     IndexesLoadFailed { error: String },
     IndexDropped { name: String },
     IndexDropFailed { error: String },
+    IndexCreated { session: SessionKey, name: Option<String> },
+    IndexCreateFailed { session: SessionKey, error: String },
 
     // View navigation
     ViewChanged,

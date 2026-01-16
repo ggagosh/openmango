@@ -15,6 +15,7 @@ use crate::state::{
 };
 use crate::theme::{borders, colors, spacing};
 
+use super::index_create::IndexCreateDialog;
 use super::CollectionView;
 
 impl CollectionView {
@@ -578,26 +579,48 @@ impl CollectionView {
                         }),
                 );
         } else if is_indexes {
-            action_row = action_row.child(
-                Button::new("refresh-indexes")
-                    .ghost()
-                    .icon(Icon::new(IconName::Redo).xsmall())
-                    .disabled(session_key.is_none())
-                    .on_click({
-                        let session_key = session_key.clone();
-                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                            let Some(session_key) = session_key.clone() else {
-                                return;
-                            };
-                            AppCommands::load_collection_indexes(
-                                state_for_indexes_refresh.clone(),
-                                session_key,
-                                true,
-                                cx,
-                            );
-                        }
-                    }),
-            );
+            action_row = action_row
+                .child(
+                    Button::new("create-index")
+                        .compact()
+                        .label("Create index")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_dialog = state_for_dialog.clone();
+                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                IndexCreateDialog::open(
+                                    state_for_dialog.clone(),
+                                    session_key,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("refresh-indexes")
+                        .ghost()
+                        .icon(Icon::new(IconName::Redo).xsmall())
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                AppCommands::load_collection_indexes(
+                                    state_for_indexes_refresh.clone(),
+                                    session_key,
+                                    true,
+                                    cx,
+                                );
+                            }
+                        }),
+                );
         } else if is_stats {
             action_row = action_row.child(
                 Button::new("refresh-stats")

@@ -2,6 +2,7 @@
 
 mod document_tree;
 mod header;
+mod index_create;
 mod node_meta;
 mod pagination;
 mod tree_content;
@@ -23,6 +24,7 @@ use gpui_component::tree::tree;
 use gpui_component::{Icon, IconName, Sizable as _};
 use mongodb::IndexModel;
 use mongodb::bson::Document;
+use index_create::IndexCreateDialog;
 use view_model::DocumentViewModel;
 
 use tree_content::render_tree_row;
@@ -913,7 +915,7 @@ impl CollectionView {
             )
             .child(
                 div()
-                    .w(px(90.0))
+                    .w(px(140.0))
                     .text_xs()
                     .text_color(colors::text_muted())
                     .child("Actions"),
@@ -928,10 +930,12 @@ impl CollectionView {
                 let keys_label = index_keys_preview(&model.keys);
                 let flags_label = index_flags(&model, &name_label);
                 let can_drop = name.as_ref().is_some_and(|n| n != "_id_");
+                let can_edit = can_drop && name.is_some();
 
                 let state = self.state.clone();
                 let session_key = session_key.clone();
                 let drop_name = name.clone();
+                let edit_model = model.clone();
 
                 div()
                     .flex()
@@ -966,54 +970,86 @@ impl CollectionView {
                             .child(flags_label),
                     )
                     .child(
-                        div().w(px(90.0)).child(
-                            Button::new(("drop-index", index))
-                                .danger()
-                                .compact()
-                                .label("Drop")
-                                .disabled(!can_drop || session_key.is_none())
-                                .on_click({
-                                    let state = state.clone();
-                                    let session_key = session_key.clone();
-                                    let drop_name = drop_name.clone();
-                                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                        let Some(session_key) = session_key.clone() else {
-                                            return;
-                                        };
-                                        let Some(drop_name) = drop_name.clone() else {
-                                            return;
-                                        };
-                                        if drop_name == "_id_" {
-                                            return;
-                                        }
-                                        let message = format!(
-                                            "Drop index {}? This cannot be undone.",
-                                            drop_name
-                                        );
-                                        open_confirm_dialog(
-                                            window,
-                                            cx,
-                                            "Drop index",
-                                            message,
-                                            "Drop",
-                                            true,
-                                            {
-                                                let state = state.clone();
+                        div()
+                            .w(px(140.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::xs())
+                                    .child(
+                                        Button::new(("edit-index", index))
+                                            .ghost()
+                                            .compact()
+                                            .label("Edit")
+                                            .disabled(!can_edit || session_key.is_none())
+                                            .on_click({
                                                 let session_key = session_key.clone();
-                                                let drop_name = drop_name.clone();
-                                                move |_window, cx| {
-                                                    AppCommands::drop_collection_index(
+                                                let state = state.clone();
+                                                let edit_model = edit_model.clone();
+                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                                    let Some(session_key) = session_key.clone() else {
+                                                        return;
+                                                    };
+                                                    IndexCreateDialog::open_edit(
                                                         state.clone(),
-                                                        session_key.clone(),
-                                                        drop_name.clone(),
+                                                        session_key,
+                                                        edit_model.clone(),
+                                                        window,
                                                         cx,
                                                     );
                                                 }
-                                            },
-                                        );
-                                    }
-                                }),
-                        ),
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new(("drop-index", index))
+                                            .danger()
+                                            .compact()
+                                            .label("Drop")
+                                            .disabled(!can_drop || session_key.is_none())
+                                            .on_click({
+                                                let state = state.clone();
+                                                let session_key = session_key.clone();
+                                                let drop_name = drop_name.clone();
+                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                                    let Some(session_key) = session_key.clone() else {
+                                                        return;
+                                                    };
+                                                    let Some(drop_name) = drop_name.clone() else {
+                                                        return;
+                                                    };
+                                                    if drop_name == "_id_" {
+                                                        return;
+                                                    }
+                                                    let message = format!(
+                                                        "Drop index {}? This cannot be undone.",
+                                                        drop_name
+                                                    );
+                                                    open_confirm_dialog(
+                                                        window,
+                                                        cx,
+                                                        "Drop index",
+                                                        message,
+                                                        "Drop",
+                                                        true,
+                                                        {
+                                                            let state = state.clone();
+                                                            let session_key = session_key.clone();
+                                                            let drop_name = drop_name.clone();
+                                                            move |_window, cx| {
+                                                                AppCommands::drop_collection_index(
+                                                                    state.clone(),
+                                                                    session_key.clone(),
+                                                                    drop_name.clone(),
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    );
+                                                }
+                                            }),
+                                    ),
+                            ),
                     )
             })
             .collect::<Vec<_>>();

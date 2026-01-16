@@ -278,6 +278,54 @@ impl ConnectionManager {
         })
     }
 
+    /// Sample documents from a collection (runs in Tokio runtime)
+    pub fn sample_documents(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        size: i64,
+    ) -> Result<Vec<mongodb::bson::Document>> {
+        use futures::TryStreamExt;
+
+        if size <= 0 {
+            return Ok(Vec::new());
+        }
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let pipeline = vec![doc! { "$sample": { "size": size } }];
+            let cursor = coll.aggregate(pipeline).await?;
+            let docs: Vec<mongodb::bson::Document> = cursor.try_collect().await?;
+            Ok(docs)
+        })
+    }
+
+    /// Create an index for a collection (runs in Tokio runtime)
+    pub fn create_index(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        index: mongodb::bson::Document,
+    ) -> Result<()> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let db = client.database(&database);
+            db.run_command(doc! { "createIndexes": collection, "indexes": [index] })
+                .await?;
+            Ok(())
+        })
+    }
+
     /// Drop an index by name in a collection (runs in Tokio runtime)
     pub fn drop_index(
         &self,

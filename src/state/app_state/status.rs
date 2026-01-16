@@ -74,6 +74,18 @@ impl AppState {
                 self.status_message =
                     Some(StatusMessage::error(format!("Drop index failed: {error}")));
             }
+            AppEvent::IndexCreated { name, .. } => {
+                if let Some(name) = name {
+                    self.status_message =
+                        Some(StatusMessage::info(format!("Index {name} created")));
+                } else {
+                    self.status_message = Some(StatusMessage::info("Index created"));
+                }
+            }
+            AppEvent::IndexCreateFailed { error, .. } => {
+                self.status_message =
+                    Some(StatusMessage::error(format!("Create index failed: {error}")));
+            }
             _ => {}
         }
     }
