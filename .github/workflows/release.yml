@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+
 jobs:
   macos:
     runs-on: macos-latest
@@ -16,6 +21,10 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ runner.os }}"
 
       - name: Ensure scripts executable
         run: chmod +x scripts/release_macos.sh
@@ -70,23 +79,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ runner.os }}"
+
       - name: Ensure scripts executable
         run: chmod +x scripts/release_linux.sh
 
-      - name: Install system dependencies
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev libgtk-3-dev
+          version: 1.0
+
+      - name: Install mold linker
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libx11-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev \
-            libgl1-mesa-dev \
-            libgtk-3-dev
+          sudo apt-get install -y mold clang
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" >> $GITHUB_ENV
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> $GITHUB_ENV
 
       - name: Build and package (Linux)
         run: scripts/release_linux.sh
