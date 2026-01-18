@@ -73,7 +73,8 @@ impl ConnectionManager {
     pub fn list_databases(&self, client: &Client) -> Result<Vec<String>> {
         let client = client.clone();
         self.runtime.block_on(async {
-            let databases = client.list_database_names().await?;
+            let mut databases = client.list_database_names().await?;
+            databases.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
             Ok(databases)
         })
     }
@@ -84,7 +85,8 @@ impl ConnectionManager {
         let database = database.to_string();
         self.runtime.block_on(async {
             let db = client.database(&database);
-            let collections = db.list_collection_names().await?;
+            let mut collections = db.list_collection_names().await?;
+            collections.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
             Ok(collections)
         })
     }
@@ -102,7 +104,8 @@ impl ConnectionManager {
         self.runtime.block_on(async {
             let db = client.database(&database);
             let cursor = db.list_collections().await?;
-            let specs: Vec<CollectionSpecification> = cursor.try_collect().await?;
+            let mut specs: Vec<CollectionSpecification> = cursor.try_collect().await?;
+            specs.sort_unstable_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
             Ok(specs)
         })
     }

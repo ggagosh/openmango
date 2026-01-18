@@ -4,6 +4,7 @@ use gpui::Context;
 use uuid::Uuid;
 
 use crate::state::events::AppEvent;
+use crate::state::StatusLevel;
 
 use super::AppState;
 use super::types::{ActiveTab, DatabaseKey, SessionKey, TabKey, View};
@@ -36,6 +37,12 @@ impl AppState {
 
     fn is_preview_active(&self) -> bool {
         matches!(self.tabs.active, ActiveTab::Preview)
+    }
+
+    fn clear_error_status(&mut self) {
+        if matches!(self.status_message.as_ref().map(|m| &m.level), Some(StatusLevel::Error)) {
+            self.status_message = None;
+        }
     }
 
     pub(super) fn cleanup_session(&mut self, key: &SessionKey) {
@@ -147,6 +154,7 @@ impl AppState {
         }
 
         if selection_changed || tab_changed {
+            self.clear_error_status();
             cx.emit(AppEvent::ViewChanged);
         }
         cx.notify();
@@ -208,6 +216,7 @@ impl AppState {
         self.update_workspace_from_state();
 
         if selection_changed || tab_changed {
+            self.clear_error_status();
             cx.emit(AppEvent::ViewChanged);
         }
         cx.notify();
@@ -236,6 +245,7 @@ impl AppState {
         self.conn.selected_collection = Some(tab.collection.clone());
         self.current_view = View::Documents;
         self.ensure_session_loaded(tab);
+        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -260,6 +270,7 @@ impl AppState {
             }
         }
         self.update_workspace_from_state();
+        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }

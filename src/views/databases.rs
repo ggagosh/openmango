@@ -204,9 +204,14 @@ impl DatabaseView {
             return section.child(row).into_any_element();
         }
 
-        if let Some(error) = stats_error {
+        if let Some(_error) = stats_error {
             row = row
-                .child(div().text_sm().text_color(colors::text_error()).child(error))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(colors::text_error())
+                        .child("Database stats failed. See banner for details."),
+                )
                 .child(
                     Button::new("retry-db-stats")
                         .ghost()
@@ -286,14 +291,19 @@ impl DatabaseView {
                 .into_any_element();
         }
 
-        if let Some(error) = collections_error {
+        if let Some(_error) = collections_error {
             return section
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
-                        .child(div().text_sm().text_color(colors::text_error()).child(error))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors::text_error())
+                                .child("Collections failed. See banner for details."),
+                        )
                         .child(
                             Button::new("retry-db-collections")
                                 .ghost()

@@ -32,13 +32,14 @@ impl RenderOnce for StatusBar {
         };
 
         let status_right = match self.status_message {
-            Some(message) => {
-                let color = match message.level {
-                    StatusLevel::Info => colors::text_secondary(),
-                    StatusLevel::Error => colors::status_warning(),
-                };
-                div().text_xs().text_color(color).child(message.text)
-            }
+            Some(message) => match message.level {
+                StatusLevel::Info => {
+                    div().text_xs().text_color(colors::text_secondary()).child(message.text)
+                }
+                StatusLevel::Error => {
+                    div().text_xs().text_color(colors::text_muted()).child("v0.1.0")
+                }
+            },
             None => div().text_xs().text_color(colors::text_muted()).child("v0.1.0"),
         };
 
