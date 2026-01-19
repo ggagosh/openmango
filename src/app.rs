@@ -168,6 +168,7 @@ impl Render for AppRoot {
         let is_connected = state.conn.active.is_some();
         let connection_name = state.conn.active.as_ref().map(|c| c.config.name.clone());
         let status_message = state.status_message.clone();
+        let read_only = state.conn.active.as_ref().map(|c| c.config.read_only).unwrap_or(false);
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
             state
@@ -289,7 +290,12 @@ impl Render for AppRoot {
                     .child(self.sidebar.clone())
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
-            .child(StatusBar::new(is_connected, connection_name, status_message))
+            .child(StatusBar::new(
+                is_connected,
+                connection_name,
+                status_message,
+                read_only,
+            ))
             .children(dialog_layer);
 
         if self.key_debug {

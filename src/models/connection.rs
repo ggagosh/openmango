@@ -13,11 +13,13 @@ pub struct SavedConnection {
     pub name: String,
     pub uri: String,
     pub last_connected: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl SavedConnection {
     pub fn new(name: String, uri: String) -> Self {
-        Self { id: Uuid::new_v4(), name, uri, last_connected: None }
+        Self { id: Uuid::new_v4(), name, uri, last_connected: None, read_only: false }
     }
 }
 

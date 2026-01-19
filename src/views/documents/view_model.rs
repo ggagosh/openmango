@@ -187,25 +187,23 @@ impl DocumentViewModel {
         }
         self.inline_editor_subscription = None;
         let value = meta.value.as_ref();
-        if let Some(Bson::String(text)) = value {
-            if text.contains('\n') || text.contains('\r') {
-                let Some(session_key) = self.current_session.clone() else {
-                    return;
-                };
-                let allow_bulk = !meta
-                    .path
-                    .iter()
-                    .any(|segment| matches!(segment, PathSegment::Index(_)));
-                PropertyActionDialog::open_edit_value(
-                    state.clone(),
-                    session_key,
-                    meta.clone(),
-                    allow_bulk,
-                    window,
-                    cx,
-                );
+        if let Some(Bson::String(text)) = value
+            && (text.contains('\n') || text.contains('\r'))
+        {
+            let Some(session_key) = self.current_session.clone() else {
                 return;
-            }
+            };
+            let allow_bulk =
+                !meta.path.iter().any(|segment| matches!(segment, PathSegment::Index(_)));
+            PropertyActionDialog::open_edit_value(
+                state.clone(),
+                session_key,
+                meta.clone(),
+                allow_bulk,
+                window,
+                cx,
+            );
+            return;
         }
         let editor = match value {
             Some(Bson::Boolean(current)) => InlineEditor::Bool(*current),

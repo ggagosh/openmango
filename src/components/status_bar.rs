@@ -1,13 +1,15 @@
 use gpui::*;
+use gpui::prelude::FluentBuilder as _;
 
 use crate::state::{StatusLevel, StatusMessage};
-use crate::theme::{colors, sizing, spacing};
+use crate::theme::{borders, colors, sizing, spacing};
 
 #[derive(IntoElement)]
 pub struct StatusBar {
     is_connected: bool,
     connection_name: Option<String>,
     status_message: Option<StatusMessage>,
+    read_only: bool,
 }
 
 impl StatusBar {
@@ -15,8 +17,9 @@ impl StatusBar {
         is_connected: bool,
         connection_name: Option<String>,
         status_message: Option<StatusMessage>,
+        read_only: bool,
     ) -> Self {
-        Self { is_connected, connection_name, status_message }
+        Self { is_connected, connection_name, status_message, read_only }
     }
 }
 
@@ -66,7 +69,19 @@ impl RenderOnce for StatusBar {
                             .rounded_full()
                             .bg(status_color),
                     )
-                    .child(div().text_xs().text_color(colors::text_primary()).child(status_text)),
+                    .child(div().text_xs().text_color(colors::text_primary()).child(status_text))
+                    .when(self.read_only && self.is_connected, |s: Div| {
+                        s.child(
+                            div()
+                                .px(spacing::xs())
+                                .py(px(1.0))
+                                .rounded(borders::radius_sm())
+                                .bg(colors::status_warning())
+                                .text_xs()
+                                .text_color(colors::bg_header())
+                                .child("READ-ONLY"),
+                        )
+                    }),
             )
             .child(status_right)
     }

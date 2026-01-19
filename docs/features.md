@@ -108,7 +108,7 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P0: Destructive action confirmations
 - [x] P0: Status bar
 - [x] P0: Error display (banner)
-- [ ] P3: Keyboard navigation
+- [x] P3: Keyboard navigation
 - [ ] P1: Multi-window support
 - [ ] P1: Split views / side-by-side tabs
 - [ ] P2: Theming

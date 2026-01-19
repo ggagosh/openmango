@@ -16,6 +16,25 @@ use crate::state::{
 pub struct AppCommands;
 
 impl AppCommands {
+    fn ensure_writable(state: &Entity<AppState>, cx: &mut App) -> bool {
+        let read_only = state
+            .read(cx)
+            .conn
+            .active
+            .as_ref()
+            .map(|conn| conn.config.read_only)
+            .unwrap_or(false);
+        if read_only {
+            state.update(cx, |state, cx| {
+                state.status_message = Some(StatusMessage::error(
+                    "Read-only connection: writes are disabled.",
+                ));
+                cx.notify();
+            });
+        }
+        !read_only
+    }
+
     /// Connect to a saved connection by ID.
     pub fn connect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
         // Find the connection config
@@ -204,6 +223,9 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let client = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -272,6 +294,9 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         Self::create_collection(state, database, collection, cx);
     }
 
@@ -283,6 +308,9 @@ impl AppCommands {
         to: String,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         if from == to {
             return;
         }
@@ -382,6 +410,9 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let client = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -444,6 +475,9 @@ impl AppCommands {
 
     /// Drop a database.
     pub fn drop_database(state: Entity<AppState>, database: String, cx: &mut App) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let client = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -900,6 +934,9 @@ impl AppCommands {
         document: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -962,6 +999,9 @@ impl AppCommands {
         documents: Vec<Document>,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let count = documents.len();
         let (client, database, collection) = {
             let state = state.read(cx);
@@ -1105,6 +1145,9 @@ impl AppCommands {
         index_name: String,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1166,6 +1209,9 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1235,6 +1281,9 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1313,6 +1362,9 @@ impl AppCommands {
         updated: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection, original_id, doc_index) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1401,6 +1453,9 @@ impl AppCommands {
         update: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection, id) = {
             let state_ref = state.read(cx);
             let Some(conn) = &state_ref.conn.active else {
@@ -1488,6 +1543,9 @@ impl AppCommands {
         update: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1556,6 +1614,9 @@ impl AppCommands {
         doc_key: DocumentKey,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection, original_id) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {
@@ -1651,6 +1712,9 @@ impl AppCommands {
         filter: Document,
         cx: &mut App,
     ) {
+        if !Self::ensure_writable(&state, cx) {
+            return;
+        }
         let (client, database, collection) = {
             let state = state.read(cx);
             let Some(conn) = &state.conn.active else {

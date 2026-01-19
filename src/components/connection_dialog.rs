@@ -2,6 +2,8 @@ use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::switch::Switch;
+use gpui_component::Sizable as _;
 
 use crate::components::Button;
 use crate::connection::get_connection_manager;
@@ -22,6 +24,7 @@ pub struct ConnectionDialog {
     state: Entity<AppState>,
     name_state: Entity<InputState>,
     uri_state: Entity<InputState>,
+    read_only: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
     pending_test_uri: Option<String>,
@@ -81,6 +84,7 @@ impl ConnectionDialog {
             state,
             name_state,
             uri_state,
+            read_only: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
             pending_test_uri: None,
@@ -125,6 +129,7 @@ impl ConnectionDialog {
             state,
             name_state,
             uri_state,
+            read_only: existing.read_only,
             status: TestStatus::Success,
             last_tested_uri: Some(existing.uri.clone()),
             pending_test_uri: None,
@@ -242,6 +247,44 @@ impl Render for ConnectionDialog {
                 div()
                     .flex()
                     .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-read-only")
+                            .checked(self.read_only)
+                            .small()
+                            .on_click({
+                                let view = cx.entity();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.read_only = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Read-only (safe mode)"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(colors::text_secondary())
+                                    .child("Disable all writes, deletes, drops, and index changes"),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
                     .justify_end()
                     .gap(spacing::sm())
                     .child(
@@ -267,6 +310,7 @@ impl Render for ConnectionDialog {
                                 let state = self.state.clone();
                                 let name_state = self.name_state.clone();
                                 let uri_state = self.uri_state.clone();
+                                let read_only = self.read_only;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
@@ -290,10 +334,12 @@ impl Render for ConnectionDialog {
                                                 name,
                                                 uri,
                                                 last_connected: existing.last_connected,
+                                                read_only,
                                             };
                                             state.update_connection(connection, cx);
                                         } else {
-                                            let connection = SavedConnection::new(name, uri);
+                                            let mut connection = SavedConnection::new(name, uri);
+                                            connection.read_only = read_only;
                                             state.add_connection(connection, cx);
                                         }
                                     });
