@@ -1,6 +1,6 @@
 # OpenMango
 
-![OpenMango logo](assets/logo/openmango-1024.png)
+<img src="assets/logo/openmango-1024.png" alt="OpenMango logo" width="240" />
 
 GPU-accelerated MongoDB desktop client built with GPUI. Fast navigation, JSON-first editing, and a tabbed workspace.
 
