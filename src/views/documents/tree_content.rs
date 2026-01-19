@@ -16,10 +16,10 @@ use serde_json;
 
 use crate::bson::{
     DocumentKey, PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string,
-    get_bson_at_path,
+    get_bson_at_path, parse_documents_from_json,
 };
 use crate::components::{Button, open_confirm_dialog};
-use crate::state::{AppCommands, AppState, SessionKey};
+use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
 use crate::views::documents::types::InlineEditor;
@@ -487,6 +487,30 @@ fn build_document_menu(
                 }
             }
         }))
+        .item(PopupMenuItem::new("Duplicate Document").on_click({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            let doc_key = doc_key.clone();
+            move |_, _window, cx| {
+                if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
+                    let mut new_doc = doc.clone();
+                    new_doc.insert("_id", mongodb::bson::oid::ObjectId::new());
+                    AppCommands::insert_document(
+                        state.clone(),
+                        session_key.clone(),
+                        new_doc,
+                        cx,
+                    );
+                }
+            }
+        }))
+        .item(PopupMenuItem::new("Paste Document(s)").on_click({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            move |_, _window, cx| {
+                paste_documents_from_clipboard(state.clone(), session_key.clone(), cx);
+            }
+        }))
         .item(PopupMenuItem::new("Discard Changes").disabled(!is_dirty).on_click({
             let view = view.clone();
             let session_key = session_key.clone();
@@ -692,6 +716,50 @@ fn resolve_document(
         .session(session_key)
         .and_then(|session| session.view.drafts.get(doc_key).cloned())
         .or_else(|| state_ref.document_for_key(session_key, doc_key))
+}
+
+fn paste_documents_from_clipboard(
+    state: Entity<AppState>,
+    session_key: SessionKey,
+    cx: &mut App,
+) {
+    let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        state.update(cx, |state, cx| {
+            state.status_message =
+                Some(StatusMessage::error("Clipboard is empty or does not contain text"));
+            cx.notify();
+        });
+        return;
+    };
+
+    let docs = match parse_documents_from_json(&text) {
+        Ok(docs) => docs,
+        Err(err) => {
+            state.update(cx, |state, cx| {
+                state.status_message = Some(StatusMessage::error(format!("Invalid JSON: {err}")));
+                cx.notify();
+            });
+            return;
+        }
+    };
+
+    if docs.is_empty() {
+        state.update(cx, |state, cx| {
+            state.status_message = Some(StatusMessage::error("No documents found"));
+            cx.notify();
+        });
+        return;
+    }
+
+    let docs = docs
+        .into_iter()
+        .map(|mut doc| {
+            doc.remove("_id");
+            doc
+        })
+        .collect::<Vec<_>>();
+
+    AppCommands::insert_documents(state, session_key, docs, cx);
 }
 
 fn format_bson_for_clipboard(value: &Bson) -> String {

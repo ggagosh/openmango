@@ -955,6 +955,69 @@ impl AppCommands {
         .detach();
     }
 
+    /// Insert multiple documents into a collection.
+    pub fn insert_documents(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        documents: Vec<Document>,
+        cx: &mut App,
+    ) {
+        let count = documents.len();
+        let (client, database, collection) = {
+            let state = state.read(cx);
+            let Some(conn) = &state.conn.active else {
+                return;
+            };
+            if conn.config.id != session_key.connection_id {
+                return;
+            }
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
+        };
+
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            async move {
+                let manager = get_connection_manager();
+                manager.insert_documents(&client, &database, &collection, documents)
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<usize, crate::error::Error> = task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(inserted) => {
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::DocumentsInserted { count: inserted };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to insert documents: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event =
+                                AppEvent::DocumentsInsertFailed { count, error: e.to_string() };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Load indexes for a collection session.
     pub fn load_collection_indexes(
         state: Entity<AppState>,
@@ -1567,6 +1630,70 @@ impl AppCommands {
                         log::error!("Failed to delete document: {}", e);
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentDeleteFailed {
+                                session: session_key.clone(),
+                                error: e.to_string(),
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Delete multiple documents by filter.
+    pub fn delete_documents_by_filter(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        filter: Document,
+        cx: &mut App,
+    ) {
+        let (client, database, collection) = {
+            let state = state.read(cx);
+            let Some(conn) = &state.conn.active else {
+                return;
+            };
+            (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
+        };
+
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            async move {
+                let manager = get_connection_manager();
+                manager.delete_documents(&client, &database, &collection, filter)
+            }
+        });
+
+        cx.spawn({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result: Result<u64, crate::error::Error> = task.await;
+                let _ = cx.update(|cx| match result {
+                    Ok(deleted) => {
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::DocumentsDeleted {
+                                session: session_key.clone(),
+                                deleted,
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
+                            cx.notify();
+                        });
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to delete documents: {}", e);
+                        state.update(cx, |state, cx| {
+                            let event = AppEvent::DocumentsDeleteFailed {
                                 session: session_key.clone(),
                                 error: e.to_string(),
                             };

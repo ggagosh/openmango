@@ -54,3 +54,57 @@ pub fn parse_document_from_json(input: &str) -> Result<Document, String> {
         _ => Err("Root JSON must be a document".to_string()),
     }
 }
+
+/// Parse JSON as either a single document or array of documents.
+pub fn parse_documents_from_json(input: &str) -> Result<Vec<Document>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Clipboard is empty".to_string());
+    }
+
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => match value {
+            Value::Array(arr) => {
+                let mut docs = Vec::with_capacity(arr.len());
+                for (i, item) in arr.into_iter().enumerate() {
+                    let bson = bson::Bson::try_from(item).map_err(|e| e.to_string())?;
+                    match bson {
+                        bson::Bson::Document(doc) => docs.push(doc),
+                        _ => return Err(format!("Array item {} is not a document", i)),
+                    }
+                }
+                Ok(docs)
+            }
+            Value::Object(_) => {
+                let bson = bson::Bson::try_from(value).map_err(|e| e.to_string())?;
+                match bson {
+                    bson::Bson::Document(doc) => Ok(vec![doc]),
+                    _ => Err("Root JSON must be a document or array".to_string()),
+                }
+            }
+            _ => Err("Root JSON must be a document or array of documents".to_string()),
+        },
+        Err(_) => {
+            let mut docs = Vec::new();
+            for (line_no, line) in trimmed.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let value: Value = serde_json::from_str(line)
+                    .map_err(|e| format!("Line {}: {}", line_no + 1, e))?;
+                let bson = bson::Bson::try_from(value).map_err(|e| e.to_string())?;
+                match bson {
+                    bson::Bson::Document(doc) => docs.push(doc),
+                    _ => return Err(format!("Line {} is not a document", line_no + 1)),
+                }
+            }
+
+            if docs.is_empty() {
+                Err("No documents found".to_string())
+            } else {
+                Ok(docs)
+            }
+        }
+    }
+}

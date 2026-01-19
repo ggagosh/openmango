@@ -74,7 +74,7 @@ impl ConnectionManager {
         let client = client.clone();
         self.runtime.block_on(async {
             let mut databases = client.list_database_names().await?;
-            databases.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+            databases.sort_unstable_by_key(|name| name.to_lowercase());
             Ok(databases)
         })
     }
@@ -86,7 +86,7 @@ impl ConnectionManager {
         self.runtime.block_on(async {
             let db = client.database(&database);
             let mut collections = db.list_collection_names().await?;
-            collections.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+            collections.sort_unstable_by_key(|name| name.to_lowercase());
             Ok(collections)
         })
     }
@@ -105,7 +105,7 @@ impl ConnectionManager {
             let db = client.database(&database);
             let cursor = db.list_collections().await?;
             let mut specs: Vec<CollectionSpecification> = cursor.try_collect().await?;
-            specs.sort_unstable_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            specs.sort_unstable_by_key(|spec| spec.name.to_lowercase());
             Ok(specs)
         })
     }
@@ -256,6 +256,47 @@ impl ConnectionManager {
                 client.database(&database).collection::<mongodb::bson::Document>(&collection);
             coll.insert_one(document).await?;
             Ok(())
+        })
+    }
+
+    /// Insert multiple documents into a collection (runs in Tokio runtime)
+    pub fn insert_documents(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        documents: Vec<mongodb::bson::Document>,
+    ) -> Result<usize> {
+        let count = documents.len();
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            coll.insert_many(documents).await?;
+            Ok(count)
+        })
+    }
+
+    /// Delete multiple documents by filter (runs in Tokio runtime)
+    pub fn delete_documents(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        filter: mongodb::bson::Document,
+    ) -> Result<u64> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let result = coll.delete_many(filter).await?;
+            Ok(result.deleted_count)
         })
     }
 
@@ -585,7 +626,7 @@ mod tests {
             },
         )?;
         let updated_name = docs
-            .get(0)
+            .first()
             .and_then(|doc| doc.get_str("name").ok())
             .unwrap_or_default();
         if updated_name != "updated" {
@@ -674,7 +715,7 @@ mod tests {
             },
         )?;
         let first_n = sorted
-            .get(0)
+            .first()
             .and_then(|doc| doc.get_i32("n").ok())
             .unwrap_or_default();
         if first_n != 1 {
@@ -694,7 +735,7 @@ mod tests {
             },
         )?;
         let paged_n = paged
-            .get(0)
+            .first()
             .and_then(|doc| doc.get_i32("n").ok())
             .unwrap_or_default();
         if paged_n != 2 {
@@ -713,7 +754,9 @@ mod tests {
                 limit: 1,
             },
         )?;
-        let projected_doc = projected.get(0).ok_or_else(|| Error::Timeout("Projection failed".to_string()))?;
+        let projected_doc = projected
+            .first()
+            .ok_or_else(|| Error::Timeout("Projection failed".to_string()))?;
         if projected_doc.get("_id").is_some() || projected_doc.get("value").is_none() {
             return Err(Error::Timeout("Query projection failed".to_string()));
         }

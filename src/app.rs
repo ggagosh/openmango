@@ -164,10 +164,14 @@ impl Sidebar {
             AppEvent::DocumentsLoaded { .. }
             | AppEvent::DocumentInserted
             | AppEvent::DocumentInsertFailed { .. }
+            | AppEvent::DocumentsInserted { .. }
+            | AppEvent::DocumentsInsertFailed { .. }
             | AppEvent::DocumentSaved { .. }
             | AppEvent::DocumentSaveFailed { .. }
             | AppEvent::DocumentDeleted { .. }
             | AppEvent::DocumentDeleteFailed { .. }
+            | AppEvent::DocumentsDeleted { .. }
+            | AppEvent::DocumentsDeleteFailed { .. }
             | AppEvent::IndexesLoaded { .. }
             | AppEvent::IndexesLoadFailed { .. }
             | AppEvent::IndexDropped { .. }

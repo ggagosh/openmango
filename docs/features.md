@@ -17,10 +17,9 @@ GPU-accelerated MongoDB Desktop Client (macOS)
 
 Non-exhaustive highlights; see each section below for full status.
 
-- No index creation UI (list/drop only)
 - No import/export flows (data or connections)
 - No aggregation pipeline editor, query history, or saved queries
-- No duplicate document or bulk ops tooling
+- Bulk ops limited (paste insert + delete); no bulk update/replace
 - No read-only/safe mode or connection profiles
 - No multi-window/split views; keyboard navigation deferred
 
@@ -66,7 +65,7 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P0: Refresh documents
 - [ ] P1: Collection stats (extended)
 - [x] P1: Index management (list/drop)
-- [ ] P1: Index management (create)
+- [x] P1: Index management (create)
 - [ ] P1: Import (JSON/CSV)
 - [ ] P1: Export (JSON/CSV/BSON)
 - [ ] P2: Schema analysis / explorer
@@ -82,8 +81,10 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P0: Insert document
 - [x] P1: Sort
 - [x] P1: Projection (field selection)
-- [ ] P1: Duplicate document
-- [ ] P2: Bulk operations
+- [x] P1: Duplicate document
+- [x] P1: Paste document(s) from clipboard (JSON array / NDJSON)
+- [x] P1: Bulk delete (filtered/all)
+- [ ] P2: Bulk update/replace
 - [x] P2: Client-side find in results (Cmd/Ctrl+F)
 
 ## 5. Query & Aggregation

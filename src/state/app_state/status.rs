@@ -50,6 +50,16 @@ impl AppState {
                 self.status_message =
                     Some(StatusMessage::error(format!("Insert failed: {error}")));
             }
+            AppEvent::DocumentsInserted { count } => {
+                self.status_message =
+                    Some(StatusMessage::info(format!("Inserted {} document(s)", count)));
+            }
+            AppEvent::DocumentsInsertFailed { count, error } => {
+                self.status_message = Some(StatusMessage::error(format!(
+                    "Failed to insert {} document(s): {}",
+                    count, error
+                )));
+            }
             AppEvent::DocumentSaveFailed { error, .. } => {
                 self.status_message = Some(StatusMessage::error(format!("Save failed: {error}")));
             }
@@ -99,6 +109,21 @@ impl AppState {
             AppEvent::DocumentsUpdateFailed { error, .. } => {
                 self.status_message =
                     Some(StatusMessage::error(format!("Update failed: {error}")));
+            }
+            AppEvent::DocumentsDeleted { session, deleted } => {
+                let _ = session;
+                if *deleted == 0 {
+                    self.status_message =
+                        Some(StatusMessage::info("No documents matched the delete.".to_string()));
+                } else {
+                    self.status_message =
+                        Some(StatusMessage::info(format!("Deleted {deleted} document(s)")));
+                }
+            }
+            AppEvent::DocumentsDeleteFailed { session, error } => {
+                let _ = session;
+                self.status_message =
+                    Some(StatusMessage::error(format!("Delete failed: {error}")));
             }
             _ => {}
         }

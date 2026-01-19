@@ -281,10 +281,10 @@ impl PropertyActionDialog {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut parent_path = parent_path(&meta.path);
-        if action == PropertyActionKind::AddField {
-            if matches!(meta.value, Some(Bson::Document(_))) {
-                parent_path = meta.path.clone();
-            }
+        if action == PropertyActionKind::AddField
+            && matches!(meta.value, Some(Bson::Document(_)))
+        {
+            parent_path = meta.path.clone();
         }
         let parent_label = if parent_path.is_empty() {
             "(document)".to_string()
@@ -334,12 +334,12 @@ impl PropertyActionDialog {
                 .soft_wrap(true)
         });
 
-        if action == PropertyActionKind::RenameField {
-            if let Some(PathSegment::Key(key)) = meta.path.last() {
-                field_state.update(cx, |state, cx| {
-                    state.set_value(key.clone(), window, cx);
-                });
-            }
+        if action == PropertyActionKind::RenameField
+            && let Some(PathSegment::Key(key)) = meta.path.last()
+        {
+            field_state.update(cx, |state, cx| {
+                state.set_value(key.clone(), window, cx);
+            });
         }
 
         let mut value_type = ValueType::String;
@@ -360,13 +360,13 @@ impl PropertyActionDialog {
             }
         }
 
-        if should_prefill_value {
-            if let Some(value) = meta.value.as_ref() {
-                let raw = format_bson_for_input(value);
-                value_state.update(cx, |state, cx| {
-                    state.set_value(raw, window, cx);
-                });
-            }
+        if should_prefill_value
+            && let Some(value) = meta.value.as_ref()
+        {
+            let raw = format_bson_for_input(value);
+            value_state.update(cx, |state, cx| {
+                state.set_value(raw, window, cx);
+            });
         }
 
         let mut dialog = Self {
@@ -549,7 +549,7 @@ impl PropertyActionDialog {
         state_ref
             .session(&self.session_key)
             .and_then(|session| session.data.filter.clone())
-            .unwrap_or_else(Document::new)
+            .unwrap_or_default()
     }
 
     fn build_update_doc(&self, cx: &mut Context<Self>) -> Result<Document, String> {
@@ -634,32 +634,31 @@ impl PropertyActionDialog {
             .dropdown_menu_with_anchor(Corner::BottomLeft, {
                 let view = view.clone();
                 move |menu, _window, _cx| {
-                    let menu = menu
-                    .item(PopupMenuItem::new(UpdateScope::CurrentDocument.label()).on_click({
-                        let view = view.clone();
-                        move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.set_scope(UpdateScope::CurrentDocument, cx);
-                            });
-                        }
-                    }))
-                    .item(PopupMenuItem::new(UpdateScope::MatchQuery.label()).on_click({
-                        let view = view.clone();
-                        move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.set_scope(UpdateScope::MatchQuery, cx);
-                            });
-                        }
-                    }))
-                    .item(PopupMenuItem::new(UpdateScope::AllDocuments.label()).on_click({
-                        let view = view.clone();
-                        move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.set_scope(UpdateScope::AllDocuments, cx);
-                            });
-                        }
-                    }));
                     menu
+                        .item(PopupMenuItem::new(UpdateScope::CurrentDocument.label()).on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.set_scope(UpdateScope::CurrentDocument, cx);
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new(UpdateScope::MatchQuery.label()).on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.set_scope(UpdateScope::MatchQuery, cx);
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new(UpdateScope::AllDocuments.label()).on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.set_scope(UpdateScope::AllDocuments, cx);
+                                });
+                            }
+                        }))
                 }
             })
     }

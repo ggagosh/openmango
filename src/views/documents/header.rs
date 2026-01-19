@@ -1,13 +1,16 @@
 //! Header bar rendering for collection view.
 
 use gpui::*;
+use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
+use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Icon, IconName, Sizable as _, WindowExt};
+use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size, WindowExt};
 
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
+use mongodb::bson::Document;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::{format_bytes, format_number};
 use crate::state::{
@@ -514,51 +517,148 @@ impl CollectionView {
                             }
                         }),
                 )
-                .child(
-                    Button::new("delete-document")
-                        .danger()
+                .child({
+                    let session_key = session_key.clone();
+                    let selected_doc = selected_doc.clone();
+                    let state_for_delete = state_for_delete.clone();
+                    let delete_variant = ButtonCustomVariant::new(cx)
+                        .color(colors::bg_button_danger().into())
+                        .foreground(colors::text_button_danger().into())
+                        .border(colors::bg_button_danger().into())
+                        .hover(colors::bg_button_danger_hover().into())
+                        .active(colors::bg_button_danger_hover().into())
+                        .shadow(false);
+
+                    MenuButton::new("delete-menu")
                         .compact()
                         .label("Delete")
-                        .disabled(selected_doc.is_none() || session_key.is_none())
-                        .on_click({
-                            let selected_doc = selected_doc.clone();
+                        .dropdown_caret(true)
+                        .custom(delete_variant)
+                        .rounded(borders::radius_sm())
+                        .with_size(Size::XSmall)
+                        .disabled(session_key.is_none())
+                        .dropdown_menu_with_anchor(Corner::BottomLeft, {
                             let session_key = session_key.clone();
+                            let selected_doc = selected_doc.clone();
                             let state_for_delete = state_for_delete.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                let Some(doc_key) = selected_doc.clone() else {
-                                    return;
-                                };
-                                let Some(session_key) = session_key.clone() else {
-                                    return;
-                                };
-                                let message = format!(
-                                    "Delete document {}? This cannot be undone.",
-                                    doc_key
-                                );
-                                open_confirm_dialog(
-                                    window,
-                                    cx,
-                                    "Delete document",
-                                    message,
-                                    "Delete",
-                                    true,
-                                    {
-                                        let state_for_delete = state_for_delete.clone();
-                                        let session_key = session_key.clone();
-                                        let doc_key = doc_key.clone();
-                                        move |_window, cx| {
-                                            AppCommands::delete_document(
-                                                state_for_delete.clone(),
-                                                session_key.clone(),
-                                                doc_key.clone(),
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                );
+                            move |menu: PopupMenu, _window, _cx| {
+                                menu.item(
+                                    PopupMenuItem::new("Delete selected")
+                                        .disabled(selected_doc.is_none())
+                                        .on_click({
+                                            let selected_doc = selected_doc.clone();
+                                            let session_key = session_key.clone();
+                                            let state_for_delete = state_for_delete.clone();
+                                            move |_, window, cx| {
+                                                let Some(doc_key) = selected_doc.clone() else {
+                                                    return;
+                                                };
+                                                let Some(session_key) = session_key.clone() else {
+                                                    return;
+                                                };
+                                                let message = format!(
+                                                    "Delete document {}? This cannot be undone.",
+                                                    doc_key
+                                                );
+                                                open_confirm_dialog(
+                                                    window,
+                                                    cx,
+                                                    "Delete document",
+                                                    message,
+                                                    "Delete",
+                                                    true,
+                                                    {
+                                                        let state_for_delete = state_for_delete.clone();
+                                                        let session_key = session_key.clone();
+                                                        let doc_key = doc_key.clone();
+                                                        move |_window, cx| {
+                                                            AppCommands::delete_document(
+                                                                state_for_delete.clone(),
+                                                                session_key.clone(),
+                                                                doc_key.clone(),
+                                                                cx,
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            }
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Delete filtered")
+                                        .disabled(!filter_active)
+                                        .on_click({
+                                            let session_key = session_key.clone();
+                                            let state_for_delete = state_for_delete.clone();
+                                            move |_, window, cx| {
+                                                let Some(session_key) = session_key.clone() else {
+                                                    return;
+                                                };
+                                                let filter = {
+                                                    let state_ref = state_for_delete.read(cx);
+                                                    state_ref
+                                                        .session(&session_key)
+                                                        .and_then(|session| session.data.filter.clone())
+                                                        .unwrap_or_default()
+                                                };
+                                                if filter.is_empty() {
+                                                    return;
+                                                }
+                                                open_confirm_dialog(
+                                                    window,
+                                                    cx,
+                                                    "Delete filtered documents",
+                                                    "Delete all documents matching the current filter? This cannot be undone.".to_string(),
+                                                    "Delete",
+                                                    true,
+                                                    {
+                                                        let state_for_delete = state_for_delete.clone();
+                                                        let session_key = session_key.clone();
+                                                        move |_window, cx| {
+                                                            AppCommands::delete_documents_by_filter(
+                                                                state_for_delete.clone(),
+                                                                session_key.clone(),
+                                                                filter.clone(),
+                                                                cx,
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            }
+                                        }),
+                                )
+                                .item(PopupMenuItem::new("Delete all").on_click({
+                                    let session_key = session_key.clone();
+                                    let state_for_delete = state_for_delete.clone();
+                                    move |_, window, cx| {
+                                        let Some(session_key) = session_key.clone() else {
+                                            return;
+                                        };
+                                        open_confirm_dialog(
+                                            window,
+                                            cx,
+                                            "Delete all documents",
+                                            "Delete all documents in this collection? This cannot be undone.".to_string(),
+                                            "Delete",
+                                            true,
+                                            {
+                                                let state_for_delete = state_for_delete.clone();
+                                                let session_key = session_key.clone();
+                                                move |_window, cx| {
+                                                    AppCommands::delete_documents_by_filter(
+                                                        state_for_delete.clone(),
+                                                        session_key.clone(),
+                                                        Document::new(),
+                                                        cx,
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    }
+                                }))
                             }
-                        }),
-                )
+                        })
+                })
                 .child(
                     Button::new("refresh")
                         .ghost()

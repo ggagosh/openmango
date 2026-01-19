@@ -25,6 +25,8 @@ pub enum AppEvent {
     DocumentsLoaded { session: SessionKey, total: u64 },
     DocumentInserted,
     DocumentInsertFailed { error: String },
+    DocumentsInserted { count: usize },
+    DocumentsInsertFailed { count: usize, error: String },
     DocumentSaved { session: SessionKey, document: DocumentKey },
     DocumentSaveFailed { session: SessionKey, error: String },
     DocumentDeleted { session: SessionKey, document: DocumentKey },
@@ -37,6 +39,8 @@ pub enum AppEvent {
     IndexCreateFailed { session: SessionKey, error: String },
     DocumentsUpdated { session: SessionKey, matched: u64, modified: u64 },
     DocumentsUpdateFailed { session: SessionKey, error: String },
+    DocumentsDeleted { session: SessionKey, deleted: u64 },
+    DocumentsDeleteFailed { session: SessionKey, error: String },
 
     // View navigation
     ViewChanged,

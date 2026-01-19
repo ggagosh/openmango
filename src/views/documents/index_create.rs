@@ -301,15 +301,14 @@ impl IndexCreateDialog {
                 });
             }
 
-            if let Some(collation) = options.collation.as_ref() {
-                if let Ok(bson) = to_bson(collation)
-                    && let Bson::Document(doc) = bson
-                {
-                    let formatted = document_to_relaxed_extjson_string(&doc);
-                    self.collation_state.update(cx, |state, cx| {
-                        state.set_value(formatted, window, cx);
-                    });
-                }
+            if let Some(collation) = options.collation.as_ref()
+                && let Ok(bson) = to_bson(collation)
+                && let Bson::Document(doc) = bson
+            {
+                let formatted = document_to_relaxed_extjson_string(&doc);
+                self.collation_state.update(cx, |state, cx| {
+                    state.set_value(formatted, window, cx);
+                });
             }
         }
 
@@ -326,10 +325,8 @@ impl IndexCreateDialog {
             json_doc.insert("hidden", true);
         }
         let ttl_raw = self.ttl_state.read(cx).value().to_string();
-        if let Ok(ttl) = ttl_raw.trim().parse::<i64>() {
-            if ttl > 0 {
-                json_doc.insert("expireAfterSeconds", ttl);
-            }
+        if let Ok(ttl) = ttl_raw.trim().parse::<i64>() && ttl > 0 {
+            json_doc.insert("expireAfterSeconds", ttl);
         }
         let partial_raw = self.partial_state.read(cx).value().to_string();
         if let Ok(doc) = parse_document_from_json(partial_raw.trim())
@@ -697,7 +694,6 @@ impl IndexCreateDialog {
                     .compact()
                     .label(label)
                     .on_click({
-                        let row_id = row_id;
                         let target = target.clone();
                         let view = view.clone();
                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -788,76 +784,73 @@ impl Render for IndexCreateDialog {
                 )
                 .child(
                     kind_button.dropdown_menu_with_anchor(Corner::BottomLeft, {
-                            let row_id = row_id;
-                            let view = view.clone();
-                            move |menu, _window, _cx| {
-                                let menu = menu
-                                    .item(PopupMenuItem::new("1").on_click({
-                                        let row_id = row_id;
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.set_row_kind(row_id, IndexKeyKind::Asc, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .item(PopupMenuItem::new("-1").on_click({
-                                        let row_id = row_id;
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.set_row_kind(row_id, IndexKeyKind::Desc, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .item(PopupMenuItem::new("text").on_click({
-                                        let row_id = row_id;
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.set_row_kind(row_id, IndexKeyKind::Text, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .item(PopupMenuItem::new("hashed").on_click({
-                                        let row_id = row_id;
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.set_row_kind(row_id, IndexKeyKind::Hashed, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .item(PopupMenuItem::new("2dsphere").on_click({
-                                        let row_id = row_id;
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.set_row_kind(row_id, IndexKeyKind::TwoDSphere, window, cx);
-                                            });
-                                        }
-                                    }))
-                                    .item(
-                                        PopupMenuItem::new("wildcard ($**)")
-                                            .disabled(!allow_wildcard)
-                                            .on_click({
-                                                let row_id = row_id;
-                                                let view = view.clone();
-                                                move |_, window, cx| {
-                                                    view.update(cx, |this, cx| {
-                                                        this.set_row_kind(
-                                                            row_id,
-                                                            IndexKeyKind::Wildcard,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
-                                    );
-                                menu
-                            }
-                        }),
+                        let view = view.clone();
+                        move |menu, _window, _cx| {
+                            menu
+                                .item(PopupMenuItem::new("1").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.set_row_kind(row_id, IndexKeyKind::Asc, window, cx);
+                                        });
+                                    }
+                                }))
+                                .item(PopupMenuItem::new("-1").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.set_row_kind(row_id, IndexKeyKind::Desc, window, cx);
+                                        });
+                                    }
+                                }))
+                                .item(PopupMenuItem::new("text").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.set_row_kind(row_id, IndexKeyKind::Text, window, cx);
+                                        });
+                                    }
+                                }))
+                                .item(PopupMenuItem::new("hashed").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.set_row_kind(row_id, IndexKeyKind::Hashed, window, cx);
+                                        });
+                                    }
+                                }))
+                                .item(PopupMenuItem::new("2dsphere").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.set_row_kind(
+                                                row_id,
+                                                IndexKeyKind::TwoDSphere,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }))
+                                .item(
+                                    PopupMenuItem::new("wildcard ($**)")
+                                        .disabled(!allow_wildcard)
+                                        .on_click({
+                                            let view = view.clone();
+                                            move |_, window, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    this.set_row_kind(
+                                                        row_id,
+                                                        IndexKeyKind::Wildcard,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
+                                )
+                        }
+                    }),
                 )
                 .child(
                     Button::new(("remove-index-row", row_id))
@@ -866,7 +859,6 @@ impl Render for IndexCreateDialog {
                         .icon(Icon::new(IconName::Close).xsmall())
                         .disabled(!show_remove)
                     .on_click({
-                        let row_id = row_id;
                         let view = view.clone();
                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                             view.update(cx, |this, cx| {
