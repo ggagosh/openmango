@@ -12,6 +12,7 @@ use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_va
 use crate::state::{AppState, SessionKey};
 use crate::views::documents::document_tree::{build_documents_tree, flatten_tree_order_all};
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::property_dialog::PropertyActionDialog;
 use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;
@@ -186,6 +187,26 @@ impl DocumentViewModel {
         }
         self.inline_editor_subscription = None;
         let value = meta.value.as_ref();
+        if let Some(Bson::String(text)) = value {
+            if text.contains('\n') || text.contains('\r') {
+                let Some(session_key) = self.current_session.clone() else {
+                    return;
+                };
+                let allow_bulk = !meta
+                    .path
+                    .iter()
+                    .any(|segment| matches!(segment, PathSegment::Index(_)));
+                PropertyActionDialog::open_edit_value(
+                    state.clone(),
+                    session_key,
+                    meta.clone(),
+                    allow_bulk,
+                    window,
+                    cx,
+                );
+                return;
+            }
+        }
         let editor = match value {
             Some(Bson::Boolean(current)) => InlineEditor::Bool(*current),
             Some(Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_)) => {

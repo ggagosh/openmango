@@ -24,7 +24,10 @@ pub fn bson_type_label(value: &Bson) -> &'static str {
 /// Get a preview string for a BSON value, truncated to max_len.
 pub fn bson_value_preview(value: &Bson, max_len: usize) -> String {
     match value {
-        Bson::String(s) => truncate_for_preview(s, max_len),
+        Bson::String(s) => {
+            let sanitized = sanitize_for_preview(s);
+            truncate_for_preview(&sanitized, max_len)
+        }
         Bson::Int32(n) => n.to_string(),
         Bson::Int64(n) => n.to_string(),
         Bson::Double(n) => n.to_string(),
@@ -67,5 +70,19 @@ pub fn truncate_for_preview(input: &str, max_len: usize) -> String {
         output.push(ch);
     }
     output.push_str("...");
+    output
+}
+
+fn sanitize_for_preview(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if ch.is_control() => output.push('?'),
+            _ => output.push(ch),
+        }
+    }
     output
 }
