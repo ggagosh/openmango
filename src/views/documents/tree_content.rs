@@ -718,7 +718,7 @@ fn resolve_document(
         .or_else(|| state_ref.document_for_key(session_key, doc_key))
 }
 
-fn paste_documents_from_clipboard(
+pub(super) fn paste_documents_from_clipboard(
     state: Entity<AppState>,
     session_key: SessionKey,
     cx: &mut App,

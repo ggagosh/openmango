@@ -153,6 +153,7 @@ impl Render for DatabaseView {
             ));
 
         div()
+            .key_context("Database")
             .flex()
             .flex_col()
             .flex_1()

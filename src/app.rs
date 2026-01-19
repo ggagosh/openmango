@@ -13,9 +13,16 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::components::{ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
+use crate::keyboard::{
+    CloseTab, CreateCollection, CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase,
+    NewConnection, NextTab, PrevTab, RefreshView,
+};
 use crate::models::{ActiveConnection, SavedConnection};
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
-use crate::theme::{colors, sizing, spacing};
+use crate::state::{
+    ActiveTab, AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, View,
+};
+use crate::theme::{borders, colors, sizing, spacing};
+use crate::views::CollectionView;
 
 // =============================================================================
 // App Component
@@ -25,6 +32,9 @@ pub struct AppRoot {
     state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
     content_area: Entity<ContentArea>,
+    key_debug: bool,
+    last_keystroke: Option<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl AppRoot {
@@ -40,7 +50,114 @@ impl AppRoot {
 
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
 
-        Self { state, sidebar, content_area }
+        let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
+        let mut subscriptions = Vec::new();
+
+        let weak_view = cx.entity().downgrade();
+        let subscription = cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(view) = weak_view.upgrade() else {
+                return;
+            };
+            view.update(cx, |this, cx| {
+                if this.key_debug {
+                    this.last_keystroke = Some(format_keystroke(event));
+                    cx.notify();
+                }
+
+                let key = event.keystroke.key.to_ascii_lowercase();
+                let modifiers = event.keystroke.modifiers;
+                let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+                let alt = modifiers.alt;
+                let shift = modifiers.shift;
+
+                if cmd_or_ctrl && !alt && !shift && key == "n" {
+                    match this.state.read(cx).current_view {
+                        View::Documents => {
+                            let subview = this
+                                .state
+                                .read(cx)
+                                .current_session_key()
+                                .and_then(|key| {
+                                    this.state
+                                        .read(cx)
+                                        .session(&key)
+                                        .map(|session| session.view.subview)
+                                })
+                                .unwrap_or(CollectionSubview::Documents);
+                            if let Some(session_key) = this.state.read(cx).current_session_key() {
+                                match subview {
+                                    CollectionSubview::Documents => {
+                                        CollectionView::open_insert_document_json_editor(
+                                            this.state.clone(),
+                                            session_key,
+                                            window,
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }
+                                    CollectionSubview::Indexes => {
+                                        CollectionView::open_index_create_dialog(
+                                            this.state.clone(),
+                                            session_key,
+                                            window,
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }
+                                    CollectionSubview::Stats => {}
+                                }
+                            }
+                        }
+                        View::Database => {
+                            let database = this.state.read(cx).conn.selected_database.clone();
+                            if let Some(database) = database {
+                                open_create_collection_dialog(
+                                    this.state.clone(),
+                                    database,
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                            }
+                        }
+                        View::Welcome | View::Databases | View::Collections => {
+                            ConnectionDialog::open(this.state.clone(), window, cx);
+                            cx.stop_propagation();
+                        }
+                    }
+                    return;
+                }
+
+                if cmd_or_ctrl && shift && !alt && key == "n" {
+                    if !matches!(this.state.read(cx).current_view, View::Documents) {
+                        this.handle_create_database(window, cx);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+
+                if cmd_or_ctrl && !alt && !shift && key == "w" {
+                    this.handle_close_tab(cx);
+                    cx.stop_propagation();
+                    return;
+                }
+
+                if cmd_or_ctrl && !alt && !shift && key == "r" {
+                    this.handle_refresh(cx);
+                    cx.stop_propagation();
+                }
+            });
+        });
+        subscriptions.push(subscription);
+
+        Self {
+            state,
+            sidebar,
+            content_area,
+            key_debug,
+            last_keystroke: None,
+            _subscriptions: subscriptions,
+        }
     }
 }
 
@@ -52,14 +169,113 @@ impl Render for AppRoot {
         let connection_name = state.conn.active.as_ref().map(|c| c.config.name.clone());
         let status_message = state.status_message.clone();
 
+        let documents_subview = if matches!(state.current_view, View::Documents) {
+            state
+                .current_session_key()
+                .and_then(|key| state.session(&key))
+                .map(|session| session.view.subview)
+        } else {
+            None
+        };
+
+        let mut key_context = String::from("Workspace");
+        match state.current_view {
+            View::Documents => {
+                key_context.push_str(" Documents");
+                match documents_subview {
+                    Some(CollectionSubview::Indexes) => key_context.push_str(" Indexes"),
+                    Some(CollectionSubview::Stats) => key_context.push_str(" Stats"),
+                    _ => {}
+                }
+            }
+            View::Database => key_context.push_str(" Database"),
+            View::Databases => key_context.push_str(" Databases"),
+            View::Collections => key_context.push_str(" Collections"),
+            View::Welcome => key_context.push_str(" Welcome"),
+        }
+
         // Render dialog layer (Context derefs to App)
         use gpui_component::Root;
         let dialog_layer = Root::render_dialog_layer(window, cx);
 
-        div()
+        let mut root = div()
+            .key_context(key_context.as_str())
+            .on_action(cx.listener(|this, _: &CloseTab, _window, cx| {
+                this.handle_close_tab(cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, _window, cx| {
+                this.state.update(cx, |state, cx| {
+                    state.select_next_tab(cx);
+                });
+            }))
+            .on_action(cx.listener(|this, _: &PrevTab, _window, cx| {
+                this.state.update(cx, |state, cx| {
+                    state.select_prev_tab(cx);
+                });
+            }))
+            .on_action(cx.listener(|this, _: &NewConnection, window, cx| {
+                this.handle_new_connection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CreateDatabase, window, cx| {
+                this.handle_create_database(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CreateCollection, window, cx| {
+                this.handle_create_collection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
+                this.handle_create_index(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &RefreshView, _window, cx| {
+                this.handle_refresh(cx);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteDatabase, window, cx| {
+                let database = this.state.read(cx).conn.selected_database.clone();
+                let Some(database) = database else {
+                    return;
+                };
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Drop database",
+                    format!("Drop database {database}? This cannot be undone."),
+                    "Drop",
+                    true,
+                    {
+                        let state = this.state.clone();
+                        let database = database.clone();
+                        move |_window, cx| {
+                            AppCommands::drop_database(state.clone(), database.clone(), cx);
+                        }
+                    },
+                );
+            }))
+            .on_action(cx.listener(|this, _: &DeleteConnection, window, cx| {
+                let connection_id =
+                    this.state.read(cx).conn.active.as_ref().map(|conn| conn.config.id);
+                let Some(connection_id) = connection_id else {
+                    return;
+                };
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Remove connection",
+                    "Remove this connection? This cannot be undone.".to_string(),
+                    "Remove",
+                    true,
+                    {
+                        let state = this.state.clone();
+                        move |_window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.remove_connection(connection_id, cx);
+                            });
+                        }
+                    },
+                );
+            }))
             .flex()
             .flex_col()
             .size_full()
+            .relative()
             .bg(crate::theme::bg_app())
             .text_color(crate::theme::text_primary())
             .font_family(crate::theme::fonts::ui())
@@ -74,7 +290,161 @@ impl Render for AppRoot {
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
             .child(StatusBar::new(is_connected, connection_name, status_message))
-            .children(dialog_layer)
+            .children(dialog_layer);
+
+        if self.key_debug {
+            root =
+                root.child(render_key_debug_overlay(&key_context, self.last_keystroke.as_deref()));
+        }
+
+        root
+    }
+}
+
+impl AppRoot {
+    fn handle_new_connection(&mut self, window: &mut Window, cx: &mut App) {
+        ConnectionDialog::open(self.state.clone(), window, cx);
+    }
+
+    fn handle_create_database(&mut self, window: &mut Window, cx: &mut App) {
+        if self.state.read(cx).conn.active.is_none() {
+            return;
+        }
+        open_create_database_dialog(self.state.clone(), window, cx);
+    }
+
+    fn handle_create_collection(&mut self, window: &mut Window, cx: &mut App) {
+        let database = self.state.read(cx).conn.selected_database.clone();
+        let Some(database) = database else {
+            return;
+        };
+        open_create_collection_dialog(self.state.clone(), database, window, cx);
+    }
+
+    fn handle_create_index(&mut self, window: &mut Window, cx: &mut App) {
+        if !matches!(self.state.read(cx).current_view, View::Documents) {
+            return;
+        }
+        let Some(session_key) = self.state.read(cx).current_session_key() else {
+            return;
+        };
+        let subview = self
+            .state
+            .read(cx)
+            .session(&session_key)
+            .map(|session| session.view.subview)
+            .unwrap_or(CollectionSubview::Documents);
+        if subview != CollectionSubview::Indexes {
+            return;
+        }
+        CollectionView::open_index_create_dialog(self.state.clone(), session_key, window, cx);
+    }
+
+    fn handle_close_tab(&mut self, cx: &mut App) {
+        self.state.update(cx, |state, cx| match state.tabs.active {
+            ActiveTab::Preview => state.close_preview_tab(cx),
+            ActiveTab::Index(index) => state.close_tab(index, cx),
+            ActiveTab::None => {}
+        });
+    }
+
+    fn handle_refresh(&mut self, cx: &mut App) {
+        let (current_view, session_key, database_key, subview) = {
+            let state_ref = self.state.read(cx);
+            let session_key = state_ref.current_session_key();
+            let subview = session_key
+                .as_ref()
+                .and_then(|key| state_ref.session(key))
+                .map(|session| session.view.subview)
+                .unwrap_or(CollectionSubview::Documents);
+            (state_ref.current_view, session_key, state_ref.current_database_key(), subview)
+        };
+
+        match current_view {
+            View::Documents => {
+                let Some(session_key) = session_key else {
+                    return;
+                };
+                match subview {
+                    CollectionSubview::Documents => {
+                        AppCommands::load_documents_for_session(
+                            self.state.clone(),
+                            session_key,
+                            cx,
+                        );
+                    }
+                    CollectionSubview::Indexes => {
+                        AppCommands::load_collection_indexes(
+                            self.state.clone(),
+                            session_key,
+                            true,
+                            cx,
+                        );
+                    }
+                    CollectionSubview::Stats => {
+                        AppCommands::load_collection_stats(self.state.clone(), session_key, cx);
+                    }
+                }
+            }
+            View::Database => {
+                let Some(database_key) = database_key else {
+                    return;
+                };
+                AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
+            }
+            View::Databases | View::Collections | View::Welcome => {
+                if self.state.read(cx).conn.active.is_some() {
+                    AppCommands::refresh_databases(self.state.clone(), cx);
+                }
+            }
+        }
+    }
+}
+
+fn render_key_debug_overlay(key_context: &str, last_keystroke: Option<&str>) -> AnyElement {
+    let last_keystroke = last_keystroke.unwrap_or("-");
+    div()
+        .absolute()
+        .bottom(px(12.0))
+        .right(px(12.0))
+        .w(px(320.0))
+        .p(spacing::sm())
+        .rounded(borders::radius_sm())
+        .bg(colors::bg_header())
+        .border_1()
+        .border_color(colors::border())
+        .text_xs()
+        .text_color(colors::text_primary())
+        .font_family(crate::theme::fonts::mono())
+        .child(div().text_sm().child("Keymap debug"))
+        .child(div().text_color(colors::text_muted()).child("Key context:"))
+        .child(div().child(key_context.to_string()))
+        .child(div().text_color(colors::text_muted()).child("Last keystroke:"))
+        .child(div().child(last_keystroke.to_string()))
+        .into_any_element()
+}
+
+fn format_keystroke(event: &KeystrokeEvent) -> String {
+    let modifiers = event.keystroke.modifiers;
+    let mut parts = Vec::new();
+    if modifiers.platform {
+        parts.push("cmd");
+    }
+    if modifiers.control {
+        parts.push("ctrl");
+    }
+    if modifiers.alt {
+        parts.push("alt");
+    }
+    if modifiers.shift {
+        parts.push("shift");
+    }
+    let key = event.keystroke.key.to_string();
+    if parts.is_empty() {
+        key
+    } else {
+        parts.push(&key);
+        parts.join("-")
     }
 }
 
@@ -252,20 +622,16 @@ impl Sidebar {
         };
 
         if let Some(db) = selected_db.as_ref() {
-            self.expanded_nodes
-                .insert(TreeNodeId::connection(connection_id));
+            self.expanded_nodes.insert(TreeNodeId::connection(connection_id));
             if selected_col.is_some() {
-                self.expanded_nodes
-                    .insert(TreeNodeId::database(connection_id, db));
+                self.expanded_nodes.insert(TreeNodeId::database(connection_id, db));
             }
         }
 
         self.selected_tree_id = match (selected_db.as_ref(), selected_col.as_ref()) {
-            (Some(db), Some(col)) => Some(TreeNodeId::collection(
-                connection_id,
-                db.to_string(),
-                col.to_string(),
-            )),
+            (Some(db), Some(col)) => {
+                Some(TreeNodeId::collection(connection_id, db.to_string(), col.to_string()))
+            }
             (Some(db), None) => Some(TreeNodeId::database(connection_id, db.to_string())),
             _ => None,
         };
@@ -839,12 +1205,8 @@ fn build_connection_menu(
         .item(PopupMenuItem::new("Edit Connection...").on_click({
             let state = state.clone();
             move |_, window, cx| {
-                if let Some(conn) = state
-                    .read(cx)
-                    .connections
-                    .iter()
-                    .find(|conn| conn.id == connection_id)
-                    .cloned()
+                if let Some(conn) =
+                    state.read(cx).connections.iter().find(|conn| conn.id == connection_id).cloned()
                 {
                     ConnectionDialog::open_edit(state.clone(), conn, window, cx);
                 }
@@ -861,22 +1223,14 @@ fn build_connection_menu(
                     .map(|conn| conn.name.clone())
                     .unwrap_or_else(|| "this connection".to_string());
                 let message = format!("Remove connection \"{name}\"? This cannot be undone.");
-                open_confirm_dialog(
-                    window,
-                    cx,
-                    "Remove connection",
-                    message,
-                    "Remove",
-                    true,
-                    {
-                        let state = state.clone();
-                        move |_window, cx| {
-                            state.update(cx, |state, cx| {
-                                state.remove_connection(connection_id, cx);
-                            });
-                        }
-                    },
-                );
+                open_confirm_dialog(window, cx, "Remove connection", message, "Remove", true, {
+                    let state = state.clone();
+                    move |_window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.remove_connection(connection_id, cx);
+                        });
+                    }
+                });
             }
         }))
         .item(PopupMenuItem::new("Disconnect").disabled(!is_connected).on_click({

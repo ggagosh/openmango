@@ -14,6 +14,7 @@ mod components;
 mod connection;
 mod error;
 mod helpers;
+mod keyboard;
 mod models;
 mod state;
 mod theme;
@@ -27,6 +28,7 @@ fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut gpui::App| {
         // Initialize gpui-component library
         gpui_component::init(cx);
+        keyboard::bind_default_keymap(cx);
         if let Err(err) = cx.text_system().add_fonts(embedded_fonts()) {
             log::warn!("Failed to load embedded fonts: {err}");
         }

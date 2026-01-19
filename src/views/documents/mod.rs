@@ -29,6 +29,13 @@ use index_create::IndexCreateDialog;
 use view_model::DocumentViewModel;
 
 use tree_content::render_tree_row;
+use tree_content::paste_documents_from_clipboard;
+use crate::keyboard::{
+    CloseSearch, CreateIndex, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
+    DuplicateDocument, EditDocumentJson, FindInResults, InsertDocument, PasteDocuments,
+    SaveDocument, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
+};
+use mongodb::bson::oid::ObjectId;
 
 /// View for browsing documents in a collection
 pub struct CollectionView {
@@ -42,7 +49,6 @@ pub struct CollectionView {
     search_visible: bool,
     search_matches: Vec<String>,
     search_index: Option<usize>,
-    keystroke_subscription: Option<Subscription>,
     input_session: Option<SessionKey>,
     filter_subscription: Option<Subscription>,
     sort_subscription: Option<Subscription>,
@@ -54,6 +60,34 @@ pub struct CollectionView {
 impl CollectionView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+
+        let weak_view = cx.entity().downgrade();
+        subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(view) = weak_view.upgrade() else {
+                return;
+            };
+            let key = event.keystroke.key.to_ascii_lowercase();
+            if key != "escape" {
+                return;
+            }
+            view.update(cx, |this, cx| {
+                let mut handled = false;
+                if this.search_visible {
+                    this.close_search(window, cx);
+                    handled = true;
+                }
+                if this.view_model.inline_state().is_some()
+                    || this.view_model.editing_node_id().is_some()
+                {
+                    this.view_model.clear_inline_edit();
+                    handled = true;
+                }
+                if handled {
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            });
+        }));
 
         let current_session = {
             let state_ref = state.read(cx);
@@ -154,7 +188,6 @@ impl CollectionView {
             search_visible: false,
             search_matches: Vec::new(),
             search_index: None,
-            keystroke_subscription: None,
             input_session: None,
             filter_subscription: None,
             sort_subscription: None,
@@ -190,46 +223,6 @@ impl Render for CollectionView {
             );
             self.search_state = Some(search_state);
             self.search_subscription = Some(subscription);
-        }
-
-        if self.keystroke_subscription.is_none() {
-            let weak_view = cx.entity().downgrade();
-            let subscription = cx.intercept_keystrokes(move |event, window, cx| {
-                let is_find = event.keystroke.modifiers.secondary()
-                    && event.keystroke.key.eq_ignore_ascii_case("f");
-                let is_escape = event.keystroke.key.eq_ignore_ascii_case("escape");
-                if !is_find && !is_escape {
-                    return;
-                }
-                let Some(view) = weak_view.upgrade() else {
-                    return;
-                };
-                view.update(cx, |this, cx| {
-                    let state_ref = this.state.read(cx);
-                    if state_ref.current_view != crate::state::View::Documents {
-                        return;
-                    }
-                    let Some(session_key) = this.view_model.current_session() else {
-                        return;
-                    };
-                    let Some(session) = state_ref.session(&session_key) else {
-                        return;
-                    };
-                    if session.view.subview != CollectionSubview::Documents {
-                        return;
-                    }
-
-                    if is_find {
-                        this.show_search_bar(window, cx);
-                        cx.stop_propagation();
-                    } else if is_escape && this.search_visible {
-                        this.close_search(window, cx);
-                        cx.notify();
-                        cx.stop_propagation();
-                    }
-                });
-            });
-            self.keystroke_subscription = Some(subscription);
         }
 
         let state_ref = self.state.read(cx);
@@ -505,7 +498,256 @@ impl Render for CollectionView {
         let state_for_prev = self.state.clone();
         let state_for_next = self.state.clone();
 
+        let mut key_context = String::from("Documents");
+        match subview {
+            CollectionSubview::Indexes => key_context.push_str(" Indexes"),
+            CollectionSubview::Stats => key_context.push_str(" Stats"),
+            CollectionSubview::Documents => {}
+        }
+
         let mut root = div()
+            .key_context(key_context.as_str())
+            .on_action(cx.listener(|this, _: &FindInResults, window, cx| {
+                if this.search_visible {
+                    return;
+                }
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                if session.view.subview != CollectionSubview::Documents {
+                    return;
+                }
+                this.show_search_bar(window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &CloseSearch, window, cx| {
+                if !this.search_visible {
+                    return;
+                }
+                this.close_search(window, cx);
+                cx.notify();
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &InsertDocument, window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                CollectionView::open_insert_document_json_editor(
+                    this.state.clone(),
+                    session_key,
+                    window,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let subview = this
+                    .state
+                    .read(cx)
+                    .session(&session_key)
+                    .map(|session| session.view.subview)
+                    .unwrap_or(CollectionSubview::Documents);
+                if subview != CollectionSubview::Indexes {
+                    return;
+                }
+                IndexCreateDialog::open(this.state.clone(), session_key, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &EditDocumentJson, window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let doc_key = {
+                    let state_ref = this.state.read(cx);
+                    state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.selected_doc.clone())
+                };
+                let Some(doc_key) = doc_key else {
+                    return;
+                };
+                CollectionView::open_document_json_editor(
+                    cx.entity(),
+                    this.state.clone(),
+                    session_key,
+                    doc_key,
+                    window,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|this, _: &DuplicateDocument, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let doc_key = {
+                    let state_ref = this.state.read(cx);
+                    state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.selected_doc.clone())
+                };
+                let Some(doc_key) = doc_key else {
+                    return;
+                };
+                let doc = {
+                    let state_ref = this.state.read(cx);
+                    state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.drafts.get(&doc_key).cloned())
+                        .or_else(|| state_ref.document_for_key(&session_key, &doc_key))
+                };
+                let Some(doc) = doc else {
+                    return;
+                };
+                let mut new_doc = doc.clone();
+                new_doc.insert("_id", ObjectId::new());
+                AppCommands::insert_document(this.state.clone(), session_key, new_doc, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteDocument, window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let doc_key = {
+                    let state_ref = this.state.read(cx);
+                    state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.selected_doc.clone())
+                };
+                let Some(doc_key) = doc_key else {
+                    return;
+                };
+                let message = format!("Delete document {}? This cannot be undone.", doc_key);
+                open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
+                    let state = this.state.clone();
+                    let session_key = session_key.clone();
+                    let doc_key = doc_key.clone();
+                    move |_window, cx| {
+                        AppCommands::delete_document(
+                            state.clone(),
+                            session_key.clone(),
+                            doc_key.clone(),
+                            cx,
+                        );
+                    }
+                });
+            }))
+            .on_action(cx.listener(|this, _: &DeleteCollection, window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let message = format!(
+                    "Drop collection {}? This cannot be undone.",
+                    session_key.collection
+                );
+                open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+                    let state = this.state.clone();
+                    let session_key = session_key.clone();
+                    move |_window, cx| {
+                        AppCommands::drop_collection(
+                            state.clone(),
+                            session_key.database.clone(),
+                            session_key.collection.clone(),
+                            cx,
+                        );
+                    }
+                });
+            }))
+            .on_action(cx.listener(|this, _: &PasteDocuments, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                paste_documents_from_clipboard(this.state.clone(), session_key, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let (doc_key, doc) = {
+                    let state_ref = this.state.read(cx);
+                    let doc_key = state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.selected_doc.clone());
+                    let doc = doc_key.as_ref().and_then(|doc_key| {
+                        state_ref
+                            .session(&session_key)
+                            .and_then(|session| session.view.drafts.get(doc_key).cloned())
+                    });
+                    (doc_key, doc)
+                };
+                let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
+                    return;
+                };
+                AppCommands::save_document(
+                    this.state.clone(),
+                    session_key,
+                    doc_key,
+                    doc,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|this, _: &DiscardDocumentChanges, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let doc_key = {
+                    let state_ref = this.state.read(cx);
+                    state_ref
+                        .session(&session_key)
+                        .and_then(|session| session.view.selected_doc.clone())
+                };
+                let Some(doc_key) = doc_key else {
+                    return;
+                };
+                this.state.update(cx, |state, cx| {
+                    state.clear_draft(&session_key, &doc_key);
+                    cx.notify();
+                });
+                this.view_model.clear_inline_edit();
+                this.view_model.rebuild_tree(&this.state, cx);
+                this.view_model.sync_dirty_state(&this.state, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ShowDocumentsSubview, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                this.state.update(cx, |state, cx| {
+                    state.set_collection_subview(&session_key, CollectionSubview::Documents);
+                    cx.notify();
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ShowIndexesSubview, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                this.state.update(cx, |state, cx| {
+                    state.set_collection_subview(&session_key, CollectionSubview::Indexes);
+                    cx.notify();
+                });
+                AppCommands::load_collection_indexes(
+                    this.state.clone(),
+                    session_key,
+                    false,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|this, _: &ShowStatsSubview, _window, cx| {
+                let Some(session_key) = this.view_model.current_session() else {
+                    return;
+                };
+                let should_load = this.state.update(cx, |state, cx| {
+                    let should_load = state.set_collection_subview(&session_key, CollectionSubview::Stats);
+                    cx.notify();
+                    should_load
+                });
+                if should_load {
+                    AppCommands::load_collection_stats(this.state.clone(), session_key, cx);
+                }
+            }))
             .flex()
             .flex_col()
             .flex_1()
@@ -549,22 +791,6 @@ impl Render for CollectionView {
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .track_focus(&self.documents_focus)
-                    .on_key_down({
-                        let view = view.clone();
-                        move |event, window, cx| {
-                            if event.is_held {
-                                return;
-                            }
-                            if event.keystroke.modifiers.secondary()
-                                && event.keystroke.key.eq_ignore_ascii_case("f")
-                            {
-                                cx.stop_propagation();
-                                view.update(cx, |this, cx| {
-                                    this.show_search_bar(window, cx);
-                                });
-                            }
-                        }
-                    })
                     .child(
                         div()
                             .relative()

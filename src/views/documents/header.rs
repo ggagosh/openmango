@@ -238,7 +238,7 @@ impl CollectionView {
         });
     }
 
-    pub(super) fn open_insert_document_json_editor(
+    pub(crate) fn open_insert_document_json_editor(
         state: Entity<AppState>,
         session_key: SessionKey,
         window: &mut Window,
@@ -335,6 +335,15 @@ impl CollectionView {
                     }
                 })
         });
+    }
+
+    pub(crate) fn open_index_create_dialog(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        IndexCreateDialog::open(state, session_key, window, cx);
     }
 
     /// Render the header bar with collection title and action buttons.

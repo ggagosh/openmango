@@ -412,6 +412,15 @@ impl PropertyActionDialog {
         );
         dialog._subscriptions.push(subscription);
 
+        let subscription = cx.intercept_keystrokes(move |event, window, cx| {
+            let key = event.keystroke.key.to_ascii_lowercase();
+            if key == "escape" {
+                window.close_dialog(cx);
+                cx.stop_propagation();
+            }
+        });
+        dialog._subscriptions.push(subscription);
+
         dialog
     }
 

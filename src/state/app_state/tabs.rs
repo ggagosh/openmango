@@ -275,6 +275,50 @@ impl AppState {
         cx.notify();
     }
 
+    pub fn select_next_tab(&mut self, cx: &mut Context<Self>) {
+        let preview_count = if self.tabs.preview.is_some() { 1 } else { 0 };
+        let tab_count = self.tabs.open.len() + preview_count;
+        if tab_count == 0 {
+            return;
+        }
+
+        let current_index = match self.tabs.active {
+            ActiveTab::Index(index) => index.min(self.tabs.open.len().saturating_sub(1)),
+            ActiveTab::Preview => self.tabs.open.len(),
+            ActiveTab::None => 0,
+        };
+        let next_index = (current_index + 1) % tab_count;
+        if next_index == self.tabs.open.len() {
+            self.select_preview_tab(cx);
+        } else {
+            self.select_tab(next_index, cx);
+        }
+    }
+
+    pub fn select_prev_tab(&mut self, cx: &mut Context<Self>) {
+        let preview_count = if self.tabs.preview.is_some() { 1 } else { 0 };
+        let tab_count = self.tabs.open.len() + preview_count;
+        if tab_count == 0 {
+            return;
+        }
+
+        let current_index = match self.tabs.active {
+            ActiveTab::Index(index) => index.min(self.tabs.open.len().saturating_sub(1)),
+            ActiveTab::Preview => self.tabs.open.len(),
+            ActiveTab::None => 0,
+        };
+        let prev_index = if current_index == 0 {
+            tab_count - 1
+        } else {
+            current_index - 1
+        };
+        if prev_index == self.tabs.open.len() {
+            self.select_preview_tab(cx);
+        } else {
+            self.select_tab(prev_index, cx);
+        }
+    }
+
     pub fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.open.len() {
             return;
