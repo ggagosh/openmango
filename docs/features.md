@@ -20,8 +20,8 @@ Non-exhaustive highlights; see each section below for full status.
 - No import/export flows (data or connections)
 - No aggregation pipeline editor, query history, or saved queries
 - Bulk ops limited (paste insert + delete); no bulk update/replace
-- No read-only/safe mode or connection profiles
-- No multi-window/split views; keyboard navigation deferred
+- No connection profiles (partial UI exists)
+- No multi-window/split views
 
 ---
 
@@ -36,7 +36,7 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P1: Edit connection
 - [x] P1: Remove connection
 - [ ] P1: Connection profiles (auth, TLS, timeouts)
-- [ ] P1: Read-only mode / safe mode
+- [x] P1: Read-only mode / safe mode
 - [ ] P2: Favorites / Tags
 - [ ] P2: Import/Export connections
 - [ ] P2: Health ping / latency

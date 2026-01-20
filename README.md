@@ -1,77 +1,70 @@
 # OpenMango
 
-<img src="assets/logo/openmango-1024.png" alt="OpenMango logo" width="240" />
+[![CI](https://github.com/ggagosh/openmango/actions/workflows/ci.yml/badge.svg)](https://github.com/ggagosh/openmango/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](https://github.com/ggagosh/openmango/blob/main/LICENSE)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 
-GPU-accelerated MongoDB desktop client built with GPUI. Fast navigation, JSON-first editing, and a tabbed workspace.
+GPU-accelerated MongoDB client for macOS
 
-## Highlights
+![OpenMango screenshot](assets/screenshot.png)
 
-- Connection manager with test/connect/disconnect
-- Database & collection browser with stats and refresh
-- Document browser with filter, sort, projection, and pagination
-- Inline edits, JSON editor, duplicate, insert, and delete
-- Paste documents from clipboard (JSON object/array or NDJSON)
-- Bulk delete (filtered or all)
-- Index management (list/create/drop)
-- Tabs with preview/permanent behavior and session restore
-- Status bar + error banner feedback
+## Download
 
-See `docs/features.md` for the detailed feature matrix.
+**[Latest Release](https://github.com/ggagosh/openmango/releases/latest)** — macOS (Apple Silicon & Intel)
+
+Or build from source (see [Development](#development) below).
+
+## Features
+
+- **Connection manager** — add, edit, test, connect/disconnect with session restore
+- **Database browser** — list, create, drop with stats
+- **Collection browser** — list, create, drop, rename with stats
+- **Document viewer** — filter, sort, projection, pagination
+- **Inline editing** — edit fields directly in tree view
+- **JSON editor** — full document editing with validation
+- **Bulk operations** — insert, duplicate, delete; paste from clipboard (JSON/NDJSON)
+- **Index management** — list, create, drop indexes
+- **Tabbed workspace** — preview/permanent tabs with full session restore
+- **Keyboard shortcuts** — 40+ bindings for power users
+
+See [`docs/features.md`](docs/features.md) for the complete feature matrix.
+
+## Development
+
+**Requirements:** Rust stable, MongoDB instance (local or remote)
+
+```sh
+# Run in development mode
+just dev
+
+# Build release
+just release
+
+# Run tests
+cargo test
+```
+
+<details>
+<summary>Release packaging</summary>
+
+```sh
+scripts/release_macos.sh
+```
+
+macOS release script supports codesign + notarization when env vars are set.
+
+</details>
 
 ## Roadmap
+
+See [`docs/features.md`](docs/features.md) for the detailed roadmap. Upcoming highlights:
 
 - Import/export data and connections
 - Aggregation pipeline editor + explain plan
 - Query history and saved queries
 - Read-only/safe mode
 - Theming and keymap customization
-- Multi-window / split views
-- Schema explorer + validation editor
 
-## Quick start
+## License
 
-Requirements:
-- Rust stable
-- MongoDB instance reachable (local or remote)
-
-```sh
-just dev
-```
-
-## Build
-
-```sh
-just release
-```
-
-## Release packaging
-
-```sh
-scripts/release_macos.sh
-scripts/release_linux.sh
-```
-
-## Tests
-
-```sh
-cargo test
-```
-
-Optional smoke tests (needs a live MongoDB):
-
-```sh
-MONGO_URI="mongodb://localhost:27017" cargo test smoke_core_flows
-MONGO_URI="mongodb://localhost:27017" cargo test crud_sanity
-MONGO_URI="mongodb://localhost:27017" cargo test query_sanity
-MONGO_URI="mongodb://localhost:27017" cargo test indexes_sanity
-MONGO_URI="mongodb://localhost:27017" cargo test stats_sanity
-```
-
-## Troubleshooting
-
-- Linux build fails with `-lxkbcommon-x11` or X11-related errors: install X11 dev packages for your distro.
-- macOS build fails with `-fuse-ld=lld`: remove any lld linker flags from `.cargo/config.toml`.
-
-## Notes
-- Requires Rust stable.
-- macOS release script supports codesign + notarization when env vars are set.
+GPL-3.0
