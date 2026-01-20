@@ -25,8 +25,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "release-macOS"
 
       - name: Disable lld linker flags for CI
         run: rm -f .cargo/config.toml

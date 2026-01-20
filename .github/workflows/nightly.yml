@@ -35,7 +35,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release-macOS"
+          shared-key: "release-${{ matrix.target }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Ensure scripts executable
         run: chmod +x scripts/release_macos.sh
