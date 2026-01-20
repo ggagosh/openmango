@@ -12,7 +12,7 @@ use gpui_component::{Icon, IconName, Sizable as _};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::components::{ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
+use crate::components::{ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase,
     NewConnection, NextTab, PrevTab, RefreshView,
@@ -774,6 +774,8 @@ impl Render for Sidebar {
         let connecting_id = self.connecting_connection;
 
         let state = self.state.clone();
+        let state_for_add = state.clone();
+        let state_for_manager = state.clone();
         let state_for_tree = self.state.clone();
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
@@ -806,22 +808,46 @@ impl Render for Sidebar {
                             .child("CONNECTIONS"),
                     )
                     .child(
-                        // Add button
                         div()
-                            .id("add-connection-btn")
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .w(sizing::icon_lg())
-                            .h(sizing::icon_lg())
-                            .rounded(crate::theme::borders::radius_sm())
-                            .cursor_pointer()
-                            .hover(|s| s.bg(colors::bg_hover()))
-                            .text_color(colors::text_primary())
-                            .child(Icon::new(IconName::Plus).xsmall())
-                            .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                Sidebar::open_add_dialog(state.clone(), window, cx);
-                            }),
+                            .gap(spacing::xs())
+                            .child(
+                                // Add button
+                                div()
+                                    .id("add-connection-btn")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(sizing::icon_lg())
+                                    .h(sizing::icon_lg())
+                                    .rounded(crate::theme::borders::radius_sm())
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(colors::bg_hover()))
+                                    .text_color(colors::text_primary())
+                                    .child(Icon::new(IconName::Plus).xsmall())
+                                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
+                                    }),
+                            )
+                            .child(
+                                // Manager button
+                                div()
+                                    .id("manage-connections-btn")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(sizing::icon_lg())
+                                    .h(sizing::icon_lg())
+                                    .rounded(crate::theme::borders::radius_sm())
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(colors::bg_hover()))
+                                    .text_color(colors::text_primary())
+                                    .child(Icon::new(IconName::Settings).xsmall())
+                                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        ConnectionManager::open(state_for_manager.clone(), window, cx);
+                                    }),
+                            ),
                     ),
             )
             .child(
@@ -1211,11 +1237,7 @@ fn build_connection_menu(
         .item(PopupMenuItem::new("Edit Connection...").on_click({
             let state = state.clone();
             move |_, window, cx| {
-                if let Some(conn) =
-                    state.read(cx).connections.iter().find(|conn| conn.id == connection_id).cloned()
-                {
-                    ConnectionDialog::open_edit(state.clone(), conn, window, cx);
-                }
+                ConnectionManager::open_selected(state.clone(), connection_id, window, cx);
             }
         }))
         .item(PopupMenuItem::new("Remove Connection...").on_click({

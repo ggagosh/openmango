@@ -1,5 +1,6 @@
 //! Command helpers for async operations + event emission.
 
+use chrono::Utc;
 use gpui::{App, AppContext as _, Entity};
 use mongodb::{IndexModel, bson::{Document, doc}};
 use uuid::Uuid;
@@ -83,12 +84,15 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok((client, databases)) => {
                         state.update(cx, |state, cx| {
+                            let mut saved = saved.clone();
+                            saved.last_connected = Some(Utc::now());
                             state.conn.active = Some(ActiveConnection {
-                                config: saved,
+                                config: saved.clone(),
                                 client,
                                 databases: databases.clone(),
                                 collections: std::collections::HashMap::new(),
                             });
+                            state.update_connection(saved, cx);
                             state.reset_runtime_state();
                             state.current_view = View::Databases;
                             state.update_workspace_from_state();

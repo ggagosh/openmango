@@ -40,6 +40,7 @@ impl ConnectionDialog {
         });
     }
 
+    #[allow(dead_code)]
     pub fn open_edit(
         state: Entity<AppState>,
         connection: SavedConnection,
@@ -93,6 +94,7 @@ impl ConnectionDialog {
         }
     }
 
+    #[allow(dead_code)]
     pub fn new_with_existing(
         state: Entity<AppState>,
         existing: SavedConnection,
