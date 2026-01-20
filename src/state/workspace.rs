@@ -1,4 +1,4 @@
-use gpui::{Bounds, WindowBounds, px, point, size};
+use gpui::{Bounds, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -73,10 +73,8 @@ impl WindowState {
     }
 
     pub fn to_bounds(&self) -> WindowBounds {
-        let bounds = Bounds::new(
-            point(px(self.x), px(self.y)),
-            size(px(self.width), px(self.height)),
-        );
+        let bounds =
+            Bounds::new(point(px(self.x), px(self.y)), size(px(self.width), px(self.height)));
         match self.mode {
             WindowMode::Windowed => WindowBounds::Windowed(bounds),
             WindowMode::Maximized => WindowBounds::Maximized(bounds),

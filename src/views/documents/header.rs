@@ -10,16 +10,16 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size, WindowExt};
 
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
-use mongodb::bson::Document;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::{format_bytes, format_number};
 use crate::state::{
     AppCommands, AppState, CollectionStats, CollectionSubview, SessionKey, StatusMessage,
 };
 use crate::theme::{borders, colors, spacing};
+use mongodb::bson::Document;
 
-use super::index_create::IndexCreateDialog;
 use super::CollectionView;
+use super::index_create::IndexCreateDialog;
 
 impl CollectionView {
     pub(super) fn apply_filter(
@@ -76,9 +76,8 @@ impl CollectionView {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
-                    state.status_message = Some(StatusMessage::error(format!(
-                        "Invalid sort JSON: {err}"
-                    )));
+                    state.status_message =
+                        Some(StatusMessage::error(format!("Invalid sort JSON: {err}")));
                     cx.notify();
                 });
                 return;
@@ -89,9 +88,8 @@ impl CollectionView {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
-                    state.status_message = Some(StatusMessage::error(format!(
-                        "Invalid projection JSON: {err}"
-                    )));
+                    state.status_message =
+                        Some(StatusMessage::error(format!("Invalid projection JSON: {err}")));
                     cx.notify();
                 });
                 return;
@@ -319,11 +317,10 @@ impl CollectionView {
                                             }
                                             Err(err) => {
                                                 state.update(cx, |state, cx| {
-                                                    state.status_message = Some(
-                                                        StatusMessage::error(format!(
+                                                    state.status_message =
+                                                        Some(StatusMessage::error(format!(
                                                             "Invalid JSON: {err}"
-                                                        )),
-                                                    );
+                                                        )));
                                                     cx.notify();
                                                 });
                                             }
@@ -384,11 +381,8 @@ impl CollectionView {
         let state_for_stats_refresh = self.state.clone();
         let state_for_indexes_refresh = self.state.clone();
 
-        let options_label = if sort_active || projection_active {
-            "Options •"
-        } else {
-            "Options"
-        };
+        let options_label =
+            if sort_active || projection_active { "Options •" } else { "Options" };
         let options_icon = Icon::new(if query_options_open {
             IconName::ChevronDown
         } else {
@@ -404,12 +398,7 @@ impl CollectionView {
             .flex()
             .items_center()
             .gap(spacing::sm())
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child(db_name.to_string()),
-            );
+            .child(div().text_xs().text_color(colors::text_muted()).child(db_name.to_string()));
 
         if is_documents {
             action_row = action_row
@@ -1154,11 +1143,7 @@ fn render_query_option_row(
         .items_center()
         .gap(spacing::sm())
         .child(
-            div()
-                .w(px(72.0))
-                .text_sm()
-                .text_color(colors::text_muted())
-                .child(label.to_string()),
+            div().w(px(72.0)).text_sm().text_color(colors::text_muted()).child(label.to_string()),
         )
         .child(
             div()
@@ -1177,9 +1162,7 @@ fn render_query_option_row(
         .into_any_element()
 }
 
-fn parse_optional_doc(
-    raw: &str,
-) -> Result<(String, Option<mongodb::bson::Document>), String> {
+fn parse_optional_doc(raw: &str) -> Result<(String, Option<mongodb::bson::Document>), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "{}" {
         return Ok((String::new(), None));

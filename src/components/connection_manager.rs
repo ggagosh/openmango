@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::scroll::ScrollableElement;
@@ -110,10 +110,8 @@ impl ConnectionDraft {
             auth_source_state: cx.new(|cx| InputState::new(window, cx).placeholder("admin")),
             auth_mechanism_state: cx.new(|cx| InputState::new(window, cx)),
             auth_mechanism_props_state: cx.new(|cx| InputState::new(window, cx)),
-            read_preference_state: cx
-                .new(|cx| InputState::new(window, cx).placeholder("primary")),
-            read_concern_state: cx
-                .new(|cx| InputState::new(window, cx).placeholder("local")),
+            read_preference_state: cx.new(|cx| InputState::new(window, cx).placeholder("primary")),
+            read_concern_state: cx.new(|cx| InputState::new(window, cx).placeholder("local")),
             write_concern_state: cx.new(|cx| InputState::new(window, cx).placeholder("majority")),
             w_timeout_state: cx.new(|cx| InputState::new(window, cx).placeholder("5000")),
             connect_timeout_state: cx.new(|cx| InputState::new(window, cx).placeholder("10000")),
@@ -123,11 +121,9 @@ impl ConnectionDraft {
             min_pool_state: cx.new(|cx| InputState::new(window, cx).placeholder("0")),
             heartbeat_frequency_state: cx
                 .new(|cx| InputState::new(window, cx).placeholder("10000")),
-            compressors_state: cx
-                .new(|cx| InputState::new(window, cx).placeholder("zstd,zlib")),
+            compressors_state: cx.new(|cx| InputState::new(window, cx).placeholder("zstd,zlib")),
             zlib_level_state: cx.new(|cx| InputState::new(window, cx).placeholder("6")),
-            tls_ca_file_state: cx
-                .new(|cx| InputState::new(window, cx).placeholder("/path/ca.pem")),
+            tls_ca_file_state: cx.new(|cx| InputState::new(window, cx).placeholder("/path/ca.pem")),
             tls_cert_key_file_state: cx
                 .new(|cx| InputState::new(window, cx).placeholder("/path/cert.pem")),
             tls_cert_key_password_state: cx
@@ -140,47 +136,34 @@ impl ConnectionDraft {
     }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<ConnectionManager>) {
-        self.name_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.name_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.uri_state.update(cx, |state, cx| {
             state.set_value("mongodb://localhost:27017".to_string(), window, cx)
         });
-        self.username_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.password_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.app_name_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.auth_source_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.username_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.password_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.app_name_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.auth_source_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.auth_mechanism_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.auth_mechanism_props_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.read_preference_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.read_concern_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.write_concern_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.w_timeout_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.read_concern_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.write_concern_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.w_timeout_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.connect_timeout_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.server_selection_timeout_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.max_pool_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.min_pool_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.max_pool_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.min_pool_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.heartbeat_frequency_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.compressors_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.zlib_level_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
-        self.tls_ca_file_state
-            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.compressors_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.zlib_level_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.tls_ca_file_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.tls_cert_key_file_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.tls_cert_key_password_state
@@ -303,15 +286,13 @@ impl ConnectionManager {
 
         if let Some(connection) = connection {
             self.selected_id = Some(connection.id);
-            self.draft.name_state.update(cx, |state, cx| {
-                state.set_value(connection.name.clone(), window, cx)
-            });
             self.draft
-                .uri_state
-                .update(cx, |state, cx| {
-                    state.set_value(connection.uri.clone(), window, cx);
-                    state.set_cursor_position(Position::new(0, 0), window, cx);
-                });
+                .name_state
+                .update(cx, |state, cx| state.set_value(connection.name.clone(), window, cx));
+            self.draft.uri_state.update(cx, |state, cx| {
+                state.set_value(connection.uri.clone(), window, cx);
+                state.set_cursor_position(Position::new(0, 0), window, cx);
+            });
             self.draft.read_only = connection.read_only;
             self.import_from_uri(window, cx);
         } else {
@@ -325,9 +306,9 @@ impl ConnectionManager {
         match parse_uri(&uri) {
             Ok(parts) => {
                 let (user, password) = parts.userinfo();
-                self.draft.username_state.update(cx, |state, cx| {
-                    state.set_value(user.unwrap_or_default(), window, cx)
-                });
+                self.draft
+                    .username_state
+                    .update(cx, |state, cx| state.set_value(user.unwrap_or_default(), window, cx));
                 self.draft.password_state.update(cx, |state, cx| {
                     state.set_value(password.unwrap_or_default(), window, cx)
                 });
@@ -349,9 +330,9 @@ impl ConnectionManager {
                 self.draft.read_concern_state.update(cx, |state, cx| {
                     state.set_value(parts.get_query("readConcernLevel"), window, cx)
                 });
-                self.draft.write_concern_state.update(cx, |state, cx| {
-                    state.set_value(parts.get_query("w"), window, cx)
-                });
+                self.draft
+                    .write_concern_state
+                    .update(cx, |state, cx| state.set_value(parts.get_query("w"), window, cx));
                 self.draft.w_timeout_state.update(cx, |state, cx| {
                     state.set_value(parts.get_query("wTimeoutMS"), window, cx)
                 });
@@ -418,28 +399,16 @@ impl ConnectionManager {
 
         parts.set_query("appName", value_or_none(&self.draft.app_name_state, cx));
         parts.set_query("authSource", value_or_none(&self.draft.auth_source_state, cx));
-        parts.set_query(
-            "authMechanism",
-            value_or_none(&self.draft.auth_mechanism_state, cx),
-        );
+        parts.set_query("authMechanism", value_or_none(&self.draft.auth_mechanism_state, cx));
         parts.set_query(
             "authMechanismProperties",
             value_or_none(&self.draft.auth_mechanism_props_state, cx),
         );
-        parts.set_query(
-            "readPreference",
-            value_or_none(&self.draft.read_preference_state, cx),
-        );
-        parts.set_query(
-            "readConcernLevel",
-            value_or_none(&self.draft.read_concern_state, cx),
-        );
+        parts.set_query("readPreference", value_or_none(&self.draft.read_preference_state, cx));
+        parts.set_query("readConcernLevel", value_or_none(&self.draft.read_concern_state, cx));
         parts.set_query("w", value_or_none(&self.draft.write_concern_state, cx));
         parts.set_query("wTimeoutMS", value_or_none(&self.draft.w_timeout_state, cx));
-        parts.set_query(
-            "connectTimeoutMS",
-            value_or_none(&self.draft.connect_timeout_state, cx),
-        );
+        parts.set_query("connectTimeoutMS", value_or_none(&self.draft.connect_timeout_state, cx));
         parts.set_query(
             "serverSelectionTimeoutMS",
             value_or_none(&self.draft.server_selection_timeout_state, cx),
@@ -451,10 +420,7 @@ impl ConnectionManager {
             value_or_none(&self.draft.heartbeat_frequency_state, cx),
         );
         parts.set_query("compressors", value_or_none(&self.draft.compressors_state, cx));
-        parts.set_query(
-            "zlibCompressionLevel",
-            value_or_none(&self.draft.zlib_level_state, cx),
-        );
+        parts.set_query("zlibCompressionLevel", value_or_none(&self.draft.zlib_level_state, cx));
         parts.set_query("tlsCAFile", value_or_none(&self.draft.tls_ca_file_state, cx));
         parts.set_query(
             "tlsCertificateKeyFile",
@@ -464,10 +430,7 @@ impl ConnectionManager {
             "tlsCertificateKeyFilePassword",
             value_or_none(&self.draft.tls_cert_key_password_state, cx),
         );
-        parts.set_query(
-            "directConnection",
-            bool_to_query(self.draft.direct_connection),
-        );
+        parts.set_query("directConnection", bool_to_query(self.draft.direct_connection));
         parts.set_query("tls", bool_to_query(self.draft.tls));
         parts.set_query("tlsInsecure", bool_to_query(self.draft.tls_insecure));
 
@@ -618,9 +581,8 @@ impl ConnectionManager {
 impl Render for ConnectionManager {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let connections = self.state.read(cx).connections.clone();
-        let selected_exists = self
-            .selected_id
-            .is_some_and(|id| connections.iter().any(|conn| conn.id == id));
+        let selected_exists =
+            self.selected_id.is_some_and(|id| connections.iter().any(|conn| conn.id == id));
         if !selected_exists && !connections.is_empty() && !self.creating_new {
             let next = connections.first().cloned();
             self.load_connection(next, window, cx);
@@ -662,7 +624,9 @@ impl Render for ConnectionManager {
                     .h(sizing::header_height())
                     .border_b_1()
                     .border_color(colors::border())
-                    .child(div().text_xs().text_color(colors::text_secondary()).child("Connections"))
+                    .child(
+                        div().text_xs().text_color(colors::text_secondary()).child("Connections"),
+                    )
                     .child(
                         div()
                             .flex()
@@ -699,103 +663,100 @@ impl Render for ConnectionManager {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .overflow_y_scrollbar()
-                    .child(if connections.is_empty() {
-                        div()
-                            .p(spacing::md())
-                            .text_sm()
-                            .text_color(colors::text_muted())
-                            .child("No connections")
-                            .into_any_element()
-                    } else {
-                        let view = cx.entity();
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .p(spacing::xs())
-                            .child(
-                                div().flex().flex_col().children(connections.into_iter().map(
-                                    move |conn| {
-                                        let is_selected = Some(conn.id) == selected_id;
-                                        let host = extract_host_from_uri(&conn.uri)
-                                            .unwrap_or_else(|| "Unknown host".to_string());
-                                        let last_connected = conn
-                                            .last_connected
-                                            .map(|dt| dt.format("%Y-%m-%d").to_string())
-                                            .unwrap_or_else(|| "Never".to_string());
-                                        let read_only = conn.read_only;
+            .child(div().flex().flex_col().flex_1().overflow_y_scrollbar().child(
+                if connections.is_empty() {
+                    div()
+                        .p(spacing::md())
+                        .text_sm()
+                        .text_color(colors::text_muted())
+                        .child("No connections")
+                        .into_any_element()
+                } else {
+                    let view = cx.entity();
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::xs())
+                        .p(spacing::xs())
+                        .child(div().flex().flex_col().children(connections.into_iter().map(
+                            move |conn| {
+                                let is_selected = Some(conn.id) == selected_id;
+                                let host = extract_host_from_uri(&conn.uri)
+                                    .unwrap_or_else(|| "Unknown host".to_string());
+                                let last_connected = conn
+                                    .last_connected
+                                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_else(|| "Never".to_string());
+                                let read_only = conn.read_only;
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.0))
+                                    .px(spacing::md())
+                                    .py(spacing::sm())
+                                    .cursor_pointer()
+                                    .rounded(borders::radius_sm())
+                                    .when(is_selected, |s| {
+                                        s.bg(colors::bg_hover())
+                                            .border_1()
+                                            .border_color(colors::border())
+                                    })
+                                    .hover(|s| s.bg(colors::bg_hover()))
+                                    .child(
                                         div()
                                             .flex()
-                                            .flex_col()
-                                            .gap(px(4.0))
-                                            .px(spacing::md())
-                                            .py(spacing::sm())
-                                            .cursor_pointer()
-                                            .rounded(borders::radius_sm())
-                                            .when(is_selected, |s| {
-                                                s.bg(colors::bg_hover())
-                                                    .border_1()
-                                                    .border_color(colors::border())
-                                            })
-                                            .hover(|s| s.bg(colors::bg_hover()))
+                                            .items_center()
+                                            .justify_between()
                                             .child(
                                                 div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(colors::text_primary())
-                                                            .child(conn.name.clone()),
-                                                    )
-                                                    .when(read_only, |s| {
-                                                        s.child(
-                                                            div()
-                                                                .px(spacing::xs())
-                                                                .py(px(1.0))
-                                                                .rounded(borders::radius_sm())
-                                                                .bg(colors::status_warning())
-                                                                .text_xs()
-                                                                .text_color(colors::bg_header())
-                                                                .child("RO"),
-                                                        )
-                                                    }),
+                                                    .text_sm()
+                                                    .text_color(colors::text_primary())
+                                                    .child(conn.name.clone()),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(colors::text_secondary())
-                                                    .child(host),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(colors::text_muted())
-                                                    .child(format!("Last: {last_connected}")),
-                                            )
-                                            .on_mouse_down(MouseButton::Left, {
-                                                let view = view.clone();
-                                                let conn = conn.clone();
-                                                move |_, window, cx| {
-                                                    view.update(cx, |this, cx| {
-                                                        this.load_connection(Some(conn.clone()), window, cx);
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            })
-                                    },
-                                )),
-                            )
-                            .into_any_element()
-                    }),
-            );
+                                            .when(read_only, |s| {
+                                                s.child(
+                                                    div()
+                                                        .px(spacing::xs())
+                                                        .py(px(1.0))
+                                                        .rounded(borders::radius_sm())
+                                                        .bg(colors::status_warning())
+                                                        .text_xs()
+                                                        .text_color(colors::bg_header())
+                                                        .child("RO"),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors::text_secondary())
+                                            .child(host),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors::text_muted())
+                                            .child(format!("Last: {last_connected}")),
+                                    )
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let view = view.clone();
+                                        let conn = conn.clone();
+                                        move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.load_connection(
+                                                    Some(conn.clone()),
+                                                    window,
+                                                    cx,
+                                                );
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                            },
+                        )))
+                        .into_any_element()
+                },
+            ));
 
         let tab_bar = TabBar::new("connection-manager-tabs")
             .selected_index(active_tab.index())
@@ -824,11 +785,11 @@ impl Render for ConnectionManager {
                     .disabled(is_testing)
                     .on_click({
                         let view = cx.entity();
-                                        move |_, _window, cx| {
-                                            ConnectionManager::start_test(view.clone(), cx);
-                                        }
-                                    }),
-                            )
+                        move |_, _window, cx| {
+                            ConnectionManager::start_test(view.clone(), cx);
+                        }
+                    }),
+            )
             .child(
                 Button::new("save-connection")
                     .compact()
@@ -840,8 +801,13 @@ impl Render for ConnectionManager {
                         move |_, window, cx| {
                             let mut reconnect_id = None;
                             view.update(cx, |this, cx| {
-                                let active_id =
-                                    this.state.read(cx).conn.active.as_ref().map(|conn| conn.config.id);
+                                let active_id = this
+                                    .state
+                                    .read(cx)
+                                    .conn
+                                    .active
+                                    .as_ref()
+                                    .map(|conn| conn.config.id);
                                 let saved_id = this.save_connection(window, cx);
                                 if saved_id.is_some_and(|id| Some(id) == active_id) {
                                     reconnect_id = saved_id;
@@ -888,7 +854,9 @@ impl Render for ConnectionManager {
                             .overflow_y_scrollbar()
                             .p(spacing::md())
                             .child(match active_tab {
-                                ManagerTab::General => self.render_general_tab(parse_error, window, cx),
+                                ManagerTab::General => {
+                                    self.render_general_tab(parse_error, window, cx)
+                                }
                                 ManagerTab::Auth => self.render_auth_tab(window, cx),
                                 ManagerTab::Options => self.render_options_tab(window, cx),
                                 ManagerTab::Tls => self.render_tls_tab(window, cx),
@@ -919,14 +887,7 @@ impl Render for ConnectionManager {
                     ),
             );
 
-        div()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .h_full()
-            .w_full()
-            .child(list)
-            .child(editor)
+        div().flex().flex_row().flex_1().h_full().w_full().child(list).child(editor)
     }
 }
 
@@ -982,17 +943,14 @@ impl ConnectionManager {
                                     }),
                             )
                             .child(
-                                Button::new("apply-uri")
-                                    .compact()
-                                    .label("Update URI")
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.update_uri_from_fields(window, cx);
-                                            });
-                                        }
-                                    }),
+                                Button::new("apply-uri").compact().label("Update URI").on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.update_uri_from_fields(window, cx);
+                                        });
+                                    }
+                                }),
                             ),
                     )
                     .child(
@@ -1041,12 +999,9 @@ impl ConnectionManager {
                                     .text_color(colors::text_primary())
                                     .child("Read-only (safe mode)"),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(colors::text_secondary())
-                                    .child("Block inserts, updates, deletes, drops, and index changes"),
-                            ),
+                            .child(div().text_xs().text_color(colors::text_secondary()).child(
+                                "Block inserts, updates, deletes, drops, and index changes",
+                            )),
                     ),
             )
             .child(
@@ -1059,7 +1014,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Username"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Username"),
+                            )
                             .child(Input::new(&self.draft.username_state)),
                     )
                     .child(
@@ -1067,7 +1027,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Password"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Password"),
+                            )
                             .child(Input::new(&self.draft.password_state).mask_toggle()),
                     ),
             )
@@ -1090,11 +1055,7 @@ impl ConnectionManager {
         ConnectionManager::open_import_uri_dialog(view, window, cx);
     }
 
-    fn open_import_uri_dialog(
-        view: Entity<ConnectionManager>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn open_import_uri_dialog(view: Entity<ConnectionManager>, window: &mut Window, cx: &mut App) {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("mongodb+srv://user:pass@cluster0.example.mongodb.net")
@@ -1140,16 +1101,26 @@ impl ConnectionManager {
                                         .on_click({
                                             let input_state = input_state.clone();
                                             move |_, window, cx| {
-                                                if let Some(text) =
-                                                    cx.read_from_clipboard().and_then(|item| item.text())
+                                                if let Some(text) = cx
+                                                    .read_from_clipboard()
+                                                    .and_then(|item| item.text())
                                                 {
-                                                    let value = text.lines().next().unwrap_or("").trim().to_string();
+                                                    let value = text
+                                                        .lines()
+                                                        .next()
+                                                        .unwrap_or("")
+                                                        .trim()
+                                                        .to_string();
                                                     if value.is_empty() {
                                                         return;
                                                     }
                                                     input_state.update(cx, |state, cx| {
                                                         state.set_value(value, window, cx);
-                                                        state.set_cursor_position(Position::new(0, 0), window, cx);
+                                                        state.set_cursor_position(
+                                                            Position::new(0, 0),
+                                                            window,
+                                                            cx,
+                                                        );
                                                     });
                                                 }
                                             }
@@ -1171,10 +1142,9 @@ impl ConnectionManager {
                                 ),
                         )
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(colors::text_muted())
-                                .child("Paste a mongodb:// or mongodb+srv:// URI to import settings."),
+                            div().text_xs().text_color(colors::text_muted()).child(
+                                "Paste a mongodb:// or mongodb+srv:// URI to import settings.",
+                            ),
                         ),
                 )
                 .footer({
@@ -1198,7 +1168,8 @@ impl ConnectionManager {
                                     let input_state = input_state.clone();
                                     move |_, window, cx| {
                                         let raw = input_state.read(cx).value().to_string();
-                                        let value = raw.lines().next().unwrap_or("").trim().to_string();
+                                        let value =
+                                            raw.lines().next().unwrap_or("").trim().to_string();
                                         if value.is_empty() {
                                             window.close_dialog(cx);
                                             return;
@@ -1206,7 +1177,11 @@ impl ConnectionManager {
                                         view.update(cx, |this, cx| {
                                             this.draft.uri_state.update(cx, |state, cx| {
                                                 state.set_value(value.clone(), window, cx);
-                                                state.set_cursor_position(Position::new(0, 0), window, cx);
+                                                state.set_cursor_position(
+                                                    Position::new(0, 0),
+                                                    window,
+                                                    cx,
+                                                );
                                             });
                                             this.import_from_uri(window, cx);
                                         });
@@ -1238,7 +1213,9 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("Auth mechanism"))
+                    .child(
+                        div().text_sm().text_color(colors::text_primary()).child("Auth mechanism"),
+                    )
                     .child(Input::new(&self.draft.auth_mechanism_state)),
             )
             .child(
@@ -1324,7 +1301,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Write concern (w)"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Write concern (w)"),
+                            )
                             .child(Input::new(&self.draft.write_concern_state)),
                     )
                     .child(
@@ -1332,7 +1314,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("wTimeoutMS"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("wTimeoutMS"),
+                            )
                             .child(Input::new(&self.draft.w_timeout_state)),
                     ),
             )
@@ -1349,20 +1336,15 @@ impl ConnectionManager {
                     .flex()
                     .items_center()
                     .gap(spacing::sm())
-                    .child(
-                        Switch::new("tls-enabled")
-                            .checked(self.draft.tls)
-                            .small()
-                            .on_click({
-                                let view = _cx.entity();
-                                move |checked, _window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.draft.tls = *checked;
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    )
+                    .child(Switch::new("tls-enabled").checked(self.draft.tls).small().on_click({
+                        let view = _cx.entity();
+                        move |checked, _window, cx| {
+                            view.update(cx, |this, cx| {
+                                this.draft.tls = *checked;
+                                cx.notify();
+                            });
+                        }
+                    }))
                     .child(div().text_sm().text_color(colors::text_primary()).child("TLS enabled")),
             )
             .child(
@@ -1384,7 +1366,9 @@ impl ConnectionManager {
                                 }
                             }),
                     )
-                    .child(div().text_sm().text_color(colors::text_primary()).child("TLS insecure")),
+                    .child(
+                        div().text_sm().text_color(colors::text_primary()).child("TLS insecure"),
+                    ),
             )
             .child(
                 div()
@@ -1438,7 +1422,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Connect timeout (ms)"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Connect timeout (ms)"),
+                            )
                             .child(Input::new(&self.draft.connect_timeout_state)),
                     )
                     .child(
@@ -1459,7 +1448,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Max pool size"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Max pool size"),
+                            )
                             .child(Input::new(&self.draft.max_pool_state)),
                     )
                     .child(
@@ -1467,7 +1461,12 @@ impl ConnectionManager {
                             .flex()
                             .flex_col()
                             .gap(spacing::xs())
-                            .child(div().text_sm().text_color(colors::text_primary()).child("Min pool size"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors::text_primary())
+                                    .child("Min pool size"),
+                            )
                             .child(Input::new(&self.draft.min_pool_state)),
                     )
                     .child(
@@ -1598,10 +1597,8 @@ fn parse_uri(input: &str) -> Result<UriParts, String> {
         return Err("URI is missing host".to_string());
     }
 
-    let (userinfo, hosts) = host_part
-        .rsplit_once('@')
-        .map(|(u, h)| (Some(u), h))
-        .unwrap_or((None, host_part));
+    let (userinfo, hosts) =
+        host_part.rsplit_once('@').map(|(u, h)| (Some(u), h)).unwrap_or((None, host_part));
 
     if hosts.trim().is_empty() {
         return Err("URI is missing host".to_string());
@@ -1617,11 +1614,7 @@ fn parse_uri(input: &str) -> Result<UriParts, String> {
         (None, None)
     };
 
-    let database = if database.trim().is_empty() {
-        None
-    } else {
-        Some(database.to_string())
-    };
+    let database = if database.trim().is_empty() { None } else { Some(database.to_string()) };
 
     let mut query_pairs = Vec::new();
     if !query.trim().is_empty() {
@@ -1652,18 +1645,13 @@ fn parse_bool(value: String) -> bool {
 }
 
 fn bool_to_query(value: bool) -> Option<String> {
-    if value {
-        Some("true".to_string())
-    } else {
-        None
-    }
+    if value { Some("true".to_string()) } else { None }
 }
 
-fn value_or_none(state: &Entity<InputState>, cx: &mut Context<ConnectionManager>) -> Option<String> {
+fn value_or_none(
+    state: &Entity<InputState>,
+    cx: &mut Context<ConnectionManager>,
+) -> Option<String> {
     let value = state.read(cx).value().to_string();
-    if value.trim().is_empty() {
-        None
-    } else {
-        Some(value.trim().to_string())
-    }
+    if value.trim().is_empty() { None } else { Some(value.trim().to_string()) }
 }

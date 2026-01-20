@@ -24,7 +24,6 @@ impl DatabaseSessionStore {
         self.sessions.get(key)
     }
 
-
     pub fn ensure(&mut self, key: DatabaseKey) -> &mut DatabaseSessionState {
         match self.sessions.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),

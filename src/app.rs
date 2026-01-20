@@ -12,7 +12,9 @@ use gpui_component::{Icon, IconName, Sizable as _};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::components::{ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
+use crate::components::{
+    ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog,
+};
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase,
     NewConnection, NextTab, PrevTab, QuitApp, RefreshView,
@@ -299,12 +301,7 @@ impl Render for AppRoot {
                     .child(self.sidebar.clone())
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
-            .child(StatusBar::new(
-                is_connected,
-                connection_name,
-                status_message,
-                read_only,
-            ))
+            .child(StatusBar::new(is_connected, connection_name, status_message, read_only))
             .children(dialog_layer);
 
         if self.key_debug {

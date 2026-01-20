@@ -33,9 +33,7 @@ fn main() {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
-        let workspace = ConfigManager::default()
-            .load_workspace()
-            .unwrap_or_default();
+        let workspace = ConfigManager::default().load_workspace().unwrap_or_default();
         let default_bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let window_bounds = workspace
             .window_state

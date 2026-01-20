@@ -1,31 +1,34 @@
-use gpui::{actions, App, KeyBinding};
+use gpui::{App, KeyBinding, actions};
 
-actions!(openmango, [
-    QuitApp,
-    NewConnection,
-    CreateDatabase,
-    CreateCollection,
-    CreateIndex,
-    InsertDocument,
-    RefreshView,
-    CloseTab,
-    NextTab,
-    PrevTab,
-    FindInResults,
-    CloseSearch,
-    SaveDocument,
-    DiscardDocumentChanges,
-    EditDocumentJson,
-    DuplicateDocument,
-    DeleteDocument,
-    DeleteCollection,
-    DeleteDatabase,
-    DeleteConnection,
-    PasteDocuments,
-    ShowDocumentsSubview,
-    ShowIndexesSubview,
-    ShowStatsSubview,
-]);
+actions!(
+    openmango,
+    [
+        QuitApp,
+        NewConnection,
+        CreateDatabase,
+        CreateCollection,
+        CreateIndex,
+        InsertDocument,
+        RefreshView,
+        CloseTab,
+        NextTab,
+        PrevTab,
+        FindInResults,
+        CloseSearch,
+        SaveDocument,
+        DiscardDocumentChanges,
+        EditDocumentJson,
+        DuplicateDocument,
+        DeleteDocument,
+        DeleteCollection,
+        DeleteDatabase,
+        DeleteConnection,
+        PasteDocuments,
+        ShowDocumentsSubview,
+        ShowIndexesSubview,
+        ShowStatsSubview,
+    ]
+);
 
 pub fn bind_default_keymap(cx: &mut App) {
     cx.bind_keys(default_keybindings());
@@ -69,16 +72,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-d", DuplicateDocument, Some("Documents && !Input")),
         KeyBinding::new("backspace", DeleteDocument, Some("Documents && !Input")),
         KeyBinding::new("delete", DeleteDocument, Some("Documents && !Input")),
-        KeyBinding::new(
-            "cmd-shift-backspace",
-            DeleteCollection,
-            Some("Documents && !Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-shift-backspace",
-            DeleteCollection,
-            Some("Documents && !Input"),
-        ),
+        KeyBinding::new("cmd-shift-backspace", DeleteCollection, Some("Documents && !Input")),
+        KeyBinding::new("ctrl-shift-backspace", DeleteCollection, Some("Documents && !Input")),
         KeyBinding::new("backspace", DeleteDatabase, Some("Database && !Input")),
         KeyBinding::new("delete", DeleteDatabase, Some("Database && !Input")),
         KeyBinding::new(

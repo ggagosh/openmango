@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::bson::DocumentKey;
 use crate::models::connection::ActiveConnection;
-use mongodb::bson::{Bson, Document};
 use mongodb::IndexModel;
+use mongodb::bson::{Bson, Document};
 use mongodb::results::{CollectionSpecification, CollectionType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -22,8 +22,8 @@ use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
-use crate::views::documents::types::InlineEditor;
 use crate::views::documents::property_dialog::PropertyActionDialog;
+use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;
 
@@ -495,12 +495,7 @@ fn build_document_menu(
                 if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
                     let mut new_doc = doc.clone();
                     new_doc.insert("_id", mongodb::bson::oid::ObjectId::new());
-                    AppCommands::insert_document(
-                        state.clone(),
-                        session_key.clone(),
-                        new_doc,
-                        cx,
-                    );
+                    AppCommands::insert_document(state.clone(), session_key.clone(), new_doc, cx);
                 }
             }
         }))
@@ -552,28 +547,25 @@ fn build_property_menu(
     let can_remove_element = is_array_element && meta.value.is_some();
     let can_add_field = !is_array_element;
 
-    menu = menu.item(
-        PopupMenuItem::new("Edit Value / Type...")
-            .disabled(!can_edit_value)
-            .on_click({
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let meta = meta.clone();
-                move |_, window, cx| {
-                    if !can_edit_value {
-                        return;
-                    }
-                    PropertyActionDialog::open_edit_value(
-                        state.clone(),
-                        session_key.clone(),
-                        meta.clone(),
-                        allow_bulk,
-                        window,
-                        cx,
-                    );
+    menu =
+        menu.item(PopupMenuItem::new("Edit Value / Type...").disabled(!can_edit_value).on_click({
+            let state = state.clone();
+            let session_key = session_key.clone();
+            let meta = meta.clone();
+            move |_, window, cx| {
+                if !can_edit_value {
+                    return;
                 }
-            }),
-    );
+                PropertyActionDialog::open_edit_value(
+                    state.clone(),
+                    session_key.clone(),
+                    meta.clone(),
+                    allow_bulk,
+                    window,
+                    cx,
+                );
+            }
+        }));
 
     if can_rename_field {
         menu = menu.item(PopupMenuItem::new("Rename Field...").on_click({
@@ -681,19 +673,19 @@ fn build_property_menu(
     }
 
     menu = menu.item(PopupMenuItem::new("Copy Value").on_click({
-            let state = state.clone();
-            let session_key = session_key.clone();
-            let doc_key = doc_key.clone();
-            let path = path.clone();
-            move |_, _window, cx| {
-                if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
-                    && let Some(value) = get_bson_at_path(&doc, &path)
-                {
-                    let text = format_bson_for_clipboard(value);
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
+        let state = state.clone();
+        let session_key = session_key.clone();
+        let doc_key = doc_key.clone();
+        let path = path.clone();
+        move |_, _window, cx| {
+            if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
+                && let Some(value) = get_bson_at_path(&doc, &path)
+            {
+                let text = format_bson_for_clipboard(value);
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
-        }));
+        }
+    }));
     menu = menu.separator();
     menu = menu.item(PopupMenuItem::new("Copy Key").on_click({
         let key_label = key_label.clone();

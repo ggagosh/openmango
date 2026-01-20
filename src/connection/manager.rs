@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use mongodb::Client;
-use mongodb::bson::doc;
 use mongodb::IndexModel;
+use mongodb::bson::doc;
 use mongodb::results::{CollectionSpecification, UpdateResult};
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -364,8 +364,7 @@ impl ConnectionManager {
 
         self.runtime.block_on(async {
             let db = client.database(&database);
-            db.run_command(doc! { "createIndexes": collection, "indexes": [index] })
-                .await?;
+            db.run_command(doc! { "createIndexes": collection, "indexes": [index] }).await?;
             Ok(())
         })
     }
@@ -490,9 +489,9 @@ impl Default for ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::bson::{Bson, Document};
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use mongodb::bson::{Bson, Document};
 
     struct DbCleanup<'a> {
         manager: &'a ConnectionManager,
@@ -511,9 +510,7 @@ mod tests {
     }
 
     fn unique_db_name(prefix: &str) -> String {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let suffix = format!("{}_{}", std::process::id(), now.as_millis());
         format!("om_smoke_{prefix}_{suffix}")
     }
@@ -539,7 +536,10 @@ mod tests {
             return Ok(());
         }
 
-        let db_name = env::var("MONGO_DB").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| databases[0].clone());
+        let db_name = env::var("MONGO_DB")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| databases[0].clone());
         let collections = manager.list_collections(&client, &db_name)?;
         if collections.is_empty() {
             return Ok(());
@@ -554,13 +554,7 @@ mod tests {
             &client,
             &db_name,
             &collection,
-            FindDocumentsOptions {
-                filter: None,
-                sort: None,
-                projection: None,
-                skip: 0,
-                limit: 1,
-            },
+            FindDocumentsOptions { filter: None, sort: None, projection: None, skip: 0, limit: 1 },
         )?;
 
         Ok(())
@@ -583,11 +577,7 @@ mod tests {
 
         let database = unique_db_name("crud");
         let collection = "docs";
-        let _cleanup = DbCleanup {
-            manager,
-            client: client.clone(),
-            database: database.clone(),
-        };
+        let _cleanup = DbCleanup { manager, client: client.clone(), database: database.clone() };
 
         let doc_a = doc! { "_id": "a", "name": "first", "n": 1 };
         let doc_b = doc! { "_id": "b", "name": "second", "n": 2 };
@@ -598,20 +588,20 @@ mod tests {
             &client,
             &database,
             collection,
-            FindDocumentsOptions {
-                filter: None,
-                sort: None,
-                projection: None,
-                skip: 0,
-                limit: 10,
-            },
+            FindDocumentsOptions { filter: None, sort: None, projection: None, skip: 0, limit: 10 },
         )?;
         if total < 2 || docs.len() < 2 {
             return Err(Error::Timeout("CRUD insert failed".to_string()));
         }
 
         let updated = doc! { "_id": "a", "name": "updated", "n": 10 };
-        manager.replace_document(&client, &database, collection, &Bson::String("a".into()), updated)?;
+        manager.replace_document(
+            &client,
+            &database,
+            collection,
+            &Bson::String("a".into()),
+            updated,
+        )?;
 
         let (docs, _) = manager.find_documents(
             &client,
@@ -625,10 +615,8 @@ mod tests {
                 limit: 1,
             },
         )?;
-        let updated_name = docs
-            .first()
-            .and_then(|doc| doc.get_str("name").ok())
-            .unwrap_or_default();
+        let updated_name =
+            docs.first().and_then(|doc| doc.get_str("name").ok()).unwrap_or_default();
         if updated_name != "updated" {
             return Err(Error::Timeout("CRUD update failed".to_string()));
         }
@@ -639,13 +627,7 @@ mod tests {
             &client,
             &database,
             collection,
-            FindDocumentsOptions {
-                filter: None,
-                sort: None,
-                projection: None,
-                skip: 0,
-                limit: 10,
-            },
+            FindDocumentsOptions { filter: None, sort: None, projection: None, skip: 0, limit: 10 },
         )?;
         if total != 1 {
             return Err(Error::Timeout("CRUD delete failed".to_string()));
@@ -671,11 +653,7 @@ mod tests {
 
         let database = unique_db_name("query");
         let collection = "docs";
-        let _cleanup = DbCleanup {
-            manager,
-            client: client.clone(),
-            database: database.clone(),
-        };
+        let _cleanup = DbCleanup { manager, client: client.clone(), database: database.clone() };
 
         let docs = vec![
             doc! { "_id": 1, "value": "b", "n": 2 },
@@ -714,10 +692,7 @@ mod tests {
                 limit: 3,
             },
         )?;
-        let first_n = sorted
-            .first()
-            .and_then(|doc| doc.get_i32("n").ok())
-            .unwrap_or_default();
+        let first_n = sorted.first().and_then(|doc| doc.get_i32("n").ok()).unwrap_or_default();
         if first_n != 1 {
             return Err(Error::Timeout("Query sort failed".to_string()));
         }
@@ -734,10 +709,7 @@ mod tests {
                 limit: 1,
             },
         )?;
-        let paged_n = paged
-            .first()
-            .and_then(|doc| doc.get_i32("n").ok())
-            .unwrap_or_default();
+        let paged_n = paged.first().and_then(|doc| doc.get_i32("n").ok()).unwrap_or_default();
         if paged_n != 2 {
             return Err(Error::Timeout("Query pagination failed".to_string()));
         }
@@ -754,9 +726,8 @@ mod tests {
                 limit: 1,
             },
         )?;
-        let projected_doc = projected
-            .first()
-            .ok_or_else(|| Error::Timeout("Projection failed".to_string()))?;
+        let projected_doc =
+            projected.first().ok_or_else(|| Error::Timeout("Projection failed".to_string()))?;
         if projected_doc.get("_id").is_some() || projected_doc.get("value").is_none() {
             return Err(Error::Timeout("Query projection failed".to_string()));
         }
@@ -781,11 +752,7 @@ mod tests {
 
         let database = unique_db_name("indexes");
         let collection = "docs";
-        let _cleanup = DbCleanup {
-            manager,
-            client: client.clone(),
-            database: database.clone(),
-        };
+        let _cleanup = DbCleanup { manager, client: client.clone(), database: database.clone() };
 
         manager.insert_document(&client, &database, collection, doc! { "_id": 1, "n": 1 })?;
 
@@ -801,11 +768,7 @@ mod tests {
         let Some(created) = created else {
             return Err(Error::Timeout("Index list failed".to_string()));
         };
-        let Some(name) = created
-            .options
-            .as_ref()
-            .and_then(|options| options.name.as_ref())
-        else {
+        let Some(name) = created.options.as_ref().and_then(|options| options.name.as_ref()) else {
             return Err(Error::Timeout("Index name missing".to_string()));
         };
 
@@ -837,11 +800,7 @@ mod tests {
 
         let database = unique_db_name("stats");
         let collection = "docs";
-        let _cleanup = DbCleanup {
-            manager,
-            client: client.clone(),
-            database: database.clone(),
-        };
+        let _cleanup = DbCleanup { manager, client: client.clone(), database: database.clone() };
 
         manager.insert_document(&client, &database, collection, doc! { "_id": 1, "n": 1 })?;
 

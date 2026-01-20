@@ -4,5 +4,5 @@ pub mod connections;
 pub mod databases;
 pub mod documents;
 
-pub use documents::CollectionView;
 pub use databases::DatabaseView;
+pub use documents::CollectionView;

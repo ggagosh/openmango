@@ -3,8 +3,8 @@
 use gpui::Context;
 use uuid::Uuid;
 
-use crate::state::events::AppEvent;
 use crate::state::StatusLevel;
+use crate::state::events::AppEvent;
 
 use super::AppState;
 use super::types::{ActiveTab, DatabaseKey, SessionKey, TabKey, View};
@@ -46,11 +46,7 @@ impl AppState {
     }
 
     pub(super) fn cleanup_session(&mut self, key: &SessionKey) {
-        let still_referenced = self
-            .tabs
-            .open
-            .iter()
-            .any(|tab| matches_collection(tab, key))
+        let still_referenced = self.tabs.open.iter().any(|tab| matches_collection(tab, key))
             || self.tabs.preview.as_ref() == Some(key);
         if !still_referenced {
             self.sessions.remove(key);
@@ -75,11 +71,8 @@ impl AppState {
             return;
         };
         let new_tab = SessionKey::new(active.config.id, database.clone(), collection.clone());
-        let existing_index = self
-            .tabs
-            .open
-            .iter()
-            .position(|tab| matches_collection(tab, &new_tab));
+        let existing_index =
+            self.tabs.open.iter().position(|tab| matches_collection(tab, &new_tab));
         let selection_changed = self.conn.selected_database.as_ref() != Some(&database)
             || self.conn.selected_collection.as_ref() != Some(&collection);
         let mut tab_changed = false;
@@ -307,11 +300,7 @@ impl AppState {
             ActiveTab::Preview => self.tabs.open.len(),
             ActiveTab::None => 0,
         };
-        let prev_index = if current_index == 0 {
-            tab_count - 1
-        } else {
-            current_index - 1
-        };
+        let prev_index = if current_index == 0 { tab_count - 1 } else { current_index - 1 };
         if prev_index == self.tabs.open.len() {
             self.select_preview_tab(cx);
         } else {
@@ -516,7 +505,9 @@ impl AppState {
             let TabKey::Collection(tab) = tab else {
                 continue;
             };
-            if tab.connection_id == connection_id && tab.database == database && tab.collection == from
+            if tab.connection_id == connection_id
+                && tab.database == database
+                && tab.collection == from
             {
                 tab.collection = to.to_string();
             }

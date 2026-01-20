@@ -1,9 +1,9 @@
 use gpui::*;
+use gpui_component::Sizable as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::switch::Switch;
-use gpui_component::Sizable as _;
 
 use crate::components::Button;
 use crate::connection::get_connection_manager;
@@ -50,10 +50,7 @@ impl ConnectionDialog {
         let dialog_view =
             cx.new(|cx| ConnectionDialog::new_with_existing(state.clone(), connection, window, cx));
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog
-                .title("Edit Connection")
-                .min_w(px(420.0))
-                .child(dialog_view.clone())
+            dialog.title("Edit Connection").min_w(px(420.0)).child(dialog_view.clone())
         });
     }
 

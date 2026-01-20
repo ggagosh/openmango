@@ -6,7 +6,7 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::{Disableable as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
-use mongodb::bson::{self, Bson, Document, oid::ObjectId, DateTime, doc};
+use mongodb::bson::{self, Bson, DateTime, Document, doc, oid::ObjectId};
 
 use crate::bson::{
     DocumentKey, PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string,
@@ -281,9 +281,7 @@ impl PropertyActionDialog {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut parent_path = parent_path(&meta.path);
-        if action == PropertyActionKind::AddField
-            && matches!(meta.value, Some(Bson::Document(_)))
-        {
+        if action == PropertyActionKind::AddField && matches!(meta.value, Some(Bson::Document(_))) {
             parent_path = meta.path.clone();
         }
         let parent_label = if parent_path.is_empty() {
@@ -360,9 +358,7 @@ impl PropertyActionDialog {
             }
         }
 
-        if should_prefill_value
-            && let Some(value) = meta.value.as_ref()
-        {
+        if should_prefill_value && let Some(value) = meta.value.as_ref() {
             let raw = format_bson_for_input(value);
             value_state.update(cx, |state, cx| {
                 state.set_value(raw, window, cx);
@@ -391,25 +387,26 @@ impl PropertyActionDialog {
 
         dialog.update_placeholder(window, cx);
 
-        let subscription = cx.subscribe_in(
-            &dialog.state,
-            window,
-            move |view, _state, event, window, cx| match event {
-                AppEvent::DocumentsUpdated { session, .. } if session == &view.session_key => {
-                    if view.updating {
-                        view.updating = false;
-                        view.error_message = None;
-                        window.close_dialog(cx);
+        let subscription =
+            cx.subscribe_in(&dialog.state, window, move |view, _state, event, window, cx| {
+                match event {
+                    AppEvent::DocumentsUpdated { session, .. } if session == &view.session_key => {
+                        if view.updating {
+                            view.updating = false;
+                            view.error_message = None;
+                            window.close_dialog(cx);
+                        }
                     }
+                    AppEvent::DocumentsUpdateFailed { session, error }
+                        if session == &view.session_key =>
+                    {
+                        view.updating = false;
+                        view.error_message = Some(error.clone());
+                        cx.notify();
+                    }
+                    _ => {}
                 }
-                AppEvent::DocumentsUpdateFailed { session, error } if session == &view.session_key => {
-                    view.updating = false;
-                    view.error_message = Some(error.clone());
-                    cx.notify();
-                }
-                _ => {}
-            },
-        );
+            });
         dialog._subscriptions.push(subscription);
 
         let subscription = cx.intercept_keystrokes(move |event, window, cx| {
@@ -457,18 +454,15 @@ impl PropertyActionDialog {
                 "false" => Ok(Bson::Boolean(false)),
                 _ => Err("Expected true/false".to_string()),
             },
-            ValueType::Int32 => trimmed
-                .parse::<i32>()
-                .map(Bson::Int32)
-                .map_err(|_| "Expected int32".to_string()),
-            ValueType::Int64 => trimmed
-                .parse::<i64>()
-                .map(Bson::Int64)
-                .map_err(|_| "Expected int64".to_string()),
-            ValueType::Double => trimmed
-                .parse::<f64>()
-                .map(Bson::Double)
-                .map_err(|_| "Expected number".to_string()),
+            ValueType::Int32 => {
+                trimmed.parse::<i32>().map(Bson::Int32).map_err(|_| "Expected int32".to_string())
+            }
+            ValueType::Int64 => {
+                trimmed.parse::<i64>().map(Bson::Int64).map_err(|_| "Expected int64".to_string())
+            }
+            ValueType::Double => {
+                trimmed.parse::<f64>().map(Bson::Double).map_err(|_| "Expected number".to_string())
+            }
             ValueType::Null => Ok(Bson::Null),
             ValueType::ObjectId => ObjectId::parse_str(trimmed)
                 .map(Bson::ObjectId)
@@ -546,11 +540,7 @@ impl PropertyActionDialog {
     }
 
     fn effective_scope(&self) -> UpdateScope {
-        if self.allow_bulk {
-            self.scope
-        } else {
-            UpdateScope::CurrentDocument
-        }
+        if self.allow_bulk { self.scope } else { UpdateScope::CurrentDocument }
     }
 
     fn current_filter(&self, cx: &mut Context<Self>) -> Document {
@@ -600,9 +590,7 @@ impl PropertyActionDialog {
                 };
                 Ok(doc! { "$rename": { self.path_dot.clone(): new_path } })
             }
-            PropertyActionKind::RemoveField => {
-                Ok(doc! { "$unset": { self.path_dot.clone(): "" } })
-            }
+            PropertyActionKind::RemoveField => Ok(doc! { "$unset": { self.path_dot.clone(): "" } }),
             PropertyActionKind::AddElement => {
                 let value = self.parse_value(cx)?;
                 Ok(doc! { "$push": { self.array_dot.clone(): value } })
@@ -643,31 +631,32 @@ impl PropertyActionDialog {
             .dropdown_menu_with_anchor(Corner::BottomLeft, {
                 let view = view.clone();
                 move |menu, _window, _cx| {
-                    menu
-                        .item(PopupMenuItem::new(UpdateScope::CurrentDocument.label()).on_click({
-                            let view = view.clone();
-                            move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_scope(UpdateScope::CurrentDocument, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new(UpdateScope::MatchQuery.label()).on_click({
-                            let view = view.clone();
-                            move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_scope(UpdateScope::MatchQuery, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new(UpdateScope::AllDocuments.label()).on_click({
+                    menu.item(PopupMenuItem::new(UpdateScope::CurrentDocument.label()).on_click({
+                        let view = view.clone();
+                        move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.set_scope(UpdateScope::CurrentDocument, cx);
+                            });
+                        }
+                    }))
+                    .item(PopupMenuItem::new(UpdateScope::MatchQuery.label()).on_click({
+                        let view = view.clone();
+                        move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.set_scope(UpdateScope::MatchQuery, cx);
+                            });
+                        }
+                    }))
+                    .item(
+                        PopupMenuItem::new(UpdateScope::AllDocuments.label()).on_click({
                             let view = view.clone();
                             move |_, _, cx| {
                                 view.update(cx, |this, cx| {
                                     this.set_scope(UpdateScope::AllDocuments, cx);
                                 });
                             }
-                        }))
+                        }),
+                    )
                 }
             })
     }
@@ -742,7 +731,8 @@ impl Render for PropertyActionDialog {
 
         let show_type = show_value;
 
-        let show_field_input = matches!(self.action, PropertyActionKind::AddField | PropertyActionKind::RenameField);
+        let show_field_input =
+            matches!(self.action, PropertyActionKind::AddField | PropertyActionKind::RenameField);
         let show_field_readonly = matches!(
             self.action,
             PropertyActionKind::EditValue
@@ -866,9 +856,7 @@ impl Render for PropertyActionDialog {
                     .flex_col()
                     .gap(spacing::xs())
                     .child(div().text_xs().text_color(colors::text_secondary()).child("Parent"))
-                    .child(
-                        Input::new(&self.parent_state).disabled(true),
-                    ),
+                    .child(Input::new(&self.parent_state).disabled(true)),
             )
             .child(field_row)
             .child(field_input)
@@ -892,13 +880,11 @@ impl Render for PropertyActionDialog {
                             .flex()
                             .items_center()
                             .gap(spacing::sm())
-                            .child(
-                                Button::new("cancel-property")
-                                    .label("Cancel")
-                                    .on_click(|_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                        window.close_dialog(cx);
-                                    }),
-                            )
+                            .child(Button::new("cancel-property").label("Cancel").on_click(
+                                |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    window.close_dialog(cx);
+                                },
+                            ))
                             .child(
                                 Button::new("apply-property")
                                     .primary()

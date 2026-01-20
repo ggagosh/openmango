@@ -8,7 +8,7 @@ use crate::helpers::{format_bytes, format_number};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, View,
 };
-use crate::theme::{borders, colors, spacing, sizing};
+use crate::theme::{borders, colors, sizing, spacing};
 
 /// Database overview view (stats + collections list)
 pub struct DatabaseView {
@@ -86,14 +86,7 @@ impl Render for DatabaseView {
                 session.data.collections_error.clone(),
             )
         } else {
-            (
-                None,
-                false,
-                None,
-                Vec::new(),
-                false,
-                None,
-            )
+            (None, false, None, Vec::new(), false, None)
         };
 
         let state = self.state.clone();
@@ -173,19 +166,11 @@ impl DatabaseView {
         database_key: Option<crate::state::DatabaseKey>,
         state: Entity<AppState>,
     ) -> AnyElement {
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .px(spacing::lg())
-            .pt(spacing::lg());
+        let mut section =
+            div().flex().flex_col().gap(spacing::sm()).px(spacing::lg()).pt(spacing::lg());
 
-        section = section.child(
-            div()
-                .text_xs()
-                .text_color(colors::text_muted())
-                .child("Database stats"),
-        );
+        section =
+            section.child(div().text_xs().text_color(colors::text_muted()).child("Database stats"));
 
         let mut row = div()
             .flex()
@@ -267,12 +252,8 @@ impl DatabaseView {
             .pt(spacing::lg())
             .pb(spacing::lg());
 
-        section = section.child(
-            div()
-                .text_xs()
-                .text_color(colors::text_muted())
-                .child("Collections"),
-        );
+        section =
+            section.child(div().text_xs().text_color(colors::text_muted()).child("Collections"));
 
         if collections_loading {
             return section
@@ -314,8 +295,7 @@ impl DatabaseView {
                                     let state = state.clone();
                                     let database_name = database_name.clone();
                                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        if let Some(active) = state.read(cx).conn.active.as_ref()
-                                        {
+                                        if let Some(active) = state.read(cx).conn.active.as_ref() {
                                             let key = crate::state::DatabaseKey::new(
                                                 active.config.id,
                                                 database_name.clone(),
@@ -362,26 +342,10 @@ impl DatabaseView {
                     .text_color(colors::text_muted())
                     .child("Collection"),
             )
+            .child(div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Type"))
+            .child(div().w(px(100.0)).text_xs().text_color(colors::text_muted()).child("Capped"))
             .child(
-                div()
-                    .w(px(120.0))
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child("Type"),
-            )
-            .child(
-                div()
-                    .w(px(100.0))
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child("Capped"),
-            )
-            .child(
-                div()
-                    .w(px(120.0))
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child("Read only"),
+                div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Read only"),
             );
 
         let rows = collections
@@ -403,11 +367,7 @@ impl DatabaseView {
                     .cursor_pointer()
                     .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                         state.update(cx, |state, cx| {
-                            state.preview_collection(
-                                database.clone(),
-                                collection_name.clone(),
-                                cx,
-                            );
+                            state.preview_collection(database.clone(), collection_name.clone(), cx);
                         });
                     })
                     .child(

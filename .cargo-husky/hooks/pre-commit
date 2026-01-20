@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run CI checks before commit
+just ci

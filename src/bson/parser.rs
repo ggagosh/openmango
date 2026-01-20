@@ -100,11 +100,7 @@ pub fn parse_documents_from_json(input: &str) -> Result<Vec<Document>, String> {
                 }
             }
 
-            if docs.is_empty() {
-                Err("No documents found".to_string())
-            } else {
-                Ok(docs)
-            }
+            if docs.is_empty() { Err("No documents found".to_string()) } else { Ok(docs) }
         }
     }
 }

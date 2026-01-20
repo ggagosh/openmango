@@ -10,32 +10,32 @@ mod tree_content;
 mod types;
 mod view_model;
 
+use crate::bson::bson_value_preview;
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionStats, CollectionSubview, SessionKey,
 };
-use crate::bson::bson_value_preview;
 use crate::theme::{borders, colors, spacing};
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
 use gpui_component::input::Input;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::tree::tree;
 use gpui_component::{Icon, IconName, Sizable as _};
+use index_create::IndexCreateDialog;
 use mongodb::IndexModel;
 use mongodb::bson::Document;
-use index_create::IndexCreateDialog;
 use view_model::DocumentViewModel;
 
-use tree_content::render_tree_row;
-use tree_content::paste_documents_from_clipboard;
 use crate::keyboard::{
     CloseSearch, CreateIndex, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
     DuplicateDocument, EditDocumentJson, FindInResults, InsertDocument, PasteDocuments,
     SaveDocument, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
 };
 use mongodb::bson::oid::ObjectId;
+use tree_content::paste_documents_from_clipboard;
+use tree_content::render_tree_row;
 
 /// View for browsing documents in a collection
 pub struct CollectionView {
@@ -93,13 +93,7 @@ impl CollectionView {
                     let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
                         return false;
                     };
-                    AppCommands::save_document(
-                        this.state.clone(),
-                        session_key,
-                        doc_key,
-                        doc,
-                        cx,
-                    );
+                    AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
                     true
                 };
                 if is_escape {
@@ -275,21 +269,20 @@ impl Render for CollectionView {
                     .placeholder("Find in values (Cmd/Ctrl+F)")
                     .clean_on_escape()
             });
-            let subscription = cx.subscribe_in(
-                &search_state,
-                window,
-                move |view, _state, event, _window, cx| match event {
-                    InputEvent::Change => {
-                        view.update_search_results(cx);
-                        cx.notify();
+            let subscription =
+                cx.subscribe_in(&search_state, window, move |view, _state, event, _window, cx| {
+                    match event {
+                        InputEvent::Change => {
+                            view.update_search_results(cx);
+                            cx.notify();
+                        }
+                        InputEvent::PressEnter { .. } => {
+                            view.next_match(cx);
+                            cx.notify();
+                        }
+                        _ => {}
                     }
-                    InputEvent::PressEnter { .. } => {
-                        view.next_match(cx);
-                        cx.notify();
-                    }
-                    _ => {}
-                },
-            );
+                });
             self.search_state = Some(search_state);
             self.search_subscription = Some(subscription);
         }
@@ -371,10 +364,8 @@ impl Render for CollectionView {
         let sort_active = !matches!(sort_raw.trim(), "" | "{}");
         let projection_active = !matches!(projection_raw.trim(), "" | "{}");
         let search_query = self.current_search_query(cx);
-        let current_match_id = self
-            .search_index
-            .and_then(|index| self.search_matches.get(index))
-            .cloned();
+        let current_match_id =
+            self.search_index.and_then(|index| self.search_matches.get(index)).cloned();
 
         let per_page_u64 = per_page.max(1) as u64;
         let total_pages = total.div_ceil(per_page_u64).max(1);
@@ -496,35 +487,36 @@ impl Render for CollectionView {
                 state.set_value("{}".to_string(), window, cx);
                 state
             });
-            let subscription =
-                cx.subscribe_in(&projection_state, window, move |view, state, event, window, cx| {
-                    match event {
-                        InputEvent::PressEnter { .. } => {
-                            if let Some(session_key) = view.view_model.current_session()
-                                && let (Some(sort_state), Some(projection_state)) =
-                                    (view.sort_state.clone(), view.projection_state.clone())
-                            {
-                                CollectionView::apply_query_options(
-                                    view.state.clone(),
-                                    session_key,
-                                    sort_state,
-                                    projection_state,
-                                    window,
-                                    cx,
-                                );
-                            }
+            let subscription = cx.subscribe_in(
+                &projection_state,
+                window,
+                move |view, state, event, window, cx| match event {
+                    InputEvent::PressEnter { .. } => {
+                        if let Some(session_key) = view.view_model.current_session()
+                            && let (Some(sort_state), Some(projection_state)) =
+                                (view.sort_state.clone(), view.projection_state.clone())
+                        {
+                            CollectionView::apply_query_options(
+                                view.state.clone(),
+                                session_key,
+                                sort_state,
+                                projection_state,
+                                window,
+                                cx,
+                            );
                         }
-                        InputEvent::Blur => {
-                            let current = state.read(cx).value().to_string();
-                            if current.trim().is_empty() {
-                                state.update(cx, |input, cx| {
-                                    input.set_value("{}".to_string(), window, cx);
-                                });
-                            }
-                        }
-                        _ => {}
                     }
-                });
+                    InputEvent::Blur => {
+                        let current = state.read(cx).value().to_string();
+                        if current.trim().is_empty() {
+                            state.update(cx, |input, cx| {
+                                input.set_value("{}".to_string(), window, cx);
+                            });
+                        }
+                    }
+                    _ => {}
+                },
+            );
             self.projection_state = Some(projection_state);
             self.projection_subscription = Some(subscription);
         }
@@ -708,10 +700,8 @@ impl Render for CollectionView {
                 let Some(session_key) = this.view_model.current_session() else {
                     return;
                 };
-                let message = format!(
-                    "Drop collection {}? This cannot be undone.",
-                    session_key.collection
-                );
+                let message =
+                    format!("Drop collection {}? This cannot be undone.", session_key.collection);
                 open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
                     let state = this.state.clone();
                     let session_key = session_key.clone();
@@ -750,13 +740,7 @@ impl Render for CollectionView {
                 let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
                     return;
                 };
-                AppCommands::save_document(
-                    this.state.clone(),
-                    session_key,
-                    doc_key,
-                    doc,
-                    cx,
-                );
+                AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
             }))
             .on_action(cx.listener(|this, _: &DiscardDocumentChanges, _window, cx| {
                 let Some(session_key) = this.view_model.current_session() else {
@@ -797,19 +781,15 @@ impl Render for CollectionView {
                     state.set_collection_subview(&session_key, CollectionSubview::Indexes);
                     cx.notify();
                 });
-                AppCommands::load_collection_indexes(
-                    this.state.clone(),
-                    session_key,
-                    false,
-                    cx,
-                );
+                AppCommands::load_collection_indexes(this.state.clone(), session_key, false, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowStatsSubview, _window, cx| {
                 let Some(session_key) = this.view_model.current_session() else {
                     return;
                 };
                 let should_load = this.state.update(cx, |state, cx| {
-                    let should_load = state.set_collection_subview(&session_key, CollectionSubview::Stats);
+                    let should_load =
+                        state.set_collection_subview(&session_key, CollectionSubview::Stats);
                     cx.notify();
                     should_load
                 });
@@ -1092,13 +1072,8 @@ impl CollectionView {
         indexes_error: Option<String>,
         session_key: Option<SessionKey>,
     ) -> AnyElement {
-        let mut content = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .bg(colors::bg_app());
+        let mut content =
+            div().flex().flex_col().flex_1().min_w(px(0.0)).overflow_hidden().bg(colors::bg_app());
 
         if indexes_loading {
             return content
@@ -1129,12 +1104,7 @@ impl CollectionView {
                         .items_center()
                         .justify_center()
                         .gap(spacing::sm())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(colors::text_error())
-                                .child(error),
-                        )
+                        .child(div().text_sm().text_color(colors::text_error()).child(error))
                         .child(
                             Button::new("retry-indexes")
                                 .ghost()
@@ -1202,20 +1172,8 @@ impl CollectionView {
                     .text_color(colors::text_muted())
                     .child("Keys"),
             )
-            .child(
-                div()
-                    .w(px(200.0))
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child("Flags"),
-            )
-            .child(
-                div()
-                    .w(px(140.0))
-                    .text_xs()
-                    .text_color(colors::text_muted())
-                    .child("Actions"),
-            );
+            .child(div().w(px(200.0)).text_xs().text_color(colors::text_muted()).child("Flags"))
+            .child(div().w(px(140.0)).text_xs().text_color(colors::text_muted()).child("Actions"));
 
         let rows = indexes
             .into_iter()
@@ -1350,14 +1308,9 @@ impl CollectionView {
             })
             .collect::<Vec<_>>();
 
-        content = content.child(header_row).child(
-            div()
-                .flex()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_y_scrollbar()
-                .children(rows),
-        );
+        content = content
+            .child(header_row)
+            .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().children(rows));
 
         content.into_any_element()
     }
@@ -1393,11 +1346,7 @@ impl CollectionView {
             .map(|state| state.read(cx).value().to_string())
             .unwrap_or_default();
         let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_lowercase())
-        }
+        if trimmed.is_empty() { None } else { Some(trimmed.to_lowercase()) }
     }
 
     fn show_search_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1526,11 +1475,7 @@ fn index_keys_preview(keys: &Document) -> String {
         .iter()
         .map(|(key, value)| format!("{key}:{}", bson_value_preview(value, 16)))
         .collect();
-    if parts.is_empty() {
-        "—".to_string()
-    } else {
-        parts.join(", ")
-    }
+    if parts.is_empty() { "—".to_string() } else { parts.join(", ") }
 }
 
 fn index_flags(model: &IndexModel, name: &str) -> String {

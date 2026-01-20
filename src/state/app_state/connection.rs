@@ -3,8 +3,8 @@
 use gpui::Context;
 
 use super::AppState;
-use crate::models::connection::SavedConnection;
 use crate::components::TreeNodeId;
+use crate::models::connection::SavedConnection;
 use crate::state::ActiveTab;
 use crate::state::View;
 use crate::state::events::AppEvent;
@@ -71,11 +71,8 @@ impl AppState {
     }
 
     pub fn remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
-        let was_active = self
-            .conn
-            .active
-            .as_ref()
-            .is_some_and(|conn| conn.config.id == connection_id);
+        let was_active =
+            self.conn.active.as_ref().is_some_and(|conn| conn.config.id == connection_id);
 
         self.connections.retain(|conn| conn.id != connection_id);
         self.save_connections();

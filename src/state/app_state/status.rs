@@ -47,8 +47,7 @@ impl AppState {
                 self.status_message = Some(StatusMessage::info("Document inserted"));
             }
             AppEvent::DocumentInsertFailed { error, .. } => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Insert failed: {error}")));
+                self.status_message = Some(StatusMessage::error(format!("Insert failed: {error}")));
             }
             AppEvent::DocumentsInserted { count } => {
                 self.status_message =
@@ -70,8 +69,7 @@ impl AppState {
                 self.status_message = Some(StatusMessage::error(format!("Delete failed: {error}")));
             }
             AppEvent::IndexesLoaded { count, .. } => {
-                self.status_message =
-                    Some(StatusMessage::info(format!("Loaded {count} indexes")));
+                self.status_message = Some(StatusMessage::info(format!("Loaded {count} indexes")));
             }
             AppEvent::IndexesLoadFailed { error, .. } => {
                 self.status_message =
@@ -107,8 +105,7 @@ impl AppState {
                 self.status_message = Some(StatusMessage::info(message));
             }
             AppEvent::DocumentsUpdateFailed { error, .. } => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Update failed: {error}")));
+                self.status_message = Some(StatusMessage::error(format!("Update failed: {error}")));
             }
             AppEvent::DocumentsDeleted { session, deleted } => {
                 let _ = session;
@@ -122,8 +119,7 @@ impl AppState {
             }
             AppEvent::DocumentsDeleteFailed { session, error } => {
                 let _ = session;
-                self.status_message =
-                    Some(StatusMessage::error(format!("Delete failed: {error}")));
+                self.status_message = Some(StatusMessage::error(format!("Delete failed: {error}")));
             }
             _ => {}
         }

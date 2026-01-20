@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder as _;
+use gpui::*;
 
 use crate::state::{StatusLevel, StatusMessage};
 use crate::theme::{borders, colors, sizing, spacing};
@@ -39,12 +39,10 @@ impl RenderOnce for StatusBar {
                 StatusLevel::Info => {
                     div().text_xs().text_color(colors::text_secondary()).child(message.text)
                 }
-                StatusLevel::Error => {
-                    div()
-                        .text_xs()
-                        .text_color(colors::text_muted())
-                        .child(format!("v{}", env!("CARGO_PKG_VERSION")))
-                }
+                StatusLevel::Error => div()
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
             },
             None => div()
                 .text_xs()

@@ -12,9 +12,9 @@ mod workspace;
 pub use database_sessions::DatabaseSessionStore;
 pub use sessions::SessionStore;
 pub use types::{
-    ActiveTab, CollectionOverview, CollectionStats, CollectionSubview, ConnectionState, DatabaseKey,
-    DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, TabState, View,
+    ActiveTab, CollectionOverview, CollectionStats, CollectionSubview, ConnectionState,
+    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData,
+    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TabState, View,
 };
 
 use gpui::EventEmitter;

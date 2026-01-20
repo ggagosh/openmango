@@ -50,5 +50,8 @@ bloat:
 clean:
     cargo clean
 
+# CI checks (matches GitHub Actions)
+ci: fmt-check lint check
+
 # All checks before commit
-precommit: fmt-check lint test
+precommit: ci test

@@ -34,6 +34,11 @@ futures = "0.3"
 dashmap = "6.1"
 parking_lot = "0.12"
 
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = [
+    "user-hooks",
+] }
+
 [profile.dev]
 opt-level = 1
 
