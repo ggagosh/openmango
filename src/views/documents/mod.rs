@@ -136,17 +136,17 @@ impl CollectionView {
                             .and_then(|session| session.view.selected_node_id.clone());
                         if let Some(node_id) = selected_node {
                             let node_meta = this.view_model.node_meta();
-                            if let Some(meta) = node_meta.get(&node_id) {
-                                if meta.is_editable {
-                                    this.view_model.begin_inline_edit(
-                                        node_id.clone(),
-                                        meta,
-                                        window,
-                                        &this.state,
-                                        cx,
-                                    );
-                                    handled = true;
-                                }
+                            if let Some(meta) = node_meta.get(&node_id)
+                                && meta.is_editable
+                            {
+                                this.view_model.begin_inline_edit(
+                                    node_id.clone(),
+                                    meta,
+                                    window,
+                                    &this.state,
+                                    cx,
+                                );
+                                handled = true;
                             }
                         }
                     }
