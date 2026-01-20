@@ -40,10 +40,16 @@ impl RenderOnce for StatusBar {
                     div().text_xs().text_color(colors::text_secondary()).child(message.text)
                 }
                 StatusLevel::Error => {
-                    div().text_xs().text_color(colors::text_muted()).child("v0.1.0")
+                    div()
+                        .text_xs()
+                        .text_color(colors::text_muted())
+                        .child(format!("v{}", env!("CARGO_PKG_VERSION")))
                 }
             },
-            None => div().text_xs().text_color(colors::text_muted()).child("v0.1.0"),
+            None => div()
+                .text_xs()
+                .text_color(colors::text_muted())
+                .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
         };
 
         div()

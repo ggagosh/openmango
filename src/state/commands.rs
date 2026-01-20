@@ -2,7 +2,10 @@
 
 use chrono::Utc;
 use gpui::{App, AppContext as _, Entity};
-use mongodb::{IndexModel, bson::{Document, doc}};
+use mongodb::{
+    IndexModel,
+    bson::{Document, doc},
+};
 use uuid::Uuid;
 
 use crate::bson::DocumentKey;
@@ -18,18 +21,12 @@ pub struct AppCommands;
 
 impl AppCommands {
     fn ensure_writable(state: &Entity<AppState>, cx: &mut App) -> bool {
-        let read_only = state
-            .read(cx)
-            .conn
-            .active
-            .as_ref()
-            .map(|conn| conn.config.read_only)
-            .unwrap_or(false);
+        let read_only =
+            state.read(cx).conn.active.as_ref().map(|conn| conn.config.read_only).unwrap_or(false);
         if read_only {
             state.update(cx, |state, cx| {
-                state.status_message = Some(StatusMessage::error(
-                    "Read-only connection: writes are disabled.",
-                ));
+                state.status_message =
+                    Some(StatusMessage::error("Read-only connection: writes are disabled."));
                 cx.notify();
             });
         }
@@ -686,8 +683,7 @@ impl AppCommands {
                                 }
                                 Err(err) => {
                                     session.data.stats_error = Some(err.to_string());
-                                    status_message =
-                                        Some(format!("Database stats failed: {err}"));
+                                    status_message = Some(format!("Database stats failed: {err}"));
                                 }
                             }
 
@@ -701,9 +697,8 @@ impl AppCommands {
                                 }
                                 Err(err) => {
                                     session.data.collections_error = Some(err.to_string());
-                                    status_message = Some(format!(
-                                        "Database collections failed: {err}"
-                                    ));
+                                    status_message =
+                                        Some(format!("Database collections failed: {err}"));
                                 }
                             }
                         }
@@ -774,7 +769,7 @@ impl AppCommands {
         };
 
         let effective_sort = if sort.is_none() && sort_raw.trim().is_empty() {
-            Some(doc! { "$natural": -1 })
+            Some(doc! { "$natural": 1 })
         } else {
             sort
         };
@@ -797,13 +792,7 @@ impl AppCommands {
                     &client,
                     &database_for_task,
                     &collection_for_task,
-                    FindDocumentsOptions {
-                        filter,
-                        sort: effective_sort,
-                        projection,
-                        skip,
-                        limit,
-                    },
+                    FindDocumentsOptions { filter, sort: effective_sort, projection, skip, limit },
                 )
             }
         });

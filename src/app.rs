@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::components::{ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog};
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase,
-    NewConnection, NextTab, PrevTab, RefreshView,
+    NewConnection, NextTab, PrevTab, QuitApp, RefreshView,
 };
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::{
@@ -69,6 +69,12 @@ impl AppRoot {
                 let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
                 let alt = modifiers.alt;
                 let shift = modifiers.shift;
+
+                if cmd_or_ctrl && !alt && !shift && key == "q" {
+                    cx.quit();
+                    cx.stop_propagation();
+                    return;
+                }
 
                 if cmd_or_ctrl && !alt && !shift && key == "n" {
                     match this.state.read(cx).current_view {
@@ -213,6 +219,9 @@ impl Render for AppRoot {
                 this.state.update(cx, |state, cx| {
                     state.select_prev_tab(cx);
                 });
+            }))
+            .on_action(cx.listener(|_this, _: &QuitApp, _window, cx| {
+                cx.quit();
             }))
             .on_action(cx.listener(|this, _: &NewConnection, window, cx| {
                 this.handle_new_connection(window, cx);
@@ -565,6 +574,27 @@ impl Sidebar {
             this.state.update(cx, |state, _cx| {
                 state.set_workspace_window_bounds(window.window_bounds());
             });
+        }));
+
+        subscriptions.push(cx.on_window_closed({
+            let state = state.clone();
+            move |cx| {
+                state.update(cx, |state, cx| {
+                    state.workspace_restore_pending = false;
+                    state.update_workspace_from_state();
+                    cx.notify();
+                });
+            }
+        }));
+
+        subscriptions.push(cx.on_app_quit(|this, cx| {
+            let state = this.state.clone();
+            state.update(cx, |state, cx| {
+                state.workspace_restore_pending = false;
+                state.update_workspace_from_state();
+                cx.notify();
+            });
+            async {}
         }));
 
         let sidebar = Self {

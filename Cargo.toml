@@ -1,6 +1,6 @@
 [package]
 name = "openmango"
-version = "0.1.1"
+version = "0.1.4"
 edition = "2024"
 description = "A GPU-accelerated MongoDB client built with GPUI"
 license = "MIT"

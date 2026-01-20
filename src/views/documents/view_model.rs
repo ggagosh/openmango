@@ -205,6 +205,7 @@ impl DocumentViewModel {
             );
             return;
         }
+        let mut focus_state: Option<Entity<InputState>> = None;
         let editor = match value {
             Some(Bson::Boolean(current)) => InlineEditor::Bool(*current),
             Some(Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_)) => {
@@ -214,6 +215,7 @@ impl DocumentViewModel {
                         state.set_value(value, window, cx);
                     });
                 }
+                focus_state = Some(state.clone());
                 let is_float = matches!(value, Some(Bson::Double(_)));
                 let subscription =
                     cx.subscribe_in(&state, window, move |_view, state, event, window, cx| {
@@ -261,11 +263,17 @@ impl DocumentViewModel {
                         state.set_value(value, window, cx);
                     });
                 }
+                focus_state = Some(state.clone());
                 InlineEditor::Text(state)
             }
         };
 
         self.inline_editor_state = Some(editor);
+        if let Some(state) = focus_state {
+            state.update(cx, |state, cx| {
+                state.focus(window, cx);
+            });
+        }
 
         self.editing_node_id = Some(node_id);
         self.editing_doc_key = Some(meta.doc_key.clone());

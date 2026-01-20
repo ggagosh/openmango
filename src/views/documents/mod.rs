@@ -67,20 +67,89 @@ impl CollectionView {
                 return;
             };
             let key = event.keystroke.key.to_ascii_lowercase();
-            if key != "escape" {
+            let is_escape = key == "escape";
+            let is_enter = key == "enter" || key == "return";
+            if !is_escape && !is_enter {
                 return;
             }
             view.update(cx, |this, cx| {
                 let mut handled = false;
-                if this.search_visible {
-                    this.close_search(window, cx);
-                    handled = true;
-                }
-                if this.view_model.inline_state().is_some()
-                    || this.view_model.editing_node_id().is_some()
-                {
-                    this.view_model.clear_inline_edit();
-                    handled = true;
+                let save_selected_document = |this: &mut CollectionView, cx: &mut Context<Self>| {
+                    let Some(session_key) = this.view_model.current_session() else {
+                        return false;
+                    };
+                    let (doc_key, doc) = {
+                        let state_ref = this.state.read(cx);
+                        let doc_key = state_ref
+                            .session(&session_key)
+                            .and_then(|session| session.view.selected_doc.clone());
+                        let doc = doc_key.as_ref().and_then(|doc_key| {
+                            state_ref
+                                .session(&session_key)
+                                .and_then(|session| session.view.drafts.get(doc_key).cloned())
+                        });
+                        (doc_key, doc)
+                    };
+                    let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
+                        return false;
+                    };
+                    AppCommands::save_document(
+                        this.state.clone(),
+                        session_key,
+                        doc_key,
+                        doc,
+                        cx,
+                    );
+                    true
+                };
+                if is_escape {
+                    if this.search_visible {
+                        this.close_search(window, cx);
+                        handled = true;
+                    }
+                    if this.view_model.inline_state().is_some()
+                        || this.view_model.editing_node_id().is_some()
+                    {
+                        this.view_model.clear_inline_edit();
+                        handled = true;
+                    }
+                } else if is_enter {
+                    let modifiers = event.keystroke.modifiers;
+                    let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+                    if this.view_model.inline_state().is_some() {
+                        this.view_model.commit_inline_edit(&this.state, cx);
+                        let committed = this.view_model.inline_state().is_none();
+                        if cmd_or_ctrl && committed {
+                            save_selected_document(this, cx);
+                        }
+                        handled = true;
+                    } else if cmd_or_ctrl {
+                        handled = save_selected_document(this, cx);
+                    } else if this.documents_focus.is_focused(window) {
+                        let Some(session_key) = this.view_model.current_session() else {
+                            return;
+                        };
+                        let selected_node = this
+                            .state
+                            .read(cx)
+                            .session(&session_key)
+                            .and_then(|session| session.view.selected_node_id.clone());
+                        if let Some(node_id) = selected_node {
+                            let node_meta = this.view_model.node_meta();
+                            if let Some(meta) = node_meta.get(&node_id) {
+                                if meta.is_editable {
+                                    this.view_model.begin_inline_edit(
+                                        node_id.clone(),
+                                        meta,
+                                        window,
+                                        &this.state,
+                                        cx,
+                                    );
+                                    handled = true;
+                                }
+                            }
+                        }
+                    }
                 }
                 if handled {
                     cx.notify();

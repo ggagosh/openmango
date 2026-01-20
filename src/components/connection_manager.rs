@@ -725,7 +725,6 @@ impl Render for ConnectionManager {
                                         let is_selected = Some(conn.id) == selected_id;
                                         let host = extract_host_from_uri(&conn.uri)
                                             .unwrap_or_else(|| "Unknown host".to_string());
-                                        let host_display = truncate_middle(&host, 40, 20, 14);
                                         let last_connected = conn
                                             .last_connected
                                             .map(|dt| dt.format("%Y-%m-%d").to_string())
@@ -773,7 +772,7 @@ impl Render for ConnectionManager {
                                                 div()
                                                     .text_xs()
                                                     .text_color(colors::text_secondary())
-                                                    .child(host_display),
+                                                    .child(host),
                                             )
                                             .child(
                                                 div()
@@ -1658,20 +1657,6 @@ fn bool_to_query(value: bool) -> Option<String> {
     } else {
         None
     }
-}
-
-fn truncate_middle(value: &str, max: usize, head: usize, tail: usize) -> String {
-    if value.len() <= max {
-        return value.to_string();
-    }
-    let head = head.min(value.len());
-    let tail = tail.min(value.len().saturating_sub(head));
-    if head == 0 || tail == 0 {
-        return value.chars().take(max).collect();
-    }
-    let start = &value[..head];
-    let end = &value[value.len().saturating_sub(tail)..];
-    format!("{start}…{end}")
 }
 
 fn value_or_none(state: &Entity<InputState>, cx: &mut Context<ConnectionManager>) -> Option<String> {

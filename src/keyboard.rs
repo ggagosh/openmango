@@ -1,6 +1,7 @@
 use gpui::{actions, App, KeyBinding};
 
 actions!(openmango, [
+    QuitApp,
     NewConnection,
     CreateDatabase,
     CreateCollection,
@@ -52,6 +53,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-tab", PrevTab, Some("Workspace")),
         KeyBinding::new("cmd-r", RefreshView, Some("Workspace")),
         KeyBinding::new("ctrl-r", RefreshView, Some("Workspace")),
+        KeyBinding::new("cmd-q", QuitApp, Some("Workspace")),
+        KeyBinding::new("ctrl-q", QuitApp, Some("Workspace")),
         KeyBinding::new("cmd-f", FindInResults, Some("Documents")),
         KeyBinding::new("ctrl-f", FindInResults, Some("Documents")),
         KeyBinding::new("escape", CloseSearch, Some("Documents")),
