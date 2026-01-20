@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-macOS"
+
+      - name: Disable lld linker flags for CI
+        run: rm -f .cargo/config.toml
+
+      - name: Check
+        run: cargo check --release --features mimalloc
+
+      - name: Clippy
+        run: cargo clippy --release --features mimalloc -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --check

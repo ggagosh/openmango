@@ -6,14 +6,30 @@ APP_NAME="OpenMango"
 BUNDLE_ID="com.openmango.app"
 VERSION="$(grep '^version = ' "$ROOT_DIR/Cargo.toml" | head -1 | cut -d '"' -f2)"
 
+# Accept target architecture as argument (e.g., aarch64-apple-darwin or x86_64-apple-darwin)
+TARGET="${1:-}"
+
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/${APP_NAME}.app"
-BIN_PATH="$ROOT_DIR/target/release/openmango"
 ICON_ICNS="$ROOT_DIR/assets/logo/openmango.icns"
 
 mkdir -p "$DIST_DIR"
 
-cargo build --release --features mimalloc
+if [[ -n "$TARGET" ]]; then
+    rustup target add "$TARGET"
+    cargo build --release --target "$TARGET" --features mimalloc
+    BIN_PATH="$ROOT_DIR/target/$TARGET/release/openmango"
+    # Determine suffix from target
+    case "$TARGET" in
+        aarch64-apple-darwin) ARCH_SUFFIX="macos-arm64" ;;
+        x86_64-apple-darwin)  ARCH_SUFFIX="macos-x86_64" ;;
+        *)                    ARCH_SUFFIX="macos" ;;
+    esac
+else
+    cargo build --release --features mimalloc
+    BIN_PATH="$ROOT_DIR/target/release/openmango"
+    ARCH_SUFFIX="macos"
+fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
@@ -71,7 +87,7 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     codesign --verify --deep --strict "$APP_DIR"
 fi
 
-ZIP_PATH="$DIST_DIR/${APP_NAME}-${VERSION}-macos.zip"
+ZIP_PATH="$DIST_DIR/${APP_NAME}-${VERSION}-${ARCH_SUFFIX}.zip"
 rm -f "$ZIP_PATH"
 
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"

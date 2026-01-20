@@ -1,9 +1,9 @@
-name: Release
+name: Nightly
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -66,14 +66,47 @@ jobs:
       - name: Build and package
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
           CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
         run: scripts/release_macos.sh ${{ matrix.target }}
 
-      - name: Upload release asset
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMango-nightly-${{ matrix.suffix }}
+          path: dist/OpenMango-*-${{ matrix.suffix }}.zip
+
+  release:
+    needs: macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.zip" -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Delete existing nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --repo ${{ github.repository }} --yes || true
+
+      - name: Create nightly release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/OpenMango-*-${{ matrix.suffix }}.zip
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          files: release/*.zip
+          body: |
+            Automated nightly build from main branch.
+
+            **Commit:** ${{ github.sha }}
+
+            > This is a development build and may be unstable.
