@@ -175,10 +175,11 @@ impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Read state for StatusBar props
         let state = self.state.read(cx);
-        let is_connected = state.conn.active.is_some();
-        let connection_name = state.conn.active.as_ref().map(|c| c.config.name.clone());
+        let active_conn = state.conn.selected_connection.and_then(|id| state.conn.active.get(&id));
+        let is_connected = active_conn.is_some();
+        let connection_name = active_conn.map(|c| c.config.name.clone());
         let status_message = state.status_message.clone();
-        let read_only = state.conn.active.as_ref().map(|c| c.config.read_only).unwrap_or(false);
+        let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
             state
@@ -264,8 +265,7 @@ impl Render for AppRoot {
                 );
             }))
             .on_action(cx.listener(|this, _: &DeleteConnection, window, cx| {
-                let connection_id =
-                    this.state.read(cx).conn.active.as_ref().map(|conn| conn.config.id);
+                let connection_id = this.state.read(cx).conn.selected_connection;
                 let Some(connection_id) = connection_id else {
                     return;
                 };
@@ -321,14 +321,25 @@ impl AppRoot {
     }
 
     fn handle_create_database(&mut self, window: &mut Window, cx: &mut App) {
-        if self.state.read(cx).conn.active.is_none() {
+        let state_ref = self.state.read(cx);
+        let Some(conn_id) = state_ref.conn.selected_connection else {
+            return;
+        };
+        if !state_ref.conn.active.contains_key(&conn_id) {
             return;
         }
         open_create_database_dialog(self.state.clone(), window, cx);
     }
 
     fn handle_create_collection(&mut self, window: &mut Window, cx: &mut App) {
-        let database = self.state.read(cx).conn.selected_database.clone();
+        let state_ref = self.state.read(cx);
+        let Some(conn_id) = state_ref.conn.selected_connection else {
+            return;
+        };
+        if !state_ref.conn.active.contains_key(&conn_id) {
+            return;
+        }
+        let database = state_ref.conn.selected_database.clone();
         let Some(database) = database else {
             return;
         };
@@ -407,8 +418,11 @@ impl AppRoot {
                 AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
             }
             View::Databases | View::Collections | View::Welcome => {
-                if self.state.read(cx).conn.active.is_some() {
-                    AppCommands::refresh_databases(self.state.clone(), cx);
+                let state_ref = self.state.read(cx);
+                if let Some(conn_id) = state_ref.conn.selected_connection
+                    && state_ref.conn.active.contains_key(&conn_id)
+                {
+                    AppCommands::refresh_databases(self.state.clone(), conn_id, cx);
                 }
             }
         }
@@ -493,7 +507,7 @@ impl Sidebar {
             let state_ref = state.read(cx);
             (state_ref.connections.clone(), state_ref.conn.active.clone())
         };
-        let entries = Self::build_entries(&connections, active.as_ref(), &HashSet::new());
+        let entries = Self::build_entries(&connections, &active, &HashSet::new());
 
         let mut subscriptions = vec![];
 
@@ -624,19 +638,18 @@ impl Sidebar {
 
         if self.selected_tree_id.is_none() {
             let state_ref = self.state.read(cx);
-            if let Some(active_conn) = active.as_ref()
+            if let Some(connection_id) = state_ref.conn.selected_connection
                 && let Some(db) = state_ref.conn.selected_database.as_ref()
             {
                 if let Some(col) = state_ref.conn.selected_collection.as_ref() {
-                    self.selected_tree_id =
-                        Some(TreeNodeId::collection(active_conn.config.id, db, col));
+                    self.selected_tree_id = Some(TreeNodeId::collection(connection_id, db, col));
                 } else {
-                    self.selected_tree_id = Some(TreeNodeId::database(active_conn.config.id, db));
+                    self.selected_tree_id = Some(TreeNodeId::database(connection_id, db));
                 }
             }
         }
 
-        self.entries = Self::build_entries(&connections, active.as_ref(), &self.expanded_nodes);
+        self.entries = Self::build_entries(&connections, &active, &self.expanded_nodes);
         if let Some(node_id) = &self.selected_tree_id
             && let Some(ix) = self.entries.iter().position(|entry| &entry.id == node_id)
         {
@@ -648,11 +661,11 @@ impl Sidebar {
     fn sync_selection_from_state(&mut self, cx: &mut Context<Self>) {
         let (connection_id, selected_db, selected_col) = {
             let state_ref = self.state.read(cx);
-            let Some(active) = state_ref.conn.active.as_ref() else {
+            let Some(connection_id) = state_ref.conn.selected_connection else {
                 return;
             };
             (
-                active.config.id,
+                connection_id,
                 state_ref.conn.selected_database.clone(),
                 state_ref.conn.selected_collection.clone(),
             )
@@ -688,7 +701,12 @@ impl Sidebar {
     fn restore_workspace_expansion(&mut self, cx: &mut Context<Self>) {
         let (connection_id, selected_db, expanded) = {
             let state_ref = self.state.read(cx);
-            let Some(active) = state_ref.conn.active.as_ref() else {
+            let Some(connection_id) =
+                state_ref.workspace.last_connection_id.or(state_ref.conn.selected_connection)
+            else {
+                return;
+            };
+            let Some(_active) = state_ref.conn.active.get(&connection_id) else {
                 return;
             };
             let mut expanded: HashSet<TreeNodeId> = state_ref
@@ -696,16 +714,16 @@ impl Sidebar {
                 .expanded_nodes
                 .iter()
                 .filter_map(|id| TreeNodeId::from_tree_id(id))
-                .filter(|node| node.connection_id() == active.config.id)
+                .filter(|node| node.connection_id() == connection_id)
                 .collect();
 
             let selected_db = state_ref.conn.selected_database.clone();
             if let Some(db) = selected_db.as_ref() {
-                expanded.insert(TreeNodeId::connection(active.config.id));
-                expanded.insert(TreeNodeId::database(active.config.id, db));
+                expanded.insert(TreeNodeId::connection(connection_id));
+                expanded.insert(TreeNodeId::database(connection_id, db));
             }
 
-            (active.config.id, selected_db, expanded)
+            (connection_id, selected_db, expanded)
         };
 
         self.expanded_nodes = expanded;
@@ -718,39 +736,35 @@ impl Sidebar {
     }
 
     fn load_expanded_databases(&mut self, cx: &mut Context<Self>) {
-        let (connection_id, collections) = {
-            let state_ref = self.state.read(cx);
-            let Some(conn) = state_ref.conn.active.as_ref() else {
-                return;
-            };
-            (conn.config.id, conn.collections.clone())
-        };
-
         for node in self.expanded_nodes.iter() {
             let TreeNodeId::Database { connection, database } = node else {
                 continue;
             };
-            if *connection != connection_id {
-                continue;
-            }
+            let collections = {
+                let state_ref = self.state.read(cx);
+                let Some(conn) = state_ref.conn.active.get(connection) else {
+                    continue;
+                };
+                conn.collections.clone()
+            };
             if collections.contains_key(database) || self.loading_databases.contains(node) {
                 continue;
             }
             self.loading_databases.insert(node.clone());
-            AppCommands::load_collections(self.state.clone(), database.clone(), cx);
+            AppCommands::load_collections(self.state.clone(), *connection, database.clone(), cx);
         }
     }
 
     fn build_entries(
         connections: &[SavedConnection],
-        active: Option<&ActiveConnection>,
+        active: &std::collections::HashMap<Uuid, ActiveConnection>,
         expanded: &HashSet<TreeNodeId>,
     ) -> Vec<SidebarEntry> {
         let mut items = Vec::new();
         for conn in connections {
             let conn_node_id = TreeNodeId::connection(conn.id);
             let conn_expanded = expanded.contains(&conn_node_id);
-            let active_conn = active.filter(|active_conn| active_conn.config.id == conn.id);
+            let active_conn = active.get(&conn.id);
             let conn_is_folder = active_conn.is_some();
             items.push(SidebarEntry {
                 id: conn_node_id,
@@ -804,13 +818,10 @@ impl Sidebar {
 
         if node_id.is_connection() {
             let connection_id = node_id.connection_id();
-            let is_connected = self
-                .state
-                .read(cx)
-                .conn
-                .active
-                .as_ref()
-                .is_some_and(|conn| conn.config.id == connection_id);
+            self.state.update(cx, |state, cx| {
+                state.select_connection(Some(connection_id), cx);
+            });
+            let is_connected = self.state.read(cx).conn.active.contains_key(&connection_id);
             let is_connecting = self.connecting_connection == Some(connection_id);
 
             if !is_connected && !is_connecting {
@@ -827,6 +838,7 @@ impl Sidebar {
                 return;
             };
             self.state.update(cx, |state, cx| {
+                state.select_connection(Some(node_id.connection_id()), cx);
                 state.select_database(db.clone(), cx);
             });
             let should_expand = !self.expanded_nodes.contains(&node_id);
@@ -841,12 +853,17 @@ impl Sidebar {
                     .read(cx)
                     .conn
                     .active
-                    .as_ref()
+                    .get(&node_id.connection_id())
                     .is_some_and(|conn| !conn.collections.contains_key(&db));
                 if should_load {
                     self.loading_databases.insert(node_id.clone());
                     cx.notify();
-                    AppCommands::load_collections(self.state.clone(), db, cx);
+                    AppCommands::load_collections(
+                        self.state.clone(),
+                        node_id.connection_id(),
+                        db,
+                        cx,
+                    );
                 }
             }
             return;
@@ -859,6 +876,7 @@ impl Sidebar {
             )
         {
             self.state.update(cx, |state, cx| {
+                state.select_connection(Some(node_id.connection_id()), cx);
                 state.select_collection(db, col, cx);
             });
         }
@@ -875,6 +893,7 @@ impl Sidebar {
             )
         {
             self.state.update(cx, |state, cx| {
+                state.select_connection(Some(node_id.connection_id()), cx);
                 state.preview_collection(db, col, cx);
             });
         }
@@ -891,15 +910,9 @@ impl Sidebar {
         let Some(TreeNodeId::Connection(connection_id)) = self.selected_tree_id.clone() else {
             return;
         };
-        let is_active = self
-            .state
-            .read(cx)
-            .conn
-            .active
-            .as_ref()
-            .is_some_and(|conn| conn.config.id == connection_id);
+        let is_active = self.state.read(cx).conn.active.contains_key(&connection_id);
         if is_active {
-            AppCommands::disconnect(self.state.clone(), cx);
+            AppCommands::disconnect(self.state.clone(), connection_id, cx);
         }
     }
 
@@ -1003,7 +1016,7 @@ impl Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state_ref = self.state.read(cx);
-        let active_id = state_ref.conn.active.as_ref().map(|c| c.config.id);
+        let active_connections = state_ref.conn.active.clone();
         let connecting_id = self.connecting_connection;
 
         let state = self.state.clone();
@@ -1133,7 +1146,7 @@ impl Render for Sidebar {
                                       _window,
                                       _cx| {
                                     let mut items = Vec::with_capacity(visible_range.len());
-                                    let active_id = active_id;
+                                    let active_connections = active_connections.clone();
                                     let connecting_id = connecting_id;
 
                                     for ix in visible_range {
@@ -1151,7 +1164,8 @@ impl Render for Sidebar {
                                         let is_collection = node_id.is_collection();
 
                                         let connection_id = node_id.connection_id();
-                                        let is_connected = is_connection && active_id == Some(connection_id);
+                                        let is_connected = is_connection
+                                            && active_connections.contains_key(&connection_id);
                                         let is_connecting =
                                             is_connection && connecting_id == Some(connection_id);
                                         let is_loading_db =
@@ -1187,6 +1201,13 @@ impl Render for Sidebar {
                                                       cx: &mut App| {
                                                     _window.blur();
                                                     cx.stop_propagation();
+
+                                                    state_clone.update(cx, |state, cx| {
+                                                        state.select_connection(
+                                                            Some(connection_id),
+                                                            cx,
+                                                        );
+                                                    });
 
                                                     let is_double_click =
                                                         sidebar_entity.update(cx, |sidebar, cx| {
@@ -1256,7 +1277,7 @@ impl Render for Sidebar {
                                                                 .read(cx)
                                                                 .conn
                                                                 .active
-                                                                .as_ref()
+                                                                .get(&connection_id)
                                                                 .is_some_and(|conn| {
                                                                     !conn
                                                                         .collections
@@ -1274,6 +1295,7 @@ impl Render for Sidebar {
                                                                 );
                                                                 AppCommands::load_collections(
                                                                     state_clone.clone(),
+                                                                    connection_id,
                                                                     db.clone(),
                                                                     cx,
                                                                 );
@@ -1467,8 +1489,7 @@ fn build_connection_menu(
     connecting_id: Option<Uuid>,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let is_connected =
-        state.read(cx).conn.active.as_ref().is_some_and(|conn| conn.config.id == connection_id);
+    let is_connected = state.read(cx).conn.active.contains_key(&connection_id);
     let is_connecting = connecting_id == Some(connection_id);
 
     menu = menu
@@ -1480,13 +1501,7 @@ fn build_connection_menu(
                     let state = state.clone();
                     let sidebar = sidebar.clone();
                     move |_, _window, cx| {
-                        if state
-                            .read(cx)
-                            .conn
-                            .active
-                            .as_ref()
-                            .is_some_and(|conn| conn.config.id == connection_id)
-                        {
+                        if state.read(cx).conn.active.contains_key(&connection_id) {
                             return;
                         }
 
@@ -1547,16 +1562,10 @@ fn build_connection_menu(
                 .on_click({
                     let state = state.clone();
                     move |_, _window, cx| {
-                        if state
-                            .read(cx)
-                            .conn
-                            .active
-                            .as_ref()
-                            .is_none_or(|conn| conn.config.id != connection_id)
-                        {
+                        if !state.read(cx).conn.active.contains_key(&connection_id) {
                             return;
                         }
-                        AppCommands::disconnect(state.clone(), cx);
+                        AppCommands::disconnect(state.clone(), connection_id, cx);
                     }
                 }),
         )
@@ -1567,7 +1576,7 @@ fn build_connection_menu(
                 .on_click({
                     let state = state.clone();
                     move |_, _window, cx| {
-                        AppCommands::refresh_databases(state.clone(), cx);
+                        AppCommands::refresh_databases(state.clone(), connection_id, cx);
                     }
                 }),
         )
@@ -1578,6 +1587,9 @@ fn build_connection_menu(
                 .on_click({
                     let state = state.clone();
                     move |_, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
                         open_create_database_dialog(state.clone(), window, cx);
                     }
                 }),
@@ -1625,8 +1637,10 @@ fn build_database_menu(
     menu = menu
         .item(PopupMenuItem::new("Select Database").action(Box::new(OpenSelection)).on_click({
             let state = state.clone();
+            let connection_id = node_id.connection_id();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
+                    state.select_connection(Some(connection_id), cx);
                     state.select_database(database_for_select.clone(), cx);
                 });
             }
@@ -1635,8 +1649,12 @@ fn build_database_menu(
             PopupMenuItem::new("Create Collection...").action(Box::new(CreateCollection)).on_click(
                 {
                     let state = state.clone();
+                    let connection_id = node_id.connection_id();
                     let database = database_for_create.clone();
                     move |_, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
                         open_create_collection_dialog(state.clone(), database.clone(), window, cx);
                     }
                 },
@@ -1650,6 +1668,7 @@ fn build_database_menu(
                     let state = state.clone();
                     let sidebar = sidebar.clone();
                     let node_id = node_id.clone();
+                    let connection_id = node_id.connection_id();
                     move |_, _window, cx| {
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.loading_databases.insert(node_id.clone());
@@ -1657,6 +1676,7 @@ fn build_database_menu(
                         });
                         AppCommands::load_collections(
                             state.clone(),
+                            connection_id,
                             database_for_refresh.clone(),
                             cx,
                         );
@@ -1665,6 +1685,7 @@ fn build_database_menu(
         )
         .item(PopupMenuItem::new("Drop Database...").action(Box::new(DeleteSelection)).on_click({
             let state = state.clone();
+            let connection_id = node_id.connection_id();
             let database = database_for_drop.clone();
             move |_, window, cx| {
                 let message = format!("Drop database \"{database}\"? This cannot be undone.");
@@ -1672,6 +1693,9 @@ fn build_database_menu(
                     let state = state.clone();
                     let database = database.clone();
                     move |_window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
                         AppCommands::drop_database(state.clone(), database.clone(), cx);
                     }
                 });
@@ -1707,6 +1731,7 @@ fn build_collection_menu(
             let state = state.clone();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
+                    state.select_connection(Some(connection_id), cx);
                     state.select_collection(
                         database_for_open.clone(),
                         collection_for_open.clone(),
@@ -1719,6 +1744,7 @@ fn build_collection_menu(
             let state = state.clone();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
+                    state.select_connection(Some(connection_id), cx);
                     state.preview_collection(
                         database_for_preview.clone(),
                         collection_for_preview.clone(),
@@ -1740,6 +1766,9 @@ fn build_collection_menu(
                     let database = database.clone();
                     let collection = collection.clone();
                     move |_, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
                         open_rename_collection_dialog(
                             state.clone(),
                             database.clone(),
@@ -1765,6 +1794,9 @@ fn build_collection_menu(
                         let database = database.clone();
                         let collection = collection.clone();
                         move |_window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.select_connection(Some(connection_id), cx);
+                            });
                             AppCommands::drop_collection(
                                 state.clone(),
                                 database.clone(),

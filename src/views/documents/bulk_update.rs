@@ -297,7 +297,7 @@ impl BulkUpdateDialog {
     }
 
     fn is_read_only(&self, cx: &mut Context<Self>) -> bool {
-        self.state.read(cx).conn.active.as_ref().map(|conn| conn.config.read_only).unwrap_or(false)
+        self.state.read(cx).active_connection().map(|conn| conn.config.read_only).unwrap_or(false)
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {

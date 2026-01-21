@@ -67,10 +67,13 @@ impl AppState {
         mode: TabOpenMode,
         cx: &mut Context<Self>,
     ) {
-        let Some(active) = &self.conn.active else {
+        let Some(conn_id) = self.conn.selected_connection else {
             return;
         };
-        let new_tab = SessionKey::new(active.config.id, database.clone(), collection.clone());
+        if !self.conn.active.contains_key(&conn_id) {
+            return;
+        }
+        let new_tab = SessionKey::new(conn_id, database.clone(), collection.clone());
         let existing_index =
             self.tabs.open.iter().position(|tab| matches_collection(tab, &new_tab));
         let selection_changed = self.conn.selected_database.as_ref() != Some(&database)
@@ -98,6 +101,7 @@ impl AppState {
                     tab_changed = true;
                 }
 
+                self.set_selected_connection_internal(conn_id);
                 self.conn.selected_database = Some(database);
                 self.conn.selected_collection = Some(collection);
                 self.current_view = View::Documents;
@@ -114,6 +118,7 @@ impl AppState {
                         tab_changed = true;
                     }
 
+                    self.set_selected_connection_internal(conn_id);
                     self.conn.selected_database = Some(database);
                     self.conn.selected_collection = Some(collection);
                     self.current_view = View::Documents;
@@ -138,6 +143,7 @@ impl AppState {
                         tab_changed = true;
                     }
 
+                    self.set_selected_connection_internal(conn_id);
                     self.conn.selected_database = Some(database);
                     self.conn.selected_collection = Some(collection);
                     self.current_view = View::Documents;
@@ -154,10 +160,13 @@ impl AppState {
     }
 
     pub(super) fn open_database_tab(&mut self, database: String, cx: &mut Context<Self>) {
-        let Some(active) = &self.conn.active else {
+        let Some(conn_id) = self.conn.selected_connection else {
             return;
         };
-        let key = DatabaseKey::new(active.config.id, database.clone());
+        if !self.conn.active.contains_key(&conn_id) {
+            return;
+        }
+        let key = DatabaseKey::new(conn_id, database.clone());
         let database_indices: Vec<usize> = self
             .tabs
             .open
@@ -202,6 +211,7 @@ impl AppState {
             tab_changed = true;
         }
 
+        self.set_selected_connection_internal(conn_id);
         self.conn.selected_database = Some(database);
         self.conn.selected_collection = None;
         self.current_view = View::Database;
@@ -216,12 +226,18 @@ impl AppState {
     }
 
     pub(super) fn close_database_tabs(&mut self, cx: &mut Context<Self>) {
+        let Some(conn_id) = self.conn.selected_connection else {
+            return;
+        };
         let indices: Vec<usize> = self
             .tabs
             .open
             .iter()
             .enumerate()
-            .filter(|(_, tab)| matches!(tab, TabKey::Database(_)))
+            .filter(|(_, tab)| match tab {
+                TabKey::Database(tab) => tab.connection_id == conn_id,
+                _ => false,
+            })
             .map(|(idx, _)| idx)
             .collect();
         for index in indices.into_iter().rev() {
@@ -234,6 +250,7 @@ impl AppState {
             return;
         };
         self.set_active_preview();
+        self.set_selected_connection_internal(tab.connection_id);
         self.conn.selected_database = Some(tab.database.clone());
         self.conn.selected_collection = Some(tab.collection.clone());
         self.current_view = View::Documents;
@@ -250,12 +267,14 @@ impl AppState {
         self.set_active_index(index);
         match tab {
             TabKey::Collection(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
                 self.conn.selected_collection = Some(tab.collection.clone());
                 self.current_view = View::Documents;
                 self.ensure_session_loaded(tab);
             }
             TabKey::Database(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
                 self.conn.selected_collection = None;
                 self.current_view = View::Database;
@@ -348,6 +367,7 @@ impl AppState {
             if self.tabs.open.is_empty() && self.tabs.preview.is_some() {
                 self.set_active_preview();
                 let tab = self.tabs.preview.clone().unwrap();
+                self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
                 self.conn.selected_collection = Some(tab.collection.clone());
                 self.current_view = View::Documents;
@@ -359,12 +379,14 @@ impl AppState {
                 self.set_active_index(next_index);
                 match tab {
                     TabKey::Collection(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
                         self.conn.selected_database = Some(tab.database.clone());
                         self.conn.selected_collection = Some(tab.collection.clone());
                         self.current_view = View::Documents;
                         self.ensure_session_loaded(tab);
                     }
                     TabKey::Database(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
                         self.conn.selected_database = Some(tab.database.clone());
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
@@ -395,12 +417,14 @@ impl AppState {
                 if let Some(tab) = self.tabs.open.get(index).cloned() {
                     match tab {
                         TabKey::Collection(tab) => {
+                            self.set_selected_connection_internal(tab.connection_id);
                             self.conn.selected_database = Some(tab.database.clone());
                             self.conn.selected_collection = Some(tab.collection.clone());
                             self.current_view = View::Documents;
                             self.ensure_session_loaded(tab);
                         }
                         TabKey::Database(tab) => {
+                            self.set_selected_connection_internal(tab.connection_id);
                             self.conn.selected_database = Some(tab.database.clone());
                             self.conn.selected_collection = None;
                             self.current_view = View::Database;
@@ -414,12 +438,14 @@ impl AppState {
                 self.set_active_index(0);
                 match tab {
                     TabKey::Collection(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
                         self.conn.selected_database = Some(tab.database.clone());
                         self.conn.selected_collection = Some(tab.collection.clone());
                         self.current_view = View::Documents;
                         self.ensure_session_loaded(tab);
                     }
                     TabKey::Database(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
                         self.conn.selected_database = Some(tab.database.clone());
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
@@ -445,6 +471,7 @@ impl AppState {
 
     pub fn close_tabs_for_collection(
         &mut self,
+        connection_id: Uuid,
         database: &str,
         collection: &str,
         cx: &mut Context<Self>,
@@ -455,7 +482,13 @@ impl AppState {
             .iter()
             .enumerate()
             .filter(|(_, tab)| {
-                matches!(tab, TabKey::Collection(tab) if tab.database == database && tab.collection == collection)
+                matches!(
+                    tab,
+                    TabKey::Collection(tab)
+                        if tab.connection_id == connection_id
+                            && tab.database == database
+                            && tab.collection == collection
+                )
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -464,6 +497,7 @@ impl AppState {
         }
 
         if let Some(tab) = self.tabs.preview.clone()
+            && tab.connection_id == connection_id
             && tab.database == database
             && tab.collection == collection
         {
@@ -471,15 +505,24 @@ impl AppState {
         }
     }
 
-    pub fn close_tabs_for_database(&mut self, database: &str, cx: &mut Context<Self>) {
+    pub fn close_tabs_for_database(
+        &mut self,
+        connection_id: Uuid,
+        database: &str,
+        cx: &mut Context<Self>,
+    ) {
         let indices: Vec<usize> = self
             .tabs
             .open
             .iter()
             .enumerate()
             .filter(|(_, tab)| match tab {
-                TabKey::Collection(tab) => tab.database == database,
-                TabKey::Database(tab) => tab.database == database,
+                TabKey::Collection(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
+                TabKey::Database(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -488,6 +531,7 @@ impl AppState {
         }
 
         if let Some(tab) = self.tabs.preview.clone()
+            && tab.connection_id == connection_id
             && tab.database == database
         {
             self.close_preview_tab(cx);

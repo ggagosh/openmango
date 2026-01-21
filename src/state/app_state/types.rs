@@ -90,11 +90,15 @@ pub enum TabKey {
 #[derive(Default)]
 pub struct ConnectionState {
     /// Currently active MongoDB connection
-    pub active: Option<ActiveConnection>,
+    pub active: HashMap<Uuid, ActiveConnection>,
+    /// Currently selected connection ID
+    pub selected_connection: Option<Uuid>,
     /// Currently selected database name
     pub selected_database: Option<String>,
     /// Currently selected collection name
     pub selected_collection: Option<String>,
+    /// Remembered selection per connection (db, collection)
+    pub selection_cache: HashMap<Uuid, (Option<String>, Option<String>)>,
 }
 
 /// Tab management state

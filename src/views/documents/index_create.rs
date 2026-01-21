@@ -463,7 +463,8 @@ impl IndexCreateDialog {
     fn load_sample_fields(&mut self, cx: &mut Context<Self>) {
         let (client, database, collection) = {
             let state_ref = self.state.read(cx);
-            let Some(conn) = &state_ref.conn.active else {
+            let conn_id = self.session_key.connection_id;
+            let Some(conn) = state_ref.conn.active.get(&conn_id) else {
                 self.sample_status = SampleStatus::Error("No active connection".to_string());
                 return;
             };

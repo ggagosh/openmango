@@ -11,16 +11,105 @@ use crate::state::events::AppEvent;
 use uuid::Uuid;
 
 impl AppState {
-    /// Reset all runtime state (used on connect/disconnect)
-    pub(crate) fn reset_runtime_state(&mut self) {
-        self.conn.selected_database = None;
-        self.conn.selected_collection = None;
-        self.tabs.open.clear();
-        self.tabs.active = ActiveTab::None;
-        self.tabs.preview = None;
-        self.tabs.dirty.clear();
-        self.sessions.clear();
-        self.db_sessions.clear();
+    pub(crate) fn set_selected_connection_internal(&mut self, connection_id: Uuid) {
+        if self.conn.selected_connection == Some(connection_id) {
+            return;
+        }
+        if let Some(current) = self.conn.selected_connection {
+            self.conn.selection_cache.insert(
+                current,
+                (self.conn.selected_database.clone(), self.conn.selected_collection.clone()),
+            );
+        }
+        self.conn.selected_connection = Some(connection_id);
+    }
+    pub fn active_connection(&self) -> Option<&crate::models::ActiveConnection> {
+        let selected = self.conn.selected_connection?;
+        self.conn.active.get(&selected)
+    }
+
+    pub fn select_connection(&mut self, connection_id: Option<Uuid>, cx: &mut Context<Self>) {
+        if self.conn.selected_connection == connection_id {
+            return;
+        }
+
+        if let Some(current) = self.conn.selected_connection {
+            self.conn.selection_cache.insert(
+                current,
+                (self.conn.selected_database.clone(), self.conn.selected_collection.clone()),
+            );
+        }
+
+        self.conn.selected_connection = connection_id;
+        if let Some(next) = connection_id {
+            if let Some((db, col)) = self.conn.selection_cache.get(&next).cloned() {
+                self.conn.selected_database = db;
+                self.conn.selected_collection = col;
+            } else {
+                self.conn.selected_database = None;
+                self.conn.selected_collection = None;
+            }
+        } else {
+            self.conn.selected_database = None;
+            self.conn.selected_collection = None;
+        }
+
+        self.current_view = if let Some(conn_id) = connection_id {
+            if self.conn.active.contains_key(&conn_id) {
+                if self.conn.selected_collection.is_some() {
+                    View::Documents
+                } else if self.conn.selected_database.is_some() {
+                    View::Collections
+                } else {
+                    View::Databases
+                }
+            } else {
+                View::Welcome
+            }
+        } else {
+            View::Welcome
+        };
+
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    pub(crate) fn reset_connection_runtime_state(
+        &mut self,
+        connection_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        let indices: Vec<usize> = self
+            .tabs
+            .open
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| match tab {
+                super::types::TabKey::Collection(tab) => tab.connection_id == connection_id,
+                super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        for index in indices.into_iter().rev() {
+            self.close_tab(index, cx);
+        }
+
+        if let Some(tab) = self.tabs.preview.clone()
+            && tab.connection_id == connection_id
+        {
+            self.close_preview_tab(cx);
+        }
+
+        self.tabs.dirty.retain(|key| key.connection_id != connection_id);
+        self.sessions.remove_connection(connection_id);
+        self.db_sessions.remove_connection(connection_id);
+
+        if self.conn.selected_connection == Some(connection_id) {
+            self.conn.selected_connection = None;
+            self.conn.selected_database = None;
+            self.conn.selected_collection = None;
+        }
     }
 
     /// Add a new connection and persist to disk
@@ -47,18 +136,18 @@ impl AppState {
             return;
         }
 
-        if let Some(active) = self.conn.active.as_mut()
-            && active.config.id == connection.id
-        {
+        if let Some(active) = self.conn.active.get_mut(&connection.id) {
             active.config = connection.clone();
             if uri_changed {
-                self.conn.active = None;
-                self.reset_runtime_state();
-                self.current_view = View::Welcome;
+                self.conn.active.remove(&connection.id);
+                self.reset_connection_runtime_state(connection.id, cx);
+                if self.conn.selected_connection == Some(connection.id) {
+                    self.current_view = View::Welcome;
+                    cx.emit(AppEvent::ViewChanged);
+                }
                 let event = AppEvent::Disconnected(connection.id);
                 self.update_status_from_event(&event);
                 cx.emit(event);
-                cx.emit(AppEvent::ViewChanged);
             }
         }
 
@@ -71,8 +160,7 @@ impl AppState {
     }
 
     pub fn remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
-        let was_active =
-            self.conn.active.as_ref().is_some_and(|conn| conn.config.id == connection_id);
+        let was_active = self.conn.active.contains_key(&connection_id);
 
         self.connections.retain(|conn| conn.id != connection_id);
         self.save_connections();
@@ -90,13 +178,15 @@ impl AppState {
         self.set_workspace_expanded_nodes(expanded);
 
         if was_active {
-            self.conn.active = None;
-            self.reset_runtime_state();
-            self.current_view = View::Welcome;
+            self.conn.active.remove(&connection_id);
+            self.reset_connection_runtime_state(connection_id, cx);
+            if self.conn.selected_connection == Some(connection_id) {
+                self.current_view = View::Welcome;
+                cx.emit(AppEvent::ViewChanged);
+            }
             let event = AppEvent::Disconnected(connection_id);
             self.update_status_from_event(&event);
             cx.emit(event);
-            cx.emit(AppEvent::ViewChanged);
         }
 
         let event = AppEvent::ConnectionRemoved;

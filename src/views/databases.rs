@@ -142,6 +142,7 @@ impl Render for DatabaseView {
                 collections_loading,
                 collections_error,
                 database_name,
+                database_key.clone(),
                 state.clone(),
             ));
 
@@ -242,6 +243,7 @@ impl DatabaseView {
         collections_loading: bool,
         collections_error: Option<String>,
         database_name: String,
+        database_key: Option<crate::state::DatabaseKey>,
         state: Entity<AppState>,
     ) -> AnyElement {
         let mut section = div()
@@ -293,20 +295,17 @@ impl DatabaseView {
                                 .label("Retry")
                                 .on_click({
                                     let state = state.clone();
-                                    let database_name = database_name.clone();
+                                    let database_key = database_key.clone();
                                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        if let Some(active) = state.read(cx).conn.active.as_ref() {
-                                            let key = crate::state::DatabaseKey::new(
-                                                active.config.id,
-                                                database_name.clone(),
-                                            );
-                                            AppCommands::load_database_overview(
-                                                state.clone(),
-                                                key,
-                                                true,
-                                                cx,
-                                            );
-                                        }
+                                        let Some(key) = database_key.clone() else {
+                                            return;
+                                        };
+                                        AppCommands::load_database_overview(
+                                            state.clone(),
+                                            key,
+                                            true,
+                                            cx,
+                                        );
                                     }
                                 }),
                         ),

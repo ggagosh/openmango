@@ -381,6 +381,20 @@ impl CollectionView {
         let state_for_subview = self.state.clone();
         let state_for_stats_refresh = self.state.clone();
         let state_for_indexes_refresh = self.state.clone();
+        let connection_name = {
+            let state_ref = self.state.read(cx);
+            state_ref
+                .conn
+                .selected_connection
+                .and_then(|id| {
+                    state_ref
+                        .connections
+                        .iter()
+                        .find(|conn| conn.id == id)
+                        .map(|conn| conn.name.clone())
+                })
+                .unwrap_or_else(|| "Connection".to_string())
+        };
 
         let options_label =
             if sort_active || projection_active { "Options •" } else { "Options" };
@@ -394,12 +408,9 @@ impl CollectionView {
         let is_documents = active_subview == CollectionSubview::Documents;
         let is_indexes = active_subview == CollectionSubview::Indexes;
         let is_stats = active_subview == CollectionSubview::Stats;
+        let breadcrumb = format!("{connection_name} / {db_name} / {collection_name}");
 
-        let mut action_row = div()
-            .flex()
-            .items_center()
-            .gap(spacing::sm())
-            .child(div().text_xs().text_color(colors::text_muted()).child(db_name.to_string()));
+        let mut action_row = div().flex().items_center().gap(spacing::sm());
 
         if is_documents {
             action_row = action_row
@@ -823,29 +834,44 @@ impl CollectionView {
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap(spacing::sm())
+                            .flex_col()
+                            .gap(spacing::xs())
+                            .flex_1()
+                            .min_w(px(0.0))
                             .child(
-                                Icon::new(IconName::Folder)
-                                    .small()
-                                    .text_color(colors::accent_green()),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(
+                                        Icon::new(IconName::Folder)
+                                            .small()
+                                            .text_color(colors::accent_green()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(colors::text_primary())
+                                            .font_family(crate::theme::fonts::heading())
+                                            .child(collection_name.to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(colors::text_muted())
+                                            .child(format!("({} docs)", format_number(total))),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(colors::text_primary())
-                                    .font_family(crate::theme::fonts::heading())
-                                    .child(collection_name.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
+                                    .text_xs()
                                     .text_color(colors::text_muted())
-                                    .child(format!("({} docs)", format_number(total))),
+                                    .truncate()
+                                    .child(breadcrumb),
                             ),
                     )
-                    .child(action_row),
+                    .child(action_row.flex_shrink_0()),
             )
             .child(div().pl(spacing::xs()).child(subview_tabs));
 

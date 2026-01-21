@@ -16,10 +16,6 @@ impl DatabaseSessionStore {
         Self::default()
     }
 
-    pub fn clear(&mut self) {
-        self.sessions.clear();
-    }
-
     pub fn get(&self, key: &DatabaseKey) -> Option<&DatabaseSessionState> {
         self.sessions.get(key)
     }
@@ -34,14 +30,21 @@ impl DatabaseSessionStore {
     pub fn remove(&mut self, key: &DatabaseKey) -> Option<DatabaseSessionState> {
         self.sessions.remove(key)
     }
+
+    pub fn remove_connection(&mut self, connection_id: Uuid) {
+        self.sessions.retain(|key, _| key.connection_id != connection_id);
+    }
 }
 
 impl AppState {
     /// Build a database key for the current connection + database selection.
     pub fn current_database_key(&self) -> Option<DatabaseKey> {
-        let conn = self.conn.active.as_ref()?;
+        let conn_id = self.conn.selected_connection?;
+        if !self.conn.active.contains_key(&conn_id) {
+            return None;
+        }
         let db = self.conn.selected_database.as_ref()?;
-        Some(DatabaseKey::new(conn.config.id, db))
+        Some(DatabaseKey::new(conn_id, db))
     }
 
     pub fn database_session(&self, key: &DatabaseKey) -> Option<&DatabaseSessionState> {

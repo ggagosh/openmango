@@ -19,10 +19,6 @@ impl SessionStore {
         Self::default()
     }
 
-    pub fn clear(&mut self) {
-        self.sessions.clear();
-    }
-
     pub fn get(&self, key: &SessionKey) -> Option<&SessionState> {
         self.sessions.get(key)
     }
@@ -40,6 +36,10 @@ impl SessionStore {
 
     pub fn remove(&mut self, key: &SessionKey) -> Option<SessionState> {
         self.sessions.remove(key)
+    }
+
+    pub fn remove_connection(&mut self, connection_id: Uuid) {
+        self.sessions.retain(|key, _| key.connection_id != connection_id);
     }
 
     pub fn rename_collection(&mut self, connection_id: Uuid, database: &str, from: &str, to: &str) {
@@ -67,10 +67,13 @@ impl SessionStore {
 impl AppState {
     /// Build a session key for the current connection + collection selection.
     pub fn current_session_key(&self) -> Option<SessionKey> {
-        let conn = self.conn.active.as_ref()?;
+        let conn_id = self.conn.selected_connection?;
+        if !self.conn.active.contains_key(&conn_id) {
+            return None;
+        }
         let db = self.conn.selected_database.as_ref()?;
         let col = self.conn.selected_collection.as_ref()?;
-        Some(SessionKey::new(conn.config.id, db, col))
+        Some(SessionKey::new(conn_id, db, col))
     }
 
     /// Get an immutable reference to a session.

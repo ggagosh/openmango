@@ -33,24 +33,35 @@ impl AppState {
         if self.workspace_restore_pending {
             return;
         }
-        let last_connection_id = self
-            .conn
-            .active
-            .as_ref()
-            .map(|conn| conn.config.id)
-            .or(self.workspace.last_connection_id);
+        let last_connection_id =
+            self.conn.selected_connection.or(self.workspace.last_connection_id);
         self.workspace.last_connection_id = last_connection_id;
 
+        let selected_connection = self.conn.selected_connection;
         let active_index = match self.tabs.active {
             ActiveTab::Index(index) if index < self.tabs.open.len() => Some(index),
             _ => None,
         };
 
-        self.workspace.active_tab = active_index;
+        self.workspace.active_tab = active_index
+            .and_then(|index| self.tabs.open.get(index))
+            .filter(|tab| match (selected_connection, tab) {
+                (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
+                (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+                _ => false,
+            })
+            .and_then(|tab| {
+                self.tabs.open.iter().position(|candidate| std::ptr::eq(candidate, tab))
+            });
         self.workspace.open_tabs = self
             .tabs
             .open
             .iter()
+            .filter(|tab| match (selected_connection, tab) {
+                (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
+                (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+                _ => false,
+            })
             .map(|tab| match tab {
                 TabKey::Collection(key) => {
                     let (filter_raw, sort_raw, projection_raw, subview, stats_open) = self
@@ -97,7 +108,7 @@ impl AppState {
             })
             .collect();
 
-        if let Some(index) = active_index
+        if let Some(index) = self.workspace.active_tab
             && let Some(tab) = self.tabs.open.get(index)
         {
             match tab {
@@ -122,13 +133,12 @@ impl AppState {
         if !self.workspace_restore_pending {
             return;
         }
-        let Some(active) = self.conn.active.as_ref() else {
+        let Some(connection_id) = self.workspace.last_connection_id else {
             return;
         };
-        if self.workspace.last_connection_id != Some(active.config.id) {
-            self.workspace_restore_pending = false;
+        let Some(active) = self.conn.active.get(&connection_id) else {
             return;
-        }
+        };
 
         let databases = active.databases.clone();
         let workspace_tabs = self.workspace.open_tabs.clone();
@@ -142,7 +152,7 @@ impl AppState {
                     }
                     if databases.contains(&tab.database) {
                         let key = SessionKey::new(
-                            active.config.id,
+                            connection_id,
                             tab.database.clone(),
                             tab.collection.clone(),
                         );
@@ -152,7 +162,7 @@ impl AppState {
                 }
                 WorkspaceTabKind::Database => {
                     if databases.contains(&tab.database) {
-                        let key = DatabaseKey::new(active.config.id, tab.database.clone());
+                        let key = DatabaseKey::new(connection_id, tab.database.clone());
                         restored_tabs.push(TabKey::Database(key));
                     }
                 }
@@ -205,11 +215,13 @@ impl AppState {
             if let Some(tab) = self.tabs.open.get(active_index).cloned() {
                 match tab {
                     TabKey::Collection(key) => {
+                        self.conn.selected_connection = Some(connection_id);
                         self.conn.selected_database = Some(key.database.clone());
                         self.conn.selected_collection = Some(key.collection.clone());
                         self.current_view = View::Documents;
                     }
                     TabKey::Database(key) => {
+                        self.conn.selected_connection = Some(connection_id);
                         self.conn.selected_database = Some(key.database.clone());
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
@@ -218,6 +230,7 @@ impl AppState {
             }
         } else if let Some(selected_db) = self.workspace.selected_database.clone() {
             if databases.contains(&selected_db) {
+                self.conn.selected_connection = Some(connection_id);
                 self.conn.selected_database = Some(selected_db);
                 self.conn.selected_collection = self.workspace.selected_collection.clone();
                 self.current_view = if self.conn.selected_collection.is_some() {

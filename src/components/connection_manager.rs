@@ -604,8 +604,8 @@ impl Render for ConnectionManager {
         };
 
         let selected_id = self.selected_id;
-        let active_id = self.state.read(cx).conn.active.as_ref().map(|conn| conn.config.id);
-        let is_active_selection = selected_id.is_some_and(|id| Some(id) == active_id);
+        let is_active_selection =
+            selected_id.is_some_and(|id| self.state.read(cx).conn.active.contains_key(&id));
 
         let list = div()
             .flex()
@@ -801,16 +801,11 @@ impl Render for ConnectionManager {
                         move |_, window, cx| {
                             let mut reconnect_id = None;
                             view.update(cx, |this, cx| {
-                                let active_id = this
-                                    .state
-                                    .read(cx)
-                                    .conn
-                                    .active
-                                    .as_ref()
-                                    .map(|conn| conn.config.id);
                                 let saved_id = this.save_connection(window, cx);
-                                if saved_id.is_some_and(|id| Some(id) == active_id) {
-                                    reconnect_id = saved_id;
+                                if let Some(saved_id) = saved_id
+                                    && this.state.read(cx).conn.active.contains_key(&saved_id)
+                                {
+                                    reconnect_id = Some(saved_id);
                                 }
                             });
                             if let Some(connection_id) = reconnect_id {

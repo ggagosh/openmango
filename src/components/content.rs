@@ -70,7 +70,7 @@ impl Render for ContentArea {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state_ref = self.state.read(cx);
         let has_collection = state_ref.conn.selected_collection.is_some();
-        let has_connection = state_ref.conn.active.is_some();
+        let has_connection = !state_ref.conn.active.is_empty();
         let selected_db = state_ref.conn.selected_database.clone();
         let tabs: Vec<TabKey> = state_ref.tabs.open.clone();
         let active_tab = state_ref.tabs.active;

@@ -20,9 +20,15 @@ use crate::state::{
 pub struct AppCommands;
 
 impl AppCommands {
-    fn ensure_writable(state: &Entity<AppState>, cx: &mut App) -> bool {
-        let read_only =
-            state.read(cx).conn.active.as_ref().map(|conn| conn.config.read_only).unwrap_or(false);
+    fn ensure_writable(
+        state: &Entity<AppState>,
+        connection_id: Option<Uuid>,
+        cx: &mut App,
+    ) -> bool {
+        let read_only = connection_id
+            .and_then(|id| state.read(cx).conn.active.get(&id))
+            .map(|conn| conn.config.read_only)
+            .unwrap_or(false);
         if read_only {
             state.update(cx, |state, cx| {
                 state.status_message =
@@ -83,15 +89,17 @@ impl AppCommands {
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
                             saved.last_connected = Some(Utc::now());
-                            state.conn.active = Some(ActiveConnection {
-                                config: saved.clone(),
-                                client,
-                                databases: databases.clone(),
-                                collections: std::collections::HashMap::new(),
-                            });
+                            state.conn.active.insert(
+                                connection_id,
+                                ActiveConnection {
+                                    config: saved.clone(),
+                                    client,
+                                    databases: databases.clone(),
+                                    collections: std::collections::HashMap::new(),
+                                },
+                            );
                             state.update_connection(saved, cx);
-                            state.reset_runtime_state();
-                            state.current_view = View::Databases;
+                            state.select_connection(Some(connection_id), cx);
                             state.update_workspace_from_state();
                             let connected = AppEvent::Connected(connection_id);
                             state.update_status_from_event(&connected);
@@ -117,18 +125,18 @@ impl AppCommands {
         .detach();
     }
 
-    /// Disconnect the active connection and reset runtime state.
-    pub fn disconnect(state: Entity<AppState>, cx: &mut App) {
-        let connection_id = state.read(cx).conn.active.as_ref().map(|conn| conn.config.id);
-
-        let Some(connection_id) = connection_id else {
+    /// Disconnect a connection and reset its runtime state.
+    pub fn disconnect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
+        if !state.read(cx).conn.active.contains_key(&connection_id) {
             return;
-        };
+        }
 
         state.update(cx, |state, cx| {
-            state.conn.active = None;
-            state.reset_runtime_state();
-            state.current_view = View::Welcome;
+            state.conn.active.remove(&connection_id);
+            state.reset_connection_runtime_state(connection_id, cx);
+            if state.conn.selected_connection == Some(connection_id) {
+                state.current_view = View::Welcome;
+            }
             state.update_workspace_from_state();
             let event = AppEvent::Disconnected(connection_id);
             state.update_status_from_event(&event);
@@ -138,14 +146,14 @@ impl AppCommands {
         });
     }
 
-    /// Refresh databases for the active connection.
-    pub fn refresh_databases(state: Entity<AppState>, cx: &mut App) {
-        let (client, connection_id) = {
+    /// Refresh databases for the selected connection.
+    pub fn refresh_databases(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
+        let client = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&connection_id) else {
                 return;
             };
-            (conn.client.clone(), conn.config.id)
+            conn.client.clone()
         };
 
         let task = cx.background_spawn(async move {
@@ -161,12 +169,9 @@ impl AppCommands {
                     Ok(databases) => {
                         state.update(cx, |state, cx| {
                             let removed = {
-                                let Some(conn) = state.conn.active.as_mut() else {
+                                let Some(conn) = state.conn.active.get_mut(&connection_id) else {
                                     return;
                                 };
-                                if conn.config.id != connection_id {
-                                    return;
-                                }
 
                                 let removed: Vec<String> = conn
                                     .databases
@@ -181,14 +186,15 @@ impl AppCommands {
                             };
 
                             for db in &removed {
-                                state.close_tabs_for_database(db, cx);
+                                state.close_tabs_for_database(connection_id, db, cx);
                             }
 
-                            if state
-                                .conn
-                                .selected_database
-                                .as_ref()
-                                .is_some_and(|selected| !databases.contains(selected))
+                            if state.conn.selected_connection == Some(connection_id)
+                                && state
+                                    .conn
+                                    .selected_database
+                                    .as_ref()
+                                    .is_some_and(|selected| !databases.contains(selected))
                             {
                                 state.conn.selected_database = None;
                                 state.conn.selected_collection = None;
@@ -224,12 +230,16 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        let connection_id = state.read(cx).conn.selected_connection;
+        if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
         let client = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn_id) = connection_id else {
+                return;
+            };
+            let Some(conn) = state.conn.active.get(&conn_id) else {
                 return;
             };
             conn.client.clone()
@@ -253,7 +263,10 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let Some(conn) = state.conn.active.as_mut() else {
+                            let Some(conn_id) = connection_id else {
+                                return;
+                            };
+                            let Some(conn) = state.conn.active.get_mut(&conn_id) else {
                                 return;
                             };
                             if !conn.databases.contains(&database) {
@@ -268,8 +281,10 @@ impl AppCommands {
                             state.status_message = Some(StatusMessage::info(format!(
                                 "Created collection {database}.{collection}"
                             )));
-                            cx.emit(AppEvent::DatabasesLoaded(conn.databases.clone()));
-                            cx.emit(AppEvent::CollectionsLoaded(entry.clone()));
+                            if state.conn.selected_connection == Some(conn_id) {
+                                cx.emit(AppEvent::DatabasesLoaded(conn.databases.clone()));
+                                cx.emit(AppEvent::CollectionsLoaded(entry.clone()));
+                            }
                             cx.notify();
                         });
                     }
@@ -295,7 +310,8 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        let connection_id = state.read(cx).conn.selected_connection;
+        if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
         Self::create_collection(state, database, collection, cx);
@@ -309,7 +325,8 @@ impl AppCommands {
         to: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        let connection_id = state.read(cx).conn.selected_connection;
+        if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
         if from == to {
@@ -318,10 +335,13 @@ impl AppCommands {
 
         let (client, connection_id) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn_id) = connection_id else {
                 return;
             };
-            (conn.client.clone(), conn.config.id)
+            let Some(conn) = state.conn.active.get(&conn_id) else {
+                return;
+            };
+            (conn.client.clone(), conn_id)
         };
 
         let task = cx.background_spawn({
@@ -344,11 +364,13 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let selection_changed = state
-                                .conn
-                                .selected_database
-                                .as_ref()
-                                .is_some_and(|selected| selected == &database)
+                            let selection_changed = state.conn.selected_connection
+                                == Some(connection_id)
+                                && state
+                                    .conn
+                                    .selected_database
+                                    .as_ref()
+                                    .is_some_and(|selected| selected == &database)
                                 && state
                                     .conn
                                     .selected_collection
@@ -356,12 +378,9 @@ impl AppCommands {
                                     .is_some_and(|selected| selected == &from);
 
                             let collections = {
-                                let Some(conn) = state.conn.active.as_mut() else {
+                                let Some(conn) = state.conn.active.get_mut(&connection_id) else {
                                     return;
                                 };
-                                if conn.config.id != connection_id {
-                                    return;
-                                }
 
                                 if let Some(entry) = conn.collections.get_mut(&database)
                                     && let Some(pos) = entry.iter().position(|name| name == &from)
@@ -380,9 +399,11 @@ impl AppCommands {
                                 cx.emit(AppEvent::ViewChanged);
                             }
 
-                            let event = AppEvent::CollectionsLoaded(collections);
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
+                            if state.conn.selected_connection == Some(connection_id) {
+                                let event = AppEvent::CollectionsLoaded(collections);
+                                state.update_status_from_event(&event);
+                                cx.emit(event);
+                            }
                             state.status_message = Some(StatusMessage::info(format!(
                                 "Renamed collection {database}.{from} → {to}"
                             )));
@@ -411,12 +432,16 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        let connection_id = state.read(cx).conn.selected_connection;
+        if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
         let client = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn_id) = connection_id else {
+                return;
+            };
+            let Some(conn) = state.conn.active.get(&conn_id) else {
                 return;
             };
             conn.client.clone()
@@ -440,23 +465,28 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            if let Some(conn) = state.conn.active.as_mut()
+                            let Some(conn_id) = connection_id else {
+                                return;
+                            };
+                            if let Some(conn) = state.conn.active.get_mut(&conn_id)
                                 && let Some(entry) = conn.collections.get_mut(&database)
                             {
                                 entry.retain(|name| name != &collection);
                             }
-                            state.close_tabs_for_collection(&database, &collection, cx);
+                            state.close_tabs_for_collection(conn_id, &database, &collection, cx);
                             state.status_message = Some(StatusMessage::info(format!(
                                 "Dropped collection {database}.{collection}"
                             )));
-                            let collections = state
-                                .conn
-                                .active
-                                .as_ref()
-                                .and_then(|conn| conn.collections.get(&database))
-                                .cloned()
-                                .unwrap_or_default();
-                            cx.emit(AppEvent::CollectionsLoaded(collections));
+                            if state.conn.selected_connection == Some(conn_id) {
+                                let collections = state
+                                    .conn
+                                    .active
+                                    .get(&conn_id)
+                                    .and_then(|conn| conn.collections.get(&database))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                cx.emit(AppEvent::CollectionsLoaded(collections));
+                            }
                             cx.notify();
                         });
                     }
@@ -476,12 +506,16 @@ impl AppCommands {
 
     /// Drop a database.
     pub fn drop_database(state: Entity<AppState>, database: String, cx: &mut App) {
-        if !Self::ensure_writable(&state, cx) {
+        let connection_id = state.read(cx).conn.selected_connection;
+        if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
         let client = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn_id) = connection_id else {
+                return;
+            };
+            let Some(conn) = state.conn.active.get(&conn_id) else {
                 return;
             };
             conn.client.clone()
@@ -503,12 +537,17 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            if let Some(conn) = state.conn.active.as_mut() {
+                            let Some(conn_id) = connection_id else {
+                                return;
+                            };
+                            if let Some(conn) = state.conn.active.get_mut(&conn_id) {
                                 conn.databases.retain(|db| db != &database);
                                 conn.collections.remove(&database);
                             }
-                            state.close_tabs_for_database(&database, cx);
-                            if state.conn.selected_database.as_ref() == Some(&database) {
+                            state.close_tabs_for_database(conn_id, &database, cx);
+                            if state.conn.selected_connection == Some(conn_id)
+                                && state.conn.selected_database.as_ref() == Some(&database)
+                            {
                                 state.conn.selected_database = None;
                                 state.conn.selected_collection = None;
                                 state.current_view = View::Databases;
@@ -516,13 +555,15 @@ impl AppCommands {
                             }
                             state.status_message =
                                 Some(StatusMessage::info(format!("Dropped database {database}")));
-                            let databases = state
-                                .conn
-                                .active
-                                .as_ref()
-                                .map(|conn| conn.databases.clone())
-                                .unwrap_or_default();
-                            cx.emit(AppEvent::DatabasesLoaded(databases));
+                            if state.conn.selected_connection == Some(conn_id) {
+                                let databases = state
+                                    .conn
+                                    .active
+                                    .get(&conn_id)
+                                    .map(|conn| conn.databases.clone())
+                                    .unwrap_or_default();
+                                cx.emit(AppEvent::DatabasesLoaded(databases));
+                            }
                             cx.notify();
                         });
                     }
@@ -541,14 +582,19 @@ impl AppCommands {
     }
 
     /// Load collections for a database.
-    pub fn load_collections(state: Entity<AppState>, database: String, cx: &mut App) {
+    pub fn load_collections(
+        state: Entity<AppState>,
+        connection_id: Uuid,
+        database: String,
+        cx: &mut App,
+    ) {
         // Get active client
         let client = {
             let state = state.read(cx);
-            match &state.conn.active {
-                Some(conn) => conn.client.clone(),
-                None => return,
-            }
+            let Some(conn) = state.conn.active.get(&connection_id) else {
+                return;
+            };
+            conn.client.clone()
         };
 
         // Run blocking MongoDB operation in background thread
@@ -570,12 +616,14 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(collections) => {
                         state.update(cx, |state, cx| {
-                            if let Some(ref mut conn) = state.conn.active {
+                            if let Some(conn) = state.conn.active.get_mut(&connection_id) {
                                 conn.collections.insert(database.clone(), collections.clone());
                             }
-                            let event = AppEvent::CollectionsLoaded(collections.clone());
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
+                            if state.conn.selected_connection == Some(connection_id) {
+                                let event = AppEvent::CollectionsLoaded(collections.clone());
+                                state.update_status_from_event(&event);
+                                cx.emit(event);
+                            }
                             cx.notify();
                         });
                     }
@@ -604,12 +652,9 @@ impl AppCommands {
     ) {
         let (client, database) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&database_key.connection_id) else {
                 return;
             };
-            if conn.config.id != database_key.connection_id {
-                return;
-            }
             (conn.client.clone(), database_key.database.clone())
         };
 
@@ -691,7 +736,9 @@ impl AppCommands {
                                 Ok((names, collections)) => {
                                     session.data.collections = collections;
                                     session.data.collections_error = None;
-                                    if let Some(conn) = state.conn.active.as_mut() {
+                                    if let Some(conn) =
+                                        state.conn.active.get_mut(&database_key.connection_id)
+                                    {
                                         conn.collections.insert(database.clone(), names);
                                     }
                                 }
@@ -735,12 +782,9 @@ impl AppCommands {
             sort_raw,
         ) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
-            if conn.config.id != session_key.connection_id {
-                return;
-            }
             let (page, per_page, request_id, filter, sort, projection, sort_raw) =
                 match state.sessions.get(&session_key) {
                     Some(session) => (
@@ -865,7 +909,7 @@ impl AppCommands {
     pub fn load_collection_stats(state: Entity<AppState>, session_key: SessionKey, cx: &mut App) {
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -927,17 +971,14 @@ impl AppCommands {
         document: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
-            if conn.config.id != session_key.connection_id {
-                return;
-            }
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
         };
 
@@ -992,18 +1033,15 @@ impl AppCommands {
         documents: Vec<Document>,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let count = documents.len();
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
-            if conn.config.id != session_key.connection_id {
-                return;
-            }
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
         };
 
@@ -1060,7 +1098,7 @@ impl AppCommands {
     ) {
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -1138,12 +1176,12 @@ impl AppCommands {
         index_name: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -1202,12 +1240,12 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -1274,12 +1312,12 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -1355,12 +1393,12 @@ impl AppCommands {
         updated: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection, original_id, doc_index) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             let Some(index) = state.document_index(&session_key, &doc_key) else {
@@ -1446,12 +1484,12 @@ impl AppCommands {
         update: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection, id) = {
             let state_ref = state.read(cx);
-            let Some(conn) = &state_ref.conn.active else {
+            let Some(conn) = state_ref.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             let Some(doc) = state_ref
@@ -1536,12 +1574,12 @@ impl AppCommands {
         update: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
@@ -1607,12 +1645,12 @@ impl AppCommands {
         doc_key: DocumentKey,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection, original_id) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             let Some(original) = state.document_for_key(&session_key, &doc_key) else {
@@ -1705,12 +1743,12 @@ impl AppCommands {
         filter: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, cx) {
+        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
             return;
         }
         let (client, database, collection) = {
             let state = state.read(cx);
-            let Some(conn) = &state.conn.active else {
+            let Some(conn) = state.conn.active.get(&session_key.connection_id) else {
                 return;
             };
             (conn.client.clone(), session_key.database.clone(), session_key.collection.clone())
