@@ -1,5 +1,6 @@
 //! Document/Collection view component.
 
+mod bulk_update;
 mod document_tree;
 mod header;
 mod index_create;

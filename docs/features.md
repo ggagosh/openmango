@@ -19,8 +19,7 @@ Non-exhaustive highlights; see each section below for full status.
 
 - No import/export flows (data or connections)
 - No aggregation pipeline editor, query history, or saved queries
-- Bulk ops limited (paste insert + delete); no bulk update/replace
-- No connection profiles (partial UI exists)
+- Bulk ops limited (paste insert + delete + update/replace)
 - No multi-window/split views
 
 ---
@@ -35,7 +34,7 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P0: Connection error feedback
 - [x] P1: Edit connection
 - [x] P1: Remove connection
-- [ ] P1: Connection profiles (auth, TLS, timeouts)
+- [x] P1: Connection profiles (auth, TLS, timeouts)
 - [x] P1: Read-only mode / safe mode
 - [ ] P2: Favorites / Tags
 - [ ] P2: Import/Export connections
@@ -84,7 +83,7 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P1: Duplicate document
 - [x] P1: Paste document(s) from clipboard (JSON array / NDJSON)
 - [x] P1: Bulk delete (filtered/all)
-- [ ] P2: Bulk update/replace
+- [x] P2: Bulk update/replace
 - [x] P2: Client-side find in results (Cmd/Ctrl+F)
 
 ## 5. Query & Aggregation
@@ -109,7 +108,6 @@ Non-exhaustive highlights; see each section below for full status.
 - [x] P0: Status bar
 - [x] P0: Error display (banner)
 - [x] P3: Keyboard navigation
-- [ ] P1: Multi-window support
 - [ ] P1: Split views / side-by-side tabs
 - [ ] P2: Theming
 - [ ] P2: Keymap customization

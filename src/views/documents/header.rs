@@ -19,6 +19,7 @@ use crate::theme::{borders, colors, spacing};
 use mongodb::bson::Document;
 
 use super::CollectionView;
+use super::bulk_update::BulkUpdateDialog;
 use super::index_create::IndexCreateDialog;
 
 impl CollectionView {
@@ -512,6 +513,29 @@ impl CollectionView {
                                         cx,
                                     );
                                 }
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("bulk-update")
+                        .compact()
+                        .label("Update")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let selected_doc = selected_doc.clone();
+                            let state_for_dialog = state_for_dialog.clone();
+                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                BulkUpdateDialog::open(
+                                    state_for_dialog.clone(),
+                                    session_key,
+                                    selected_doc.clone(),
+                                    window,
+                                    cx,
+                                );
                             }
                         }),
                 )
