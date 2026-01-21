@@ -55,8 +55,9 @@ pub fn build_documents_tree(
         };
         meta.insert(root_id.clone(), root_meta);
 
-        let mut root =
-            TreeItem::new(root_id.clone(), key_label).expanded(expanded_nodes.contains(&root_id));
+        let mut root = TreeItem::new(root_id.clone(), key_label)
+            .expanded(expanded_nodes.contains(&root_id))
+            .disabled(true);
         let children: Vec<TreeItem> = doc
             .iter()
             .map(|(key, value)| {
@@ -134,8 +135,9 @@ pub fn build_bson_tree_item(
         },
     );
 
-    let mut item =
-        TreeItem::new(node_id.clone(), key_label).expanded(expanded_nodes.contains(&node_id));
+    let mut item = TreeItem::new(node_id.clone(), key_label)
+        .expanded(expanded_nodes.contains(&node_id))
+        .disabled(true);
 
     match value {
         Bson::Document(doc) => {

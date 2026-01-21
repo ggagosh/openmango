@@ -65,15 +65,6 @@ pub fn render_tree_row(
     let is_folder = entry.is_folder();
     let is_expanded = entry.is_expanded();
 
-    let leading = if is_folder {
-        Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
-            .xsmall()
-            .text_color(colors::text_muted())
-            .into_any_element()
-    } else {
-        div().w(px(14.0)).into_any_element()
-    };
-
     let menu_meta = meta.cloned();
     let row_meta = meta.cloned();
     let row_session = session_key.clone();
@@ -81,12 +72,53 @@ pub fn render_tree_row(
     let row_tree = tree_state.clone();
     let row_item_id = item_id.clone();
     let row_focus = documents_focus.clone();
+    let row_view = view.clone();
+    let toggle_session = session_key.clone();
+    let toggle_state = state.clone();
+    let toggle_view = view.clone();
+    let toggle_item_id = item_id.clone();
+
+    let leading = if is_folder {
+        div()
+            .w(px(14.0))
+            .flex()
+            .items_center()
+            .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+                if event.click_count != 1 {
+                    return;
+                }
+                let Some(session_key) = toggle_session.clone() else {
+                    return;
+                };
+                toggle_state.update(cx, |state, cx| {
+                    state.toggle_expanded_node(&session_key, &toggle_item_id);
+                    cx.notify();
+                });
+                toggle_view.update(cx, |this, cx| {
+                    this.view_model.rebuild_tree(&this.state, cx);
+                    cx.notify();
+                });
+            })
+            .child(
+                Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .xsmall()
+                    .text_color(colors::text_muted()),
+            )
+            .into_any_element()
+    } else {
+        div().w(px(14.0)).into_any_element()
+    };
 
     let row = div()
         .flex()
         .items_center()
         .w_full()
         .gap(spacing::xs())
+        .rounded(borders::radius_sm())
+        .border_1()
+        .border_color(rgba(0x00000000))
+        .when(_selected, |s: Div| s.bg(colors::list_selected()).border_color(colors::border()))
+        .when(!_selected, |s: Div| s.hover(|s| s.bg(colors::list_hover())))
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
         .on_mouse_down(MouseButton::Left, {
@@ -94,7 +126,7 @@ pub fn render_tree_row(
             let row_session = row_session.clone();
             let row_state = row_state.clone();
             let row_tree = row_tree.clone();
-            move |_, window, cx| {
+            move |event, window, cx| {
                 window.focus(&row_focus);
                 cx.stop_propagation();
                 row_tree.update(cx, |tree, cx| {
@@ -107,26 +139,21 @@ pub fn render_tree_row(
                             meta.doc_key.clone(),
                             row_item_id.clone(),
                         );
+                        if event.click_count == 2 && meta.is_folder {
+                            state.toggle_expanded_node(&session_key, &row_item_id);
+                        }
                         cx.notify();
                     });
+                    if event.click_count == 2 && meta.is_folder {
+                        row_view.update(cx, |this, cx| {
+                            this.view_model.rebuild_tree(&this.state, cx);
+                            cx.notify();
+                        });
+                    }
                 }
             }
         })
-        .child(render_key_column(
-            ix,
-            &item_id,
-            depth,
-            leading,
-            &key_label,
-            is_root,
-            is_dirty,
-            node_meta.clone(),
-            view.clone(),
-            tree_state.clone(),
-            state.clone(),
-            session_key.clone(),
-            documents_focus.clone(),
-        ))
+        .child(render_key_column(depth, leading, &key_label, is_root, is_dirty))
         .child(render_value_column(
             ix,
             &item_id,
@@ -189,23 +216,13 @@ pub fn render_tree_row(
 
 #[allow(clippy::too_many_arguments)]
 fn render_key_column(
-    ix: usize,
-    item_id: &str,
     depth: usize,
     leading: AnyElement,
     key_label: &str,
     is_root: bool,
     is_dirty: bool,
-    node_meta: Arc<HashMap<String, NodeMeta>>,
-    view: Entity<CollectionView>,
-    tree_state: Entity<TreeState>,
-    state: Entity<AppState>,
-    session_key: Option<SessionKey>,
-    documents_focus: FocusHandle,
 ) -> impl IntoElement {
-    let item_id = item_id.to_string();
     let key_label = key_label.to_string();
-    let focus_handle = documents_focus.clone();
 
     div()
         .flex()
@@ -214,38 +231,6 @@ fn render_key_column(
         .flex_1()
         .min_w(px(0.0))
         .pl(px(6.0 + 14.0 * depth as f32))
-        .on_mouse_down(MouseButton::Left, {
-            let item_id = item_id.clone();
-            move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                window.focus(&focus_handle);
-                cx.stop_propagation();
-                tree_state.update(cx, |tree, cx| {
-                    tree.set_selected_index(Some(ix), cx);
-                });
-
-                if let Some(meta) = node_meta.get(&item_id) {
-                    if let Some(session_key) = session_key.clone() {
-                        state.update(cx, |state, cx| {
-                            state.set_selected_node(
-                                &session_key,
-                                meta.doc_key.clone(),
-                                item_id.clone(),
-                            );
-                            if event.click_count == 2 && meta.is_folder {
-                                state.toggle_expanded_node(&session_key, &item_id);
-                            }
-                            cx.notify();
-                        });
-                    }
-                    view.update(cx, |this, cx| {
-                        if event.click_count == 2 && meta.is_folder {
-                            this.view_model.rebuild_tree(&this.state, cx);
-                        }
-                        cx.notify();
-                    });
-                }
-            }
-        })
         .child(leading)
         .child(
             div()
@@ -319,7 +304,6 @@ fn render_value_column(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
                         window.focus(&focus_handle);
-                        cx.stop_propagation();
                         tree_state.update(cx, |tree, cx| {
                             tree.set_selected_index(Some(ix), cx);
                         });
