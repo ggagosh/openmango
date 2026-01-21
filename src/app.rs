@@ -16,8 +16,10 @@ use crate::components::{
     ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog,
 };
 use crate::keyboard::{
-    CloseTab, CreateCollection, CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase,
-    NewConnection, NextTab, PrevTab, QuitApp, RefreshView,
+    CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
+    DeleteConnection, DeleteDatabase, DeleteSelection, DisconnectConnection, EditConnection,
+    NewConnection, NextTab, OpenSelection, OpenSelectionPreview, PrevTab, QuitApp, RefreshView,
+    RenameCollection,
 };
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::{
@@ -471,6 +473,7 @@ pub struct Sidebar {
     expanded_nodes: HashSet<TreeNodeId>,
     selected_tree_id: Option<TreeNodeId>,
     entries: Vec<SidebarEntry>,
+    focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -601,6 +604,7 @@ impl Sidebar {
             expanded_nodes: HashSet::new(),
             selected_tree_id: None,
             entries,
+            focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
             _subscriptions: subscriptions,
         };
@@ -792,6 +796,208 @@ impl Sidebar {
     fn open_add_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
         ConnectionDialog::open(state, window, cx);
     }
+
+    fn handle_open_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_tree_id.clone() else {
+            return;
+        };
+
+        if node_id.is_connection() {
+            let connection_id = node_id.connection_id();
+            let is_connected = self
+                .state
+                .read(cx)
+                .conn
+                .active
+                .as_ref()
+                .is_some_and(|conn| conn.config.id == connection_id);
+            let is_connecting = self.connecting_connection == Some(connection_id);
+
+            if !is_connected && !is_connecting {
+                self.expanded_nodes.insert(node_id.clone());
+                self.persist_expanded_nodes(cx);
+                self.refresh_tree(cx);
+                AppCommands::connect(self.state.clone(), connection_id, cx);
+            }
+            return;
+        }
+
+        if node_id.is_database() {
+            let Some(db) = node_id.database_name().map(|db| db.to_string()) else {
+                return;
+            };
+            self.state.update(cx, |state, cx| {
+                state.select_database(db.clone(), cx);
+            });
+            let should_expand = !self.expanded_nodes.contains(&node_id);
+            if should_expand {
+                self.expanded_nodes.insert(node_id.clone());
+                self.persist_expanded_nodes(cx);
+                self.refresh_tree(cx);
+            }
+            if should_expand && !self.loading_databases.contains(&node_id) {
+                let should_load = self
+                    .state
+                    .read(cx)
+                    .conn
+                    .active
+                    .as_ref()
+                    .is_some_and(|conn| !conn.collections.contains_key(&db));
+                if should_load {
+                    self.loading_databases.insert(node_id.clone());
+                    cx.notify();
+                    AppCommands::load_collections(self.state.clone(), db, cx);
+                }
+            }
+            return;
+        }
+
+        if node_id.is_collection()
+            && let (Some(db), Some(col)) = (
+                node_id.database_name().map(|db| db.to_string()),
+                node_id.collection_name().map(|col| col.to_string()),
+            )
+        {
+            self.state.update(cx, |state, cx| {
+                state.select_collection(db, col, cx);
+            });
+        }
+    }
+
+    fn handle_open_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_tree_id.clone() else {
+            return;
+        };
+        if node_id.is_collection()
+            && let (Some(db), Some(col)) = (
+                node_id.database_name().map(|db| db.to_string()),
+                node_id.collection_name().map(|col| col.to_string()),
+            )
+        {
+            self.state.update(cx, |state, cx| {
+                state.preview_collection(db, col, cx);
+            });
+        }
+    }
+
+    fn handle_edit_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(TreeNodeId::Connection(connection_id)) = self.selected_tree_id.clone() else {
+            return;
+        };
+        ConnectionManager::open_selected(self.state.clone(), connection_id, window, cx);
+    }
+
+    fn handle_disconnect_connection(&mut self, cx: &mut Context<Self>) {
+        let Some(TreeNodeId::Connection(connection_id)) = self.selected_tree_id.clone() else {
+            return;
+        };
+        let is_active = self
+            .state
+            .read(cx)
+            .conn
+            .active
+            .as_ref()
+            .is_some_and(|conn| conn.config.id == connection_id);
+        if is_active {
+            AppCommands::disconnect(self.state.clone(), cx);
+        }
+    }
+
+    fn handle_copy_selection_name(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_tree_id.clone() else {
+            return;
+        };
+        let text = match node_id {
+            TreeNodeId::Connection(connection_id) => self
+                .state
+                .read(cx)
+                .connections
+                .iter()
+                .find(|conn| conn.id == connection_id)
+                .map(|conn| conn.name.clone()),
+            TreeNodeId::Database { database, .. } => Some(database),
+            TreeNodeId::Collection { database, collection, .. } => {
+                Some(format!("{database}/{collection}"))
+            }
+        };
+        if let Some(text) = text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn handle_copy_connection_uri(&mut self, cx: &mut Context<Self>) {
+        let Some(TreeNodeId::Connection(connection_id)) = self.selected_tree_id.clone() else {
+            return;
+        };
+        if let Some(conn) =
+            self.state.read(cx).connections.iter().find(|conn| conn.id == connection_id)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(conn.uri.clone()));
+        }
+    }
+
+    fn handle_rename_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(TreeNodeId::Collection { database, collection, .. }) =
+            self.selected_tree_id.clone()
+        else {
+            return;
+        };
+        open_rename_collection_dialog(self.state.clone(), database, collection, window, cx);
+    }
+
+    fn handle_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_tree_id.clone() else {
+            return;
+        };
+        match node_id {
+            TreeNodeId::Connection(connection_id) => {
+                let name = self
+                    .state
+                    .read(cx)
+                    .connections
+                    .iter()
+                    .find(|conn| conn.id == connection_id)
+                    .map(|conn| conn.name.clone())
+                    .unwrap_or_else(|| "this connection".to_string());
+                let message = format!("Remove connection \"{name}\"? This cannot be undone.");
+                open_confirm_dialog(window, cx, "Remove connection", message, "Remove", true, {
+                    let state = self.state.clone();
+                    move |_window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.remove_connection(connection_id, cx);
+                        });
+                    }
+                });
+            }
+            TreeNodeId::Database { database, .. } => {
+                let message = format!("Drop database \"{database}\"? This cannot be undone.");
+                open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
+                    let state = self.state.clone();
+                    let database = database.clone();
+                    move |_window, cx| {
+                        AppCommands::drop_database(state.clone(), database.clone(), cx);
+                    }
+                });
+            }
+            TreeNodeId::Collection { database, collection, .. } => {
+                let message =
+                    format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
+                open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+                    let state = self.state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_window, cx| {
+                        AppCommands::drop_collection(
+                            state.clone(),
+                            database.clone(),
+                            collection.clone(),
+                            cx,
+                        );
+                    }
+                });
+            }
+        }
+    }
 }
 
 impl Render for Sidebar {
@@ -808,6 +1014,7 @@ impl Render for Sidebar {
         let scroll_handle = self.scroll_handle.clone();
 
         div()
+            .key_context("Sidebar")
             .flex()
             .flex_col()
             .w(sizing::sidebar_width())
@@ -817,6 +1024,31 @@ impl Render for Sidebar {
             .bg(colors::bg_sidebar())
             .border_r_1()
             .border_color(colors::border())
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &OpenSelection, _window, cx| {
+                this.handle_open_selection(cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSelectionPreview, _window, cx| {
+                this.handle_open_preview(cx);
+            }))
+            .on_action(cx.listener(|this, _: &EditConnection, window, cx| {
+                this.handle_edit_connection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DisconnectConnection, _window, cx| {
+                this.handle_disconnect_connection(cx);
+            }))
+            .on_action(cx.listener(|this, _: &CopySelectionName, _window, cx| {
+                this.handle_copy_selection_name(cx);
+            }))
+            .on_action(cx.listener(|this, _: &CopyConnectionUri, _window, cx| {
+                this.handle_copy_connection_uri(cx);
+            }))
+            .on_action(cx.listener(|this, _: &RenameCollection, window, cx| {
+                this.handle_rename_collection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
+                this.handle_delete_selection(window, cx);
+            }))
             .child(
                 // Header with "+" button
                 div()
@@ -933,6 +1165,7 @@ impl Render for Sidebar {
 
                                         let selected =
                                             sidebar.selected_tree_id.as_ref() == Some(&node_id);
+                                        let menu_focus = sidebar.focus_handle.clone();
 
                                         let row = div()
                                             .id(("sidebar-row", ix))
@@ -1163,6 +1396,7 @@ impl Render for Sidebar {
                                             let state = state_clone.clone();
                                             let sidebar_entity = sidebar_entity.clone();
                                             move |menu, _window, cx| {
+                                                let menu = menu.action_context(menu_focus.clone());
                                                 match menu_node_id.clone() {
                                                     TreeNodeId::Connection(connection_id) => {
                                                         build_connection_menu(
@@ -1238,85 +1472,118 @@ fn build_connection_menu(
     let is_connecting = connecting_id == Some(connection_id);
 
     menu = menu
-        .item(PopupMenuItem::new("Connect").disabled(is_connected || is_connecting).on_click({
-            let state = state.clone();
-            let sidebar = sidebar.clone();
-            move |_, _window, cx| {
-                if state
-                    .read(cx)
-                    .conn
-                    .active
-                    .as_ref()
-                    .is_some_and(|conn| conn.config.id == connection_id)
-                {
-                    return;
-                }
+        .item(
+            PopupMenuItem::new("Connect")
+                .action(Box::new(OpenSelection))
+                .disabled(is_connected || is_connecting)
+                .on_click({
+                    let state = state.clone();
+                    let sidebar = sidebar.clone();
+                    move |_, _window, cx| {
+                        if state
+                            .read(cx)
+                            .conn
+                            .active
+                            .as_ref()
+                            .is_some_and(|conn| conn.config.id == connection_id)
+                        {
+                            return;
+                        }
 
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.expanded_nodes.insert(TreeNodeId::connection(connection_id));
-                    sidebar.persist_expanded_nodes(cx);
-                    sidebar.refresh_tree(cx);
-                });
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.expanded_nodes.insert(TreeNodeId::connection(connection_id));
+                            sidebar.persist_expanded_nodes(cx);
+                            sidebar.refresh_tree(cx);
+                        });
 
-                AppCommands::connect(state.clone(), connection_id, cx);
-            }
-        }))
-        .item(PopupMenuItem::new("Edit Connection...").on_click({
+                        AppCommands::connect(state.clone(), connection_id, cx);
+                    }
+                }),
+        )
+        .item(PopupMenuItem::new("Edit Connection...").action(Box::new(EditConnection)).on_click({
             let state = state.clone();
             move |_, window, cx| {
                 ConnectionManager::open_selected(state.clone(), connection_id, window, cx);
             }
         }))
-        .item(PopupMenuItem::new("Remove Connection...").on_click({
-            let state = state.clone();
-            move |_, window, cx| {
-                let name = state
-                    .read(cx)
-                    .connections
-                    .iter()
-                    .find(|conn| conn.id == connection_id)
-                    .map(|conn| conn.name.clone())
-                    .unwrap_or_else(|| "this connection".to_string());
-                let message = format!("Remove connection \"{name}\"? This cannot be undone.");
-                open_confirm_dialog(window, cx, "Remove connection", message, "Remove", true, {
-                    let state = state.clone();
-                    move |_window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.remove_connection(connection_id, cx);
-                        });
-                    }
-                });
-            }
-        }))
-        .item(PopupMenuItem::new("Disconnect").disabled(!is_connected).on_click({
-            let state = state.clone();
-            move |_, _window, cx| {
-                if state
-                    .read(cx)
-                    .conn
-                    .active
-                    .as_ref()
-                    .is_none_or(|conn| conn.config.id != connection_id)
+        .item(
+            PopupMenuItem::new("Remove Connection...").action(Box::new(DeleteSelection)).on_click(
                 {
-                    return;
-                }
-                AppCommands::disconnect(state.clone(), cx);
-            }
-        }))
-        .item(PopupMenuItem::new("Refresh Databases").disabled(!is_connected).on_click({
-            let state = state.clone();
-            move |_, _window, cx| {
-                AppCommands::refresh_databases(state.clone(), cx);
-            }
-        }))
-        .item(PopupMenuItem::new("Create Database...").disabled(!is_connected).on_click({
-            let state = state.clone();
-            move |_, window, cx| {
-                open_create_database_dialog(state.clone(), window, cx);
-            }
-        }))
+                    let state = state.clone();
+                    move |_, window, cx| {
+                        let name = state
+                            .read(cx)
+                            .connections
+                            .iter()
+                            .find(|conn| conn.id == connection_id)
+                            .map(|conn| conn.name.clone())
+                            .unwrap_or_else(|| "this connection".to_string());
+                        let message =
+                            format!("Remove connection \"{name}\"? This cannot be undone.");
+                        open_confirm_dialog(
+                            window,
+                            cx,
+                            "Remove connection",
+                            message,
+                            "Remove",
+                            true,
+                            {
+                                let state = state.clone();
+                                move |_window, cx| {
+                                    state.update(cx, |state, cx| {
+                                        state.remove_connection(connection_id, cx);
+                                    });
+                                }
+                            },
+                        );
+                    }
+                },
+            ),
+        )
+        .item(
+            PopupMenuItem::new("Disconnect")
+                .action(Box::new(DisconnectConnection))
+                .disabled(!is_connected)
+                .on_click({
+                    let state = state.clone();
+                    move |_, _window, cx| {
+                        if state
+                            .read(cx)
+                            .conn
+                            .active
+                            .as_ref()
+                            .is_none_or(|conn| conn.config.id != connection_id)
+                        {
+                            return;
+                        }
+                        AppCommands::disconnect(state.clone(), cx);
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Refresh Databases")
+                .action(Box::new(RefreshView))
+                .disabled(!is_connected)
+                .on_click({
+                    let state = state.clone();
+                    move |_, _window, cx| {
+                        AppCommands::refresh_databases(state.clone(), cx);
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Create Database...")
+                .action(Box::new(CreateDatabase))
+                .disabled(!is_connected)
+                .on_click({
+                    let state = state.clone();
+                    move |_, window, cx| {
+                        open_create_database_dialog(state.clone(), window, cx);
+                    }
+                }),
+        )
         .separator()
-        .item(PopupMenuItem::new("Copy Name").on_click({
+        .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 if let Some(conn) =
@@ -1326,7 +1593,7 @@ fn build_connection_menu(
                 }
             }
         }))
-        .item(PopupMenuItem::new("Copy URI").on_click({
+        .item(PopupMenuItem::new("Copy URI").action(Box::new(CopyConnectionUri)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 if let Some(conn) =
@@ -1356,7 +1623,7 @@ fn build_database_menu(
     let database_for_copy = database;
 
     menu = menu
-        .item(PopupMenuItem::new("Select Database").on_click({
+        .item(PopupMenuItem::new("Select Database").action(Box::new(OpenSelection)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
@@ -1364,26 +1631,39 @@ fn build_database_menu(
                 });
             }
         }))
-        .item(PopupMenuItem::new("Create Collection...").on_click({
-            let state = state.clone();
-            let database = database_for_create.clone();
-            move |_, window, cx| {
-                open_create_collection_dialog(state.clone(), database.clone(), window, cx);
-            }
-        }))
-        .item(PopupMenuItem::new("Refresh Collections").disabled(is_loading).on_click({
-            let state = state.clone();
-            let sidebar = sidebar.clone();
-            let node_id = node_id.clone();
-            move |_, _window, cx| {
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.loading_databases.insert(node_id.clone());
-                    cx.notify();
-                });
-                AppCommands::load_collections(state.clone(), database_for_refresh.clone(), cx);
-            }
-        }))
-        .item(PopupMenuItem::new("Drop Database...").on_click({
+        .item(
+            PopupMenuItem::new("Create Collection...").action(Box::new(CreateCollection)).on_click(
+                {
+                    let state = state.clone();
+                    let database = database_for_create.clone();
+                    move |_, window, cx| {
+                        open_create_collection_dialog(state.clone(), database.clone(), window, cx);
+                    }
+                },
+            ),
+        )
+        .item(
+            PopupMenuItem::new("Refresh Collections")
+                .action(Box::new(RefreshView))
+                .disabled(is_loading)
+                .on_click({
+                    let state = state.clone();
+                    let sidebar = sidebar.clone();
+                    let node_id = node_id.clone();
+                    move |_, _window, cx| {
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.loading_databases.insert(node_id.clone());
+                            cx.notify();
+                        });
+                        AppCommands::load_collections(
+                            state.clone(),
+                            database_for_refresh.clone(),
+                            cx,
+                        );
+                    }
+                }),
+        )
+        .item(PopupMenuItem::new("Drop Database...").action(Box::new(DeleteSelection)).on_click({
             let state = state.clone();
             let database = database_for_drop.clone();
             move |_, window, cx| {
@@ -1398,7 +1678,7 @@ fn build_database_menu(
             }
         }))
         .separator()
-        .item(PopupMenuItem::new("Copy Name").on_click({
+        .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
             move |_, _window, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(database_for_copy.clone()));
             }
@@ -1423,7 +1703,7 @@ fn build_collection_menu(
     let label = format!("{}/{}", database, collection);
 
     menu = menu
-        .item(PopupMenuItem::new("Open").on_click({
+        .item(PopupMenuItem::new("Open").action(Box::new(OpenSelection)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
@@ -1435,7 +1715,7 @@ fn build_collection_menu(
                 });
             }
         }))
-        .item(PopupMenuItem::new("Open Preview").on_click({
+        .item(PopupMenuItem::new("Open Preview").action(Box::new(OpenSelectionPreview)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 state.update(cx, |state, cx| {
@@ -1447,50 +1727,57 @@ fn build_collection_menu(
                 });
             }
         }))
-        .item(PopupMenuItem::new("Refresh Documents").on_click({
+        .item(PopupMenuItem::new("Refresh Documents").action(Box::new(RefreshView)).on_click({
             let state = state.clone();
             move |_, _window, cx| {
                 AppCommands::load_documents_for_session(state.clone(), session_key.clone(), cx);
             }
         }))
-        .item(PopupMenuItem::new("Rename Collection...").on_click({
-            let state = state.clone();
-            let database = database.clone();
-            let collection = collection.clone();
-            move |_, window, cx| {
-                open_rename_collection_dialog(
-                    state.clone(),
-                    database.clone(),
-                    collection.clone(),
-                    window,
-                    cx,
-                );
-            }
-        }))
-        .item(PopupMenuItem::new("Drop Collection...").on_click({
-            let state = state.clone();
-            let database = database.clone();
-            let collection = collection.clone();
-            move |_, window, cx| {
-                let message =
-                    format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
-                open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+        .item(
+            PopupMenuItem::new("Rename Collection...").action(Box::new(RenameCollection)).on_click(
+                {
                     let state = state.clone();
                     let database = database.clone();
                     let collection = collection.clone();
-                    move |_window, cx| {
-                        AppCommands::drop_collection(
+                    move |_, window, cx| {
+                        open_rename_collection_dialog(
                             state.clone(),
                             database.clone(),
                             collection.clone(),
+                            window,
                             cx,
                         );
                     }
-                });
-            }
-        }))
+                },
+            ),
+        )
+        .item(PopupMenuItem::new("Drop Collection...").action(Box::new(DeleteSelection)).on_click(
+            {
+                let state = state.clone();
+                let database = database.clone();
+                let collection = collection.clone();
+                move |_, window, cx| {
+                    let message = format!(
+                        "Drop collection \"{database}.{collection}\"? This cannot be undone."
+                    );
+                    open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+                        let state = state.clone();
+                        let database = database.clone();
+                        let collection = collection.clone();
+                        move |_window, cx| {
+                            AppCommands::drop_collection(
+                                state.clone(),
+                                database.clone(),
+                                collection.clone(),
+                                cx,
+                            );
+                        }
+                    });
+                }
+            },
+        ))
         .separator()
-        .item(PopupMenuItem::new("Copy Name").on_click({
+        .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
             move |_, _window, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(label.clone()));
             }
