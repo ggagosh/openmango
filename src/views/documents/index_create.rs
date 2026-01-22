@@ -464,7 +464,7 @@ impl IndexCreateDialog {
         let (client, database, collection) = {
             let state_ref = self.state.read(cx);
             let conn_id = self.session_key.connection_id;
-            let Some(conn) = state_ref.conn.active.get(&conn_id) else {
+            let Some(conn) = state_ref.active_connection_by_id(conn_id) else {
                 self.sample_status = SampleStatus::Error("No active connection".to_string());
                 return;
             };

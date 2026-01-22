@@ -729,11 +729,7 @@ fn resolve_document(
     doc_key: &DocumentKey,
     cx: &App,
 ) -> Option<Document> {
-    let state_ref = state.read(cx);
-    state_ref
-        .session(session_key)
-        .and_then(|session| session.view.drafts.get(doc_key).cloned())
-        .or_else(|| state_ref.document_for_key(session_key, doc_key))
+    state.read(cx).session_draft_or_document(session_key, doc_key)
 }
 
 pub(super) fn paste_documents_from_clipboard(

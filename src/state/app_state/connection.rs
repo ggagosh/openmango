@@ -1,16 +1,70 @@
 //! Connection management for AppState.
 
+use std::collections::HashMap;
+
 use gpui::Context;
 
 use super::AppState;
 use crate::components::TreeNodeId;
-use crate::models::connection::SavedConnection;
+use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::ActiveTab;
 use crate::state::View;
 use crate::state::events::AppEvent;
 use uuid::Uuid;
 
 impl AppState {
+    pub fn connections_snapshot(&self) -> Vec<SavedConnection> {
+        self.connections.clone()
+    }
+
+    pub fn connection_by_id(&self, connection_id: Uuid) -> Option<&SavedConnection> {
+        self.connections.iter().find(|conn| conn.id == connection_id)
+    }
+
+    pub fn connection_name(&self, connection_id: Uuid) -> Option<String> {
+        self.connection_by_id(connection_id).map(|conn| conn.name.clone())
+    }
+
+    pub fn connection_uri(&self, connection_id: Uuid) -> Option<String> {
+        self.connection_by_id(connection_id).map(|conn| conn.uri.clone())
+    }
+
+    pub fn active_connections_snapshot(&self) -> HashMap<Uuid, ActiveConnection> {
+        self.conn.active.clone()
+    }
+
+    pub fn active_connection_by_id(&self, connection_id: Uuid) -> Option<&ActiveConnection> {
+        self.conn.active.get(&connection_id)
+    }
+
+    pub fn is_connected(&self, connection_id: Uuid) -> bool {
+        self.conn.active.contains_key(&connection_id)
+    }
+
+    pub fn has_active_connections(&self) -> bool {
+        !self.conn.active.is_empty()
+    }
+
+    pub fn selected_connection_id(&self) -> Option<Uuid> {
+        self.conn.selected_connection
+    }
+
+    pub fn selected_database(&self) -> Option<&str> {
+        self.conn.selected_database.as_deref()
+    }
+
+    pub fn selected_collection(&self) -> Option<&str> {
+        self.conn.selected_collection.as_deref()
+    }
+
+    pub fn selected_database_name(&self) -> Option<String> {
+        self.conn.selected_database.clone()
+    }
+
+    pub fn selected_collection_name(&self) -> Option<String> {
+        self.conn.selected_collection.clone()
+    }
+
     pub(crate) fn set_selected_connection_internal(&mut self, connection_id: Uuid) {
         if self.conn.selected_connection == Some(connection_id) {
             return;

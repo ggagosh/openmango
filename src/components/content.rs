@@ -29,9 +29,9 @@ impl ContentArea {
                 let (should_create_collection, should_create_database) = {
                     let state_ref = state.read(cx);
                     (
-                        state_ref.conn.selected_collection.is_some(),
+                        state_ref.selected_collection().is_some(),
                         matches!(state_ref.current_view, View::Database)
-                            && state_ref.conn.selected_database.is_some(),
+                            && state_ref.selected_database().is_some(),
                     )
                 };
 
@@ -49,13 +49,13 @@ impl ContentArea {
         }));
 
         // Check if we should create collection view initially
-        let collection_view = if state.read(cx).conn.selected_collection.is_some() {
+        let collection_view = if state.read(cx).selected_collection().is_some() {
             Some(cx.new(|cx| CollectionView::new(state.clone(), cx)))
         } else {
             None
         };
         let database_view = if matches!(state.read(cx).current_view, View::Database)
-            && state.read(cx).conn.selected_database.is_some()
+            && state.read(cx).selected_database().is_some()
         {
             Some(cx.new(|cx| DatabaseView::new(state.clone(), cx)))
         } else {
@@ -69,13 +69,13 @@ impl ContentArea {
 impl Render for ContentArea {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state_ref = self.state.read(cx);
-        let has_collection = state_ref.conn.selected_collection.is_some();
-        let has_connection = !state_ref.conn.active.is_empty();
-        let selected_db = state_ref.conn.selected_database.clone();
-        let tabs: Vec<TabKey> = state_ref.tabs.open.clone();
-        let active_tab = state_ref.tabs.active;
-        let preview_tab = state_ref.tabs.preview.clone();
-        let dirty_tabs = state_ref.tabs.dirty.clone();
+        let has_collection = state_ref.selected_collection().is_some();
+        let has_connection = state_ref.has_active_connections();
+        let selected_db = state_ref.selected_database_name();
+        let tabs: Vec<TabKey> = state_ref.open_tabs().to_vec();
+        let active_tab = state_ref.active_tab();
+        let preview_tab = state_ref.preview_tab().cloned();
+        let dirty_tabs = state_ref.dirty_tabs().clone();
         let current_view = state_ref.current_view;
         let error_text = state_ref.status_message.as_ref().and_then(|message| {
             if matches!(message.level, StatusLevel::Error) {
@@ -110,7 +110,7 @@ impl Render for ContentArea {
                 .on_click(move |index, _window, cx| {
                     let index = *index;
                     state.update(cx, |state, cx| {
-                        if index < state.tabs.open.len() {
+                        if index < state.open_tabs().len() {
                             state.select_tab(index, cx);
                         } else {
                             state.select_preview_tab(cx);

@@ -198,6 +198,28 @@ pub struct SessionState {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionSnapshot {
+    pub items: Vec<SessionDocument>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: i64,
+    pub is_loading: bool,
+    pub selected_doc: Option<DocumentKey>,
+    pub dirty_selected: bool,
+    pub filter_raw: String,
+    pub sort_raw: String,
+    pub projection_raw: String,
+    pub query_options_open: bool,
+    pub subview: CollectionSubview,
+    pub stats: Option<CollectionStats>,
+    pub stats_loading: bool,
+    pub stats_error: Option<String>,
+    pub indexes: Option<Vec<IndexModel>>,
+    pub indexes_loading: bool,
+    pub indexes_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DatabaseStats {
     pub collections: u64,
     pub objects: u64,

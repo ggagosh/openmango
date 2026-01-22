@@ -127,10 +127,7 @@ impl CollectionView {
     ) {
         let doc = {
             let state_ref = state.read(cx);
-            state_ref
-                .session(&session_key)
-                .and_then(|session| session.view.drafts.get(&doc_key).cloned())
-                .or_else(|| state_ref.document_for_key(&session_key, &doc_key))
+            state_ref.session_draft_or_document(&session_key, &doc_key)
         };
         let Some(doc) = doc else {
             return;
@@ -384,15 +381,8 @@ impl CollectionView {
         let connection_name = {
             let state_ref = self.state.read(cx);
             state_ref
-                .conn
-                .selected_connection
-                .and_then(|id| {
-                    state_ref
-                        .connections
-                        .iter()
-                        .find(|conn| conn.id == id)
-                        .map(|conn| conn.name.clone())
-                })
+                .selected_connection_id()
+                .and_then(|id| state_ref.connection_name(id))
                 .unwrap_or_else(|| "Connection".to_string())
         };
 
@@ -507,9 +497,8 @@ impl CollectionView {
                                     let session_key = state_ref.current_session_key();
                                     session_key
                                         .as_ref()
-                                        .and_then(|session_key| state_ref.session(session_key))
-                                        .and_then(|session| {
-                                            session.view.drafts.get(&doc_key).cloned()
+                                        .and_then(|session_key| {
+                                            state_ref.session_draft(session_key, &doc_key)
                                         })
                                 };
                                 if let Some(doc) = doc
@@ -630,8 +619,7 @@ impl CollectionView {
                                                 let filter = {
                                                     let state_ref = state_for_delete.read(cx);
                                                     state_ref
-                                                        .session(&session_key)
-                                                        .and_then(|session| session.data.filter.clone())
+                                                        .session_filter(&session_key)
                                                         .unwrap_or_default()
                                                 };
                                                 if filter.is_empty() {

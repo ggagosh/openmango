@@ -1,0 +1,53 @@
+//! Command helpers for async operations + event emission.
+
+use gpui::{App, Entity};
+use mongodb::Client;
+use uuid::Uuid;
+
+use crate::state::{AppState, SessionKey, StatusMessage};
+
+pub struct AppCommands;
+
+impl AppCommands {
+    pub(super) fn ensure_writable(
+        state: &Entity<AppState>,
+        connection_id: Option<Uuid>,
+        cx: &mut App,
+    ) -> bool {
+        let read_only = connection_id
+            .and_then(|id| state.read(cx).conn.active.get(&id))
+            .map(|conn| conn.config.read_only)
+            .unwrap_or(false);
+        if read_only {
+            state.update(cx, |state, cx| {
+                state.status_message =
+                    Some(StatusMessage::error("Read-only connection: writes are disabled."));
+                cx.notify();
+            });
+        }
+        !read_only
+    }
+
+    pub(super) fn active_client(
+        state: &Entity<AppState>,
+        connection_id: Uuid,
+        cx: &mut App,
+    ) -> Option<Client> {
+        state.read(cx).conn.active.get(&connection_id).map(|conn| conn.client.clone())
+    }
+
+    pub(super) fn client_for_session(
+        state: &Entity<AppState>,
+        session_key: &SessionKey,
+        cx: &mut App,
+    ) -> Option<Client> {
+        Self::active_client(state, session_key.connection_id, cx)
+    }
+}
+
+mod collections;
+mod connections;
+mod databases;
+mod documents;
+mod indexes;
+mod stats;

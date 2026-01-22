@@ -104,11 +104,7 @@ impl BulkUpdateDialog {
                 .soft_wrap(true)
         });
 
-        let current_filter = state
-            .read(cx)
-            .session(&session_key)
-            .and_then(|session| session.data.filter.clone())
-            .unwrap_or_default();
+        let current_filter = state.read(cx).session_filter(&session_key).unwrap_or_default();
         let filter_value = document_to_relaxed_extjson_string(&current_filter);
         filter_state.update(cx, |state, cx| {
             state.set_value(filter_value, window, cx);
@@ -198,19 +194,11 @@ impl BulkUpdateDialog {
     }
 
     fn current_filter(&self, cx: &mut Context<Self>) -> Document {
-        let state_ref = self.state.read(cx);
-        state_ref
-            .session(&self.session_key)
-            .and_then(|session| session.data.filter.clone())
-            .unwrap_or_default()
+        self.state.read(cx).session_filter(&self.session_key).unwrap_or_default()
     }
 
     fn selected_document(&self, doc_key: &DocumentKey, cx: &mut Context<Self>) -> Option<Document> {
-        let state_ref = self.state.read(cx);
-        state_ref
-            .session(&self.session_key)
-            .and_then(|session| session.view.drafts.get(doc_key).cloned())
-            .or_else(|| state_ref.document_for_key(&self.session_key, doc_key))
+        self.state.read(cx).session_draft_or_document(&self.session_key, doc_key)
     }
 
     fn selected_id(&self, cx: &mut Context<Self>) -> Result<Bson, String> {

@@ -1,5 +1,7 @@
 //! Tab management for AppState.
 
+use std::collections::HashSet;
+
 use gpui::Context;
 use uuid::Uuid;
 
@@ -16,6 +18,22 @@ pub(super) enum TabOpenMode {
 }
 
 impl AppState {
+    pub fn open_tabs(&self) -> &[TabKey] {
+        &self.tabs.open
+    }
+
+    pub fn preview_tab(&self) -> Option<&SessionKey> {
+        self.tabs.preview.as_ref()
+    }
+
+    pub fn active_tab(&self) -> ActiveTab {
+        self.tabs.active
+    }
+
+    pub fn dirty_tabs(&self) -> &HashSet<SessionKey> {
+        &self.tabs.dirty
+    }
+
     fn active_index(&self) -> Option<usize> {
         match self.tabs.active {
             ActiveTab::Index(index) => Some(index),

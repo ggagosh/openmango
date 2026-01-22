@@ -544,11 +544,7 @@ impl PropertyActionDialog {
     }
 
     fn current_filter(&self, cx: &mut Context<Self>) -> Document {
-        let state_ref = self.state.read(cx);
-        state_ref
-            .session(&self.session_key)
-            .and_then(|session| session.data.filter.clone())
-            .unwrap_or_default()
+        self.state.read(cx).session_filter(&self.session_key).unwrap_or_default()
     }
 
     fn build_update_doc(&self, cx: &mut Context<Self>) -> Result<Document, String> {

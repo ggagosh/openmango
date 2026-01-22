@@ -6,7 +6,10 @@ use std::collections::hash_map::Entry;
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
-use super::{AppState, CollectionSubview, SessionKey, SessionState};
+use super::{
+    AppState, CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState,
+    SessionViewState,
+};
 use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
 
 #[derive(Default)]
@@ -79,6 +82,69 @@ impl AppState {
     /// Get an immutable reference to a session.
     pub fn session(&self, key: &SessionKey) -> Option<&SessionState> {
         self.sessions.get(key)
+    }
+
+    pub fn session_view(&self, key: &SessionKey) -> Option<&SessionViewState> {
+        self.session(key).map(|session| &session.view)
+    }
+
+    pub fn session_data(&self, key: &SessionKey) -> Option<&SessionData> {
+        self.session(key).map(|session| &session.data)
+    }
+
+    pub fn session_snapshot(&self, key: &SessionKey) -> Option<SessionSnapshot> {
+        let session = self.session(key)?;
+        let selected_doc = session.view.selected_doc.clone();
+        let dirty_selected =
+            selected_doc.as_ref().is_some_and(|doc| session.view.dirty.contains(doc));
+        Some(SessionSnapshot {
+            items: session.data.items.clone(),
+            total: session.data.total,
+            page: session.data.page,
+            per_page: session.data.per_page,
+            is_loading: session.data.is_loading,
+            selected_doc,
+            dirty_selected,
+            filter_raw: session.data.filter_raw.clone(),
+            sort_raw: session.data.sort_raw.clone(),
+            projection_raw: session.data.projection_raw.clone(),
+            query_options_open: session.view.query_options_open,
+            subview: session.view.subview,
+            stats: session.data.stats.clone(),
+            stats_loading: session.data.stats_loading,
+            stats_error: session.data.stats_error.clone(),
+            indexes: session.data.indexes.clone(),
+            indexes_loading: session.data.indexes_loading,
+            indexes_error: session.data.indexes_error.clone(),
+        })
+    }
+
+    pub fn session_selected_doc(&self, key: &SessionKey) -> Option<DocumentKey> {
+        self.session_view(key).and_then(|view| view.selected_doc.clone())
+    }
+
+    pub fn session_selected_node_id(&self, key: &SessionKey) -> Option<String> {
+        self.session_view(key).and_then(|view| view.selected_node_id.clone())
+    }
+
+    pub fn session_subview(&self, key: &SessionKey) -> Option<CollectionSubview> {
+        self.session_view(key).map(|view| view.subview)
+    }
+
+    pub fn session_filter(&self, key: &SessionKey) -> Option<Document> {
+        self.session_data(key).and_then(|data| data.filter.clone())
+    }
+
+    pub fn session_draft(&self, key: &SessionKey, doc_key: &DocumentKey) -> Option<Document> {
+        self.session_view(key).and_then(|view| view.drafts.get(doc_key).cloned())
+    }
+
+    pub fn session_draft_or_document(
+        &self,
+        key: &SessionKey,
+        doc_key: &DocumentKey,
+    ) -> Option<Document> {
+        self.session_draft(key, doc_key).or_else(|| self.document_for_key(key, doc_key))
     }
 
     /// Get a mutable reference to a session.
