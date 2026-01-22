@@ -1,6 +1,6 @@
 use crate::components::Button;
 use crate::components::ConnectionDialog;
-use gpui::prelude::{FluentBuilder as _, StatefulInteractiveElement as _};
+use gpui::prelude::{FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _};
 use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
@@ -16,10 +16,10 @@ use crate::components::{
     ConnectionManager, ContentArea, StatusBar, TreeNodeId, open_confirm_dialog,
 };
 use crate::keyboard::{
-    CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
-    DeleteConnection, DeleteDatabase, DeleteSelection, DisconnectConnection, EditConnection,
-    NewConnection, NextTab, OpenSelection, OpenSelectionPreview, PrevTab, QuitApp, RefreshView,
-    RenameCollection,
+    CloseSidebarSearch, CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection,
+    CreateDatabase, CreateIndex, DeleteConnection, DeleteDatabase, DeleteSelection,
+    DisconnectConnection, EditConnection, FindInSidebar, NewConnection, NextTab, OpenSelection,
+    OpenSelectionPreview, PrevTab, QuitApp, RefreshView, RenameCollection,
 };
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::{
@@ -487,6 +487,11 @@ pub struct Sidebar {
     expanded_nodes: HashSet<TreeNodeId>,
     selected_tree_id: Option<TreeNodeId>,
     entries: Vec<SidebarEntry>,
+    search_open: bool,
+    search_state: Entity<InputState>,
+    search_selected: Option<usize>,
+    typeahead_query: String,
+    typeahead_last: Option<std::time::Instant>,
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -501,6 +506,16 @@ struct SidebarEntry {
     is_expanded: bool,
 }
 
+#[derive(Clone, Debug)]
+struct SidebarSearchResult {
+    index: usize,
+    node_id: TreeNodeId,
+    connection_id: Uuid,
+    connection_name: String,
+    database: String,
+    score: usize,
+}
+
 impl Sidebar {
     pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (connections, active) = {
@@ -508,6 +523,8 @@ impl Sidebar {
             (state_ref.connections.clone(), state_ref.conn.active.clone())
         };
         let entries = Self::build_entries(&connections, &active, &HashSet::new());
+        let search_state =
+            cx.new(|cx| InputState::new(_window, cx).placeholder("Search databases"));
 
         let mut subscriptions = vec![];
 
@@ -590,6 +607,8 @@ impl Sidebar {
             });
         }));
 
+        subscriptions.push(cx.observe(&search_state, |_, _, cx| cx.notify()));
+
         subscriptions.push(cx.on_window_closed({
             let state = state.clone();
             move |cx| {
@@ -618,6 +637,11 @@ impl Sidebar {
             expanded_nodes: HashSet::new(),
             selected_tree_id: None,
             entries,
+            search_open: false,
+            search_state,
+            search_selected: None,
+            typeahead_query: String::new(),
+            typeahead_last: None,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
             _subscriptions: subscriptions,
@@ -811,7 +835,17 @@ impl Sidebar {
         ConnectionDialog::open(state, window, cx);
     }
 
-    fn handle_open_selection(&mut self, cx: &mut Context<Self>) {
+    fn handle_open_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_open {
+            let query = self.search_state.read(cx).value().to_string();
+            let results = self.search_results(&query, cx);
+            let selection = self.search_selected;
+            let result = selection.and_then(|ix| results.get(ix)).or_else(|| results.first());
+            if let Some(result) = result {
+                self.select_search_result(result, window, cx);
+            }
+            return;
+        }
         let Some(node_id) = self.selected_tree_id.clone() else {
             return;
         };
@@ -1011,6 +1045,246 @@ impl Sidebar {
             }
         }
     }
+
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_open = true;
+        self.typeahead_query.clear();
+        self.typeahead_last = None;
+        self.search_selected = Some(0);
+        self.search_state.update(cx, |state, cx| {
+            state.set_value(String::new(), window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_open {
+            return;
+        }
+        self.search_open = false;
+        self.search_selected = None;
+        self.search_state.update(cx, |state, cx| {
+            state.set_value(String::new(), window, cx);
+        });
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    fn handle_typeahead_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.search_open {
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt {
+            return;
+        }
+        let key = event.keystroke.key.to_lowercase();
+        if key == "escape" {
+            if !self.typeahead_query.is_empty() {
+                self.typeahead_query.clear();
+                cx.notify();
+            }
+            return;
+        }
+        if key == "backspace" {
+            if !self.typeahead_query.is_empty() {
+                self.typeahead_query.pop();
+                self.typeahead_last = Some(std::time::Instant::now());
+                self.select_typeahead_match(cx);
+            }
+            return;
+        }
+        let Some(key_char) = event.keystroke.key_char.as_ref() else {
+            return;
+        };
+        if key_char.chars().count() != 1 {
+            return;
+        }
+        let ch = key_char.to_lowercase();
+        let now = std::time::Instant::now();
+        if self
+            .typeahead_last
+            .is_none_or(|last| now.duration_since(last) > std::time::Duration::from_millis(1000))
+        {
+            self.typeahead_query.clear();
+        }
+        self.typeahead_last = Some(now);
+        self.typeahead_query.push_str(&ch);
+        self.select_typeahead_match(cx);
+    }
+
+    fn select_typeahead_match(&mut self, cx: &mut Context<Self>) {
+        let query = self.typeahead_query.trim();
+        if query.is_empty() {
+            return;
+        }
+        let query = query.to_lowercase();
+        let entries = &self.entries;
+        if entries.is_empty() {
+            return;
+        }
+        let start = self
+            .selected_tree_id
+            .as_ref()
+            .and_then(|id| entries.iter().position(|entry| &entry.id == id))
+            .map(|ix| ix + 1)
+            .unwrap_or(0);
+
+        let mut matched_index = None;
+        for offset in 0..entries.len() {
+            let idx = (start + offset) % entries.len();
+            let entry = &entries[idx];
+            if entry.label.to_lowercase().starts_with(&query) {
+                matched_index = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(ix) = matched_index {
+            let entry = &entries[ix];
+            self.selected_tree_id = Some(entry.id.clone());
+            self.scroll_handle.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    fn move_sidebar_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let current_index = self
+            .selected_tree_id
+            .as_ref()
+            .and_then(|id| self.entries.iter().position(|entry| &entry.id == id))
+            .unwrap_or(0);
+        let len = self.entries.len() as isize;
+        let next = (current_index as isize + delta).rem_euclid(len) as usize;
+        let entry = &self.entries[next];
+        self.selected_tree_id = Some(entry.id.clone());
+        self.scroll_handle.scroll_to_item(next, gpui::ScrollStrategy::Center);
+        let state = self.state.clone();
+        let node_id = entry.id.clone();
+        state.update(cx, |state, cx| match node_id {
+            TreeNodeId::Connection(connection_id) => {
+                state.select_connection(Some(connection_id), cx);
+            }
+            TreeNodeId::Database { connection, database } => {
+                state.select_connection(Some(connection), cx);
+                state.select_database(database, cx);
+            }
+            TreeNodeId::Collection { connection, database, collection } => {
+                state.select_connection(Some(connection), cx);
+                state.preview_collection(database, collection, cx);
+            }
+        });
+        cx.notify();
+    }
+
+    fn move_search_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let query = self.search_state.read(cx).value().to_string();
+        let results = self.search_results(&query, cx);
+        if results.is_empty() {
+            self.search_selected = None;
+            cx.notify();
+            return;
+        }
+        let len = results.len() as isize;
+        let current = self.search_selected.unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(len) as usize;
+        self.search_selected = Some(next);
+        cx.notify();
+    }
+
+    fn select_search_result(
+        &mut self,
+        result: &SidebarSearchResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let database = result.database.clone();
+        let connection_id = result.connection_id;
+        self.expanded_nodes.insert(TreeNodeId::connection(connection_id));
+        self.expanded_nodes.insert(result.node_id.clone());
+        self.persist_expanded_nodes(cx);
+        self.loading_databases.insert(result.node_id.clone());
+        AppCommands::load_collections(self.state.clone(), connection_id, database.clone(), cx);
+        self.selected_tree_id = Some(result.node_id.clone());
+        self.scroll_handle.scroll_to_item(result.index, gpui::ScrollStrategy::Center);
+        self.state.update(cx, |state, cx| {
+            state.select_connection(Some(connection_id), cx);
+            state.select_database(database, cx);
+        });
+        self.close_search(window, cx);
+    }
+
+    fn fuzzy_match_score(query: &str, text: &str) -> Option<usize> {
+        if query.is_empty() {
+            return None;
+        }
+        let mut score = 0usize;
+        let mut last_index = 0usize;
+        let chars: Vec<char> = text.chars().collect();
+        for ch in query.chars() {
+            let mut found = None;
+            for (offset, tc) in chars.iter().enumerate().skip(last_index) {
+                if *tc == ch {
+                    found = Some(offset);
+                    break;
+                }
+            }
+            let pos = found?;
+            score += pos.saturating_sub(last_index);
+            last_index = pos + 1;
+        }
+        Some(score)
+    }
+
+    fn search_results(&self, query: &str, cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        let connection_names: std::collections::HashMap<Uuid, String> = self
+            .state
+            .read(cx)
+            .connections
+            .iter()
+            .map(|conn| (conn.id, conn.name.clone()))
+            .collect();
+
+        let mut results = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            let TreeNodeId::Database { connection, database } = &entry.id else {
+                continue;
+            };
+            let label = entry.label.to_lowercase();
+            let Some(score) = Self::fuzzy_match_score(&query, &label) else {
+                continue;
+            };
+            let connection_name = connection_names
+                .get(connection)
+                .cloned()
+                .unwrap_or_else(|| "Connection".to_string());
+            results.push(SidebarSearchResult {
+                index,
+                node_id: entry.id.clone(),
+                connection_id: *connection,
+                connection_name,
+                database: database.clone(),
+                score,
+            });
+        }
+
+        results.sort_by(|a, b| {
+            a.score
+                .cmp(&b.score)
+                .then_with(|| a.database.len().cmp(&b.database.len()))
+                .then_with(|| a.database.cmp(&b.database))
+        });
+        results
+    }
 }
 
 impl Render for Sidebar {
@@ -1026,6 +1300,17 @@ impl Render for Sidebar {
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
 
+        let search_query = self.search_state.read(cx).value().to_string();
+        let search_results =
+            if self.search_open { self.search_results(&search_query, cx) } else { Vec::new() };
+        if self.search_open {
+            if search_query.trim().is_empty() || search_results.is_empty() {
+                self.search_selected = None;
+            } else if self.search_selected.is_none_or(|ix| ix >= search_results.len()) {
+                self.search_selected = Some(0);
+            }
+        }
+
         div()
             .key_context("Sidebar")
             .flex()
@@ -1038,8 +1323,125 @@ impl Render for Sidebar {
             .border_r_1()
             .border_color(colors::border())
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &OpenSelection, _window, cx| {
-                this.handle_open_selection(cx);
+            .on_mouse_down(MouseButton::Left, {
+                let focus_handle = self.focus_handle.clone();
+                move |_, window, _cx| {
+                    window.focus(&focus_handle);
+                }
+            })
+            .on_key_down({
+                let sidebar_entity = sidebar_entity.clone();
+                move |event: &KeyDownEvent, _window: &mut Window, cx: &mut App| {
+                    let key = event.keystroke.key.to_lowercase();
+                    sidebar_entity.update(cx, |sidebar, cx| {
+                        if !sidebar.search_open {
+                            match key.as_str() {
+                                "up" | "arrowup" => {
+                                    sidebar.move_sidebar_selection(-1, cx);
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                "down" | "arrowdown" => {
+                                    sidebar.move_sidebar_selection(1, cx);
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                "left" | "arrowleft" => {
+                                    if let Some(node_id) = sidebar.selected_tree_id.clone() {
+                                        if sidebar.expanded_nodes.contains(&node_id) {
+                                            sidebar.expanded_nodes.remove(&node_id);
+                                            sidebar.persist_expanded_nodes(cx);
+                                            sidebar.refresh_tree(cx);
+                                        } else if let TreeNodeId::Database { connection, database: _ } =
+                                            node_id
+                                        {
+                                            let parent = TreeNodeId::connection(connection);
+                                            sidebar.selected_tree_id = Some(parent.clone());
+                                            sidebar.scroll_handle.scroll_to_item(
+                                                sidebar
+                                                    .entries
+                                                    .iter()
+                                                    .position(|entry| entry.id == parent)
+                                                    .unwrap_or(0),
+                                                gpui::ScrollStrategy::Center,
+                                            );
+                                            cx.notify();
+                                        } else if let TreeNodeId::Collection {
+                                            connection,
+                                            database,
+                                            ..
+                                        } = node_id
+                                        {
+                                            let parent =
+                                                TreeNodeId::database(connection, database.clone());
+                                            sidebar.selected_tree_id = Some(parent.clone());
+                                            sidebar.scroll_handle.scroll_to_item(
+                                                sidebar
+                                                    .entries
+                                                    .iter()
+                                                    .position(|entry| entry.id == parent)
+                                                    .unwrap_or(0),
+                                                gpui::ScrollStrategy::Center,
+                                            );
+                                            cx.notify();
+                                        }
+                                    }
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                "right" | "arrowright" => {
+                                    if let Some(node_id) = sidebar.selected_tree_id.clone() {
+                                        if node_id.is_connection() {
+                                            if !sidebar.expanded_nodes.contains(&node_id) {
+                                                sidebar.expanded_nodes.insert(node_id.clone());
+                                                sidebar.persist_expanded_nodes(cx);
+                                                sidebar.refresh_tree(cx);
+                                            }
+                                        } else if let TreeNodeId::Database {
+                                            connection,
+                                            database,
+                                        } = node_id.clone()
+                                        {
+                                            if !sidebar.expanded_nodes.contains(&node_id) {
+                                                sidebar.expanded_nodes.insert(node_id.clone());
+                                                sidebar.persist_expanded_nodes(cx);
+                                                sidebar.refresh_tree(cx);
+                                            }
+                                            let should_load = sidebar
+                                                .state
+                                                .read(cx)
+                                                .conn
+                                                .active
+                                                .get(&connection)
+                                                .is_some_and(|conn| {
+                                                    !conn.collections.contains_key(&database)
+                                                });
+                                            if should_load
+                                                && !sidebar.loading_databases.contains(&node_id)
+                                            {
+                                                sidebar.loading_databases.insert(node_id.clone());
+                                                cx.notify();
+                                                AppCommands::load_collections(
+                                                    sidebar.state.clone(),
+                                                    connection,
+                                                    database,
+                                                    cx,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                        sidebar.handle_typeahead_key(event, cx);
+                    });
+                }
+            })
+            .on_action(cx.listener(|this, _: &OpenSelection, window, cx| {
+                this.handle_open_selection(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSelectionPreview, _window, cx| {
                 this.handle_open_preview(cx);
@@ -1061,6 +1463,12 @@ impl Render for Sidebar {
             }))
             .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
                 this.handle_delete_selection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FindInSidebar, window, cx| {
+                this.open_search(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseSidebarSearch, window, cx| {
+                this.close_search(window, cx);
             }))
             .child(
                 // Header with "+" button
@@ -1123,6 +1531,146 @@ impl Render for Sidebar {
                     ),
             )
             .child(
+                if self.search_open {
+                    let sidebar_entity = sidebar_entity.clone();
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::xs())
+                        .px(spacing::md())
+                        .py(spacing::xs())
+                        .border_b_1()
+                        .border_color(colors::border())
+                        .child(
+                            div()
+                                .capture_key_down({
+                                    let sidebar_entity = sidebar_entity.clone();
+                                    move |event: &KeyDownEvent,
+                                          window: &mut Window,
+                                          cx: &mut App| {
+                                        let key = event.keystroke.key.to_lowercase();
+                                        if key == "escape" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                sidebar.close_search(window, cx);
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "down" || key == "arrowdown" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                sidebar.move_search_selection(1, cx);
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "up" || key == "arrowup" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                sidebar.move_search_selection(-1, cx);
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "enter" || key == "return" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                let query =
+                                                    sidebar.search_state.read(cx).value().to_string();
+                                                let results = sidebar.search_results(&query, cx);
+                                                let selection = sidebar.search_selected;
+                                                let result = selection
+                                                    .and_then(|ix| results.get(ix))
+                                                    .or_else(|| results.first());
+                                                if let Some(result) = result {
+                                                    sidebar.select_search_result(
+                                                        result,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            });
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                })
+                                .child(Input::new(&self.search_state).w_full()),
+                        )
+                        .child({
+                            if search_query.trim().is_empty() {
+                                div()
+                                    .text_xs()
+                                    .text_color(colors::text_muted())
+                                    .child("Type to search databases")
+                                    .into_any_element()
+                            } else if search_results.is_empty() {
+                                div()
+                                    .text_xs()
+                                    .text_color(colors::text_muted())
+                                    .child("No matches")
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .children(search_results.iter().enumerate().map(|(ix, result)| {
+                                        let result = result.clone();
+                                        let database = result.database.clone();
+                                        let connection_name = result.connection_name.clone();
+                                        let sidebar_entity = sidebar_entity.clone();
+                                        let is_selected =
+                                            self.search_selected == Some(ix);
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .px(spacing::sm())
+                                            .py(px(4.0))
+                                            .rounded(borders::radius_sm())
+                                            .hover(|s| s.bg(colors::list_hover()))
+                                            .cursor_pointer()
+                                            .id(("sidebar-search-row", result.index))
+                                            .when(is_selected, |s| s.bg(colors::list_selected()))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .min_w(px(0.0))
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(colors::text_primary())
+                                                            .truncate()
+                                                            .child(database.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(colors::text_muted())
+                                                            .truncate()
+                                                            .child(connection_name),
+                                                    ),
+                                            )
+                                            .on_click(move |_: &ClickEvent,
+                                                           window: &mut Window,
+                                                           cx: &mut App| {
+                                                let result = result.clone();
+                                                sidebar_entity.update(cx, |sidebar, cx| {
+                                                    sidebar.select_search_result(
+                                                        &result,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            })
+                                    }))
+                                    .into_any_element()
+                            }
+                        })
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
+            )
+            .child(
                 // Connection tree
                 div()
                     .flex()
@@ -1180,6 +1728,7 @@ impl Render for Sidebar {
                                         let selected =
                                             sidebar.selected_tree_id.as_ref() == Some(&node_id);
                                         let menu_focus = sidebar.focus_handle.clone();
+                                        let row_focus = menu_focus.clone();
 
                                         let row = div()
                                             .id(("sidebar-row", ix))
@@ -1199,7 +1748,7 @@ impl Render for Sidebar {
                                                 move |event: &ClickEvent,
                                                       _window: &mut Window,
                                                       cx: &mut App| {
-                                                    _window.blur();
+                                                    _window.focus(&row_focus);
                                                     cx.stop_propagation();
 
                                                     state_clone.update(cx, |state, cx| {

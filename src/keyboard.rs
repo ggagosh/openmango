@@ -44,6 +44,8 @@ actions!(
         ShowDocumentsSubview,
         ShowIndexesSubview,
         ShowStatsSubview,
+        FindInSidebar,
+        CloseSidebarSearch,
     ]
 );
 
@@ -98,6 +100,9 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-f", FindInResults, Some("Documents")),
         KeyBinding::new("escape", CloseSearch, Some("Documents")),
         KeyBinding::new("escape", CloseSearch, Some("Documents && Input")),
+        KeyBinding::new("cmd-f", FindInSidebar, Some("Sidebar")),
+        KeyBinding::new("ctrl-f", FindInSidebar, Some("Sidebar")),
+        KeyBinding::new("escape", CloseSidebarSearch, Some("Sidebar")),
         KeyBinding::new("cmd-s", SaveDocument, Some("Documents && !Input")),
         KeyBinding::new("ctrl-s", SaveDocument, Some("Documents && !Input")),
         KeyBinding::new("cmd-shift-s", DiscardDocumentChanges, Some("Documents && !Input")),
