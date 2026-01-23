@@ -1,0 +1,163 @@
+use gpui::*;
+
+use crate::state::{AppEvent, AppState, StatusLevel, View};
+use crate::views::{CollectionView, DatabaseView};
+
+mod empty;
+mod shell;
+mod tabs;
+
+use empty::render_empty_state;
+use shell::render_shell;
+use tabs::{TabsHost, render_tabs_host};
+
+/// Content area component that shows collection view or welcome screen
+pub struct ContentArea {
+    state: Entity<AppState>,
+    collection_view: Option<Entity<CollectionView>>,
+    database_view: Option<Entity<DatabaseView>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ContentArea {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let mut subscriptions = vec![];
+
+        subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
+
+        // Subscribe to view-change events to lazily create collection view
+        subscriptions.push(cx.subscribe(&state, |this, state, event, cx| match event {
+            AppEvent::ViewChanged | AppEvent::Connected(_) => {
+                let (should_create_collection, should_create_database) = {
+                    let state_ref = state.read(cx);
+                    (
+                        state_ref.selected_collection().is_some(),
+                        matches!(state_ref.current_view, View::Database)
+                            && state_ref.selected_database().is_some(),
+                    )
+                };
+
+                if should_create_collection && this.collection_view.is_none() {
+                    this.collection_view =
+                        Some(cx.new(|cx| CollectionView::new(state.clone(), cx)));
+                }
+                if should_create_database && this.database_view.is_none() {
+                    this.database_view = Some(cx.new(|cx| DatabaseView::new(state.clone(), cx)));
+                }
+
+                cx.notify();
+            }
+            _ => {}
+        }));
+
+        // Check if we should create collection view initially
+        let collection_view = if state.read(cx).selected_collection().is_some() {
+            Some(cx.new(|cx| CollectionView::new(state.clone(), cx)))
+        } else {
+            None
+        };
+        let database_view = if matches!(state.read(cx).current_view, View::Database)
+            && state.read(cx).selected_database().is_some()
+        {
+            Some(cx.new(|cx| DatabaseView::new(state.clone(), cx)))
+        } else {
+            None
+        };
+
+        Self { state, collection_view, database_view, _subscriptions: subscriptions }
+    }
+
+    fn ensure_views(
+        &mut self,
+        should_collection: bool,
+        should_database: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if should_collection && self.collection_view.is_none() {
+            self.collection_view = Some(cx.new(|cx| CollectionView::new(self.state.clone(), cx)));
+        }
+        if should_database && self.database_view.is_none() {
+            self.database_view = Some(cx.new(|cx| DatabaseView::new(self.state.clone(), cx)));
+        }
+    }
+}
+
+impl Render for ContentArea {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (
+            has_collection,
+            has_connection,
+            selected_db,
+            tabs,
+            active_tab,
+            preview_tab,
+            dirty_tabs,
+            current_view,
+            error_text,
+        ) = {
+            let state_ref = self.state.read(cx);
+            (
+                state_ref.selected_collection().is_some(),
+                state_ref.has_active_connections(),
+                state_ref.selected_database_name(),
+                state_ref.open_tabs().to_vec(),
+                state_ref.active_tab(),
+                state_ref.preview_tab().cloned(),
+                state_ref.dirty_tabs().clone(),
+                state_ref.current_view,
+                state_ref.status_message().and_then(|message| {
+                    if matches!(message.level, StatusLevel::Error) {
+                        Some(message.text.clone())
+                    } else {
+                        None
+                    }
+                }),
+            )
+        };
+
+        let should_collection_view = matches!(current_view, View::Documents);
+        let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
+        let has_tabs = !tabs.is_empty() || preview_tab.is_some();
+        if has_tabs {
+            self.ensure_views(should_collection_view, should_database_view, cx);
+            let host = TabsHost {
+                state: self.state.clone(),
+                tabs: &tabs,
+                active_tab,
+                preview_tab,
+                dirty_tabs: &dirty_tabs,
+                current_view,
+                has_collection,
+                collection_view: self.collection_view.as_ref(),
+                database_view: self.database_view.as_ref(),
+            };
+            let content = render_tabs_host(host);
+            return render_shell(error_text, self.state.clone(), content, false);
+        }
+
+        if matches!(current_view, View::Database) {
+            self.ensure_views(false, should_database_view, cx);
+            if let Some(view) = &self.database_view {
+                return render_shell(error_text, self.state.clone(), view.clone(), false);
+            }
+        }
+
+        if has_collection {
+            self.ensure_views(should_collection_view, false, cx);
+            if let Some(view) = &self.collection_view {
+                return render_shell(error_text, self.state.clone(), view.clone(), false);
+            }
+        }
+
+        let hint = if !has_connection {
+            "Add a connection to get started".to_string()
+        } else if selected_db.is_none() {
+            "Select a database in the sidebar".to_string()
+        } else {
+            "Select a collection to view documents".to_string()
+        };
+
+        let empty = render_empty_state(hint);
+        render_shell(error_text, self.state.clone(), empty, true)
+    }
+}
