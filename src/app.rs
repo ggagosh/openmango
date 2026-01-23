@@ -2,7 +2,7 @@ mod actions;
 mod dialogs;
 mod menus;
 mod root;
-mod search;
+pub(crate) mod search;
 mod sidebar;
 mod sidebar_model;
 

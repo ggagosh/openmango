@@ -2,11 +2,12 @@ use gpui::prelude::InteractiveElement as _;
 use gpui::*;
 
 use super::sidebar::Sidebar;
+use crate::components::action_bar::ActionBar;
 use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_dialog};
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, EditConnection, NewConnection, NextTab,
-    PrevTab, QuitApp, RefreshView,
+    OpenActionBar, PrevTab, QuitApp, RefreshView,
 };
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, colors, spacing};
@@ -19,6 +20,7 @@ pub struct AppRoot {
     pub(super) state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
     content_area: Entity<ContentArea>,
+    pub(super) action_bar: Entity<ActionBar>,
     pub(super) key_debug: bool,
     pub(super) last_keystroke: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -35,6 +37,16 @@ impl AppRoot {
         // Create content area with state reference
         let content_area = cx.new(|cx| ContentArea::new(state.clone(), cx));
 
+        // Create action bar with execution callback
+        let action_bar = cx.new(|_cx| {
+            ActionBar::new(state.clone()).on_execute({
+                let state = state.clone();
+                move |execution, window, cx| {
+                    Self::execute_action(&state, execution, window, cx);
+                }
+            })
+        });
+
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
 
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
@@ -47,6 +59,7 @@ impl AppRoot {
             state,
             sidebar,
             content_area,
+            action_bar,
             key_debug,
             last_keystroke: None,
             _subscriptions: subscriptions,
@@ -207,6 +220,11 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &RefreshView, _window, cx| {
                 this.handle_refresh(cx);
             }))
+            .on_action(cx.listener(|this, _: &OpenActionBar, window, cx| {
+                this.action_bar.update(cx, |bar, cx| {
+                    bar.toggle(window, cx);
+                });
+            }))
             .child(
                 div()
                     .flex()
@@ -217,7 +235,8 @@ impl Render for AppRoot {
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
             .child(StatusBar::new(is_connected, connection_name, status_message, read_only))
-            .children(dialog_layer);
+            .children(dialog_layer)
+            .child(self.action_bar.clone());
 
         if self.key_debug {
             root =

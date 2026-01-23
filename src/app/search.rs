@@ -63,7 +63,7 @@ pub(crate) fn search_results(
     results
 }
 
-fn fuzzy_match_score(query: &str, text: &str) -> Option<usize> {
+pub(crate) fn fuzzy_match_score(query: &str, text: &str) -> Option<usize> {
     if query.is_empty() {
         return None;
     }

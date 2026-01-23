@@ -1,7 +1,9 @@
 use gpui::*;
+use uuid::Uuid;
 
 use crate::components::ConnectionDialog;
-use crate::state::{ActiveTab, AppCommands, CollectionSubview, View};
+use crate::components::action_bar::ActionExecution;
+use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, View};
 use crate::views::CollectionView;
 
 use super::AppRoot;
@@ -28,6 +30,17 @@ impl AppRoot {
 
                 if cmd_or_ctrl && !alt && !shift && key == "q" {
                     cx.quit();
+                    cx.stop_propagation();
+                    return;
+                }
+
+                if cmd_or_ctrl && !alt && !shift && key == "k" {
+                    this.action_bar.update(
+                        cx,
+                        |bar: &mut crate::components::action_bar::ActionBar, cx| {
+                            bar.toggle(window, cx);
+                        },
+                    );
                     cx.stop_propagation();
                     return;
                 }
@@ -161,6 +174,135 @@ impl AppRoot {
             ActiveTab::Index(index) => state.close_tab(index, cx),
             ActiveTab::None => {}
         });
+    }
+
+    pub(super) fn execute_action(
+        state: &Entity<AppState>,
+        exec: ActionExecution,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let id = exec.action_id.as_ref();
+
+        // Navigation: connections
+        if let Some(uuid_str) = id.strip_prefix("nav:conn:") {
+            if let Ok(conn_id) = Uuid::parse_str(uuid_str) {
+                state.update(cx, |state, cx| {
+                    state.select_connection(Some(conn_id), cx);
+                });
+            }
+            return;
+        }
+
+        // Navigation: databases (format: "nav:db:<uuid>:<database>")
+        if let Some(rest) = id.strip_prefix("nav:db:") {
+            if let Some((uuid_str, database)) = rest.split_once(':')
+                && let Ok(conn_id) = Uuid::parse_str(uuid_str)
+            {
+                state.update(cx, |state, cx| {
+                    state.select_connection(Some(conn_id), cx);
+                    state.select_database(database.to_string(), cx);
+                });
+            }
+            return;
+        }
+
+        // Navigation: collections (format: "nav:col:<uuid>:<database>:<collection>")
+        if let Some(rest) = id.strip_prefix("nav:col:") {
+            // Parse: uuid:db:col (uuid is always 36 chars)
+            if rest.len() > 37 {
+                let uuid_str = &rest[..36];
+                let remainder = &rest[37..]; // skip the ':'
+                if let Ok(conn_id) = Uuid::parse_str(uuid_str)
+                    && let Some((database, collection)) = remainder.split_once(':')
+                {
+                    state.update(cx, |state, cx| {
+                        state.select_connection(Some(conn_id), cx);
+                        state.select_collection(database.to_string(), collection.to_string(), cx);
+                    });
+                }
+            }
+            return;
+        }
+
+        // Tab actions
+        if let Some(tab_str) = id.strip_prefix("tab:") {
+            if tab_str == "preview" {
+                state.update(cx, |state, cx| {
+                    state.select_preview_tab(cx);
+                });
+            } else if let Ok(index) = tab_str.parse::<usize>() {
+                state.update(cx, |state, cx| {
+                    state.select_tab(index, cx);
+                });
+            }
+            return;
+        }
+
+        // Commands and views
+        match id {
+            "cmd:new-connection" => {
+                ConnectionDialog::open(state.clone(), window, cx);
+            }
+            "cmd:create-database" => {
+                let state_ref = state.read(cx);
+                let Some(conn_id) = state_ref.selected_connection_id() else {
+                    return;
+                };
+                if !state_ref.is_connected(conn_id) {
+                    return;
+                }
+                open_create_database_dialog(state.clone(), window, cx);
+            }
+            "cmd:create-collection" => {
+                let state_ref = state.read(cx);
+                let Some(conn_id) = state_ref.selected_connection_id() else {
+                    return;
+                };
+                if !state_ref.is_connected(conn_id) {
+                    return;
+                }
+                let Some(database) = state_ref.selected_database_name() else {
+                    return;
+                };
+                open_create_collection_dialog(state.clone(), database, window, cx);
+            }
+            "cmd:refresh" => {
+                let state_ref = state.read(cx);
+                if let Some(conn_id) = state_ref.selected_connection_id()
+                    && state_ref.is_connected(conn_id)
+                {
+                    AppCommands::refresh_databases(state.clone(), conn_id, cx);
+                }
+            }
+            "cmd:disconnect" => {
+                if let Some(conn_id) = state.read(cx).selected_connection_id() {
+                    AppCommands::disconnect(state.clone(), conn_id, cx);
+                }
+            }
+            "view:documents" => {
+                if let Some(key) = state.read(cx).current_session_key() {
+                    state.update(cx, |state, _cx| {
+                        state.set_collection_subview(&key, CollectionSubview::Documents);
+                    });
+                }
+            }
+            "view:indexes" => {
+                if let Some(key) = state.read(cx).current_session_key() {
+                    state.update(cx, |state, _cx| {
+                        state.set_collection_subview(&key, CollectionSubview::Indexes);
+                    });
+                }
+            }
+            "view:stats" => {
+                if let Some(key) = state.read(cx).current_session_key() {
+                    state.update(cx, |state, _cx| {
+                        state.set_collection_subview(&key, CollectionSubview::Stats);
+                    });
+                }
+            }
+            _ => {} // Unknown action — no-op
+        }
     }
 
     pub(super) fn handle_refresh(&mut self, cx: &mut App) {
