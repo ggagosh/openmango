@@ -41,116 +41,8 @@ impl CollectionView {
             let key = event.keystroke.key.to_ascii_lowercase();
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
-            let is_arrow = key == "up" || key == "down" || key == "left" || key == "right";
 
-            if !is_escape && !is_enter && !is_arrow {
-                return;
-            }
-
-            // Handle arrow keys for tree navigation
-            if is_arrow {
-                view.update(cx, |this, cx| {
-                    // Only navigate when documents_focus is focused and no inline editing
-                    if !this.documents_focus.is_focused(window) {
-                        return;
-                    }
-                    if this.view_model.inline_state().is_some() {
-                        return;
-                    }
-                    let Some(session_key) = this.view_model.current_session() else {
-                        return;
-                    };
-
-                    let count = this.view_model.tree_order().len();
-                    if count == 0 {
-                        return;
-                    }
-
-                    let current_ix =
-                        this.view_model.tree_state().read(cx).selected_index().unwrap_or(0);
-                    let current_node_id = this.view_model.tree_order().get(current_ix).cloned();
-
-                    match key.as_str() {
-                        "up" => {
-                            let new_ix = if current_ix == 0 { count - 1 } else { current_ix - 1 };
-                            Self::select_tree_index(this, new_ix, &session_key, cx);
-                            cx.stop_propagation();
-                        }
-                        "down" => {
-                            let new_ix = if current_ix >= count - 1 { 0 } else { current_ix + 1 };
-                            Self::select_tree_index(this, new_ix, &session_key, cx);
-                            cx.stop_propagation();
-                        }
-                        "left" => {
-                            // 1. Collapse if expanded folder
-                            // 2. Otherwise move to parent
-                            if let Some(node_id) = current_node_id {
-                                let node_meta = this.view_model.node_meta();
-                                let is_folder =
-                                    node_meta.get(&node_id).is_some_and(|m| m.is_folder);
-                                let is_expanded = this
-                                    .state
-                                    .read(cx)
-                                    .session_view(&session_key)
-                                    .is_some_and(|v| v.expanded_nodes.contains(&node_id));
-                                if is_folder && is_expanded {
-                                    this.state.update(cx, |state, cx| {
-                                        state.toggle_expanded_node(&session_key, &node_id);
-                                        cx.notify();
-                                    });
-                                    this.view_model.rebuild_tree(&this.state, cx);
-                                    cx.notify();
-                                } else {
-                                    // Move to parent: strip last path segment from node_id
-                                    let parent_id = node_id.rfind('/').map(|i| &node_id[..i]);
-                                    if let Some(parent_id) = parent_id {
-                                        let parent_ix = this
-                                            .view_model
-                                            .tree_order()
-                                            .iter()
-                                            .position(|id| id == parent_id);
-                                        if let Some(parent_ix) = parent_ix {
-                                            Self::select_tree_index(
-                                                this,
-                                                parent_ix,
-                                                &session_key,
-                                                cx,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            cx.stop_propagation();
-                        }
-                        "right" => {
-                            // 1. Expand if collapsed folder
-                            // 2. Move to first child if expanded folder
-                            if let Some(node_id) = current_node_id {
-                                let node_meta = this.view_model.node_meta();
-                                let is_folder =
-                                    node_meta.get(&node_id).is_some_and(|m| m.is_folder);
-                                let is_expanded = this
-                                    .state
-                                    .read(cx)
-                                    .session_view(&session_key)
-                                    .is_some_and(|v| v.expanded_nodes.contains(&node_id));
-                                if is_folder && !is_expanded {
-                                    this.state.update(cx, |state, cx| {
-                                        state.toggle_expanded_node(&session_key, &node_id);
-                                        cx.notify();
-                                    });
-                                    this.view_model.rebuild_tree(&this.state, cx);
-                                    cx.notify();
-                                } else if is_folder && is_expanded && current_ix + 1 < count {
-                                    // Move to first child (next item in DFS order)
-                                    Self::select_tree_index(this, current_ix + 1, &session_key, cx);
-                                }
-                            }
-                            cx.stop_propagation();
-                        }
-                        _ => {}
-                    }
-                });
+            if !is_escape && !is_enter {
                 return;
             }
             view.update(cx, |this, cx| {
@@ -522,6 +414,89 @@ impl CollectionView {
             }
         }
         cx.notify();
+    }
+
+    pub(crate) fn handle_tree_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.view_model.inline_state().is_some() {
+            return false;
+        }
+        let Some(session_key) = self.view_model.current_session() else {
+            return false;
+        };
+
+        let count = self.view_model.tree_order().len();
+        if count == 0 {
+            return false;
+        }
+
+        let current_ix = self.view_model.tree_state().read(cx).selected_index().unwrap_or(0);
+        let current_node_id = self.view_model.tree_order().get(current_ix).cloned();
+        let key = event.keystroke.key.to_ascii_lowercase();
+
+        match key.as_str() {
+            "up" => {
+                let new_ix = if current_ix == 0 { count - 1 } else { current_ix - 1 };
+                Self::select_tree_index(self, new_ix, &session_key, cx);
+                true
+            }
+            "down" => {
+                let new_ix = if current_ix >= count - 1 { 0 } else { current_ix + 1 };
+                Self::select_tree_index(self, new_ix, &session_key, cx);
+                true
+            }
+            "left" => {
+                if let Some(node_id) = current_node_id {
+                    let node_meta = self.view_model.node_meta();
+                    let is_folder = node_meta.get(&node_id).is_some_and(|m| m.is_folder);
+                    let is_expanded = self
+                        .state
+                        .read(cx)
+                        .session_view(&session_key)
+                        .is_some_and(|v| v.expanded_nodes.contains(&node_id));
+                    if is_folder && is_expanded {
+                        self.state.update(cx, |state, cx| {
+                            state.toggle_expanded_node(&session_key, &node_id);
+                            cx.notify();
+                        });
+                        self.view_model.rebuild_tree(&self.state, cx);
+                        cx.notify();
+                    } else {
+                        let parent_id = node_id.rfind('/').map(|i| &node_id[..i]);
+                        if let Some(parent_id) = parent_id {
+                            let parent_ix =
+                                self.view_model.tree_order().iter().position(|id| id == parent_id);
+                            if let Some(parent_ix) = parent_ix {
+                                Self::select_tree_index(self, parent_ix, &session_key, cx);
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "right" => {
+                if let Some(node_id) = current_node_id {
+                    let node_meta = self.view_model.node_meta();
+                    let is_folder = node_meta.get(&node_id).is_some_and(|m| m.is_folder);
+                    let is_expanded = self
+                        .state
+                        .read(cx)
+                        .session_view(&session_key)
+                        .is_some_and(|v| v.expanded_nodes.contains(&node_id));
+                    if is_folder && !is_expanded {
+                        self.state.update(cx, |state, cx| {
+                            state.toggle_expanded_node(&session_key, &node_id);
+                            cx.notify();
+                        });
+                        self.view_model.rebuild_tree(&self.state, cx);
+                        cx.notify();
+                    } else if is_folder && is_expanded && current_ix + 1 < count {
+                        Self::select_tree_index(self, current_ix + 1, &session_key, cx);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn go_to_match(&mut self, index: usize, cx: &mut Context<Self>) {

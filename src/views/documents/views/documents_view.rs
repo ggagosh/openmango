@@ -53,6 +53,16 @@ impl CollectionView {
             .min_w(px(0.0))
             .overflow_hidden()
             .track_focus(&self.documents_focus)
+            .on_key_down({
+                let view = view.clone();
+                move |event, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.handle_tree_key(event, cx) {
+                            cx.stop_propagation();
+                        }
+                    });
+                }
+            })
             .child(
                 div()
                     .relative()
