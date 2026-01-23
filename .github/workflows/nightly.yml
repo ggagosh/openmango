@@ -71,6 +71,9 @@ jobs:
       - name: Build and package
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
           CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
         run: scripts/release_macos.sh ${{ matrix.target }}

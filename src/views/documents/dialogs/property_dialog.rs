@@ -6,105 +6,18 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::{Disableable as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
-use mongodb::bson::{self, Bson, DateTime, Document, doc, oid::ObjectId};
+use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
-use crate::bson::{
-    DocumentKey, PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string,
-    parse_document_from_json,
-};
+use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
 use crate::components::Button;
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PropertyActionKind {
-    EditValue,
-    AddField,
-    RenameField,
-    RemoveField,
-    AddElement,
-    RemoveMatchingValues,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum UpdateScope {
-    CurrentDocument,
-    MatchQuery,
-    AllDocuments,
-}
-
-impl UpdateScope {
-    fn label(self) -> &'static str {
-        match self {
-            UpdateScope::CurrentDocument => "Current document only",
-            UpdateScope::MatchQuery => "Match current query",
-            UpdateScope::AllDocuments => "All documents",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ValueType {
-    Document,
-    Array,
-    ObjectId,
-    String,
-    Bool,
-    Int32,
-    Int64,
-    Double,
-    Date,
-    Null,
-}
-
-impl ValueType {
-    fn label(self) -> &'static str {
-        match self {
-            ValueType::Document => "Document",
-            ValueType::Array => "Array",
-            ValueType::ObjectId => "ObjectId",
-            ValueType::String => "String",
-            ValueType::Bool => "Bool",
-            ValueType::Int32 => "Int32",
-            ValueType::Int64 => "Int64",
-            ValueType::Double => "Double",
-            ValueType::Date => "Date",
-            ValueType::Null => "Null",
-        }
-    }
-
-    fn placeholder(self) -> &'static str {
-        match self {
-            ValueType::Document => "{ }",
-            ValueType::Array => "[ ]",
-            ValueType::ObjectId => "ObjectId hex",
-            ValueType::String => "Value",
-            ValueType::Bool => "true / false",
-            ValueType::Int32 => "0",
-            ValueType::Int64 => "0",
-            ValueType::Double => "0.0",
-            ValueType::Date => "RFC3339 timestamp",
-            ValueType::Null => "",
-        }
-    }
-
-    fn from_bson(value: &Bson) -> Self {
-        match value {
-            Bson::Document(_) => ValueType::Document,
-            Bson::Array(_) => ValueType::Array,
-            Bson::ObjectId(_) => ValueType::ObjectId,
-            Bson::String(_) => ValueType::String,
-            Bson::Boolean(_) => ValueType::Bool,
-            Bson::Int32(_) => ValueType::Int32,
-            Bson::Int64(_) => ValueType::Int64,
-            Bson::Double(_) => ValueType::Double,
-            Bson::DateTime(_) => ValueType::Date,
-            Bson::Null => ValueType::Null,
-            _ => ValueType::String,
-        }
-    }
-}
+use super::property_dialog_support::{
+    PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
+    format_bson_for_input, parent_path, parse_bool, parse_date, parse_f64, parse_i32, parse_i64,
+};
 
 pub struct PropertyActionDialog {
     state: Entity<AppState>,
@@ -449,27 +362,15 @@ impl PropertyActionDialog {
 
         match self.value_type {
             ValueType::String => Ok(Bson::String(raw)),
-            ValueType::Bool => match trimmed.to_ascii_lowercase().as_str() {
-                "true" => Ok(Bson::Boolean(true)),
-                "false" => Ok(Bson::Boolean(false)),
-                _ => Err("Expected true/false".to_string()),
-            },
-            ValueType::Int32 => {
-                trimmed.parse::<i32>().map(Bson::Int32).map_err(|_| "Expected int32".to_string())
-            }
-            ValueType::Int64 => {
-                trimmed.parse::<i64>().map(Bson::Int64).map_err(|_| "Expected int64".to_string())
-            }
-            ValueType::Double => {
-                trimmed.parse::<f64>().map(Bson::Double).map_err(|_| "Expected number".to_string())
-            }
+            ValueType::Bool => parse_bool(trimmed),
+            ValueType::Int32 => parse_i32(trimmed),
+            ValueType::Int64 => parse_i64(trimmed),
+            ValueType::Double => parse_f64(trimmed),
             ValueType::Null => Ok(Bson::Null),
             ValueType::ObjectId => ObjectId::parse_str(trimmed)
                 .map(Bson::ObjectId)
                 .map_err(|_| "Expected ObjectId hex".to_string()),
-            ValueType::Date => DateTime::parse_rfc3339_str(trimmed)
-                .map(Bson::DateTime)
-                .map_err(|_| "Expected RFC3339 date".to_string()),
+            ValueType::Date => parse_date(trimmed),
             ValueType::Document => {
                 let raw = if trimmed.is_empty() { "{}" } else { trimmed };
                 parse_document_from_json(raw)
@@ -544,11 +445,7 @@ impl PropertyActionDialog {
     }
 
     fn current_filter(&self, cx: &mut Context<Self>) -> Document {
-        let state_ref = self.state.read(cx);
-        state_ref
-            .session(&self.session_key)
-            .and_then(|session| session.data.filter.clone())
-            .unwrap_or_default()
+        self.state.read(cx).session_filter(&self.session_key).unwrap_or_default()
     }
 
     fn build_update_doc(&self, cx: &mut Context<Self>) -> Result<Document, String> {
@@ -901,72 +798,5 @@ impl Render for PropertyActionDialog {
                             ),
                     ),
             )
-    }
-}
-
-fn parent_path(path: &[PathSegment]) -> Vec<PathSegment> {
-    if path.is_empty() {
-        return Vec::new();
-    }
-    path[..path.len() - 1].to_vec()
-}
-
-fn display_segment(segment: Option<&PathSegment>) -> String {
-    match segment {
-        Some(PathSegment::Key(key)) => key.to_string(),
-        Some(PathSegment::Index(index)) => format!("[{index}]"),
-        None => "".to_string(),
-    }
-}
-
-fn display_path(path: &[PathSegment]) -> String {
-    let mut out = String::new();
-    for segment in path {
-        match segment {
-            PathSegment::Key(key) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(key);
-            }
-            PathSegment::Index(index) => {
-                out.push('[');
-                out.push_str(&index.to_string());
-                out.push(']');
-            }
-        }
-    }
-    out
-}
-
-fn dot_path(path: &[PathSegment]) -> String {
-    let mut out = String::new();
-    for segment in path {
-        match segment {
-            PathSegment::Key(key) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(key);
-            }
-            PathSegment::Index(index) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(&index.to_string());
-            }
-        }
-    }
-    out
-}
-
-fn format_bson_for_input(value: &Bson) -> String {
-    match value {
-        Bson::Document(doc) => document_to_relaxed_extjson_string(doc),
-        Bson::Array(arr) => {
-            let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
-        }
-        _ => bson_value_for_edit(value),
     }
 }

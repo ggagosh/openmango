@@ -10,9 +10,9 @@ use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
 use crate::state::{AppState, SessionKey};
-use crate::views::documents::document_tree::{build_documents_tree, flatten_tree_order_all};
+use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
-use crate::views::documents::property_dialog::PropertyActionDialog;
+use crate::views::documents::tree::document_tree::{build_documents_tree, flatten_tree_order_all};
 use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;
@@ -122,22 +122,21 @@ impl DocumentViewModel {
             return;
         };
         let state_ref = state.read(cx);
-        let Some(session) = state_ref.session(&session_key) else {
+        let Some(data) = state_ref.session_data(&session_key) else {
+            return;
+        };
+        let Some(view) = state_ref.session_view(&session_key) else {
             return;
         };
 
-        let (items, meta, order) = build_documents_tree(
-            &session.data.items,
-            &session.view.drafts,
-            &session.view.expanded_nodes,
-        );
+        let (items, meta, order) =
+            build_documents_tree(&data.items, &view.drafts, &view.expanded_nodes);
         let mut full_order = Vec::new();
         for item in &items {
             flatten_tree_order_all(item, &mut full_order);
         }
 
-        let selected_index = session
-            .view
+        let selected_index = view
             .selected_node_id
             .as_ref()
             .and_then(|id| order.iter().position(|entry| entry == id));
@@ -156,10 +155,8 @@ impl DocumentViewModel {
         let Some(session) = self.current_session.clone() else {
             return;
         };
-        let dirty = state
-            .read(cx)
-            .session(&session)
-            .is_some_and(|session_state| !session_state.view.dirty.is_empty());
+        let dirty =
+            state.read(cx).session_view(&session).is_some_and(|view| !view.dirty.is_empty());
         state.update(cx, |state, cx| {
             state.set_collection_dirty(session.clone(), dirty, cx);
         });

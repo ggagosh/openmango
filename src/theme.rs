@@ -271,4 +271,5 @@ pub mod borders {
 }
 
 // Re-exports for easier access
+#[allow(unused_imports)]
 pub use colors::*;

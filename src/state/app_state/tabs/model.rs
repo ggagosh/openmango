@@ -1,21 +1,38 @@
 //! Tab management for AppState.
 
+use std::collections::HashSet;
+
 use gpui::Context;
 use uuid::Uuid;
 
-use crate::state::StatusLevel;
 use crate::state::events::AppEvent;
+use crate::state::{AppState, StatusLevel};
 
-use super::AppState;
-use super::types::{ActiveTab, DatabaseKey, SessionKey, TabKey, View};
+use crate::state::app_state::types::{ActiveTab, DatabaseKey, SessionKey, TabKey, View};
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TabOpenMode {
+pub(in crate::state::app_state) enum TabOpenMode {
     Preview,
     Permanent,
 }
 
 impl AppState {
+    pub fn open_tabs(&self) -> &[TabKey] {
+        &self.tabs.open
+    }
+
+    pub fn preview_tab(&self) -> Option<&SessionKey> {
+        self.tabs.preview.as_ref()
+    }
+
+    pub fn active_tab(&self) -> ActiveTab {
+        self.tabs.active
+    }
+
+    pub fn dirty_tabs(&self) -> &HashSet<SessionKey> {
+        &self.tabs.dirty
+    }
+
     fn active_index(&self) -> Option<usize> {
         match self.tabs.active {
             ActiveTab::Index(index) => Some(index),
@@ -40,8 +57,8 @@ impl AppState {
     }
 
     fn clear_error_status(&mut self) {
-        if matches!(self.status_message.as_ref().map(|m| &m.level), Some(StatusLevel::Error)) {
-            self.status_message = None;
+        if matches!(self.status_message().as_ref().map(|m| &m.level), Some(StatusLevel::Error)) {
+            self.clear_status_message();
         }
     }
 
@@ -60,7 +77,7 @@ impl AppState {
         }
     }
 
-    pub(super) fn open_collection_with_mode(
+    pub(in crate::state::app_state) fn open_collection_with_mode(
         &mut self,
         database: String,
         collection: String,
@@ -159,7 +176,11 @@ impl AppState {
         cx.notify();
     }
 
-    pub(super) fn open_database_tab(&mut self, database: String, cx: &mut Context<Self>) {
+    pub(in crate::state::app_state) fn open_database_tab(
+        &mut self,
+        database: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(conn_id) = self.conn.selected_connection else {
             return;
         };
@@ -225,7 +246,7 @@ impl AppState {
         cx.notify();
     }
 
-    pub(super) fn close_database_tabs(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::state::app_state) fn close_database_tabs(&mut self, cx: &mut Context<Self>) {
         let Some(conn_id) = self.conn.selected_connection else {
             return;
         };

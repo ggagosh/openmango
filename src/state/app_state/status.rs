@@ -9,90 +9,111 @@ impl AppState {
     pub(crate) fn update_status_from_event(&mut self, event: &AppEvent) {
         match event {
             AppEvent::Connecting(_) => {
-                self.status_message = Some(StatusMessage::info("Connecting..."));
+                self.set_status_message(Some(StatusMessage::info("Connecting...")));
             }
             AppEvent::Connected(_) => {
-                self.status_message = Some(StatusMessage::info("Connected"));
+                self.set_status_message(Some(StatusMessage::info("Connected")));
             }
             AppEvent::Disconnected(_) => {
-                self.status_message = Some(StatusMessage::info("Disconnected"));
+                self.set_status_message(Some(StatusMessage::info("Disconnected")));
             }
             AppEvent::ConnectionFailed(error) => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Connection failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Connection failed: {error}"
+                ))));
             }
             AppEvent::ConnectionUpdated => {
-                self.status_message = Some(StatusMessage::info("Connection updated"));
+                self.set_status_message(Some(StatusMessage::info("Connection updated")));
             }
             AppEvent::ConnectionRemoved => {
-                self.status_message = Some(StatusMessage::info("Connection removed"));
+                self.set_status_message(Some(StatusMessage::info("Connection removed")));
             }
             AppEvent::DatabasesLoaded(databases) => {
-                self.status_message =
-                    Some(StatusMessage::info(format!("Loaded {} databases", databases.len())));
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Loaded {} databases",
+                    databases.len()
+                ))));
             }
             AppEvent::CollectionsLoaded(collections) => {
-                self.status_message =
-                    Some(StatusMessage::info(format!("Loaded {} collections", collections.len())));
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Loaded {} collections",
+                    collections.len()
+                ))));
             }
             AppEvent::CollectionsFailed(error) => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Collections failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Collections failed: {error}"
+                ))));
             }
             AppEvent::DocumentsLoaded { total, .. } => {
-                self.status_message =
-                    Some(StatusMessage::info(format!("Loaded {total} documents")));
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Loaded {total} documents"
+                ))));
             }
             AppEvent::DocumentInserted => {
-                self.status_message = Some(StatusMessage::info("Document inserted"));
+                self.set_status_message(Some(StatusMessage::info("Document inserted")));
             }
             AppEvent::DocumentInsertFailed { error, .. } => {
-                self.status_message = Some(StatusMessage::error(format!("Insert failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Insert failed: {error}"
+                ))));
             }
             AppEvent::DocumentsInserted { count } => {
-                self.status_message =
-                    Some(StatusMessage::info(format!("Inserted {} document(s)", count)));
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Inserted {} document(s)",
+                    count
+                ))));
             }
             AppEvent::DocumentsInsertFailed { count, error } => {
-                self.status_message = Some(StatusMessage::error(format!(
+                self.set_status_message(Some(StatusMessage::error(format!(
                     "Failed to insert {} document(s): {}",
                     count, error
-                )));
+                ))));
             }
             AppEvent::DocumentSaveFailed { error, .. } => {
-                self.status_message = Some(StatusMessage::error(format!("Save failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Save failed: {error}"
+                ))));
             }
             AppEvent::DocumentDeleted { .. } => {
-                self.status_message = Some(StatusMessage::info("Document deleted"));
+                self.set_status_message(Some(StatusMessage::info("Document deleted")));
             }
             AppEvent::DocumentDeleteFailed { error, .. } => {
-                self.status_message = Some(StatusMessage::error(format!("Delete failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Delete failed: {error}"
+                ))));
             }
             AppEvent::IndexesLoaded { count, .. } => {
-                self.status_message = Some(StatusMessage::info(format!("Loaded {count} indexes")));
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Loaded {count} indexes"
+                ))));
             }
             AppEvent::IndexesLoadFailed { error, .. } => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Indexes failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Indexes failed: {error}"
+                ))));
             }
             AppEvent::IndexDropped { name, .. } => {
-                self.status_message = Some(StatusMessage::info(format!("Index {name} dropped")));
+                self.set_status_message(Some(StatusMessage::info(format!("Index {name} dropped"))));
             }
             AppEvent::IndexDropFailed { error, .. } => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Drop index failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Drop index failed: {error}"
+                ))));
             }
             AppEvent::IndexCreated { name, .. } => {
                 if let Some(name) = name {
-                    self.status_message =
-                        Some(StatusMessage::info(format!("Index {name} created")));
+                    self.set_status_message(Some(StatusMessage::info(format!(
+                        "Index {name} created"
+                    ))));
                 } else {
-                    self.status_message = Some(StatusMessage::info("Index created"));
+                    self.set_status_message(Some(StatusMessage::info("Index created")));
                 }
             }
             AppEvent::IndexCreateFailed { error, .. } => {
-                self.status_message =
-                    Some(StatusMessage::error(format!("Create index failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Create index failed: {error}"
+                ))));
             }
             AppEvent::DocumentsUpdated { matched, modified, .. } => {
                 let message = if *matched == 0 {
@@ -102,24 +123,30 @@ impl AppState {
                 } else {
                     format!("Updated {modified} of {matched} documents")
                 };
-                self.status_message = Some(StatusMessage::info(message));
+                self.set_status_message(Some(StatusMessage::info(message)));
             }
             AppEvent::DocumentsUpdateFailed { error, .. } => {
-                self.status_message = Some(StatusMessage::error(format!("Update failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Update failed: {error}"
+                ))));
             }
             AppEvent::DocumentsDeleted { session, deleted } => {
                 let _ = session;
                 if *deleted == 0 {
-                    self.status_message =
-                        Some(StatusMessage::info("No documents matched the delete.".to_string()));
+                    self.set_status_message(Some(StatusMessage::info(
+                        "No documents matched the delete.".to_string(),
+                    )));
                 } else {
-                    self.status_message =
-                        Some(StatusMessage::info(format!("Deleted {deleted} document(s)")));
+                    self.set_status_message(Some(StatusMessage::info(format!(
+                        "Deleted {deleted} document(s)"
+                    ))));
                 }
             }
             AppEvent::DocumentsDeleteFailed { session, error } => {
                 let _ = session;
-                self.status_message = Some(StatusMessage::error(format!("Delete failed: {error}")));
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Delete failed: {error}"
+                ))));
             }
             _ => {}
         }

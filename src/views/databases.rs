@@ -51,7 +51,7 @@ impl Render for DatabaseView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state_ref = self.state.read(cx);
         let database_name =
-            state_ref.conn.selected_database.clone().unwrap_or_else(|| "Database".to_string());
+            state_ref.selected_database_name().unwrap_or_else(|| "Database".to_string());
         let database_key = state_ref.current_database_key();
 
         if database_key.is_none() {

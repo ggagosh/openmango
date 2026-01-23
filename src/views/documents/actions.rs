@@ -1,0 +1,379 @@
+use gpui::*;
+use mongodb::bson::{Bson, oid::ObjectId};
+
+use crate::bson::{
+    PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string, get_bson_at_path,
+};
+use crate::components::open_confirm_dialog;
+use crate::keyboard::{
+    AddElement, AddField, CloseSearch, CopyDocumentJson, CopyKey, CopyValue, CreateIndex,
+    DeleteCollection, DeleteDocument, DiscardDocumentChanges, DuplicateDocument, EditDocumentJson,
+    EditValueType, FindInResults, InsertDocument, PasteDocuments, RemoveMatchingValues,
+    RemoveSelectedField, RenameField, SaveDocument, ShowDocumentsSubview, ShowIndexesSubview,
+    ShowStatsSubview,
+};
+use crate::state::{AppCommands, CollectionSubview};
+
+use super::CollectionView;
+use super::dialogs::index_create::IndexCreateDialog;
+use super::dialogs::property_dialog::PropertyActionDialog;
+use super::node_meta::NodeMeta;
+use super::tree::tree_content::paste_documents_from_clipboard;
+
+impl CollectionView {
+    pub(super) fn bind_root_actions(&mut self, root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_action(cx.listener(|this, _: &FindInResults, window, cx| {
+            if this.search_visible {
+                return;
+            }
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let subview = this
+                .state
+                .read(cx)
+                .session_subview(&session_key)
+                .unwrap_or(CollectionSubview::Documents);
+            if subview != CollectionSubview::Documents {
+                return;
+            }
+            this.show_search_bar(window, cx);
+            cx.stop_propagation();
+        }))
+        .on_action(cx.listener(|this, _: &CloseSearch, window, cx| {
+            if !this.search_visible {
+                return;
+            }
+            this.close_search(window, cx);
+            cx.notify();
+            cx.stop_propagation();
+        }))
+        .on_action(cx.listener(|this, _: &InsertDocument, window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            CollectionView::open_insert_document_json_editor(
+                this.state.clone(),
+                session_key,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let subview = this
+                .state
+                .read(cx)
+                .session_subview(&session_key)
+                .unwrap_or(CollectionSubview::Documents);
+            if subview != CollectionSubview::Indexes {
+                return;
+            }
+            IndexCreateDialog::open(this.state.clone(), session_key, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &EditDocumentJson, window, cx| {
+            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+                return;
+            };
+            CollectionView::open_document_json_editor(
+                cx.entity(),
+                this.state.clone(),
+                session_key,
+                doc_key,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &DuplicateDocument, _window, cx| {
+            let Some((session_key, _doc_key, doc)) = this.selected_document_for_current_session(cx)
+            else {
+                return;
+            };
+            let mut new_doc = doc.clone();
+            new_doc.insert("_id", ObjectId::new());
+            AppCommands::insert_document(this.state.clone(), session_key, new_doc, cx);
+        }))
+        .on_action(cx.listener(|this, _: &DeleteDocument, window, cx| {
+            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+                return;
+            };
+            let message = format!("Delete document {}? This cannot be undone.", doc_key);
+            open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
+                let state = this.state.clone();
+                let session_key = session_key.clone();
+                let doc_key = doc_key.clone();
+                move |_window, cx| {
+                    AppCommands::delete_document(
+                        state.clone(),
+                        session_key.clone(),
+                        doc_key.clone(),
+                        cx,
+                    );
+                }
+            });
+        }))
+        .on_action(cx.listener(|this, _: &DeleteCollection, window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let message =
+                format!("Drop collection {}? This cannot be undone.", session_key.collection);
+            open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
+                let state = this.state.clone();
+                let session_key = session_key.clone();
+                move |_window, cx| {
+                    AppCommands::drop_collection(
+                        state.clone(),
+                        session_key.database.clone(),
+                        session_key.collection.clone(),
+                        cx,
+                    );
+                }
+            });
+        }))
+        .on_action(cx.listener(|this, _: &PasteDocuments, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            paste_documents_from_clipboard(this.state.clone(), session_key, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyDocumentJson, _window, cx| {
+            let Some((_session_key, _doc_key, doc)) =
+                this.selected_document_for_current_session(cx)
+            else {
+                return;
+            };
+            let json = document_to_relaxed_extjson_string(&doc);
+            cx.write_to_clipboard(ClipboardItem::new_string(json));
+        }))
+        .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
+            let Some((session_key, doc_key, doc)) = this.selected_draft_for_current_session(cx)
+            else {
+                return;
+            };
+            AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
+        }))
+        .on_action(cx.listener(|this, _: &EditValueType, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if !flags.can_edit_value {
+                return;
+            }
+            PropertyActionDialog::open_edit_value(
+                this.state.clone(),
+                session_key,
+                meta,
+                flags.allow_bulk,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &RenameField, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if !flags.can_rename_field {
+                return;
+            }
+            PropertyActionDialog::open_rename_field(
+                this.state.clone(),
+                session_key,
+                meta,
+                flags.allow_bulk,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &RemoveSelectedField, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if flags.can_remove_element {
+                PropertyActionDialog::open_remove_matching(
+                    this.state.clone(),
+                    session_key,
+                    meta,
+                    false,
+                    window,
+                    cx,
+                );
+            } else if flags.can_remove_field {
+                PropertyActionDialog::open_remove_field(
+                    this.state.clone(),
+                    session_key,
+                    meta,
+                    flags.allow_bulk,
+                    window,
+                    cx,
+                );
+            }
+        }))
+        .on_action(cx.listener(|this, _: &AddField, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if !flags.can_add_field {
+                return;
+            }
+            PropertyActionDialog::open_add_field(
+                this.state.clone(),
+                session_key,
+                meta,
+                flags.allow_bulk,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &AddElement, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if !flags.is_array || flags.is_array_element {
+                return;
+            }
+            PropertyActionDialog::open_add_element(
+                this.state.clone(),
+                session_key,
+                meta,
+                flags.allow_bulk,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &RemoveMatchingValues, window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let flags = property_flags(&meta);
+            if !flags.is_array || flags.is_array_element {
+                return;
+            }
+            PropertyActionDialog::open_remove_matching(
+                this.state.clone(),
+                session_key,
+                meta,
+                flags.allow_bulk,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &CopyValue, _window, cx| {
+            let Some((session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            let Some(doc) = this.resolve_document(&session_key, &meta.doc_key, cx) else {
+                return;
+            };
+            if let Some(value) = get_bson_at_path(&doc, &meta.path) {
+                let text = format_bson_for_clipboard(value);
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+        }))
+        .on_action(cx.listener(|this, _: &CopyKey, _window, cx| {
+            let Some((_session_key, meta)) = this.selected_property_context(cx) else {
+                return;
+            };
+            cx.write_to_clipboard(ClipboardItem::new_string(meta.key_label));
+        }))
+        .on_action(cx.listener(|this, _: &DiscardDocumentChanges, _window, cx| {
+            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+                return;
+            };
+            this.state.update(cx, |state, cx| {
+                state.clear_draft(&session_key, &doc_key);
+                cx.notify();
+            });
+            this.view_model.clear_inline_edit();
+            this.view_model.rebuild_tree(&this.state, cx);
+            this.view_model.sync_dirty_state(&this.state, cx);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &ShowDocumentsSubview, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            this.state.update(cx, |state, cx| {
+                state.set_collection_subview(&session_key, CollectionSubview::Documents);
+                cx.notify();
+            });
+        }))
+        .on_action(cx.listener(|this, _: &ShowIndexesSubview, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            this.state.update(cx, |state, cx| {
+                state.set_collection_subview(&session_key, CollectionSubview::Indexes);
+                cx.notify();
+            });
+            AppCommands::load_collection_indexes(this.state.clone(), session_key, false, cx);
+        }))
+        .on_action(cx.listener(|this, _: &ShowStatsSubview, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let should_load = this.state.update(cx, |state, cx| {
+                let should_load =
+                    state.set_collection_subview(&session_key, CollectionSubview::Stats);
+                cx.notify();
+                should_load
+            });
+            if should_load {
+                AppCommands::load_collection_stats(this.state.clone(), session_key, cx);
+            }
+        }))
+    }
+}
+
+struct PropertyFlags {
+    allow_bulk: bool,
+    can_edit_value: bool,
+    can_rename_field: bool,
+    can_remove_field: bool,
+    can_remove_element: bool,
+    can_add_field: bool,
+    is_array: bool,
+    is_array_element: bool,
+}
+
+fn property_flags(meta: &NodeMeta) -> PropertyFlags {
+    let is_array_element = matches!(meta.path.last(), Some(PathSegment::Index(_)));
+    let has_index = meta.path.iter().any(|segment| matches!(segment, PathSegment::Index(_)));
+    let allow_bulk = !has_index;
+    let is_id = matches!(meta.path.last(), Some(PathSegment::Key(key)) if key == "_id");
+    let is_array = matches!(meta.value, Some(Bson::Array(_)));
+    let can_edit_value = !is_id;
+    let can_rename_field = !is_id && !is_array_element;
+    let can_remove_field = !is_id && !is_array_element;
+    let can_remove_element = is_array_element && meta.value.is_some();
+    let can_add_field = !is_array_element;
+
+    PropertyFlags {
+        allow_bulk,
+        can_edit_value,
+        can_rename_field,
+        can_remove_field,
+        can_remove_element,
+        can_add_field,
+        is_array,
+        is_array_element,
+    }
+}
+
+fn format_bson_for_clipboard(value: &Bson) -> String {
+    match value {
+        Bson::Document(doc) => document_to_relaxed_extjson_string(doc),
+        Bson::Array(arr) => {
+            let value = Bson::Array(arr.clone()).into_relaxed_extjson();
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
+        }
+        _ => bson_value_for_edit(value),
+    }
+}
