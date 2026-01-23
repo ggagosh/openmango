@@ -210,10 +210,11 @@ impl CollectionView {
                                             }
                                             Err(err) => {
                                                 state.update(cx, |state, cx| {
-                                                    state.status_message =
-                                                        Some(StatusMessage::error(format!(
+                                                    state.set_status_message(Some(
+                                                        StatusMessage::error(format!(
                                                             "Invalid JSON: {err}"
-                                                        )));
+                                                        )),
+                                                    ));
                                                     cx.notify();
                                                 });
                                             }

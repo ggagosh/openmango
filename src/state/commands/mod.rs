@@ -14,14 +14,13 @@ impl AppCommands {
         connection_id: Option<Uuid>,
         cx: &mut App,
     ) -> bool {
-        let read_only = connection_id
-            .and_then(|id| state.read(cx).conn.active.get(&id))
-            .map(|conn| conn.config.read_only)
-            .unwrap_or(false);
+        let read_only =
+            connection_id.map(|id| state.read(cx).connection_read_only(id)).unwrap_or(false);
         if read_only {
             state.update(cx, |state, cx| {
-                state.status_message =
-                    Some(StatusMessage::error("Read-only connection: writes are disabled."));
+                state.set_status_message(Some(StatusMessage::error(
+                    "Read-only connection: writes are disabled.",
+                )));
                 cx.notify();
             });
         }
@@ -33,7 +32,7 @@ impl AppCommands {
         connection_id: Uuid,
         cx: &mut App,
     ) -> Option<Client> {
-        state.read(cx).conn.active.get(&connection_id).map(|conn| conn.client.clone())
+        state.read(cx).active_connection_client(connection_id)
     }
 
     pub(super) fn client_for_session(

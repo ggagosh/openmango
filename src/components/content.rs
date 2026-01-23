@@ -77,7 +77,7 @@ impl Render for ContentArea {
         let preview_tab = state_ref.preview_tab().cloned();
         let dirty_tabs = state_ref.dirty_tabs().clone();
         let current_view = state_ref.current_view;
-        let error_text = state_ref.status_message.as_ref().and_then(|message| {
+        let error_text = state_ref.status_message().as_ref().and_then(|message| {
             if matches!(message.level, StatusLevel::Error) {
                 Some(message.text.clone())
             } else {
@@ -427,7 +427,7 @@ impl ContentArea {
                                 let state = state.clone();
                                 move |_, _window, cx| {
                                     state.update(cx, |state, cx| {
-                                        state.status_message = None;
+                                        state.clear_status_message();
                                         cx.notify();
                                     });
                                 }

@@ -76,9 +76,7 @@ impl Sidebar {
                             let should_load = self
                                 .state
                                 .read(cx)
-                                .conn
-                                .active
-                                .get(&connection)
+                                .active_connection_by_id(connection)
                                 .is_some_and(|conn| !conn.collections.contains_key(&database));
                             if should_load && !self.model.loading_databases.contains(&node_id) {
                                 self.model.loading_databases.insert(node_id.clone());

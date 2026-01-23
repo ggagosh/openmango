@@ -21,7 +21,7 @@ impl CollectionView {
         if trimmed.is_empty() || trimmed == "{}" {
             state.update(cx, |state, cx| {
                 state.clear_filter(&session_key);
-                state.status_message = Some(StatusMessage::info("Filter cleared"));
+                state.set_status_message(Some(StatusMessage::info("Filter cleared")));
                 cx.notify();
             });
             AppCommands::load_documents_for_session(state.clone(), session_key, cx);
@@ -32,15 +32,16 @@ impl CollectionView {
             Ok(filter) => {
                 state.update(cx, |state, cx| {
                     state.set_filter(&session_key, trimmed.to_string(), Some(filter));
-                    state.status_message = Some(StatusMessage::info("Filter applied"));
+                    state.set_status_message(Some(StatusMessage::info("Filter applied")));
                     cx.notify();
                 });
                 AppCommands::load_documents_for_session(state.clone(), session_key, cx);
             }
             Err(err) => {
                 state.update(cx, |state, cx| {
-                    state.status_message =
-                        Some(StatusMessage::error(format!("Invalid filter JSON: {err}")));
+                    state.set_status_message(Some(StatusMessage::error(format!(
+                        "Invalid filter JSON: {err}"
+                    ))));
                     cx.notify();
                 });
             }
@@ -62,8 +63,9 @@ impl CollectionView {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
-                    state.status_message =
-                        Some(StatusMessage::error(format!("Invalid sort JSON: {err}")));
+                    state.set_status_message(Some(StatusMessage::error(format!(
+                        "Invalid sort JSON: {err}"
+                    ))));
                     cx.notify();
                 });
                 return;
@@ -74,8 +76,9 @@ impl CollectionView {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
-                    state.status_message =
-                        Some(StatusMessage::error(format!("Invalid projection JSON: {err}")));
+                    state.set_status_message(Some(StatusMessage::error(format!(
+                        "Invalid projection JSON: {err}"
+                    ))));
                     cx.notify();
                 });
                 return;
@@ -96,7 +99,7 @@ impl CollectionView {
                 projection_raw_store,
                 projection_doc,
             );
-            state.status_message = Some(StatusMessage::info(message));
+            state.set_status_message(Some(StatusMessage::info(message)));
             cx.notify();
         });
         AppCommands::load_documents_for_session(state.clone(), session_key, cx);

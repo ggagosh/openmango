@@ -22,7 +22,7 @@ impl AppCommands {
         let (database, collection, skip, limit, request_id, filter, sort, projection, sort_raw) = {
             let state = state.read(cx);
             let (page, per_page, request_id, filter, sort, projection, sort_raw) =
-                match state.sessions.get(&session_key) {
+                match state.session(&session_key) {
                     Some(session) => (
                         session.data.page,
                         session.data.per_page,
@@ -375,8 +375,9 @@ impl AppCommands {
 
         let Some(id) = id else {
             state.update(cx, |state, cx| {
-                state.status_message =
-                    Some(StatusMessage::error("Document missing _id; cannot update."));
+                state.set_status_message(Some(StatusMessage::error(
+                    "Document missing _id; cannot update.",
+                )));
                 cx.notify();
             });
             return;

@@ -61,7 +61,7 @@ impl Render for AppRoot {
         let active_conn = state.active_connection();
         let is_connected = active_conn.is_some();
         let connection_name = active_conn.map(|c| c.config.name.clone());
-        let status_message = state.status_message.clone();
+        let status_message = state.status_message();
         let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
 
         let documents_subview = if matches!(state.current_view, View::Documents) {

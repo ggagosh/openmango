@@ -53,8 +53,9 @@ impl AppCommands {
                                 session.data.stats_loading = false;
                                 session.data.stats_error = Some(e.to_string());
                             }
-                            state.status_message =
-                                Some(StatusMessage::error(format!("Stats failed: {e}")));
+                            state.set_status_message(Some(StatusMessage::error(format!(
+                                "Stats failed: {e}"
+                            ))));
                             cx.notify();
                         });
                     }

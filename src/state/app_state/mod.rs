@@ -9,12 +9,12 @@ mod tabs;
 mod types;
 mod workspace;
 
-pub use database_sessions::DatabaseSessionStore;
-pub use sessions::SessionStore;
+pub(crate) use database_sessions::DatabaseSessionStore;
+pub(crate) use sessions::SessionStore;
 pub use types::{
-    ActiveTab, CollectionOverview, CollectionStats, CollectionSubview, ConnectionState,
-    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData,
-    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TabState, View,
+    ActiveTab, CollectionOverview, CollectionStats, CollectionSubview, DatabaseKey,
+    DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, View,
 };
 
 use gpui::EventEmitter;
@@ -32,14 +32,14 @@ pub struct AppState {
     pub connections: Vec<SavedConnection>,
 
     // Organized sub-states
-    pub conn: ConnectionState,
-    pub tabs: TabState,
-    pub sessions: SessionStore,
-    pub db_sessions: DatabaseSessionStore,
+    conn: ConnectionState,
+    tabs: TabState,
+    sessions: SessionStore,
+    db_sessions: DatabaseSessionStore,
 
     // View state
     pub current_view: View,
-    pub status_message: Option<StatusMessage>,
+    status_message: Option<StatusMessage>,
 
     // Config manager for persistence
     pub(crate) config: ConfigManager,
@@ -77,6 +77,18 @@ impl AppState {
             workspace,
             workspace_restore_pending,
         }
+    }
+
+    pub fn status_message(&self) -> Option<StatusMessage> {
+        self.status_message.clone()
+    }
+
+    pub fn set_status_message(&mut self, message: Option<StatusMessage>) {
+        self.status_message = message;
+    }
+
+    pub fn clear_status_message(&mut self) {
+        self.status_message = None;
     }
 }
 

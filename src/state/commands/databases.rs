@@ -15,7 +15,7 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).conn.selected_connection;
+        let connection_id = state.read(cx).selected_connection_id();
         if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
@@ -24,7 +24,7 @@ impl AppCommands {
 
     /// Drop a database.
     pub fn drop_database(state: Entity<AppState>, database: String, cx: &mut App) {
-        let connection_id = state.read(cx).conn.selected_connection;
+        let connection_id = state.read(cx).selected_connection_id();
         if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
@@ -54,26 +54,25 @@ impl AppCommands {
                             let Some(conn_id) = connection_id else {
                                 return;
                             };
-                            if let Some(conn) = state.conn.active.get_mut(&conn_id) {
+                            if let Some(conn) = state.active_connection_mut(conn_id) {
                                 conn.databases.retain(|db| db != &database);
                                 conn.collections.remove(&database);
                             }
                             state.close_tabs_for_database(conn_id, &database, cx);
-                            if state.conn.selected_connection == Some(conn_id)
-                                && state.conn.selected_database.as_ref() == Some(&database)
+                            if state.selected_connection_is(conn_id)
+                                && state.selected_database() == Some(database.as_str())
                             {
-                                state.conn.selected_database = None;
-                                state.conn.selected_collection = None;
+                                state.set_selected_database_name(None);
+                                state.set_selected_collection_name(None);
                                 state.current_view = View::Databases;
                                 cx.emit(AppEvent::ViewChanged);
                             }
-                            state.status_message =
-                                Some(StatusMessage::info(format!("Dropped database {database}")));
-                            if state.conn.selected_connection == Some(conn_id) {
+                            state.set_status_message(Some(StatusMessage::info(format!(
+                                "Dropped database {database}"
+                            ))));
+                            if state.selected_connection_is(conn_id) {
                                 let databases = state
-                                    .conn
-                                    .active
-                                    .get(&conn_id)
+                                    .active_connection_by_id(conn_id)
                                     .map(|conn| conn.databases.clone())
                                     .unwrap_or_default();
                                 cx.emit(AppEvent::DatabasesLoaded(databases));
@@ -84,8 +83,9 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to drop database: {}", e);
                         state.update(cx, |state, cx| {
-                            state.status_message =
-                                Some(StatusMessage::error(format!("Drop database failed: {e}")));
+                            state.set_status_message(Some(StatusMessage::error(format!(
+                                "Drop database failed: {e}"
+                            ))));
                             cx.notify();
                         });
                     }
@@ -186,7 +186,7 @@ impl AppCommands {
                                     session.data.collections = collections;
                                     session.data.collections_error = None;
                                     if let Some(conn) =
-                                        state.conn.active.get_mut(&database_key.connection_id)
+                                        state.active_connection_mut(database_key.connection_id)
                                     {
                                         conn.collections.insert(database.clone(), names);
                                     }
@@ -200,7 +200,7 @@ impl AppCommands {
                         }
 
                         if let Some(message) = status_message {
-                            state.status_message = Some(StatusMessage::error(message));
+                            state.set_status_message(Some(StatusMessage::error(message)));
                         }
 
                         cx.notify();

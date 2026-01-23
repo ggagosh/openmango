@@ -447,13 +447,9 @@ impl Render for Sidebar {
                                                             }
                                                             let should_load = state_clone
                                                                 .read(cx)
-                                                                .conn
-                                                                .active
-                                                                .get(&connection_id)
+                                                                .active_connection_by_id(connection_id)
                                                                 .is_some_and(|conn| {
-                                                                    !conn
-                                                                        .collections
-                                                                        .contains_key(db)
+                                                                    !conn.collections.contains_key(db)
                                                                 });
                                                             if should_load {
                                                                 sidebar_entity.update(

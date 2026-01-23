@@ -59,7 +59,7 @@ impl AppCommands {
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
                             saved.last_connected = Some(Utc::now());
-                            state.conn.active.insert(
+                            state.insert_active_connection(
                                 connection_id,
                                 ActiveConnection {
                                     config: saved.clone(),
@@ -97,14 +97,14 @@ impl AppCommands {
 
     /// Disconnect a connection and reset its runtime state.
     pub fn disconnect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
-        if !state.read(cx).conn.active.contains_key(&connection_id) {
+        if !state.read(cx).is_connected(connection_id) {
             return;
         }
 
         state.update(cx, |state, cx| {
-            state.conn.active.remove(&connection_id);
+            state.remove_active_connection(connection_id);
             state.reset_connection_runtime_state(connection_id, cx);
-            if state.conn.selected_connection == Some(connection_id) {
+            if state.selected_connection_is(connection_id) {
                 state.current_view = View::Welcome;
             }
             state.update_workspace_from_state();
@@ -135,7 +135,7 @@ impl AppCommands {
                     Ok(databases) => {
                         state.update(cx, |state, cx| {
                             let removed = {
-                                let Some(conn) = state.conn.active.get_mut(&connection_id) else {
+                                let Some(conn) = state.active_connection_mut(connection_id) else {
                                     return;
                                 };
 
@@ -155,15 +155,13 @@ impl AppCommands {
                                 state.close_tabs_for_database(connection_id, db, cx);
                             }
 
-                            if state.conn.selected_connection == Some(connection_id)
-                                && state
-                                    .conn
-                                    .selected_database
-                                    .as_ref()
-                                    .is_some_and(|selected| !databases.contains(selected))
+                            if state.selected_connection_is(connection_id)
+                                && state.selected_database().is_some_and(|selected| {
+                                    !databases.iter().any(|db| db == selected)
+                                })
                             {
-                                state.conn.selected_database = None;
-                                state.conn.selected_collection = None;
+                                state.set_selected_database_name(None);
+                                state.set_selected_collection_name(None);
                                 state.current_view = View::Databases;
                                 cx.emit(AppEvent::ViewChanged);
                             }
@@ -177,9 +175,9 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to refresh databases: {}", e);
                         state.update(cx, |state, cx| {
-                            state.status_message = Some(StatusMessage::error(format!(
+                            state.set_status_message(Some(StatusMessage::error(format!(
                                 "Refresh databases failed: {e}"
-                            )));
+                            ))));
                             cx.notify();
                         });
                     }

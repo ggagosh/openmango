@@ -6,11 +6,11 @@ use std::collections::hash_map::Entry;
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
-use super::{
-    AppState, CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState,
-    SessionViewState,
-};
 use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
+use crate::state::AppState;
+use crate::state::app_state::types::{
+    CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
+};
 
 #[derive(Default)]
 pub struct SessionStore {
@@ -280,7 +280,7 @@ impl AppState {
             session.data.filter = filter;
             session.data.page = 0;
         }
-        self.update_workspace_from_state();
+        self.update_workspace_session_filters(session_key);
     }
 
     pub fn clear_filter(&mut self, session_key: &SessionKey) {
@@ -289,7 +289,7 @@ impl AppState {
             session.data.filter = None;
             session.data.page = 0;
         }
-        self.update_workspace_from_state();
+        self.update_workspace_session_filters(session_key);
     }
 
     pub fn set_sort_projection(
@@ -307,7 +307,7 @@ impl AppState {
             session.data.projection = projection;
             session.data.page = 0;
         }
-        self.update_workspace_from_state();
+        self.update_workspace_session_filters(session_key);
     }
 
     pub fn set_collection_subview(
@@ -331,7 +331,7 @@ impl AppState {
         }
 
         if changed {
-            self.update_workspace_from_state();
+            self.update_workspace_session_view(session_key);
         }
 
         should_load

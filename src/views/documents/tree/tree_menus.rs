@@ -337,8 +337,9 @@ pub(crate) fn paste_documents_from_clipboard(
 ) {
     let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
         state.update(cx, |state, cx| {
-            state.status_message =
-                Some(StatusMessage::error("Clipboard is empty or does not contain text"));
+            state.set_status_message(Some(StatusMessage::error(
+                "Clipboard is empty or does not contain text",
+            )));
             cx.notify();
         });
         return;
@@ -348,7 +349,8 @@ pub(crate) fn paste_documents_from_clipboard(
         Ok(docs) => docs,
         Err(err) => {
             state.update(cx, |state, cx| {
-                state.status_message = Some(StatusMessage::error(format!("Invalid JSON: {err}")));
+                state
+                    .set_status_message(Some(StatusMessage::error(format!("Invalid JSON: {err}"))));
                 cx.notify();
             });
             return;
@@ -357,7 +359,7 @@ pub(crate) fn paste_documents_from_clipboard(
 
     if docs.is_empty() {
         state.update(cx, |state, cx| {
-            state.status_message = Some(StatusMessage::error("No documents found"));
+            state.set_status_message(Some(StatusMessage::error("No documents found")));
             cx.notify();
         });
         return;

@@ -14,7 +14,7 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).conn.selected_connection;
+        let connection_id = state.read(cx).selected_connection_id();
         if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
@@ -46,24 +46,28 @@ impl AppCommands {
                             let Some(conn_id) = connection_id else {
                                 return;
                             };
-                            let Some(conn) = state.conn.active.get_mut(&conn_id) else {
-                                return;
+                            let (databases, collections) = {
+                                let Some(conn) = state.active_connection_mut(conn_id) else {
+                                    return;
+                                };
+                                if !conn.databases.contains(&database) {
+                                    conn.databases.push(database.clone());
+                                    conn.databases.sort();
+                                }
+                                let entry = conn.collections.entry(database.clone()).or_default();
+                                if !entry.contains(&collection) {
+                                    entry.push(collection.clone());
+                                    entry.sort();
+                                }
+                                (conn.databases.clone(), entry.clone())
                             };
-                            if !conn.databases.contains(&database) {
-                                conn.databases.push(database.clone());
-                                conn.databases.sort();
-                            }
-                            let entry = conn.collections.entry(database.clone()).or_default();
-                            if !entry.contains(&collection) {
-                                entry.push(collection.clone());
-                                entry.sort();
-                            }
-                            state.status_message = Some(StatusMessage::info(format!(
+
+                            state.set_status_message(Some(StatusMessage::info(format!(
                                 "Created collection {database}.{collection}"
-                            )));
-                            if state.conn.selected_connection == Some(conn_id) {
-                                cx.emit(AppEvent::DatabasesLoaded(conn.databases.clone()));
-                                cx.emit(AppEvent::CollectionsLoaded(entry.clone()));
+                            ))));
+                            if state.selected_connection_is(conn_id) {
+                                cx.emit(AppEvent::DatabasesLoaded(databases));
+                                cx.emit(AppEvent::CollectionsLoaded(collections));
                             }
                             cx.notify();
                         });
@@ -71,9 +75,9 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to create collection: {}", e);
                         state.update(cx, |state, cx| {
-                            state.status_message = Some(StatusMessage::error(format!(
+                            state.set_status_message(Some(StatusMessage::error(format!(
                                 "Create collection failed: {e}"
-                            )));
+                            ))));
                             cx.notify();
                         });
                     }
@@ -91,7 +95,7 @@ impl AppCommands {
         to: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).conn.selected_connection;
+        let connection_id = state.read(cx).selected_connection_id();
         if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
@@ -127,21 +131,17 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let selection_changed = state.conn.selected_connection
+                            let selection_changed = state.selected_connection_id()
                                 == Some(connection_id)
                                 && state
-                                    .conn
-                                    .selected_database
-                                    .as_ref()
-                                    .is_some_and(|selected| selected == &database)
+                                    .selected_database()
+                                    .is_some_and(|selected| selected == database.as_str())
                                 && state
-                                    .conn
-                                    .selected_collection
-                                    .as_ref()
-                                    .is_some_and(|selected| selected == &from);
+                                    .selected_collection()
+                                    .is_some_and(|selected| selected == from.as_str());
 
                             let collections = {
-                                let Some(conn) = state.conn.active.get_mut(&connection_id) else {
+                                let Some(conn) = state.active_connection_mut(connection_id) else {
                                     return;
                                 };
 
@@ -158,27 +158,27 @@ impl AppCommands {
                             state.rename_collection_keys(connection_id, &database, &from, &to);
 
                             if selection_changed {
-                                state.conn.selected_collection = Some(to.clone());
+                                state.set_selected_collection_name(Some(to.clone()));
                                 cx.emit(AppEvent::ViewChanged);
                             }
 
-                            if state.conn.selected_connection == Some(connection_id) {
+                            if state.selected_connection_is(connection_id) {
                                 let event = AppEvent::CollectionsLoaded(collections);
                                 state.update_status_from_event(&event);
                                 cx.emit(event);
                             }
-                            state.status_message = Some(StatusMessage::info(format!(
+                            state.set_status_message(Some(StatusMessage::info(format!(
                                 "Renamed collection {database}.{from} → {to}"
-                            )));
+                            ))));
                             cx.notify();
                         });
                     }
                     Err(e) => {
                         log::error!("Failed to rename collection: {}", e);
                         state.update(cx, |state, cx| {
-                            state.status_message = Some(StatusMessage::error(format!(
+                            state.set_status_message(Some(StatusMessage::error(format!(
                                 "Rename collection failed: {e}"
-                            )));
+                            ))));
                             cx.notify();
                         });
                     }
@@ -195,7 +195,7 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).conn.selected_connection;
+        let connection_id = state.read(cx).selected_connection_id();
         if !Self::ensure_writable(&state, connection_id, cx) {
             return;
         }
@@ -227,20 +227,18 @@ impl AppCommands {
                             let Some(conn_id) = connection_id else {
                                 return;
                             };
-                            if let Some(conn) = state.conn.active.get_mut(&conn_id)
+                            if let Some(conn) = state.active_connection_mut(conn_id)
                                 && let Some(entry) = conn.collections.get_mut(&database)
                             {
                                 entry.retain(|name| name != &collection);
                             }
                             state.close_tabs_for_collection(conn_id, &database, &collection, cx);
-                            state.status_message = Some(StatusMessage::info(format!(
+                            state.set_status_message(Some(StatusMessage::info(format!(
                                 "Dropped collection {database}.{collection}"
-                            )));
-                            if state.conn.selected_connection == Some(conn_id) {
+                            ))));
+                            if state.selected_connection_is(conn_id) {
                                 let collections = state
-                                    .conn
-                                    .active
-                                    .get(&conn_id)
+                                    .active_connection_by_id(conn_id)
                                     .and_then(|conn| conn.collections.get(&database))
                                     .cloned()
                                     .unwrap_or_default();
@@ -252,8 +250,9 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to drop collection: {}", e);
                         state.update(cx, |state, cx| {
-                            state.status_message =
-                                Some(StatusMessage::error(format!("Drop collection failed: {e}")));
+                            state.set_status_message(Some(StatusMessage::error(format!(
+                                "Drop collection failed: {e}"
+                            ))));
                             cx.notify();
                         });
                     }
@@ -294,10 +293,10 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(collections) => {
                         state.update(cx, |state, cx| {
-                            if let Some(conn) = state.conn.active.get_mut(&connection_id) {
+                            if let Some(conn) = state.active_connection_mut(connection_id) {
                                 conn.collections.insert(database.clone(), collections.clone());
                             }
-                            if state.conn.selected_connection == Some(connection_id) {
+                            if state.selected_connection_is(connection_id) {
                                 let event = AppEvent::CollectionsLoaded(collections.clone());
                                 state.update_status_from_event(&event);
                                 cx.emit(event);

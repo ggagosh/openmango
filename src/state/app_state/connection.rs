@@ -37,6 +37,36 @@ impl AppState {
         self.conn.active.get(&connection_id)
     }
 
+    pub(crate) fn active_connection_mut(
+        &mut self,
+        connection_id: Uuid,
+    ) -> Option<&mut ActiveConnection> {
+        self.conn.active.get_mut(&connection_id)
+    }
+
+    pub(crate) fn insert_active_connection(
+        &mut self,
+        connection_id: Uuid,
+        connection: ActiveConnection,
+    ) -> Option<ActiveConnection> {
+        self.conn.active.insert(connection_id, connection)
+    }
+
+    pub(crate) fn remove_active_connection(
+        &mut self,
+        connection_id: Uuid,
+    ) -> Option<ActiveConnection> {
+        self.conn.active.remove(&connection_id)
+    }
+
+    pub fn active_connection_client(&self, connection_id: Uuid) -> Option<mongodb::Client> {
+        self.conn.active.get(&connection_id).map(|conn| conn.client.clone())
+    }
+
+    pub fn connection_read_only(&self, connection_id: Uuid) -> bool {
+        self.conn.active.get(&connection_id).map(|conn| conn.config.read_only).unwrap_or(false)
+    }
+
     pub fn is_connected(&self, connection_id: Uuid) -> bool {
         self.conn.active.contains_key(&connection_id)
     }
@@ -47,6 +77,18 @@ impl AppState {
 
     pub fn selected_connection_id(&self) -> Option<Uuid> {
         self.conn.selected_connection
+    }
+
+    pub(crate) fn selected_connection_is(&self, connection_id: Uuid) -> bool {
+        self.conn.selected_connection == Some(connection_id)
+    }
+
+    pub(crate) fn set_selected_database_name(&mut self, database: Option<String>) {
+        self.conn.selected_database = database;
+    }
+
+    pub(crate) fn set_selected_collection_name(&mut self, collection: Option<String>) {
+        self.conn.selected_collection = collection;
     }
 
     pub fn selected_database(&self) -> Option<&str> {
