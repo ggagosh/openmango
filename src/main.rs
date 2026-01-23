@@ -51,6 +51,12 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                // Quit the app when the window is closed (standard macOS single-window behavior)
+                window.on_window_should_close(cx, |_window, cx| {
+                    cx.quit();
+                    true
+                });
+
                 let app_view = cx.new(|cx| AppRoot::new(window, cx));
                 cx.new(|cx| Root::new(app_view, window, cx))
             },
