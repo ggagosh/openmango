@@ -12,7 +12,7 @@ use crate::bson::{
 use crate::state::SessionDocument;
 use crate::theme::colors;
 
-use super::node_meta::NodeMeta;
+use super::super::node_meta::NodeMeta;
 
 /// Build the document tree from a list of documents.
 ///

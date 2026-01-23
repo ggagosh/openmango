@@ -10,9 +10,9 @@ use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
 use crate::state::{AppState, SessionKey};
-use crate::views::documents::document_tree::{build_documents_tree, flatten_tree_order_all};
+use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
-use crate::views::documents::property_dialog::PropertyActionDialog;
+use crate::views::documents::tree::document_tree::{build_documents_tree, flatten_tree_order_all};
 use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;

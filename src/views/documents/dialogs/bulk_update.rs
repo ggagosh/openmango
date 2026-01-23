@@ -13,46 +13,9 @@ use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BulkUpdateScope {
-    SelectedDocument,
-    FilteredQuery,
-    AllDocuments,
-    CustomFilter,
-}
-
-impl BulkUpdateScope {
-    fn label(self) -> &'static str {
-        match self {
-            BulkUpdateScope::SelectedDocument => "Selected document",
-            BulkUpdateScope::FilteredQuery => "Filtered documents",
-            BulkUpdateScope::AllDocuments => "All documents",
-            BulkUpdateScope::CustomFilter => "Custom filter",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BulkUpdateMode {
-    Update,
-    Replace,
-}
-
-impl BulkUpdateMode {
-    fn label(self) -> &'static str {
-        match self {
-            BulkUpdateMode::Update => "Update",
-            BulkUpdateMode::Replace => "Replace",
-        }
-    }
-
-    fn template(self) -> &'static str {
-        match self {
-            BulkUpdateMode::Update => "{\n  \"$set\": {\n    \"field\": \"value\"\n  }\n}",
-            BulkUpdateMode::Replace => "{\n  \"field\": \"value\"\n}",
-        }
-    }
-}
+use super::bulk_update_support::{
+    BulkUpdateMode, BulkUpdateScope, parse_update_doc, validate_update_doc,
+};
 
 pub struct BulkUpdateDialog {
     state: Entity<AppState>,
@@ -236,54 +199,6 @@ impl BulkUpdateDialog {
         }
     }
 
-    fn parse_update_doc(&self, cx: &mut Context<Self>) -> Result<Document, String> {
-        let raw = self.update_state.read(cx).value().to_string();
-        if raw.trim().is_empty() {
-            return Err("Update JSON is required.".to_string());
-        }
-        parse_document_from_json(&raw).map_err(|err| format!("Invalid update JSON: {err}"))
-    }
-
-    fn validate_update_doc(&self, doc: &Document, cx: &mut Context<Self>) -> Result<(), String> {
-        if doc.is_empty() {
-            return Err("Update document cannot be empty.".to_string());
-        }
-        match self.mode {
-            BulkUpdateMode::Update => {
-                if !doc.keys().all(|key| key.starts_with('$')) {
-                    return Err(
-                        "Update document must use update operators (keys starting with '$')."
-                            .to_string(),
-                    );
-                }
-            }
-            BulkUpdateMode::Replace => {
-                if doc.keys().any(|key| key.starts_with('$')) {
-                    return Err("Replacement document cannot include update operators.".to_string());
-                }
-                if let Some(id) = doc.get("_id") {
-                    match self.scope {
-                        BulkUpdateScope::SelectedDocument => {
-                            let selected_id = self.selected_id(cx)?;
-                            if id != &selected_id {
-                                return Err(
-                                    "Replacement document cannot change the _id value.".to_string()
-                                );
-                            }
-                        }
-                        _ => {
-                            return Err(
-                                "Replacement document cannot include _id when updating multiple documents."
-                                    .to_string(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn is_read_only(&self, cx: &mut Context<Self>) -> bool {
         self.state.read(cx).active_connection().map(|conn| conn.config.read_only).unwrap_or(false)
     }
@@ -299,7 +214,8 @@ impl BulkUpdateDialog {
         }
 
         self.error_message = None;
-        let update_doc = match self.parse_update_doc(cx) {
+        let update_raw = self.update_state.read(cx).value().to_string();
+        let update_doc = match parse_update_doc(&update_raw) {
             Ok(doc) => doc,
             Err(err) => {
                 self.error_message = Some(err);
@@ -307,7 +223,10 @@ impl BulkUpdateDialog {
                 return;
             }
         };
-        if let Err(err) = self.validate_update_doc(&update_doc, cx) {
+        let selected_id = self.selected_id(cx).ok();
+        if let Err(err) =
+            validate_update_doc(self.mode, self.scope, &update_doc, selected_id.as_ref())
+        {
             self.error_message = Some(err);
             cx.notify();
             return;

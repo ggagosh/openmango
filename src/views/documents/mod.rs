@@ -1,16 +1,17 @@
 //! Document/Collection view component.
 
-mod bulk_update;
-mod document_tree;
+mod actions;
 mod header;
-mod index_create;
 mod node_meta;
 mod pagination;
-mod property_dialog;
+mod query;
 mod state;
-mod tree_content;
 mod types;
 mod view;
 mod view_model;
+
+pub mod dialogs;
+pub mod tree;
+pub mod views;
 
 pub use state::CollectionView;
