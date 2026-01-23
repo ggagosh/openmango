@@ -115,6 +115,22 @@ impl AppRoot {
                 if cmd_or_ctrl && !alt && !shift && key == "r" {
                     this.handle_refresh(cx);
                     cx.stop_propagation();
+                    return;
+                }
+
+                // Cmd+1-9: switch to tab by index
+                if cmd_or_ctrl
+                    && !alt
+                    && !shift
+                    && key.len() == 1
+                    && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
+                    && (1..=9).contains(&digit)
+                {
+                    let tab_index = (digit - 1) as usize;
+                    this.state.update(cx, |state, cx| {
+                        state.select_tab(tab_index, cx);
+                    });
+                    cx.stop_propagation();
                 }
             });
         })
