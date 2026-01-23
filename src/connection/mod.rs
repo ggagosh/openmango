@@ -1,3 +1,3 @@
-pub mod manager;
+pub mod mongo;
 
-pub use manager::{FindDocumentsOptions, get_connection_manager};
+pub use mongo::{FindDocumentsOptions, get_connection_manager};

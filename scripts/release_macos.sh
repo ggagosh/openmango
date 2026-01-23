@@ -113,6 +113,9 @@ if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]; then
         --wait
     echo "Stapling notarization ticket..."
     xcrun stapler staple "$APP_DIR"
+    # Re-create zip with stapled app
+    rm -f "$ZIP_PATH"
+    ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
 fi
 
 echo "Built: $APP_DIR"
