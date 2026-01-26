@@ -74,7 +74,7 @@ impl AppRoot {
                                         );
                                         cx.stop_propagation();
                                     }
-                                    CollectionSubview::Stats => {}
+                                    CollectionSubview::Stats | CollectionSubview::Aggregation => {}
                                 }
                             }
                         }
@@ -317,6 +317,13 @@ impl AppRoot {
                     });
                 }
             }
+            "view:aggregation" => {
+                if let Some(key) = state.read(cx).current_session_key() {
+                    state.update(cx, |state, _cx| {
+                        state.set_collection_subview(&key, CollectionSubview::Aggregation);
+                    });
+                }
+            }
             _ => {} // Unknown action — no-op
         }
     }
@@ -355,6 +362,9 @@ impl AppRoot {
                     }
                     CollectionSubview::Stats => {
                         AppCommands::load_collection_stats(self.state.clone(), session_key, cx);
+                    }
+                    CollectionSubview::Aggregation => {
+                        AppCommands::run_aggregation(self.state.clone(), session_key, false, cx);
                     }
                 }
             }

@@ -203,6 +203,109 @@ pub fn render_tree_row(
     ListItem::new(ix).selected(_selected).child(row)
 }
 
+pub fn render_readonly_tree_row(
+    ix: usize,
+    entry: &TreeEntry,
+    selected: bool,
+    node_meta: &Arc<HashMap<String, NodeMeta>>,
+    view: Entity<CollectionView>,
+    tree_state: Entity<TreeState>,
+) -> ListItem {
+    let item_id = entry.item().id.to_string();
+    let meta = node_meta.get(&item_id);
+
+    let key_label =
+        meta.map(|meta| meta.key_label.clone()).unwrap_or_else(|| entry.item().label.to_string());
+    let value_label = meta.map(|meta| meta.value_label.clone()).unwrap_or_default();
+    let value_color = meta.map(|meta| meta.value_color).unwrap_or(colors::text_primary());
+    let type_label = meta.map(|meta| meta.type_label.clone()).unwrap_or_default();
+    let is_root = meta.map(|meta| meta.path.is_empty()).unwrap_or(false);
+
+    let depth = entry.depth();
+    let is_folder = entry.is_folder();
+    let is_expanded = entry.is_expanded();
+
+    let leading = if is_folder {
+        let toggle_item_id = item_id.clone();
+        let toggle_view = view.clone();
+        let toggle_tree = tree_state.clone();
+        div()
+            .w(px(14.0))
+            .flex()
+            .items_center()
+            .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+                if event.click_count != 1 {
+                    return;
+                }
+                cx.stop_propagation();
+                toggle_tree.update(cx, |tree, cx| {
+                    tree.set_selected_index(Some(ix), cx);
+                });
+                toggle_view.update(cx, |this, cx| {
+                    if this.aggregation_results_expanded_nodes.contains(&toggle_item_id) {
+                        this.aggregation_results_expanded_nodes.remove(&toggle_item_id);
+                    } else {
+                        this.aggregation_results_expanded_nodes.insert(toggle_item_id.clone());
+                    }
+                    cx.notify();
+                });
+            })
+            .child(
+                Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .xsmall()
+                    .text_color(colors::text_muted()),
+            )
+            .into_any_element()
+    } else {
+        div().w(px(14.0)).into_any_element()
+    };
+
+    let row = div()
+        .flex()
+        .items_center()
+        .w_full()
+        .gap(spacing::xs())
+        .rounded(borders::radius_sm())
+        .border_1()
+        .border_color(rgba(0x00000000))
+        .when(selected, |s: Div| s.bg(colors::list_selected()).border_color(colors::border()))
+        .when(!selected, |s: Div| s.hover(|s| s.bg(colors::list_hover())))
+        .on_mouse_down(MouseButton::Left, {
+            let row_item_id = item_id.clone();
+            let row_view = view.clone();
+            let row_tree = tree_state.clone();
+            move |event, _window, cx| {
+                cx.stop_propagation();
+                row_tree.update(cx, |tree, cx| {
+                    tree.set_selected_index(Some(ix), cx);
+                });
+                if event.click_count == 2 && is_folder {
+                    row_view.update(cx, |this, cx| {
+                        if this.aggregation_results_expanded_nodes.contains(&row_item_id) {
+                            this.aggregation_results_expanded_nodes.remove(&row_item_id);
+                        } else {
+                            this.aggregation_results_expanded_nodes.insert(row_item_id.clone());
+                        }
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .child(render_key_column(depth, leading, &key_label, is_root, false))
+        .child(render_value_column_readonly(&value_label, value_color))
+        .child(
+            div()
+                .w(px(120.0))
+                .text_sm()
+                .text_color(colors::text_muted())
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(type_label),
+        );
+
+    ListItem::new(ix).selected(selected).child(row)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_key_column(
     depth: usize,
@@ -407,4 +510,15 @@ fn render_inline_editor(
             }
         }))
         .into_any_element()
+}
+
+fn render_value_column_readonly(value_label: &str, value_color: Rgba) -> impl IntoElement {
+    div().flex().items_center().gap(spacing::xs()).flex_1().min_w(px(0.0)).child(
+        div()
+            .text_sm()
+            .text_color(value_color)
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(value_label.to_string()),
+    )
 }

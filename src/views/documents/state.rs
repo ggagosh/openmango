@@ -1,10 +1,13 @@
 use gpui::*;
 use gpui_component::input::InputState;
+use gpui_component::tree::TreeState;
 
 use mongodb::bson::Document;
 
+use std::collections::HashSet;
+
 use crate::bson::DocumentKey;
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
+use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey};
 
 use super::node_meta::NodeMeta;
 use super::view_model::DocumentViewModel;
@@ -14,6 +17,8 @@ pub struct CollectionView {
     pub(crate) state: Entity<AppState>,
     pub(crate) view_model: DocumentViewModel,
     pub(crate) documents_focus: FocusHandle,
+    pub(crate) aggregation_focus: FocusHandle,
+    pub(crate) aggregation_stage_list_scroll: UniformListScrollHandle,
     pub(crate) filter_state: Option<Entity<InputState>>,
     pub(crate) sort_state: Option<Entity<InputState>>,
     pub(crate) projection_state: Option<Entity<InputState>>,
@@ -22,10 +27,20 @@ pub struct CollectionView {
     pub(crate) search_matches: Vec<String>,
     pub(crate) search_index: Option<usize>,
     pub(crate) input_session: Option<SessionKey>,
+    pub(crate) aggregation_input_session: Option<SessionKey>,
+    pub(crate) aggregation_selected_stage: Option<usize>,
+    pub(crate) aggregation_stage_count: usize,
     pub(crate) filter_subscription: Option<Subscription>,
     pub(crate) sort_subscription: Option<Subscription>,
     pub(crate) projection_subscription: Option<Subscription>,
     pub(crate) search_subscription: Option<Subscription>,
+    pub(crate) aggregation_stage_body_state: Option<Entity<InputState>>,
+    pub(crate) aggregation_results_tree_state: Option<Entity<TreeState>>,
+    pub(crate) aggregation_limit_state: Option<Entity<InputState>>,
+    pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
+    pub(crate) aggregation_results_signature: Option<u64>,
+    pub(crate) aggregation_stage_body_subscription: Option<Subscription>,
+    pub(crate) aggregation_limit_subscription: Option<Subscription>,
     pub(crate) _subscriptions: Vec<Subscription>,
 }
 
@@ -39,6 +54,7 @@ impl CollectionView {
                 return;
             };
             let key = event.keystroke.key.to_ascii_lowercase();
+            let modifiers = event.keystroke.modifiers;
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
 
@@ -65,6 +81,30 @@ impl CollectionView {
                     AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
                     true
                 };
+                if is_enter && (modifiers.secondary() || modifiers.control) {
+                    let is_aggregation = this
+                        .view_model
+                        .current_session()
+                        .and_then(|session_key| this.state.read(cx).session_subview(&session_key))
+                        .is_some_and(|subview| subview == CollectionSubview::Aggregation);
+                    if is_aggregation
+                        && let Some(body_state) = this.aggregation_stage_body_state.clone()
+                    {
+                        let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
+                        if focused {
+                            if let Some(session_key) = this.view_model.current_session() {
+                                AppCommands::run_aggregation(
+                                    this.state.clone(),
+                                    session_key,
+                                    false,
+                                    cx,
+                                );
+                            }
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                }
                 if is_escape {
                     if this.search_visible {
                         this.close_search(window, cx);
@@ -76,6 +116,24 @@ impl CollectionView {
                         this.view_model.clear_inline_edit();
                         window.focus(&this.documents_focus);
                         handled = true;
+                    }
+                    if !handled {
+                        let is_aggregation = this
+                            .view_model
+                            .current_session()
+                            .and_then(|session_key| {
+                                this.state.read(cx).session_subview(&session_key)
+                            })
+                            .is_some_and(|subview| subview == CollectionSubview::Aggregation);
+                        if is_aggregation
+                            && let Some(body_state) = this.aggregation_stage_body_state.clone()
+                        {
+                            let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
+                            if focused {
+                                window.focus(&this.aggregation_focus);
+                                handled = true;
+                            }
+                        }
                     }
                 } else if is_enter {
                     let modifiers = event.keystroke.modifiers;
@@ -216,6 +274,8 @@ impl CollectionView {
             state,
             view_model,
             documents_focus: cx.focus_handle(),
+            aggregation_focus: cx.focus_handle(),
+            aggregation_stage_list_scroll: UniformListScrollHandle::default(),
             filter_state: None,
             sort_state: None,
             projection_state: None,
@@ -224,10 +284,20 @@ impl CollectionView {
             search_matches: Vec::new(),
             search_index: None,
             input_session: None,
+            aggregation_input_session: None,
+            aggregation_selected_stage: None,
+            aggregation_stage_count: 0,
             filter_subscription: None,
             sort_subscription: None,
             projection_subscription: None,
             search_subscription: None,
+            aggregation_stage_body_state: None,
+            aggregation_results_tree_state: None,
+            aggregation_limit_state: None,
+            aggregation_results_expanded_nodes: HashSet::new(),
+            aggregation_results_signature: None,
+            aggregation_stage_body_subscription: None,
+            aggregation_limit_subscription: None,
             _subscriptions: subscriptions,
         }
     }

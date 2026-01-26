@@ -1,5 +1,6 @@
 //! Global application state.
 
+mod aggregation;
 mod connection;
 mod database_sessions;
 mod selection;
@@ -9,6 +10,7 @@ mod tabs;
 mod types;
 mod workspace;
 
+pub(crate) use aggregation::{PipelineAnalysis, PipelineStage, PipelineState};
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{

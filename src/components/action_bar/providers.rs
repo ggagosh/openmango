@@ -193,5 +193,14 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
             available: has_collection,
             priority: 2,
         },
+        ActionItem {
+            id: SharedString::from("view:aggregation"),
+            label: SharedString::from("Show Aggregation"),
+            detail: None,
+            category: ActionCategory::View,
+            shortcut: Some(SharedString::from("Cmd+Alt+4")),
+            available: has_collection,
+            priority: 3,
+        },
     ]
 }

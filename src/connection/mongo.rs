@@ -350,6 +350,36 @@ impl ConnectionManager {
         })
     }
 
+    /// Run an aggregation pipeline for a collection (runs in Tokio runtime)
+    pub fn aggregate_pipeline(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        mut pipeline: Vec<mongodb::bson::Document>,
+        limit: Option<i64>,
+    ) -> Result<Vec<mongodb::bson::Document>> {
+        use futures::TryStreamExt;
+
+        if let Some(limit) = limit
+            && limit > 0
+        {
+            pipeline.push(doc! { "$limit": limit });
+        }
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let cursor = coll.aggregate(pipeline).await?;
+            let docs: Vec<mongodb::bson::Document> = cursor.try_collect().await?;
+            Ok(docs)
+        })
+    }
+
     /// Create an index for a collection (runs in Tokio runtime)
     pub fn create_index(
         &self,

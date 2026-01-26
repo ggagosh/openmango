@@ -148,6 +148,21 @@ impl AppState {
                     "Delete failed: {error}"
                 ))));
             }
+            AppEvent::AggregationCompleted { session, count, preview, limited } => {
+                let _ = session;
+                let mode = if *preview { "Preview" } else { "Aggregation" };
+                let mut message = format!("{mode} returned {count} result(s)");
+                if *limited {
+                    message.push_str(" (limited)");
+                }
+                self.set_status_message(Some(StatusMessage::info(message)));
+            }
+            AppEvent::AggregationFailed { session, error } => {
+                let _ = session;
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Aggregation failed: {error}"
+                ))));
+            }
             _ => {}
         }
     }

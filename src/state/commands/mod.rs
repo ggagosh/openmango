@@ -44,6 +44,7 @@ impl AppCommands {
     }
 }
 
+mod aggregation;
 mod collections;
 mod connections;
 mod databases;

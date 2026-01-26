@@ -90,6 +90,7 @@ impl Render for AppRoot {
                 match documents_subview {
                     Some(CollectionSubview::Indexes) => key_context.push_str(" Indexes"),
                     Some(CollectionSubview::Stats) => key_context.push_str(" Stats"),
+                    Some(CollectionSubview::Aggregation) => key_context.push_str(" Aggregation"),
                     _ => {}
                 }
             }

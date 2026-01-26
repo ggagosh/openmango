@@ -110,6 +110,14 @@ impl AppState {
                 session.data.projection_raw = raw;
                 session.data.projection = doc;
             });
+            session.data.aggregation.stages = tab.aggregation_pipeline.clone();
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+            if session.data.aggregation.selected_stage.is_none()
+                && !session.data.aggregation.stages.is_empty()
+            {
+                session.data.aggregation.selected_stage = Some(0);
+            }
         }
 
         active_tab
@@ -118,13 +126,21 @@ impl AppState {
     fn build_workspace_tab(&self, tab: &TabKey) -> WorkspaceTab {
         match tab {
             TabKey::Collection(key) => {
-                let (filter_raw, sort_raw, projection_raw, subview, stats_open) = self
+                let (
+                    filter_raw,
+                    sort_raw,
+                    projection_raw,
+                    aggregation_pipeline,
+                    subview,
+                    stats_open,
+                ) = self
                     .session(key)
                     .map(|session| {
                         (
                             session.data.filter_raw.clone(),
                             session.data.sort_raw.clone(),
                             session.data.projection_raw.clone(),
+                            session.data.aggregation.stages.clone(),
                             session.view.subview,
                             matches!(session.view.subview, CollectionSubview::Stats),
                         )
@@ -134,6 +150,7 @@ impl AppState {
                             String::new(),
                             String::new(),
                             String::new(),
+                            Vec::new(),
                             CollectionSubview::Documents,
                             false,
                         )
@@ -145,6 +162,7 @@ impl AppState {
                     filter_raw,
                     sort_raw,
                     projection_raw,
+                    aggregation_pipeline,
                     stats_open,
                     subview,
                 }
@@ -156,6 +174,7 @@ impl AppState {
                 filter_raw: String::new(),
                 sort_raw: String::new(),
                 projection_raw: String::new(),
+                aggregation_pipeline: Vec::new(),
                 stats_open: false,
                 subview: CollectionSubview::Documents,
             },

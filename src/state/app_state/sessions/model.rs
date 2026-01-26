@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
 use crate::state::AppState;
+use crate::state::app_state::PipelineStage;
 use crate::state::app_state::types::{
     CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
 };
@@ -116,6 +117,7 @@ impl AppState {
             indexes: session.data.indexes.clone(),
             indexes_loading: session.data.indexes_loading,
             indexes_error: session.data.indexes_error.clone(),
+            aggregation: session.data.aggregation.clone(),
         })
     }
 
@@ -308,6 +310,161 @@ impl AppState {
             session.data.page = 0;
         }
         self.update_workspace_session_filters(session_key);
+    }
+
+    pub fn add_pipeline_stage(
+        &mut self,
+        session_key: &SessionKey,
+        operator: impl Into<String>,
+    ) -> Option<usize> {
+        let mut new_index = None;
+        if let Some(session) = self.session_mut(session_key) {
+            session.data.aggregation.stages.push(PipelineStage::new(operator));
+            let len = session.data.aggregation.stages.len();
+            session.data.aggregation.selected_stage = len.checked_sub(1);
+            session.data.aggregation.stage_doc_counts = vec![None; len];
+            session.data.aggregation.analysis = None;
+            new_index = session.data.aggregation.selected_stage;
+        }
+        self.update_workspace_session_view(session_key);
+        new_index
+    }
+
+    pub fn remove_pipeline_stage(&mut self, session_key: &SessionKey, index: usize) {
+        if let Some(session) = self.session_mut(session_key) {
+            if index >= session.data.aggregation.stages.len() {
+                return;
+            }
+            session.data.aggregation.stages.remove(index);
+            let len = session.data.aggregation.stages.len();
+            let selected = session.data.aggregation.selected_stage;
+            session.data.aggregation.selected_stage = match selected {
+                Some(sel) if sel == index => {
+                    if len == 0 {
+                        None
+                    } else {
+                        Some(sel.min(len.saturating_sub(1)))
+                    }
+                }
+                Some(sel) if sel > index => Some(sel - 1),
+                Some(sel) if sel < len => Some(sel),
+                _ => None,
+            };
+            session.data.aggregation.stage_doc_counts = vec![None; len];
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.error = None;
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn set_pipeline_selected_stage(
+        &mut self,
+        session_key: &SessionKey,
+        selected: Option<usize>,
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            let max_index = session.data.aggregation.stages.len().saturating_sub(1);
+            session.data.aggregation.selected_stage = selected.filter(|idx| *idx <= max_index);
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn set_pipeline_stage_body(
+        &mut self,
+        session_key: &SessionKey,
+        index: usize,
+        body: String,
+    ) {
+        if let Some(session) = self.session_mut(session_key)
+            && let Some(stage) = session.data.aggregation.stages.get_mut(index)
+        {
+            stage.body = body;
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn set_pipeline_stage_operator(
+        &mut self,
+        session_key: &SessionKey,
+        index: usize,
+        operator: String,
+    ) {
+        if let Some(session) = self.session_mut(session_key)
+            && let Some(stage) = session.data.aggregation.stages.get_mut(index)
+        {
+            stage.operator = operator;
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn toggle_pipeline_stage_enabled(&mut self, session_key: &SessionKey, index: usize) {
+        if let Some(session) = self.session_mut(session_key)
+            && let Some(stage) = session.data.aggregation.stages.get_mut(index)
+        {
+            stage.enabled = !stage.enabled;
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn set_pipeline_result_limit(&mut self, session_key: &SessionKey, limit: i64) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.data.aggregation.result_limit = limit;
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn duplicate_pipeline_stage(
+        &mut self,
+        session_key: &SessionKey,
+        index: usize,
+    ) -> Option<usize> {
+        let mut new_index = None;
+        if let Some(session) = self.session_mut(session_key) {
+            let stage = session.data.aggregation.stages.get(index).cloned()?;
+            let insert_index = index + 1;
+            session.data.aggregation.stages.insert(insert_index, stage);
+            session.data.aggregation.selected_stage = Some(insert_index);
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+            session.data.aggregation.analysis = None;
+            new_index = session.data.aggregation.selected_stage;
+        }
+        self.update_workspace_session_view(session_key);
+        new_index
+    }
+
+    pub fn move_pipeline_stage(&mut self, session_key: &SessionKey, from: usize, to: usize) {
+        if let Some(session) = self.session_mut(session_key) {
+            let len = session.data.aggregation.stages.len();
+            if from >= len || to >= len || from == to {
+                return;
+            }
+            let stage = session.data.aggregation.stages.remove(from);
+            session.data.aggregation.stages.insert(to, stage);
+
+            let selected = session.data.aggregation.selected_stage;
+            session.data.aggregation.selected_stage = match selected {
+                Some(sel) if sel == from => Some(to),
+                Some(sel) if from < to && sel > from && sel <= to => Some(sel - 1),
+                Some(sel) if from > to && sel >= to && sel < from => Some(sel + 1),
+                other => other,
+            };
+
+            session.data.aggregation.stage_doc_counts =
+                vec![None; session.data.aggregation.stages.len()];
+            session.data.aggregation.analysis = None;
+        }
+        self.update_workspace_session_view(session_key);
     }
 
     pub fn set_collection_subview(

@@ -110,7 +110,9 @@ impl Sidebar {
             | AppEvent::IndexCreated { .. }
             | AppEvent::IndexCreateFailed { .. }
             | AppEvent::DocumentsUpdated { .. }
-            | AppEvent::DocumentsUpdateFailed { .. } => {}
+            | AppEvent::DocumentsUpdateFailed { .. }
+            | AppEvent::AggregationCompleted { .. }
+            | AppEvent::AggregationFailed { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }
