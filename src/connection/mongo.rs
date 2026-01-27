@@ -358,10 +358,12 @@ impl ConnectionManager {
         collection: &str,
         mut pipeline: Vec<mongodb::bson::Document>,
         limit: Option<i64>,
+        append_limit: bool,
     ) -> Result<Vec<mongodb::bson::Document>> {
         use futures::TryStreamExt;
 
-        if let Some(limit) = limit
+        if append_limit
+            && let Some(limit) = limit
             && limit > 0
         {
             pipeline.push(doc! { "$limit": limit });

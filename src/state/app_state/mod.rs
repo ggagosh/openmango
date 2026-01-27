@@ -19,6 +19,8 @@ pub use types::{
     SessionKey, SessionState, SessionViewState, TabKey, View,
 };
 
+use std::sync::{Arc, atomic::AtomicU64};
+
 use gpui::EventEmitter;
 
 use crate::models::connection::SavedConnection;
@@ -49,6 +51,7 @@ pub struct AppState {
     // Workspace persistence
     pub workspace: WorkspaceState,
     pub(crate) workspace_restore_pending: bool,
+    aggregation_workspace_save_gen: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             WorkspaceState::default()
         });
         let workspace_restore_pending = workspace.last_connection_id.is_some();
+        let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
         Self {
             connections,
@@ -78,6 +82,7 @@ impl AppState {
             config,
             workspace,
             workspace_restore_pending,
+            aggregation_workspace_save_gen,
         }
     }
 

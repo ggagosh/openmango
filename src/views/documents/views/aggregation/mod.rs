@@ -186,8 +186,14 @@ impl CollectionView {
                             } else {
                                 trimmed.parse::<i64>().map_err(|_| "Limit must be a number")
                             };
+                            let previous_limit = view
+                                .state
+                                .read(cx)
+                                .session(&session_key)
+                                .map(|session| session.data.aggregation.result_limit)
+                                .unwrap_or(50);
                             match parsed {
-                                Ok(limit) => {
+                                Ok(limit) if limit > 0 => {
                                     let normalized = limit.to_string();
                                     state.update(cx, |state, cx| {
                                         state.set_value(normalized.clone(), window, cx);
@@ -211,6 +217,18 @@ impl CollectionView {
                                             cx,
                                         );
                                     }
+                                }
+                                Ok(_) => {
+                                    let previous_value = previous_limit.to_string();
+                                    state.update(cx, |state, cx| {
+                                        state.set_value(previous_value, window, cx);
+                                    });
+                                    view.state.update(cx, |state, cx| {
+                                        state.set_status_message(Some(StatusMessage::error(
+                                            "Limit must be a positive number.",
+                                        )));
+                                        cx.notify();
+                                    });
                                 }
                                 Err(message) => {
                                     view.state.update(cx, |state, cx| {

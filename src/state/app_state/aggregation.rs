@@ -1,5 +1,7 @@
 //! Aggregation pipeline state for a collection session.
 
+use std::sync::{Arc, atomic::AtomicU64};
+
 use mongodb::bson::Document;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,9 @@ pub struct PipelineState {
     pub auto_preview: bool,
     pub loading: bool,
     pub error: Option<String>,
+    pub request_id: u64,
+    pub stage_stats_enabled: bool,
+    pub run_generation: Arc<AtomicU64>,
     pub result_limit: i64,
     pub results_page: u64,
     pub last_run_time_ms: Option<u64>,
@@ -48,6 +53,9 @@ impl Default for PipelineState {
             auto_preview: false,
             loading: false,
             error: None,
+            request_id: 0,
+            stage_stats_enabled: true,
+            run_generation: Arc::new(AtomicU64::new(0)),
             result_limit: 50,
             results_page: 0,
             last_run_time_ms: None,

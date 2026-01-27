@@ -118,6 +118,8 @@ impl AppState {
             session.data.aggregation.results_page = 0;
             session.data.aggregation.last_run_time_ms = None;
             session.data.aggregation.error = None;
+            session.data.aggregation.request_id = 0;
+            session.data.aggregation.loading = false;
             if session.data.aggregation.selected_stage.is_none()
                 && !session.data.aggregation.stages.is_empty()
             {

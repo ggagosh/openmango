@@ -359,7 +359,16 @@ fn render_stage_list(
     cx: &mut Context<CollectionView>,
 ) -> AnyElement {
     let StageListView { scroll_handle, focus_handle, view_entity, drag_over, drag_source } = view;
-    let stages = pipeline.stages.clone();
+    #[derive(Clone)]
+    struct StageMeta {
+        operator: String,
+        enabled: bool,
+    }
+    let stages: Vec<StageMeta> = pipeline
+        .stages
+        .iter()
+        .map(|stage| StageMeta { operator: stage.operator.clone(), enabled: stage.enabled })
+        .collect();
     let stage_doc_counts = pipeline.stage_doc_counts.clone();
     let item_count = stages.len();
     if !cx.has_active_drag() && (drag_over.is_some() || drag_source.is_some()) {

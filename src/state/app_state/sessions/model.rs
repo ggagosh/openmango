@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::atomic::Ordering;
 
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
@@ -11,7 +12,7 @@ use crate::state::AppState;
 use crate::state::app_state::types::{
     CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
 };
-use crate::state::app_state::{PipelineStage, StageDocCounts};
+use crate::state::app_state::{PipelineStage, PipelineState, StageDocCounts};
 
 #[derive(Default)]
 pub struct SessionStore {
@@ -312,6 +313,37 @@ impl AppState {
         self.update_workspace_session_filters(session_key);
     }
 
+    fn invalidate_aggregation_run(aggregation: &mut PipelineState) {
+        aggregation.request_id += 1;
+        aggregation.run_generation.fetch_add(1, Ordering::SeqCst);
+        aggregation.loading = false;
+    }
+
+    fn reset_aggregation_results(aggregation: &mut PipelineState) {
+        aggregation.results = None;
+        aggregation.results_page = 0;
+        aggregation.last_run_time_ms = None;
+        aggregation.error = None;
+        Self::invalidate_aggregation_run(aggregation);
+    }
+
+    fn reset_aggregation_stage_stats_state(aggregation: &mut PipelineState) {
+        aggregation.analysis = None;
+        aggregation.stage_doc_counts = vec![StageDocCounts::default(); aggregation.stages.len()];
+    }
+
+    fn reset_aggregation_stage_stats_only(aggregation: &mut PipelineState) {
+        Self::reset_aggregation_stage_stats_state(aggregation);
+        aggregation.last_run_time_ms = None;
+        aggregation.error = None;
+        Self::invalidate_aggregation_run(aggregation);
+    }
+
+    fn reset_aggregation_after_edit(aggregation: &mut PipelineState) {
+        Self::reset_aggregation_stage_stats_state(aggregation);
+        Self::reset_aggregation_results(aggregation);
+    }
+
     pub fn add_pipeline_stage(
         &mut self,
         session_key: &SessionKey,
@@ -322,11 +354,7 @@ impl AppState {
             session.data.aggregation.stages.push(PipelineStage::new(operator));
             let len = session.data.aggregation.stages.len();
             session.data.aggregation.selected_stage = len.checked_sub(1);
-            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -342,13 +370,8 @@ impl AppState {
             session.data.aggregation.stages = stages;
             let len = session.data.aggregation.stages.len();
             session.data.aggregation.selected_stage = len.checked_sub(1);
-            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
-            session.data.aggregation.error = None;
             session.data.aggregation.loading = false;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -365,12 +388,7 @@ impl AppState {
             let insert_index = index.min(len);
             session.data.aggregation.stages.insert(insert_index, PipelineStage::new(operator));
             session.data.aggregation.selected_stage = Some(insert_index);
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -397,12 +415,7 @@ impl AppState {
                 Some(sel) if sel < len => Some(sel),
                 _ => None,
             };
-            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
-            session.data.aggregation.error = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -416,6 +429,7 @@ impl AppState {
             let max_index = session.data.aggregation.stages.len().saturating_sub(1);
             session.data.aggregation.selected_stage = selected.filter(|idx| *idx <= max_index);
             session.data.aggregation.results_page = 0;
+            Self::invalidate_aggregation_run(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -430,12 +444,7 @@ impl AppState {
             && let Some(stage) = session.data.aggregation.stages.get_mut(index)
         {
             stage.body = body;
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -450,12 +459,7 @@ impl AppState {
             && let Some(stage) = session.data.aggregation.stages.get_mut(index)
         {
             stage.operator = operator;
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -465,24 +469,32 @@ impl AppState {
             && let Some(stage) = session.data.aggregation.stages.get_mut(index)
         {
             stage.enabled = !stage.enabled;
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
 
     pub fn set_pipeline_result_limit(&mut self, session_key: &SessionKey, limit: i64) {
         if let Some(session) = self.session_mut(session_key) {
-            session.data.aggregation.result_limit = limit;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.results = None;
-            session.data.aggregation.last_run_time_ms = None;
+            let normalized_limit = limit.max(1);
+            session.data.aggregation.result_limit = normalized_limit;
+            Self::reset_aggregation_results(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
+    }
+
+    pub fn set_pipeline_stage_stats_enabled(&mut self, session_key: &SessionKey, enabled: bool) {
+        let mut changed = false;
+        if let Some(session) = self.session_mut(session_key)
+            && session.data.aggregation.stage_stats_enabled != enabled
+        {
+            session.data.aggregation.stage_stats_enabled = enabled;
+            Self::reset_aggregation_stage_stats_only(&mut session.data.aggregation);
+            changed = true;
+        }
+        if changed {
+            self.update_workspace_session_view(session_key);
+        }
     }
 
     pub fn duplicate_pipeline_stage(
@@ -496,12 +508,7 @@ impl AppState {
             let insert_index = index + 1;
             session.data.aggregation.stages.insert(insert_index, stage);
             session.data.aggregation.selected_stage = Some(insert_index);
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -525,12 +532,7 @@ impl AppState {
                 other => other,
             };
 
-            session.data.aggregation.stage_doc_counts =
-                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
-            session.data.aggregation.analysis = None;
-            session.data.aggregation.results = None;
-            session.data.aggregation.results_page = 0;
-            session.data.aggregation.last_run_time_ms = None;
+            Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);
     }
@@ -540,6 +542,7 @@ impl AppState {
             && session.data.aggregation.results_page > 0
         {
             session.data.aggregation.results_page -= 1;
+            Self::invalidate_aggregation_run(&mut session.data.aggregation);
             self.update_workspace_session_view(session_key);
             return true;
         }
@@ -554,6 +557,7 @@ impl AppState {
             let next = session.data.aggregation.results_page + 1;
             if next < total_pages {
                 session.data.aggregation.results_page = next;
+                Self::invalidate_aggregation_run(&mut session.data.aggregation);
                 self.update_workspace_session_view(session_key);
                 return true;
             }
@@ -591,6 +595,8 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use mongodb::bson::{Bson, doc};
 
     use crate::bson::{DocumentKey, PathSegment};
@@ -638,5 +644,119 @@ mod tests {
         assert!(!state.prev_page(&session_key));
         assert!(state.next_page(&session_key, 2));
         assert!(state.prev_page(&session_key));
+    }
+
+    #[test]
+    fn stage_edit_resets_counts_results_and_cancels_run() {
+        let mut state = AppState::new();
+        let session_key = SessionKey::new(uuid::Uuid::new_v4(), "db", "col");
+        state.ensure_session(session_key.clone());
+        state.add_pipeline_stage(&session_key, "$match");
+
+        let (prev_request_id, prev_generation) = {
+            let session = state.session_mut(&session_key).expect("session exists");
+            session.data.aggregation.stage_doc_counts[0].input = Some(10);
+            session.data.aggregation.stage_doc_counts[0].output = Some(5);
+            session.data.aggregation.stage_doc_counts[0].time_ms = Some(2);
+            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.results_page = 3;
+            session.data.aggregation.last_run_time_ms = Some(42);
+            session.data.aggregation.error = Some("boom".to_string());
+            (
+                session.data.aggregation.request_id,
+                session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            )
+        };
+
+        state.set_pipeline_stage_body(&session_key, 0, r#"{ "a": 1 }"#.to_string());
+
+        let session = state.session(&session_key).expect("session exists");
+        let counts = &session.data.aggregation.stage_doc_counts[0];
+        assert_eq!(counts.input, None);
+        assert_eq!(counts.output, None);
+        assert_eq!(counts.time_ms, None);
+        assert!(session.data.aggregation.results.is_none());
+        assert_eq!(session.data.aggregation.results_page, 0);
+        assert_eq!(session.data.aggregation.last_run_time_ms, None);
+        assert_eq!(session.data.aggregation.error, None);
+        assert!(!session.data.aggregation.loading);
+        assert_eq!(session.data.aggregation.request_id, prev_request_id + 1);
+        assert_eq!(
+            session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            prev_generation + 1
+        );
+    }
+
+    #[test]
+    fn limit_change_resets_results_but_not_counts() {
+        let mut state = AppState::new();
+        let session_key = SessionKey::new(uuid::Uuid::new_v4(), "db", "col");
+        state.ensure_session(session_key.clone());
+        state.add_pipeline_stage(&session_key, "$match");
+
+        let (prev_request_id, prev_generation) = {
+            let session = state.session_mut(&session_key).expect("session exists");
+            session.data.aggregation.stage_doc_counts[0].output = Some(7);
+            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.results_page = 2;
+            session.data.aggregation.last_run_time_ms = Some(11);
+            session.data.aggregation.error = Some("err".to_string());
+            (
+                session.data.aggregation.request_id,
+                session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            )
+        };
+
+        state.set_pipeline_result_limit(&session_key, 25);
+
+        let session = state.session(&session_key).expect("session exists");
+        assert_eq!(session.data.aggregation.result_limit, 25);
+        assert_eq!(session.data.aggregation.stage_doc_counts[0].output, Some(7));
+        assert!(session.data.aggregation.results.is_none());
+        assert_eq!(session.data.aggregation.results_page, 0);
+        assert_eq!(session.data.aggregation.last_run_time_ms, None);
+        assert_eq!(session.data.aggregation.error, None);
+        assert_eq!(session.data.aggregation.request_id, prev_request_id + 1);
+        assert_eq!(
+            session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            prev_generation + 1
+        );
+    }
+
+    #[test]
+    fn stage_stats_toggle_resets_counts_but_keeps_results() {
+        let mut state = AppState::new();
+        let session_key = SessionKey::new(uuid::Uuid::new_v4(), "db", "col");
+        state.ensure_session(session_key.clone());
+        state.add_pipeline_stage(&session_key, "$match");
+
+        let (prev_request_id, prev_generation) = {
+            let session = state.session_mut(&session_key).expect("session exists");
+            session.data.aggregation.stage_doc_counts[0].output = Some(9);
+            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.last_run_time_ms = Some(33);
+            session.data.aggregation.error = Some("old".to_string());
+            (
+                session.data.aggregation.request_id,
+                session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            )
+        };
+
+        state.set_pipeline_stage_stats_enabled(&session_key, false);
+
+        let session = state.session(&session_key).expect("session exists");
+        let counts = &session.data.aggregation.stage_doc_counts[0];
+        assert_eq!(counts.input, None);
+        assert_eq!(counts.output, None);
+        assert_eq!(counts.time_ms, None);
+        assert!(session.data.aggregation.results.is_some());
+        assert_eq!(session.data.aggregation.last_run_time_ms, None);
+        assert_eq!(session.data.aggregation.error, None);
+        assert!(!session.data.aggregation.stage_stats_enabled);
+        assert_eq!(session.data.aggregation.request_id, prev_request_id + 1);
+        assert_eq!(
+            session.data.aggregation.run_generation.load(Ordering::SeqCst),
+            prev_generation + 1
+        );
     }
 }

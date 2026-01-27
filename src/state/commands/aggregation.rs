@@ -1,5 +1,9 @@
 //! Aggregation pipeline execution commands.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Instant;
 
 use gpui::{App, AppContext as _, Entity};
@@ -8,7 +12,7 @@ use crate::bson::parse_document_from_json;
 use crate::connection::get_connection_manager;
 use crate::connection::mongo::ConnectionManager;
 use crate::state::app_state::{PipelineStage, StageDocCounts};
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey, StatusMessage};
 use mongodb::bson::{Bson, Document, doc};
 
 impl AppCommands {
@@ -22,9 +26,25 @@ impl AppCommands {
             return;
         };
 
-        let (database, collection, stages, selected_stage, result_limit, results_page) = {
+        let (
+            database,
+            collection,
+            stages,
+            selected_stage,
+            result_limit,
+            results_page,
+            stage_stats_enabled,
+            run_generation,
+        ) = {
             let state_ref = state.read(cx);
-            let (stages, selected_stage, result_limit, results_page) = state_ref
+            let (
+                stages,
+                selected_stage,
+                result_limit,
+                results_page,
+                stage_stats_enabled,
+                run_generation,
+            ) = state_ref
                 .session(&session_key)
                 .map(|session| {
                     (
@@ -32,9 +52,11 @@ impl AppCommands {
                         session.data.aggregation.selected_stage,
                         session.data.aggregation.result_limit,
                         session.data.aggregation.results_page,
+                        session.data.aggregation.stage_stats_enabled,
+                        session.data.aggregation.run_generation.clone(),
                     )
                 })
-                .unwrap_or((Vec::new(), None, 50, 0));
+                .unwrap_or((Vec::new(), None, 50, 0, true, Arc::new(AtomicU64::new(0))));
             (
                 session_key.database.clone(),
                 session_key.collection.clone(),
@@ -42,6 +64,8 @@ impl AppCommands {
                 selected_stage,
                 result_limit,
                 results_page,
+                stage_stats_enabled,
+                run_generation,
             )
         };
 
@@ -71,48 +95,54 @@ impl AppCommands {
             return;
         };
 
-        let pipeline = match build_pipeline(&stages, selected_stage) {
-            Ok(pipeline) => pipeline,
-            Err(err) => {
-                state.update(cx, |state, cx| {
-                    if let Some(session) = state.session_mut(&session_key) {
-                        session.data.aggregation.error = Some(format!("Invalid stage JSON: {err}"));
-                        session.data.aggregation.results = None;
-                        session.data.aggregation.last_run_time_ms = None;
-                    }
-                    cx.notify();
-                });
-                let event = AppEvent::AggregationFailed {
-                    session: session_key,
-                    error: format!("Invalid stage JSON: {err}"),
-                };
-                state.update(cx, |state, cx| {
-                    state.update_status_from_event(&event);
-                    cx.emit(event);
-                    cx.notify();
-                });
-                return;
-            }
-        };
+        let has_write_stage = pipeline_has_write_stage(&stages, selected_stage);
+        if has_write_stage && !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+            state.update(cx, |state, cx| {
+                if let Some(session) = state.session_mut(&session_key) {
+                    session.data.aggregation.error = Some(
+                        "Write stages ($out/$merge) require a writable connection.".to_string(),
+                    );
+                    session.data.aggregation.results = None;
+                    session.data.aggregation.last_run_time_ms = None;
+                    session.data.aggregation.loading = false;
+                }
+                cx.notify();
+            });
+            let event = AppEvent::AggregationFailed {
+                session: session_key,
+                error: "Write stages require a writable connection.".to_string(),
+            };
+            state.update(cx, |state, cx| {
+                state.update_status_from_event(&event);
+                cx.emit(event);
+                cx.notify();
+            });
+            return;
+        }
 
-        state.update(cx, |state, cx| {
-            if let Some(session) = state.session_mut(&session_key) {
-                session.data.aggregation.loading = true;
-                session.data.aggregation.error = None;
-            }
+        let (request_id, run_generation_value) = state.update(cx, |state, cx| {
+            let session = state.ensure_session(session_key.clone());
+            session.data.aggregation.loading = true;
+            session.data.aggregation.error = None;
+            session.data.aggregation.request_id += 1;
+            let request_id = session.data.aggregation.request_id;
+            let run_generation_value =
+                session.data.aggregation.run_generation.fetch_add(1, Ordering::SeqCst) + 1;
             cx.notify();
+            (request_id, run_generation_value)
         });
 
         let per_page = if result_limit > 0 { result_limit } else { 50 };
-        let limited = per_page > 0;
-        let skip = results_page.saturating_mul(per_page as u64);
+        let limited = per_page > 0 && !has_write_stage;
+        let skip = if has_write_stage { 0 } else { results_page.saturating_mul(per_page as u64) };
         let skip_i64 = skip.min(i64::MAX as u64) as i64;
 
         let task = cx.background_spawn({
             let database_for_task = database.clone();
             let collection_for_task = collection.clone();
-            let pipeline_for_task = pipeline.clone();
             let stages_for_task = stages.clone();
+            let run_generation_for_task = run_generation.clone();
+            let stage_stats_enabled_for_task = stage_stats_enabled;
             async move {
                 let manager = get_connection_manager();
                 let ctx = AggregationRunContext {
@@ -124,7 +154,10 @@ impl AppCommands {
                 let params = AggregationRunParams {
                     stages: stages_for_task,
                     target_index,
-                    pipeline: pipeline_for_task,
+                    has_write_stage,
+                    stage_stats_enabled: stage_stats_enabled_for_task,
+                    run_generation: run_generation_for_task,
+                    run_generation_value,
                     pagination: AggregationPagination { per_page, skip: skip_i64 },
                 };
                 run_pipeline_with_stage_stats(&ctx, params)
@@ -140,14 +173,18 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(run) => {
                         let count = run.documents.len();
-                        state.update(cx, |state, cx| {
-                            if let Some(session) = state.session_mut(&session_key) {
-                                session.data.aggregation.results = Some(run.documents);
-                                session.data.aggregation.loading = false;
-                                session.data.aggregation.error = None;
-                                session.data.aggregation.stage_doc_counts = run.stage_stats;
-                                session.data.aggregation.last_run_time_ms = Some(run.run_time_ms);
+                        let applied = state.update(cx, |state, cx| {
+                            let Some(session) = state.session_mut(&session_key) else {
+                                return false;
+                            };
+                            if session.data.aggregation.request_id != request_id {
+                                return false;
                             }
+                            session.data.aggregation.results = Some(run.documents);
+                            session.data.aggregation.loading = false;
+                            session.data.aggregation.error = None;
+                            session.data.aggregation.stage_doc_counts = run.stage_stats;
+                            session.data.aggregation.last_run_time_ms = Some(run.run_time_ms);
                             let event = AppEvent::AggregationCompleted {
                                 session: session_key.clone(),
                                 count,
@@ -157,18 +194,33 @@ impl AppCommands {
                             state.update_status_from_event(&event);
                             cx.emit(event);
                             cx.notify();
+                            true
                         });
+                        if applied && has_write_stage {
+                            state.update(cx, |state, cx| {
+                                state.set_status_message(Some(StatusMessage::info(
+                                    "Write stage detected: stage stats and preview limit are disabled.",
+                                )));
+                                cx.notify();
+                            });
+                        }
                     }
+                    Err(AggregationRunError::Cancelled) => {}
                     Err(error) => {
+                        let error_message = error.to_string();
                         state.update(cx, |state, cx| {
-                            if let Some(session) = state.session_mut(&session_key) {
-                                session.data.aggregation.loading = false;
-                                session.data.aggregation.error = Some(error.to_string());
-                                session.data.aggregation.last_run_time_ms = None;
+                            let Some(session) = state.session_mut(&session_key) else {
+                                return;
+                            };
+                            if session.data.aggregation.request_id != request_id {
+                                return;
                             }
+                            session.data.aggregation.loading = false;
+                            session.data.aggregation.error = Some(error_message.clone());
+                            session.data.aggregation.last_run_time_ms = None;
                             let event = AppEvent::AggregationFailed {
                                 session: session_key.clone(),
-                                error: error.to_string(),
+                                error: error_message,
                             };
                             state.update_status_from_event(&event);
                             cx.emit(event);
@@ -182,36 +234,37 @@ impl AppCommands {
     }
 }
 
-fn build_pipeline(
-    stages: &[PipelineStage],
-    selected_stage: Option<usize>,
-) -> Result<Vec<Document>, String> {
-    let mut pipeline = Vec::new();
-    for (idx, stage) in stages.iter().enumerate() {
-        if let Some(selected) = selected_stage
-            && idx > selected
-        {
-            break;
-        }
-        if !stage.enabled {
-            continue;
-        }
-        let operator = stage.operator.trim();
-        if operator.is_empty() {
-            return Err(format!("Stage {} has no operator", idx + 1));
-        }
-        let body = stage.body.trim();
-        let body_doc = if body.is_empty() || body == "{}" {
-            Document::new()
-        } else {
-            parse_document_from_json(body)
-                .map_err(|err| format!("Stage {} ({operator}): {err}", idx + 1))?
-        };
-        let mut stage_doc = Document::new();
-        stage_doc.insert(operator, body_doc);
-        pipeline.push(stage_doc);
+fn pipeline_has_write_stage(stages: &[PipelineStage], selected_stage: Option<usize>) -> bool {
+    let target_index = selected_stage.or_else(|| stages.len().checked_sub(1));
+    let Some(target_index) = target_index else {
+        return false;
+    };
+    (0..=target_index).any(|idx| {
+        stages.get(idx).is_some_and(|stage| {
+            if !stage.enabled {
+                return false;
+            }
+            matches!(stage.operator.trim(), "$out" | "$merge")
+        })
+    })
+}
+
+fn build_stage_doc(stage: &PipelineStage, idx: usize) -> Result<Document, AggregationRunError> {
+    let operator = stage.operator.trim();
+    if operator.is_empty() {
+        return Err(AggregationRunError::Pipeline(format!("Stage {} has no operator", idx + 1)));
     }
-    Ok(pipeline)
+    let body = stage.body.trim();
+    let body_doc = if body.is_empty() || body == "{}" {
+        Document::new()
+    } else {
+        parse_document_from_json(body).map_err(|err| {
+            AggregationRunError::Pipeline(format!("Stage {} ({operator}): {err}", idx + 1))
+        })?
+    };
+    let mut stage_doc = Document::new();
+    stage_doc.insert(operator, body_doc);
+    Ok(stage_doc)
 }
 
 #[derive(Debug)]
@@ -225,6 +278,7 @@ struct AggregationRunResult {
 enum AggregationRunError {
     Pipeline(String),
     Mongo(crate::error::Error),
+    Cancelled,
 }
 
 impl std::fmt::Display for AggregationRunError {
@@ -232,6 +286,7 @@ impl std::fmt::Display for AggregationRunError {
         match self {
             Self::Pipeline(message) => write!(f, "{message}"),
             Self::Mongo(error) => write!(f, "Aggregation failed: {error}"),
+            Self::Cancelled => write!(f, "Aggregation cancelled"),
         }
     }
 }
@@ -257,7 +312,10 @@ struct AggregationPagination {
 struct AggregationRunParams {
     stages: Vec<PipelineStage>,
     target_index: usize,
-    pipeline: Vec<Document>,
+    has_write_stage: bool,
+    stage_stats_enabled: bool,
+    run_generation: Arc<AtomicU64>,
+    run_generation_value: u64,
     pagination: AggregationPagination,
 }
 
@@ -265,15 +323,35 @@ fn run_pipeline_with_stage_stats(
     ctx: &AggregationRunContext<'_>,
     params: AggregationRunParams,
 ) -> Result<AggregationRunResult, AggregationRunError> {
-    let AggregationRunParams { stages, target_index, pipeline, pagination } = params;
+    let AggregationRunParams {
+        stages,
+        target_index,
+        has_write_stage,
+        stage_stats_enabled,
+        run_generation,
+        run_generation_value,
+        pagination,
+    } = params;
     let AggregationPagination { per_page, skip } = pagination;
+
+    if is_cancelled(&run_generation, run_generation_value) {
+        return Err(AggregationRunError::Cancelled);
+    }
 
     let mut stage_stats = vec![StageDocCounts::default(); stages.len()];
 
-    let (base_count, _) = run_count(ctx, Vec::new())?;
-    let mut prev_output = Some(base_count);
+    let compute_stage_stats = stage_stats_enabled && !has_write_stage;
+    let mut prev_output = if compute_stage_stats {
+        Some(run_count(ctx, Vec::new(), &run_generation, run_generation_value)?.0)
+    } else {
+        None
+    };
+    let mut running_pipeline: Vec<Document> = Vec::new();
 
     for idx in 0..=target_index {
+        if is_cancelled(&run_generation, run_generation_value) {
+            return Err(AggregationRunError::Cancelled);
+        }
         let Some(stage) = stages.get(idx) else {
             break;
         };
@@ -289,19 +367,26 @@ fn run_pipeline_with_stage_stats(
             continue;
         }
 
-        let pipeline_for_stage =
-            build_pipeline(&stages, Some(idx)).map_err(AggregationRunError::Pipeline)?;
-        let (count, elapsed_ms) = run_count(ctx, pipeline_for_stage)?;
-        if let Some(counts) = stage_stats.get_mut(idx) {
-            counts.output = Some(count);
-            counts.time_ms = Some(elapsed_ms);
+        let stage_doc = build_stage_doc(stage, idx)?;
+        running_pipeline.push(stage_doc);
+
+        if compute_stage_stats {
+            let (count, elapsed_ms) =
+                run_count(ctx, running_pipeline.clone(), &run_generation, run_generation_value)?;
+            if let Some(counts) = stage_stats.get_mut(idx) {
+                counts.output = Some(count);
+                counts.time_ms = Some(elapsed_ms);
+            }
+            prev_output = Some(count);
         }
-        prev_output = Some(count);
     }
 
-    let mut results_pipeline = pipeline;
-    if skip > 0 {
+    let mut results_pipeline = running_pipeline;
+    if skip > 0 && !has_write_stage {
         results_pipeline.push(doc! { "$skip": skip });
+    }
+    if is_cancelled(&run_generation, run_generation_value) {
+        return Err(AggregationRunError::Cancelled);
     }
     let start = Instant::now();
     let documents = ctx
@@ -311,7 +396,8 @@ fn run_pipeline_with_stage_stats(
             ctx.database,
             ctx.collection,
             results_pipeline,
-            Some(per_page),
+            if has_write_stage { None } else { Some(per_page) },
+            !has_write_stage,
         )
         .map_err(AggregationRunError::from)?;
     let run_time_ms = start.elapsed().as_millis() as u64;
@@ -322,16 +408,28 @@ fn run_pipeline_with_stage_stats(
 fn run_count(
     ctx: &AggregationRunContext<'_>,
     mut pipeline: Vec<Document>,
+    run_generation: &Arc<AtomicU64>,
+    run_generation_value: u64,
 ) -> Result<(u64, u64), AggregationRunError> {
+    if is_cancelled(run_generation, run_generation_value) {
+        return Err(AggregationRunError::Cancelled);
+    }
     pipeline.push(doc! { "$count": "__openmango_count" });
     let start = Instant::now();
     let docs = ctx
         .manager
-        .aggregate_pipeline(ctx.client, ctx.database, ctx.collection, pipeline, None)
+        .aggregate_pipeline(ctx.client, ctx.database, ctx.collection, pipeline, None, false)
         .map_err(AggregationRunError::from)?;
+    if is_cancelled(run_generation, run_generation_value) {
+        return Err(AggregationRunError::Cancelled);
+    }
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let count = docs.first().map(count_from_doc).unwrap_or(0);
     Ok((count, elapsed_ms))
+}
+
+fn is_cancelled(run_generation: &Arc<AtomicU64>, run_generation_value: u64) -> bool {
+    run_generation.load(Ordering::SeqCst) != run_generation_value
 }
 
 fn count_from_doc(doc: &Document) -> u64 {
@@ -343,5 +441,76 @@ fn count_from_doc(doc: &Document) -> u64 {
         Bson::Int32(v) => (*v).max(0) as u64,
         Bson::Double(v) => (*v).max(0.0) as u64,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_stage_doc, is_cancelled, pipeline_has_write_stage};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    use mongodb::bson::doc;
+
+    use crate::state::app_state::PipelineStage;
+
+    #[test]
+    fn pipeline_has_write_stage_respects_selection_and_enabled() {
+        let stages = vec![
+            PipelineStage { operator: "$match".to_string(), body: "{}".to_string(), enabled: true },
+            PipelineStage { operator: "$out".to_string(), body: "{}".to_string(), enabled: true },
+            PipelineStage { operator: "$merge".to_string(), body: "{}".to_string(), enabled: true },
+        ];
+
+        assert!(pipeline_has_write_stage(&stages, None));
+        assert!(!pipeline_has_write_stage(&stages, Some(0)));
+
+        let mut disabled = stages.clone();
+        disabled[1].enabled = false;
+        disabled[2].enabled = false;
+        assert!(!pipeline_has_write_stage(&disabled, None));
+    }
+
+    #[test]
+    fn build_stage_doc_parses_and_handles_empty_body() {
+        let parsed = build_stage_doc(
+            &PipelineStage {
+                operator: "$match".to_string(),
+                body: r#"{ "status": "active" }"#.to_string(),
+                enabled: true,
+            },
+            0,
+        )
+        .expect("stage should parse");
+        assert_eq!(parsed, doc! { "$match": { "status": "active" } });
+
+        let empty = build_stage_doc(
+            &PipelineStage { operator: "$match".to_string(), body: "".to_string(), enabled: true },
+            1,
+        )
+        .expect("empty body should become {}");
+        assert_eq!(empty, doc! { "$match": {} });
+    }
+
+    #[test]
+    fn build_stage_doc_errors_on_empty_operator() {
+        let err = build_stage_doc(
+            &PipelineStage { operator: "   ".to_string(), body: "{}".to_string(), enabled: true },
+            2,
+        )
+        .expect_err("empty operator should error");
+        let message = err.to_string();
+        assert!(message.contains("Stage 3 has no operator"));
+    }
+
+    #[test]
+    fn is_cancelled_detects_generation_changes() {
+        let generation = Arc::new(AtomicU64::new(0));
+        assert!(!is_cancelled(&generation, 0));
+        generation.fetch_add(1, Ordering::SeqCst);
+        assert!(is_cancelled(&generation, 0));
+        assert!(!is_cancelled(&generation, 1));
     }
 }
