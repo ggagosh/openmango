@@ -1,7 +1,8 @@
 //! Aggregation pipeline state for a collection session.
 
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{Arc, Mutex, atomic::AtomicU64};
 
+use futures::future::AbortHandle;
 use mongodb::bson::Document;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,24 @@ impl PipelineStage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StageStatsMode {
+    Off,
+    Counts,
+    #[default]
+    CountsAndTiming,
+}
+
+impl StageStatsMode {
+    pub fn counts_enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub fn timings_enabled(self) -> bool {
+        matches!(self, Self::CountsAndTiming)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PipelineState {
     pub stages: Vec<PipelineStage>,
@@ -35,8 +54,9 @@ pub struct PipelineState {
     pub loading: bool,
     pub error: Option<String>,
     pub request_id: u64,
-    pub stage_stats_enabled: bool,
+    pub stage_stats_mode: StageStatsMode,
     pub run_generation: Arc<AtomicU64>,
+    pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
     pub result_limit: i64,
     pub results_page: u64,
     pub last_run_time_ms: Option<u64>,
@@ -54,8 +74,9 @@ impl Default for PipelineState {
             loading: false,
             error: None,
             request_id: 0,
-            stage_stats_enabled: true,
+            stage_stats_mode: StageStatsMode::default(),
             run_generation: Arc::new(AtomicU64::new(0)),
+            abort_handle: Arc::new(Mutex::new(None)),
             result_limit: 50,
             results_page: 0,
             last_run_time_ms: None,

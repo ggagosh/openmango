@@ -10,7 +10,7 @@ use gpui_component::tree::tree;
 use crate::bson::DocumentKey;
 use crate::components::Button;
 use crate::helpers::format_number;
-use crate::state::app_state::PipelineState;
+use crate::state::app_state::{PipelineState, StageStatsMode};
 use crate::state::{AppCommands, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::tree::document_tree::build_documents_tree;
@@ -58,8 +58,11 @@ impl CollectionView {
             .and_then(|idx| pipeline.stages.get(idx).map(|stage| (idx, stage)))
             .map(|(idx, stage)| format!("Results (after Stage {}: {})", idx + 1, stage.operator))
             .unwrap_or_else(|| "Results (full pipeline)".to_string());
-        let stage_stats_enabled = pipeline.stage_stats_enabled;
+        let stage_stats_mode = pipeline.stage_stats_mode;
+        let stage_stats_enabled = stage_stats_mode.counts_enabled();
+        let stage_timings_enabled = stage_stats_mode.timings_enabled();
         let can_toggle_stage_stats = session_key.is_some() && !pipeline.stages.is_empty();
+        let can_toggle_timing = can_toggle_stage_stats && stage_stats_enabled;
 
         let header = div()
             .flex()
@@ -107,13 +110,18 @@ impl CollectionView {
                                             let Some(session_key) = session_key.clone() else {
                                                 return;
                                             };
-                                            if checked == stage_stats_enabled {
+                                            let next_mode = if checked {
+                                                StageStatsMode::CountsAndTiming
+                                            } else {
+                                                StageStatsMode::Off
+                                            };
+                                            if next_mode == stage_stats_mode {
                                                 return;
                                             }
                                             state.update(cx, |state, cx| {
-                                                state.set_pipeline_stage_stats_enabled(
+                                                state.set_pipeline_stage_stats_mode(
                                                     &session_key,
-                                                    checked,
+                                                    next_mode,
                                                 );
                                                 cx.notify();
                                             });
@@ -135,6 +143,64 @@ impl CollectionView {
                                     }),
                             )
                             .child(div().text_xs().text_color(colors::text_muted()).child("Stats")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .child(
+                                Switch::new("agg-stage-stats-timing")
+                                    .checked(stage_timings_enabled)
+                                    .small()
+                                    .tooltip("Per-stage timing (slower)")
+                                    .disabled(!can_toggle_timing)
+                                    .on_click({
+                                        let state = self.state.clone();
+                                        let session_key = session_key.clone();
+                                        move |checked, _window, cx| {
+                                            let checked = *checked;
+                                            let Some(session_key) = session_key.clone() else {
+                                                return;
+                                            };
+                                            if !stage_stats_enabled {
+                                                return;
+                                            }
+                                            let next_mode = if checked {
+                                                StageStatsMode::CountsAndTiming
+                                            } else {
+                                                StageStatsMode::Counts
+                                            };
+                                            if next_mode == stage_stats_mode {
+                                                return;
+                                            }
+                                            state.update(cx, |state, cx| {
+                                                state.set_pipeline_stage_stats_mode(
+                                                    &session_key,
+                                                    next_mode,
+                                                );
+                                                cx.notify();
+                                            });
+                                            let should_run = state
+                                                .read(cx)
+                                                .session(&session_key)
+                                                .is_some_and(|session| {
+                                                    !session.data.aggregation.stages.is_empty()
+                                                });
+                                            if should_run {
+                                                AppCommands::run_aggregation(
+                                                    state.clone(),
+                                                    session_key,
+                                                    false,
+                                                    cx,
+                                                );
+                                            }
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div().text_xs().text_color(colors::text_muted()).child("Timing"),
+                            ),
                     )
                     .child(div().text_xs().text_color(colors::text_muted()).child("Limit"))
                     .child(if let Some(limit_state) = self.aggregation_limit_state.clone() {

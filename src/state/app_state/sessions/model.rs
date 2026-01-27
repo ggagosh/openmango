@@ -12,7 +12,7 @@ use crate::state::AppState;
 use crate::state::app_state::types::{
     CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
 };
-use crate::state::app_state::{PipelineStage, PipelineState, StageDocCounts};
+use crate::state::app_state::{PipelineStage, PipelineState, StageDocCounts, StageStatsMode};
 
 #[derive(Default)]
 pub struct SessionStore {
@@ -314,6 +314,11 @@ impl AppState {
     }
 
     fn invalidate_aggregation_run(aggregation: &mut PipelineState) {
+        if let Ok(mut handle) = aggregation.abort_handle.lock()
+            && let Some(handle) = handle.take()
+        {
+            handle.abort();
+        }
         aggregation.request_id += 1;
         aggregation.run_generation.fetch_add(1, Ordering::SeqCst);
         aggregation.loading = false;
@@ -483,12 +488,16 @@ impl AppState {
         self.update_workspace_session_view(session_key);
     }
 
-    pub fn set_pipeline_stage_stats_enabled(&mut self, session_key: &SessionKey, enabled: bool) {
+    pub fn set_pipeline_stage_stats_mode(
+        &mut self,
+        session_key: &SessionKey,
+        mode: StageStatsMode,
+    ) {
         let mut changed = false;
         if let Some(session) = self.session_mut(session_key)
-            && session.data.aggregation.stage_stats_enabled != enabled
+            && session.data.aggregation.stage_stats_mode != mode
         {
-            session.data.aggregation.stage_stats_enabled = enabled;
+            session.data.aggregation.stage_stats_mode = mode;
             Self::reset_aggregation_stage_stats_only(&mut session.data.aggregation);
             changed = true;
         }
@@ -600,6 +609,7 @@ mod tests {
     use mongodb::bson::{Bson, doc};
 
     use crate::bson::{DocumentKey, PathSegment};
+    use crate::state::app_state::StageStatsMode;
     use crate::state::{AppState, SessionKey};
 
     #[test]
@@ -742,7 +752,7 @@ mod tests {
             )
         };
 
-        state.set_pipeline_stage_stats_enabled(&session_key, false);
+        state.set_pipeline_stage_stats_mode(&session_key, StageStatsMode::Off);
 
         let session = state.session(&session_key).expect("session exists");
         let counts = &session.data.aggregation.stage_doc_counts[0];
@@ -752,7 +762,7 @@ mod tests {
         assert!(session.data.aggregation.results.is_some());
         assert_eq!(session.data.aggregation.last_run_time_ms, None);
         assert_eq!(session.data.aggregation.error, None);
-        assert!(!session.data.aggregation.stage_stats_enabled);
+        assert_eq!(session.data.aggregation.stage_stats_mode, StageStatsMode::Off);
         assert_eq!(session.data.aggregation.request_id, prev_request_id + 1);
         assert_eq!(
             session.data.aggregation.run_generation.load(Ordering::SeqCst),
