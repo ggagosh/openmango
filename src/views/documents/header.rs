@@ -11,6 +11,7 @@ use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 use crate::bson::DocumentKey;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::{format_bytes, format_number};
+use crate::keyboard::RunAggregation;
 use crate::state::{AppCommands, AppState, CollectionStats, CollectionSubview, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use mongodb::bson::Document;
@@ -448,6 +449,11 @@ impl CollectionView {
                         .primary()
                         .compact()
                         .label("Run")
+                        .tooltip_with_action(
+                            "Run aggregation",
+                            &RunAggregation,
+                            Some("Documents Aggregation"),
+                        )
                         .disabled(session_key.is_none() || aggregation_loading)
                         .on_click({
                             let session_key = session_key.clone();

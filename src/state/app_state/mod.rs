@@ -10,7 +10,7 @@ mod tabs;
 mod types;
 mod workspace;
 
-pub(crate) use aggregation::{PipelineAnalysis, PipelineStage, PipelineState};
+pub(crate) use aggregation::{PipelineAnalysis, PipelineStage, PipelineState, StageDocCounts};
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{

@@ -9,6 +9,7 @@ use crate::theme::{colors, spacing};
 
 use crate::views::CollectionView;
 
+mod operators;
 mod results_view;
 mod stage_editor;
 mod stage_list;
@@ -115,6 +116,10 @@ impl CollectionView {
                 cx.subscribe_in(&body_state, window, move |view, state, event, window, cx| {
                     match event {
                         InputEvent::Change => {
+                            if view.aggregation_ignore_body_change {
+                                view.aggregation_ignore_body_change = false;
+                                return;
+                            }
                             let Some(session_key) = view.view_model.current_session() else {
                                 return;
                             };
@@ -194,6 +199,18 @@ impl CollectionView {
                                         )));
                                         cx.notify();
                                     });
+                                    let should_run =
+                                        view.state.read(cx).session(&session_key).is_some_and(
+                                            |session| !session.data.aggregation.stages.is_empty(),
+                                        );
+                                    if should_run {
+                                        AppCommands::run_aggregation(
+                                            view.state.clone(),
+                                            session_key.clone(),
+                                            false,
+                                            cx,
+                                        );
+                                    }
                                 }
                                 Err(message) => {
                                     view.state.update(cx, |state, cx| {
@@ -226,6 +243,9 @@ impl CollectionView {
             let session_changed = self.aggregation_input_session != session_key;
             self.aggregation_input_session = session_key.clone();
             self.aggregation_selected_stage = pipeline.selected_stage;
+            if session_changed {
+                self.aggregation_drag_over = None;
+            }
 
             let new_count = pipeline.stages.len();
             let prev_count = self.aggregation_stage_count;
@@ -247,9 +267,13 @@ impl CollectionView {
                     .and_then(|idx| pipeline.stages.get(idx))
                     .map(|stage| stage.body.clone())
                     .unwrap_or_else(|| "{}".to_string());
-                body_state.update(cx, |state, cx| {
-                    state.set_value(body_value, window, cx);
-                });
+                let current_value = body_state.read(cx).value().to_string();
+                if current_value != body_value {
+                    self.aggregation_ignore_body_change = true;
+                    body_state.update(cx, |state, cx| {
+                        state.set_value(body_value, window, cx);
+                    });
+                }
             }
 
             if let Some(limit_state) = self.aggregation_limit_state.clone() {

@@ -8,10 +8,10 @@ use uuid::Uuid;
 
 use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
 use crate::state::AppState;
-use crate::state::app_state::PipelineStage;
 use crate::state::app_state::types::{
     CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
 };
+use crate::state::app_state::{PipelineStage, StageDocCounts};
 
 #[derive(Default)]
 pub struct SessionStore {
@@ -322,8 +322,55 @@ impl AppState {
             session.data.aggregation.stages.push(PipelineStage::new(operator));
             let len = session.data.aggregation.stages.len();
             session.data.aggregation.selected_stage = len.checked_sub(1);
-            session.data.aggregation.stage_doc_counts = vec![None; len];
+            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
             session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
+            new_index = session.data.aggregation.selected_stage;
+        }
+        self.update_workspace_session_view(session_key);
+        new_index
+    }
+
+    pub fn replace_pipeline_stages(
+        &mut self,
+        session_key: &SessionKey,
+        stages: Vec<PipelineStage>,
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.data.aggregation.stages = stages;
+            let len = session.data.aggregation.stages.len();
+            session.data.aggregation.selected_stage = len.checked_sub(1);
+            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
+            session.data.aggregation.error = None;
+            session.data.aggregation.loading = false;
+        }
+        self.update_workspace_session_view(session_key);
+    }
+
+    pub fn insert_pipeline_stage(
+        &mut self,
+        session_key: &SessionKey,
+        index: usize,
+        operator: impl Into<String>,
+    ) -> Option<usize> {
+        let mut new_index = None;
+        if let Some(session) = self.session_mut(session_key) {
+            let len = session.data.aggregation.stages.len();
+            let insert_index = index.min(len);
+            session.data.aggregation.stages.insert(insert_index, PipelineStage::new(operator));
+            session.data.aggregation.selected_stage = Some(insert_index);
+            session.data.aggregation.stage_doc_counts =
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
+            session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -350,9 +397,11 @@ impl AppState {
                 Some(sel) if sel < len => Some(sel),
                 _ => None,
             };
-            session.data.aggregation.stage_doc_counts = vec![None; len];
+            session.data.aggregation.stage_doc_counts = vec![StageDocCounts::default(); len];
             session.data.aggregation.analysis = None;
             session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
             session.data.aggregation.error = None;
         }
         self.update_workspace_session_view(session_key);
@@ -366,6 +415,7 @@ impl AppState {
         if let Some(session) = self.session_mut(session_key) {
             let max_index = session.data.aggregation.stages.len().saturating_sub(1);
             session.data.aggregation.selected_stage = selected.filter(|idx| *idx <= max_index);
+            session.data.aggregation.results_page = 0;
         }
         self.update_workspace_session_view(session_key);
     }
@@ -382,7 +432,10 @@ impl AppState {
             stage.body = body;
             session.data.aggregation.analysis = None;
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
         }
         self.update_workspace_session_view(session_key);
     }
@@ -399,7 +452,10 @@ impl AppState {
             stage.operator = operator;
             session.data.aggregation.analysis = None;
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
         }
         self.update_workspace_session_view(session_key);
     }
@@ -411,7 +467,10 @@ impl AppState {
             stage.enabled = !stage.enabled;
             session.data.aggregation.analysis = None;
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
         }
         self.update_workspace_session_view(session_key);
     }
@@ -419,6 +478,9 @@ impl AppState {
     pub fn set_pipeline_result_limit(&mut self, session_key: &SessionKey, limit: i64) {
         if let Some(session) = self.session_mut(session_key) {
             session.data.aggregation.result_limit = limit;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.results = None;
+            session.data.aggregation.last_run_time_ms = None;
         }
         self.update_workspace_session_view(session_key);
     }
@@ -435,8 +497,11 @@ impl AppState {
             session.data.aggregation.stages.insert(insert_index, stage);
             session.data.aggregation.selected_stage = Some(insert_index);
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
             session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -461,10 +526,39 @@ impl AppState {
             };
 
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
             session.data.aggregation.analysis = None;
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
         }
         self.update_workspace_session_view(session_key);
+    }
+
+    pub fn prev_pipeline_page(&mut self, session_key: &SessionKey) -> bool {
+        if let Some(session) = self.session_mut(session_key)
+            && session.data.aggregation.results_page > 0
+        {
+            session.data.aggregation.results_page -= 1;
+            self.update_workspace_session_view(session_key);
+            return true;
+        }
+        false
+    }
+
+    pub fn next_pipeline_page(&mut self, session_key: &SessionKey, total_pages: u64) -> bool {
+        if total_pages == 0 {
+            return false;
+        }
+        if let Some(session) = self.session_mut(session_key) {
+            let next = session.data.aggregation.results_page + 1;
+            if next < total_pages {
+                session.data.aggregation.results_page = next;
+                self.update_workspace_session_view(session_key);
+                return true;
+            }
+        }
+        false
     }
 
     pub fn set_collection_subview(

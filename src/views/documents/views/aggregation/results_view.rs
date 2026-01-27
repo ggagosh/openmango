@@ -6,8 +6,10 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tree::tree;
 
 use crate::bson::DocumentKey;
+use crate::components::Button;
+use crate::helpers::format_number;
 use crate::state::app_state::PipelineState;
-use crate::state::{SessionDocument, SessionKey};
+use crate::state::{AppCommands, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::tree::document_tree::build_documents_tree;
 use crate::views::documents::tree::tree_row::render_readonly_tree_row;
@@ -28,6 +30,27 @@ impl CollectionView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let results_count = pipeline.results.as_ref().map(|docs| docs.len()).unwrap_or(0);
+        let target_index = pipeline.selected_stage.or_else(|| pipeline.stages.len().checked_sub(1));
+        let total_count = target_index
+            .and_then(|idx| pipeline.stage_doc_counts.get(idx))
+            .and_then(|counts| counts.output);
+        let per_page = if pipeline.result_limit > 0 { pipeline.result_limit as u64 } else { 50 };
+        let current_page = pipeline.results_page;
+        let total_pages =
+            total_count.map(|total| if total == 0 { 1 } else { ((total - 1) / per_page) + 1 });
+        let (shown_start, shown_end) = if results_count == 0 {
+            (0, 0)
+        } else {
+            let start = current_page.saturating_mul(per_page) + 1;
+            let end = start + results_count as u64 - 1;
+            (start, end)
+        };
+        let count_label =
+            total_count.map(format_number).unwrap_or_else(|| format_number(results_count as u64));
+        let mut meta_label = format!("{count_label} document(s)");
+        if let Some(ms) = pipeline.last_run_time_ms {
+            meta_label.push_str(&format!(" · {ms}ms"));
+        }
         let stage_label = pipeline
             .selected_stage
             .and_then(|idx| pipeline.stages.get(idx).map(|stage| (idx, stage)))
@@ -49,12 +72,7 @@ impl CollectionView {
                     .items_center()
                     .gap(spacing::xs())
                     .child(div().text_sm().text_color(colors::text_primary()).child(stage_label))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors::text_muted())
-                            .child(format!("{results_count} document(s)")),
-                    )
+                    .child(div().text_xs().text_color(colors::text_muted()).child(meta_label))
                     .child(if pipeline.loading {
                         Spinner::new().xsmall().into_any_element()
                     } else {
@@ -90,6 +108,15 @@ impl CollectionView {
             );
         }
         body = body.child(render_results_tree(self, pipeline, session_key.clone(), window, cx));
+        let footer_data = ResultsFooterData {
+            total_count,
+            per_page,
+            current_page,
+            total_pages,
+            shown_start,
+            shown_end,
+        };
+        body = body.child(render_results_footer(self.state.clone(), session_key, footer_data));
 
         div()
             .flex()
@@ -105,6 +132,136 @@ impl CollectionView {
             .child(body)
             .into_any_element()
     }
+}
+
+struct ResultsFooterData {
+    total_count: Option<u64>,
+    per_page: u64,
+    current_page: u64,
+    total_pages: Option<u64>,
+    shown_start: u64,
+    shown_end: u64,
+}
+
+fn render_results_footer(
+    state: Entity<crate::state::AppState>,
+    session_key: Option<SessionKey>,
+    data: ResultsFooterData,
+) -> AnyElement {
+    let ResultsFooterData {
+        total_count,
+        per_page,
+        current_page,
+        total_pages,
+        shown_start,
+        shown_end,
+    } = data;
+    let has_session = session_key.is_some();
+    let has_total = total_count.is_some();
+    let total_pages_value = total_pages.unwrap_or(0);
+    let prev_disabled = !has_session || current_page == 0 || !has_total;
+    let next_disabled = !has_session || !has_total || current_page + 1 >= total_pages_value;
+
+    let range_label = if let Some(total) = total_count {
+        if shown_start == 0 {
+            format!("Showing 0 of {}", format_number(total))
+        } else {
+            format!(
+                "Showing {}-{} of {}",
+                format_number(shown_start),
+                format_number(shown_end.min(total)),
+                format_number(total),
+            )
+        }
+    } else {
+        format!("Showing {} per page", format_number(per_page))
+    };
+    let page_label = if let Some(total_pages) = total_pages {
+        format!("Page {} of {}", current_page + 1, total_pages.max(1))
+    } else {
+        "Page —".to_string()
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(spacing::sm())
+        .py(spacing::xs())
+        .bg(colors::bg_header())
+        .border_t_1()
+        .border_color(colors::border())
+        .child(div().text_xs().text_color(colors::text_muted()).child(range_label))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(div().text_xs().text_color(colors::text_muted()).child(page_label))
+                .child(
+                    Button::new("agg-prev-page")
+                        .compact()
+                        .label("Prev")
+                        .disabled(prev_disabled)
+                        .on_click({
+                            let state = state.clone();
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                let moved = state.update(cx, |state, cx| {
+                                    let changed = state.prev_pipeline_page(&session_key);
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                    changed
+                                });
+                                if moved {
+                                    AppCommands::run_aggregation(
+                                        state.clone(),
+                                        session_key,
+                                        false,
+                                        cx,
+                                    );
+                                }
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("agg-next-page")
+                        .compact()
+                        .label("Next")
+                        .disabled(next_disabled)
+                        .on_click({
+                            let state = state.clone();
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                let total_pages = total_pages_value.max(1);
+                                let moved = state.update(cx, |state, cx| {
+                                    let changed =
+                                        state.next_pipeline_page(&session_key, total_pages);
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                    changed
+                                });
+                                if moved {
+                                    AppCommands::run_aggregation(
+                                        state.clone(),
+                                        session_key,
+                                        false,
+                                        cx,
+                                    );
+                                }
+                            }
+                        }),
+                ),
+        )
+        .into_any_element()
 }
 
 fn render_results_tree(

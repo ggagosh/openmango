@@ -54,6 +54,7 @@ actions!(
         MoveAggregationStageDown,
         DuplicateAggregationStage,
         DeleteAggregationStage,
+        ToggleAggregationStageEnabled,
         FindInSidebar,
         CloseSidebarSearch,
         OpenActionBar,
@@ -175,6 +176,16 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new(
+            "cmd-shift-k",
+            ClearAggregationStage,
+            Some("Documents && Aggregation && Input"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-k",
+            ClearAggregationStage,
+            Some("Documents && Aggregation && Input"),
+        ),
+        KeyBinding::new(
             "cmd-shift-backspace",
             ClearAggregationStage,
             Some("Documents && Aggregation && Input"),
@@ -196,6 +207,16 @@ fn default_keybindings() -> Vec<KeyBinding> {
         ),
         KeyBinding::new("cmd-d", DuplicateAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-d", DuplicateAggregationStage, Some("Documents && Aggregation")),
+        KeyBinding::new(
+            "cmd-shift-e",
+            ToggleAggregationStageEnabled,
+            Some("Documents && Aggregation"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-e",
+            ToggleAggregationStageEnabled,
+            Some("Documents && Aggregation && !Input"),
+        ),
         KeyBinding::new(
             "delete",
             DeleteAggregationStage,

@@ -26,13 +26,15 @@ pub struct PipelineState {
     pub stages: Vec<PipelineStage>,
     pub selected_stage: Option<usize>,
     pub results: Option<Vec<Document>>,
-    pub stage_doc_counts: Vec<Option<u64>>,
+    pub stage_doc_counts: Vec<StageDocCounts>,
     pub analysis: Option<PipelineAnalysis>,
     #[allow(dead_code)]
     pub auto_preview: bool,
     pub loading: bool,
     pub error: Option<String>,
     pub result_limit: i64,
+    pub results_page: u64,
+    pub last_run_time_ms: Option<u64>,
 }
 
 impl Default for PipelineState {
@@ -47,8 +49,17 @@ impl Default for PipelineState {
             loading: false,
             error: None,
             result_limit: 50,
+            results_page: 0,
+            last_run_time_ms: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StageDocCounts {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub time_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

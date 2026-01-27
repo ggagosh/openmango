@@ -12,7 +12,7 @@ use crate::keyboard::{
     FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
     PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation,
     SaveDocument, SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
-    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
+    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
 };
 use crate::state::{AppCommands, CollectionSubview, StatusMessage};
 
@@ -566,7 +566,7 @@ impl CollectionView {
                 cx.notify();
             });
         }))
-        .on_action(cx.listener(|this, _: &DeleteAggregationStage, _window, cx| {
+        .on_action(cx.listener(|this, _: &ToggleAggregationStageEnabled, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -587,8 +587,62 @@ impl CollectionView {
                 return;
             };
             this.state.update(cx, |state, cx| {
-                state.remove_pipeline_stage(&session_key, selected);
+                state.toggle_pipeline_stage_enabled(&session_key, selected);
+                let enabled = state
+                    .session(&session_key)
+                    .and_then(|session| session.data.aggregation.stages.get(selected))
+                    .is_some_and(|stage| stage.enabled);
+                let message = if enabled { "Stage enabled" } else { "Stage disabled" };
+                state.set_status_message(Some(StatusMessage::info(message)));
                 cx.notify();
+            });
+        }))
+        .on_action(cx.listener(|this, _: &DeleteAggregationStage, window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let subview = this
+                .state
+                .read(cx)
+                .session_subview(&session_key)
+                .unwrap_or(CollectionSubview::Documents);
+            if subview != CollectionSubview::Aggregation {
+                return;
+            }
+            let (selected, stage_number, operator_label) = {
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                let Some(selected) = session.data.aggregation.selected_stage else {
+                    return;
+                };
+                let operator_label = session
+                    .data
+                    .aggregation
+                    .stages
+                    .get(selected)
+                    .map(|stage| stage.operator.trim())
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or("stage")
+                    .to_string();
+                (selected, selected + 1, operator_label)
+            };
+
+            let message = format!(
+                "Delete Stage {} ({}). This cannot be undone.",
+                stage_number, operator_label
+            );
+            let state = this.state.clone();
+            open_confirm_dialog(window, cx, "Delete stage", message, "Delete", true, {
+                let session_key = session_key.clone();
+                move |_window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.remove_pipeline_stage(&session_key, selected);
+                        state.set_status_message(Some(StatusMessage::info("Stage deleted")));
+                        cx.notify();
+                    });
+                }
             });
         }))
     }

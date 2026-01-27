@@ -1,4 +1,5 @@
 use crate::bson::parse_document_from_json;
+use crate::state::app_state::StageDocCounts;
 use crate::state::{CollectionSubview, WorkspaceTab, WorkspaceTabKind};
 use uuid::Uuid;
 
@@ -112,7 +113,11 @@ impl AppState {
             });
             session.data.aggregation.stages = tab.aggregation_pipeline.clone();
             session.data.aggregation.stage_doc_counts =
-                vec![None; session.data.aggregation.stages.len()];
+                vec![StageDocCounts::default(); session.data.aggregation.stages.len()];
+            session.data.aggregation.results = None;
+            session.data.aggregation.results_page = 0;
+            session.data.aggregation.last_run_time_ms = None;
+            session.data.aggregation.error = None;
             if session.data.aggregation.selected_stage.is_none()
                 && !session.data.aggregation.stages.is_empty()
             {

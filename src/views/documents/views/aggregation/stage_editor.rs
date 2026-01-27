@@ -6,37 +6,14 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Disableable as _, Sizable as _, Size};
 
 use crate::components::Button;
+use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
 use crate::state::app_state::PipelineState;
 use crate::state::{SessionKey, StatusMessage};
 use crate::theme::{borders, colors, spacing};
 
 use crate::views::CollectionView;
 
-const OPERATORS: &[&str] = &[
-    "$match",
-    "$project",
-    "$addFields",
-    "$set",
-    "$unset",
-    "$replaceRoot",
-    "$replaceWith",
-    "$group",
-    "$bucket",
-    "$bucketAuto",
-    "$lookup",
-    "$unwind",
-    "$sort",
-    "$limit",
-    "$skip",
-    "$out",
-    "$merge",
-    "$count",
-    "$facet",
-    "$sample",
-    "$unionWith",
-    "$redact",
-    "$graphLookup",
-];
+use super::operators::OPERATOR_GROUPS;
 
 impl CollectionView {
     pub(in crate::views::documents) fn render_aggregation_stage_editor(
@@ -48,6 +25,7 @@ impl CollectionView {
     ) -> AnyElement {
         let selected_index = pipeline.selected_stage;
         let stage = selected_index.and_then(|idx| pipeline.stages.get(idx));
+        let selected_operator = stage.map(|stage| stage.operator.clone()).unwrap_or_default();
 
         let header = div()
             .flex()
@@ -83,31 +61,43 @@ impl CollectionView {
                         .with_size(Size::XSmall)
                         .disabled(session_key.is_none())
                         .dropdown_menu_with_anchor(Corner::BottomLeft, {
+                            let selected_operator = selected_operator.clone();
                             move |menu: PopupMenu, _window, _cx| {
                                 let mut menu = menu;
-                                for operator in OPERATORS {
-                                    let operator = operator.to_string();
-                                    let state = state_for_menu.clone();
-                                    let session_key = session_key_for_menu.clone();
-                                    menu =
-                                        menu.item(PopupMenuItem::new(operator.clone()).on_click({
-                                            move |_, _window, cx| {
-                                                let Some(session_key) = session_key.clone() else {
-                                                    return;
-                                                };
-                                                let Some(index) = selected_index else {
-                                                    return;
-                                                };
-                                                state.update(cx, |state, cx| {
-                                                    state.set_pipeline_stage_operator(
-                                                        &session_key,
-                                                        index,
-                                                        operator.clone(),
-                                                    );
-                                                    cx.notify();
-                                                });
-                                            }
-                                        }));
+                                for (group_idx, group) in OPERATOR_GROUPS.iter().enumerate() {
+                                    menu = menu.item(PopupMenuItem::label(group.label.to_string()));
+                                    for operator in group.operators {
+                                        let operator = operator.to_string();
+                                        let state = state_for_menu.clone();
+                                        let session_key = session_key_for_menu.clone();
+                                        let checked = selected_operator == operator;
+                                        menu = menu.item(
+                                            PopupMenuItem::new(operator.clone())
+                                                .checked(checked)
+                                                .on_click({
+                                                    move |_, _window, cx| {
+                                                        let Some(session_key) = session_key.clone()
+                                                        else {
+                                                            return;
+                                                        };
+                                                        let Some(index) = selected_index else {
+                                                            return;
+                                                        };
+                                                        state.update(cx, |state, cx| {
+                                                            state.set_pipeline_stage_operator(
+                                                                &session_key,
+                                                                index,
+                                                                operator.clone(),
+                                                            );
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    if group_idx + 1 < OPERATOR_GROUPS.len() {
+                                        menu = menu.item(PopupMenuItem::separator());
+                                    }
                                 }
                                 menu
                             }
@@ -130,6 +120,11 @@ impl CollectionView {
                         Button::new("agg-format-stage")
                             .compact()
                             .label("Format")
+                            .tooltip_with_action(
+                                "Format JSON",
+                                &FormatAggregationStage,
+                                Some("Documents Aggregation"),
+                            )
                             .disabled(session_key.is_none() || stage.is_none())
                             .on_click({
                                 let body_state = self.aggregation_stage_body_state.clone();
@@ -167,6 +162,11 @@ impl CollectionView {
                         Button::new("agg-clear-stage")
                             .compact()
                             .label("Clear")
+                            .tooltip_with_action(
+                                "Clear stage",
+                                &ClearAggregationStage,
+                                Some("Documents Aggregation Input"),
+                            )
                             .disabled(session_key.is_none() || stage.is_none())
                             .on_click({
                                 let body_state = self.aggregation_stage_body_state.clone();
