@@ -14,14 +14,26 @@ Build a native Rust completion system for JSON editors that understands MongoDB 
 ### gpui-component CompletionProvider API
 ```rust
 pub trait CompletionProvider {
-    fn completions(&self, text: &Rope, offset: usize, trigger: CompletionContext, window, cx)
+    fn completions(
+        &self,
+        text: &Rope,
+        offset: usize,
+        trigger: CompletionContext,
+        window: &mut Window,
+        cx: &mut Context<InputState>,
+    )
         -> Task<Result<CompletionResponse>>;
-    fn is_completion_trigger(&self, offset: usize, new_text: &str, cx) -> bool;
+    fn is_completion_trigger(
+        &self,
+        offset: usize,
+        new_text: &str,
+        cx: &mut Context<InputState>,
+    ) -> bool;
 }
 ```
 
 ### Existing Codebase
-- **Operators defined**: `src/views/documents/views/aggregation/operators.rs` - 18 operators in 7 groups
+- **Operators defined**: `src/views/documents/views/aggregation/operators.rs` - 23 operators in 7 groups
 - **Stage model**: `PipelineStage { operator: String, body: String, enabled: bool }`
 - **BSON parsing**: `src/bson/parser.rs` - JSON↔BSON conversion utilities
 - **Session state**: Can access `PipelineState` with all stages and results
@@ -39,6 +51,7 @@ pub trait CompletionProvider {
 │  - current_operator: String ($match, $group, etc.)          │
 │  - collection_fields: Vec<FieldInfo>                        │
 │  - pipeline_context: PipelineFieldTracker                   │
+│  - shared_state: Rc<RefCell<CompletionState>>               │
 ├─────────────────────────────────────────────────────────────┤
 │                          │                                  │
 │    ┌────────────────────┼────────────────────┐              │
@@ -53,8 +66,10 @@ pub trait CompletionProvider {
 1. **JsonCursorContext** - Determines where cursor is in JSON
    - At object key position (after `{` or `,`)
    - At value position (after `:`)
-   - Inside string (for field paths `"$fieldName"`)
+   - Inside string (key vs value; field path `"$fieldName"`)
    - At array element position
+   - Handles scalar root bodies (number/string) for stages like `$limit`, `$skip`, `$count`
+   - Offset handling is byte-based (matches gpui)
 
 2. **OperatorKnowledge** - Static MongoDB operator definitions
    - Per-stage operator valid keys ($match keys, $group keys, etc.)
@@ -70,6 +85,14 @@ pub trait CompletionProvider {
 
 ## MongoDB Operator Knowledge Base
 
+### Supported Stage Operators
+All stages from `OPERATOR_GROUPS` are in scope:
+```
+$match, $project, $addFields, $set, $unset, $replaceRoot, $replaceWith,
+$group, $bucket, $bucketAuto, $lookup, $unwind, $sort, $limit, $skip,
+$out, $merge, $count, $facet, $sample, $unionWith, $redact, $graphLookup
+```
+
 ### Stage Operators (what goes after `:` in stage body)
 
 | Stage | Expected Structure |
@@ -81,8 +104,25 @@ pub trait CompletionProvider {
 | `$lookup` | Join: `{ from, localField, foreignField, as }` |
 | `$unwind` | Unwind: `"$arrayField"` or `{ path, ... }` |
 | `$addFields` | Add: `{ newField: expr }` |
+| `$set` | Alias of `$addFields` |
+| `$unset` | `"field"` or `["field1", "field2"]` |
+| `$replaceRoot` | `{ newRoot: expr }` |
+| `$replaceWith` | `expr` |
 | `$limit` | Number |
 | `$skip` | Number |
+| `$count` | String field name |
+| `$facet` | Object of sub-pipelines |
+| `$sample` | `{ size: N }` |
+| `$unionWith` | `"collection"` or `{ coll, pipeline }` |
+| `$redact` | Expression returning `$$KEEP` / `$$PRUNE` / `$$DESCEND` |
+| `$graphLookup` | `{ from, startWith, connectFromField, connectToField, as, ... }` |
+| `$bucket` | `{ groupBy, boundaries, default?, output? }` |
+| `$bucketAuto` | `{ groupBy, buckets, output? }` |
+| `$out` | `"collection"` or `{ db?, coll? }` |
+| `$merge` | `{ into, on?, whenMatched?, whenNotMatched? }` |
+
+For advanced stages (facet/graphLookup/bucket/etc.), v1 completion will provide
+baseline key suggestions and field refs, with richer schemas added incrementally.
 
 ### Query Operators (for $match)
 ```
@@ -132,7 +172,13 @@ pub enum JsonContext {
     ObjectKey { depth: usize, path: Vec<String> },
     ObjectValue { depth: usize, path: Vec<String>, key: String },
     ArrayElement { depth: usize, path: Vec<String> },
-    StringLiteral { in_field_ref: bool },  // true if starts with "$"
+    StringLiteral { role: StringRole, in_field_ref: bool },
+    Unknown,
+}
+
+pub enum StringRole {
+    Key,
+    Value,
     Unknown,
 }
 
@@ -154,6 +200,7 @@ type Spanned<T> = (T, SimpleSpan);
 fn json_parser<'a>() -> impl Parser<'a, &'a str, Spanned<JsonNode>, extra::Err<Rich<'a, char>>> {
     recursive(|value| {
         let string = just('"')
+            // NOTE: simplified; implement proper JSON escapes
             .ignore_then(none_of('"').repeated().collect::<String>())
             .then_ignore(just('"').or_not())  // Optional closing quote for incomplete
             .map_with(|s, e| (s, e.span()));
@@ -162,8 +209,9 @@ fn json_parser<'a>() -> impl Parser<'a, &'a str, Spanned<JsonNode>, extra::Err<R
             .then(just('.').then(text::digits(10)).or_not())
             .to_slice()
             .from_str::<f64>()
-            .unwrapped()
-            .map(JsonNode::Number);
+            .map(JsonNode::Number)
+            .or_not()
+            .map(|num| num.unwrap_or(JsonNode::Invalid));
 
         let array = value.clone()
             .separated_by(just(',').padded())
@@ -205,6 +253,8 @@ Algorithm:
 2. Walk AST to find deepest node containing cursor offset
 3. Determine if cursor is at key position, value position, or inside string
 4. Extract path from root to cursor position
+5. Offsets are byte-based (align with gpui); spans must be byte offsets
+6. If parsing fails, fall back to lightweight scanning for string/field-ref context
 
 **1.3 `src/completions/operators.rs`** - Static operator definitions
 ```rust
@@ -231,14 +281,18 @@ pub fn get_expressions() -> &'static [OperatorInfo];
 **1.4 `src/completions/provider.rs`** - CompletionProvider impl
 ```rust
 pub struct AggregationCompletionProvider {
-    operator: String,                        // Current stage operator
-    collection_fields: Vec<FieldInfo>,       // From schema sample
-    pipeline_fields: Option<Vec<String>>,    // From previous stages
+    state: Rc<RefCell<CompletionState>>,     // Shared mutable state
+}
+
+pub struct CompletionState {
+    pub operator: String,
+    pub collection_fields: Vec<FieldInfo>,
+    pub pipeline_tracker: PipelineFieldTracker,
 }
 
 impl CompletionProvider for AggregationCompletionProvider {
     fn is_completion_trigger(&self, offset: usize, new_text: &str, cx) -> bool {
-        matches!(new_text, "\"" | ":" | "$" | "{" | ",")
+        matches!(new_text, "\"" | ":" | "$" | "." | "{" | ",")
     }
 
     fn completions(&self, text: &Rope, offset: usize, trigger, window, cx)
@@ -259,7 +313,9 @@ impl CompletionProvider for AggregationCompletionProvider {
 ```rust
 impl AggregationCompletionProvider {
     fn get_completions_for_context(&self, ctx: &JsonContext) -> Vec<CompletionItem> {
-        match (&self.operator[..], ctx) {
+        let state = self.state.borrow();
+        let operator = state.operator.as_str();
+        match (operator, ctx) {
             // $match at root key → field names + logical operators
             ("$match", JsonContext::ObjectKey { depth: 1, .. }) => {
                 self.field_completions() + query_logical_operators()
@@ -291,8 +347,13 @@ impl AggregationCompletionProvider {
                     .into_iter().map(completion).collect()
             }
 
+            // Key strings inside object behave like ObjectKey
+            (_, JsonContext::StringLiteral { role: StringRole::Key, .. }) => {
+                self.key_completions_for_operator(operator)
+            }
+
             // Inside string starting with $ → field references
-            (_, JsonContext::StringLiteral { in_field_ref: true }) => {
+            (_, JsonContext::StringLiteral { in_field_ref: true, .. }) => {
                 self.field_ref_completions()  // "$fieldName" format
             }
 
@@ -300,11 +361,15 @@ impl AggregationCompletionProvider {
         }
     }
 }
+
+// Treat key-string context like ObjectKey for the current operator
+fn key_completions_for_operator(&self, operator: &str) -> Vec<CompletionItem>;
 ```
 
 **2.2 Field reference detection**
 - When cursor is inside `"$..."`, suggest field names prefixed with `$`
 - Handle nested paths: `"$address.city"`
+- Also trigger on `.` to continue nested suggestions
 
 ### Phase 3: Collection Schema Integration
 
@@ -323,7 +388,7 @@ Algorithm:
 - Sample first N documents (e.g., 100)
 - Recursively extract all field paths
 - Track most common BSON type per path
-- Deduplicate and sort
+- Deduplicate and sort (deterministic ordering)
 
 **3.2 Fetch schema on editor focus**
 ```rust
@@ -342,18 +407,19 @@ cx.spawn(|view, mut cx| async move {
 **4.1 `src/completions/pipeline.rs`** - Track field transformations
 
 ```rust
-use std::collections::HashSet;
+use serde_json::Value;
+use std::collections::BTreeSet;
 
 pub struct PipelineFieldTracker {
     /// Fields available at current stage (after processing previous stages)
-    available_fields: HashSet<String>,
+    available_fields: BTreeSet<String>,
     /// Original collection fields (baseline)
-    collection_fields: HashSet<String>,
+    collection_fields: BTreeSet<String>,
 }
 
 impl PipelineFieldTracker {
     pub fn new(collection_fields: Vec<String>) -> Self {
-        let fields: HashSet<_> = collection_fields.into_iter().collect();
+        let fields: BTreeSet<_> = collection_fields.into_iter().collect();
         Self {
             available_fields: fields.clone(),
             collection_fields: fields,
@@ -371,6 +437,10 @@ impl PipelineFieldTracker {
         }
     }
 
+    fn parse_body_value(&self, body: &str) -> Option<Value> {
+        serde_json::from_str::<Value>(body).ok()
+    }
+
     fn apply_stage(&mut self, stage: &PipelineStage) {
         match stage.operator.as_str() {
             "$project" => self.apply_project(&stage.body),
@@ -383,6 +453,9 @@ impl PipelineFieldTracker {
             _ => {}  // $match, $sort, $limit, $skip don't change fields
         }
     }
+    // Note: stage bodies can be scalar (e.g., $limit: 5, $count: "name", $unwind: "$path").
+    // parse_body_value returns Value::Number/String for these; field tracking should ignore or
+    // use the string path for $unwind/$replaceWith where applicable.
 
     fn apply_project(&mut self, body: &str) {
         // Parse body, extract included fields
@@ -422,7 +495,7 @@ impl PipelineFieldTracker {
         // Complex: may need to track nested field structures
     }
 
-    pub fn get_available_fields(&self) -> &HashSet<String> {
+    pub fn get_available_fields(&self) -> &BTreeSet<String> {
         &self.available_fields
     }
 }
@@ -442,14 +515,22 @@ impl AggregationCompletionProvider {
 
     fn field_completions(&self) -> Vec<CompletionItem> {
         // Prefer pipeline-tracked fields if available
-        // Fall back to collection schema fields
-        let fields = if self.pipeline_tracker.get_available_fields().is_empty() {
-            &self.collection_fields
+        // Fall back to collection schema fields (FieldInfo)
+        let state = self.state.borrow();
+        if state.pipeline_tracker.get_available_fields().is_empty() {
+            state
+                .collection_fields
+                .iter()
+                .map(|f| self.make_field_completion(&f.path))
+                .collect()
         } else {
-            self.pipeline_tracker.get_available_fields()
-        };
-
-        fields.iter().map(|f| self.make_field_completion(f)).collect()
+            state
+                .pipeline_tracker
+                .get_available_fields()
+                .iter()
+                .map(|f| self.make_field_completion(f))
+                .collect()
+        }
     }
 }
 ```
@@ -495,6 +576,7 @@ lsp-types = "..."   # Already in Cargo.lock - CompletionItem types
 |---------|---------|-------------|
 | `"` | Start of string | Field names, operators |
 | `$` | Inside string | Field refs (`$field`), operators |
+| `.` | Inside string | Nested field paths |
 | `:` | After key | Values based on key context |
 | `{` | New object | Keys for current context |
 | `,` | After value | Next key/element |
@@ -529,7 +611,7 @@ lsp-types = "..."   # Already in Cargo.lock - CompletionItem types
 - **Pure Rust**: No sidecar process, all logic in Rust
 - **Synchronous completions**: No async fetch during completion (pre-load schema)
 - **Graceful fallback**: If context unclear, return empty (user types manually)
-- **Performance**: JSON parsing is simple scan, not full AST (fast for typical stage sizes)
+- **Performance**: Partial AST with Chumsky error recovery; fall back to lightweight scanning if parse fails
 - **Extensibility**: Operator knowledge in static arrays, easy to extend
 
 ---
