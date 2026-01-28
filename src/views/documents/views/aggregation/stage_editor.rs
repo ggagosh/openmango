@@ -5,9 +5,10 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Disableable as _, Sizable as _, Size};
 
+use crate::bson::{format_relaxed_json_value, parse_value_from_relaxed_json};
 use crate::components::Button;
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
-use crate::state::app_state::PipelineState;
+use crate::state::app_state::{PipelineState, default_stage_body};
 use crate::state::{SessionKey, StatusMessage};
 use crate::theme::{borders, colors, spacing};
 
@@ -45,6 +46,7 @@ impl CollectionView {
                     };
                     let session_key_for_menu = session_key.clone();
                     let state_for_menu = self.state.clone();
+                    let body_state_for_menu = self.aggregation_stage_body_state.clone();
                     let operator_variant = ButtonCustomVariant::new(cx)
                         .color(colors::bg_button_secondary().into())
                         .foreground(colors::text_primary().into())
@@ -70,12 +72,13 @@ impl CollectionView {
                                         let operator = operator.to_string();
                                         let state = state_for_menu.clone();
                                         let session_key = session_key_for_menu.clone();
+                                        let body_state = body_state_for_menu.clone();
                                         let checked = selected_operator == operator;
                                         menu = menu.item(
                                             PopupMenuItem::new(operator.clone())
                                                 .checked(checked)
                                                 .on_click({
-                                                    move |_, _window, cx| {
+                                                    move |_, window, cx| {
                                                         let Some(session_key) = session_key.clone()
                                                         else {
                                                             return;
@@ -83,6 +86,9 @@ impl CollectionView {
                                                         let Some(index) = selected_index else {
                                                             return;
                                                         };
+                                                        let template =
+                                                            default_stage_body(&operator)
+                                                                .map(|value| value.to_string());
                                                         state.update(cx, |state, cx| {
                                                             state.set_pipeline_stage_operator(
                                                                 &session_key,
@@ -91,6 +97,15 @@ impl CollectionView {
                                                             );
                                                             cx.notify();
                                                         });
+                                                        if let (Some(body_state), Some(template)) =
+                                                            (body_state.clone(), template)
+                                                        {
+                                                            body_state.update(cx, |state, cx| {
+                                                                state.set_value(
+                                                                    template, window, cx,
+                                                                );
+                                                            });
+                                                        }
                                                     }
                                                 }),
                                         );
@@ -134,15 +149,12 @@ impl CollectionView {
                                         return;
                                     };
                                     let raw = body_state.read(cx).value().to_string();
-                                    match serde_json::from_str::<serde_json::Value>(&raw) {
+                                    match parse_value_from_relaxed_json(&raw) {
                                         Ok(value) => {
-                                            if let Ok(formatted) =
-                                                serde_json::to_string_pretty(&value)
-                                            {
-                                                body_state.update(cx, |state, cx| {
-                                                    state.set_value(formatted, window, cx);
-                                                });
-                                            }
+                                            let formatted = format_relaxed_json_value(&value);
+                                            body_state.update(cx, |state, cx| {
+                                                state.set_value(formatted, window, cx);
+                                            });
                                         }
                                         Err(err) => {
                                             state.update(cx, |state, cx| {

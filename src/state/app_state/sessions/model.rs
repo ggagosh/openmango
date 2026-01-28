@@ -12,7 +12,9 @@ use crate::state::AppState;
 use crate::state::app_state::types::{
     CollectionSubview, SessionData, SessionKey, SessionSnapshot, SessionState, SessionViewState,
 };
-use crate::state::app_state::{PipelineStage, PipelineState, StageDocCounts, StageStatsMode};
+use crate::state::app_state::{
+    PipelineStage, PipelineState, StageDocCounts, StageStatsMode, default_stage_body,
+};
 
 #[derive(Default)]
 pub struct SessionStore {
@@ -464,6 +466,9 @@ impl AppState {
             && let Some(stage) = session.data.aggregation.stages.get_mut(index)
         {
             stage.operator = operator;
+            if let Some(template) = default_stage_body(stage.operator.trim()) {
+                stage.body = template.to_string();
+            }
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
         }
         self.update_workspace_session_view(session_key);

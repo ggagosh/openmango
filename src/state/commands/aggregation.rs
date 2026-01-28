@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use gpui::{App, AppContext as _, Entity};
 
-use crate::bson::parse_document_from_json;
+use crate::bson::parse_bson_from_relaxed_json;
 use crate::connection::get_connection_manager;
 use crate::connection::mongo::{AggregatePipelineError, ConnectionManager};
 use crate::state::app_state::{PipelineStage, StageDocCounts, StageStatsMode};
@@ -274,15 +274,15 @@ fn build_stage_doc(stage: &PipelineStage, idx: usize) -> Result<Document, Aggreg
         return Err(AggregationRunError::Pipeline(format!("Stage {} has no operator", idx + 1)));
     }
     let body = stage.body.trim();
-    let body_doc = if body.is_empty() || body == "{}" {
-        Document::new()
+    let body_bson = if body.is_empty() || body == "{}" {
+        Bson::Document(Document::new())
     } else {
-        parse_document_from_json(body).map_err(|err| {
+        parse_bson_from_relaxed_json(body).map_err(|err| {
             AggregationRunError::Pipeline(format!("Stage {} ({operator}): {err}", idx + 1))
         })?
     };
     let mut stage_doc = Document::new();
-    stage_doc.insert(operator, body_doc);
+    stage_doc.insert(operator, body_bson);
     Ok(stage_doc)
 }
 

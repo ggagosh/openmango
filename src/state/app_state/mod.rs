@@ -12,6 +12,7 @@ mod workspace;
 
 pub(crate) use aggregation::{
     PipelineAnalysis, PipelineStage, PipelineState, StageDocCounts, StageStatsMode,
+    default_stage_body,
 };
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;

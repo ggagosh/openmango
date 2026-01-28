@@ -20,7 +20,49 @@ fn stage_enabled_default() -> bool {
 
 impl PipelineStage {
     pub fn new(operator: impl Into<String>) -> Self {
-        Self { operator: operator.into(), body: "{}".to_string(), enabled: true }
+        let operator = operator.into();
+        let body = default_stage_body(&operator).unwrap_or("{}").to_string();
+        Self { operator, body, enabled: true }
+    }
+}
+
+pub(crate) fn default_stage_body(operator: &str) -> Option<&'static str> {
+    match operator {
+        "$match" => Some("{\n  field: value\n}"),
+        "$project" => Some("{\n  field: 1\n}"),
+        "$group" => Some("{\n  _id: \"$field\",\n  value: { $sum: 1 }\n}"),
+        "$sort" => Some("{\n  field: 1\n}"),
+        "$limit" => Some("10"),
+        "$skip" => Some("0"),
+        "$lookup" => Some(
+            "{\n  from: \"collection\",\n  localField: \"field\",\n  foreignField: \"field\",\n  as: \"results\"\n}",
+        ),
+        "$unwind" => Some("\"$field\""),
+        "$addFields" | "$set" => Some("{\n  newField: value\n}"),
+        "$unset" => Some("\"field\""),
+        "$replaceRoot" => Some("{\n  newRoot: \"$field\"\n}"),
+        "$replaceWith" => Some("\"$field\""),
+        "$count" => Some("\"count\""),
+        "$sample" => Some("{\n  size: 10\n}"),
+        "$bucket" => Some(
+            "{\n  groupBy: \"$field\",\n  boundaries: [0, 10],\n  default: \"other\",\n  output: {\n    count: { $sum: 1 }\n  }\n}",
+        ),
+        "$bucketAuto" => Some(
+            "{\n  groupBy: \"$field\",\n  buckets: 5,\n  output: {\n    count: { $sum: 1 }\n  }\n}",
+        ),
+        "$facet" => Some("{\n  facet: [\n    { $match: { field: value } }\n  ]\n}"),
+        "$unionWith" => Some(
+            "{\n  coll: \"collection\",\n  pipeline: [\n    { $match: { field: value } }\n  ]\n}",
+        ),
+        "$redact" => Some(
+            "{\n  $cond: {\n    if: { $gt: [\"$field\", value] },\n    then: \"$$KEEP\",\n    else: \"$$PRUNE\"\n  }\n}",
+        ),
+        "$graphLookup" => Some(
+            "{\n  from: \"collection\",\n  startWith: \"$field\",\n  connectFromField: \"field\",\n  connectToField: \"field\",\n  as: \"results\"\n}",
+        ),
+        "$out" => Some("\"collection\""),
+        "$merge" => Some("{\n  into: \"collection\"\n}"),
+        _ => None,
     }
 }
 
