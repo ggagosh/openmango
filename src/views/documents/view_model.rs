@@ -267,8 +267,9 @@ impl DocumentViewModel {
 
         self.inline_editor_state = Some(editor);
         if let Some(state) = focus_state {
-            state.update(cx, |state, cx| {
-                state.focus(window, cx);
+            let focus = state.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, _cx| {
+                window.focus(&focus);
             });
         }
 
