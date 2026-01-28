@@ -76,6 +76,9 @@ pub mod colors {
     pub fn border_subtle() -> Rgba {
         rgb(0x333333)
     }
+    pub fn border_focus() -> Rgba {
+        accent()
+    }
 
     // Status
     pub fn status_success() -> Rgba {

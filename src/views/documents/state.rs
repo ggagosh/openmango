@@ -1,10 +1,13 @@
 use gpui::*;
 use gpui_component::input::InputState;
+use gpui_component::tree::TreeState;
 
 use mongodb::bson::Document;
 
+use std::collections::HashSet;
+
 use crate::bson::DocumentKey;
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
+use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
 
 use super::node_meta::NodeMeta;
 use super::view_model::DocumentViewModel;
@@ -14,6 +17,8 @@ pub struct CollectionView {
     pub(crate) state: Entity<AppState>,
     pub(crate) view_model: DocumentViewModel,
     pub(crate) documents_focus: FocusHandle,
+    pub(crate) aggregation_focus: FocusHandle,
+    pub(crate) aggregation_stage_list_scroll: UniformListScrollHandle,
     pub(crate) filter_state: Option<Entity<InputState>>,
     pub(crate) sort_state: Option<Entity<InputState>>,
     pub(crate) projection_state: Option<Entity<InputState>>,
@@ -22,11 +27,142 @@ pub struct CollectionView {
     pub(crate) search_matches: Vec<String>,
     pub(crate) search_index: Option<usize>,
     pub(crate) input_session: Option<SessionKey>,
+    pub(crate) aggregation_input_session: Option<SessionKey>,
+    pub(crate) aggregation_selected_stage: Option<usize>,
+    pub(crate) aggregation_stage_count: usize,
+    pub(crate) aggregation_drag_over: Option<(usize, bool)>,
+    pub(crate) aggregation_drag_source: Option<usize>,
     pub(crate) filter_subscription: Option<Subscription>,
     pub(crate) sort_subscription: Option<Subscription>,
     pub(crate) projection_subscription: Option<Subscription>,
     pub(crate) search_subscription: Option<Subscription>,
+    pub(crate) aggregation_stage_body_state: Option<Entity<InputState>>,
+    pub(crate) aggregation_results_tree_state: Option<Entity<TreeState>>,
+    pub(crate) aggregation_limit_state: Option<Entity<InputState>>,
+    pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
+    pub(crate) aggregation_results_signature: Option<u64>,
+    pub(crate) aggregation_ignore_body_change: bool,
+    pub(crate) aggregation_stage_body_subscription: Option<Subscription>,
+    pub(crate) aggregation_limit_subscription: Option<Subscription>,
     pub(crate) _subscriptions: Vec<Subscription>,
+}
+
+fn handle_aggregation_shortcut(
+    view: &mut CollectionView,
+    session_key: &SessionKey,
+    key: &str,
+    modifiers: Modifiers,
+    body_focused: bool,
+    window: &mut Window,
+    cx: &mut Context<CollectionView>,
+) -> bool {
+    let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+    if !cmd_or_ctrl {
+        return false;
+    }
+
+    let (selected_stage, stage_count) = {
+        let state_ref = view.state.read(cx);
+        let Some(session) = state_ref.session(session_key) else {
+            return false;
+        };
+        (session.data.aggregation.selected_stage, session.data.aggregation.stages.len())
+    };
+
+    match key {
+        "enter" | "return" => {
+            AppCommands::run_aggregation(view.state.clone(), session_key.clone(), false, cx);
+            true
+        }
+        "f" if modifiers.shift => {
+            let Some(body_state) = view.aggregation_stage_body_state.clone() else {
+                return false;
+            };
+            if !body_focused {
+                return false;
+            }
+            let raw = body_state.read(cx).value().to_string();
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(value) => {
+                    if let Ok(formatted) = serde_json::to_string_pretty(&value) {
+                        body_state.update(cx, |state, cx| {
+                            state.set_value(formatted, window, cx);
+                        });
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(err) => {
+                    view.state.update(cx, |state, cx| {
+                        state.set_status_message(Some(StatusMessage::error(format!(
+                            "Invalid JSON: {err}",
+                        ))));
+                        cx.notify();
+                    });
+                    true
+                }
+            }
+        }
+        "k" if modifiers.shift => {
+            if !body_focused {
+                return false;
+            }
+            let Some(index) = selected_stage else {
+                return false;
+            };
+            if let Some(body_state) = view.aggregation_stage_body_state.clone() {
+                body_state.update(cx, |state, cx| {
+                    state.set_value("{}".to_string(), window, cx);
+                });
+            }
+            view.state.update(cx, |state, cx| {
+                state.set_pipeline_stage_body(session_key, index, "{}".to_string());
+                cx.notify();
+            });
+            true
+        }
+        "d" if !modifiers.shift => {
+            let Some(index) = selected_stage else {
+                return false;
+            };
+            view.state.update(cx, |state, cx| {
+                state.duplicate_pipeline_stage(session_key, index);
+                state.set_status_message(Some(StatusMessage::info("Stage duplicated")));
+                cx.notify();
+            });
+            true
+        }
+        "up" if modifiers.shift => {
+            let Some(index) = selected_stage else {
+                return false;
+            };
+            if index == 0 {
+                return false;
+            }
+            view.state.update(cx, |state, cx| {
+                state.move_pipeline_stage(session_key, index, index - 1);
+                state.set_status_message(Some(StatusMessage::info("Stage moved up")));
+                cx.notify();
+            });
+            true
+        }
+        "down" if modifiers.shift => {
+            let Some(index) = selected_stage else {
+                return false;
+            };
+            if index + 1 >= stage_count {
+                return false;
+            }
+            view.state.update(cx, |state, cx| {
+                state.move_pipeline_stage(session_key, index, index + 1);
+                state.set_status_message(Some(StatusMessage::info("Stage moved down")));
+                cx.notify();
+            });
+            true
+        }
+        _ => false,
+    }
 }
 
 impl CollectionView {
@@ -39,10 +175,12 @@ impl CollectionView {
                 return;
             };
             let key = event.keystroke.key.to_ascii_lowercase();
+            let modifiers = event.keystroke.modifiers;
+            let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
 
-            if !is_escape && !is_enter {
+            if !is_escape && !is_enter && !cmd_or_ctrl {
                 return;
             }
             view.update(cx, |this, cx| {
@@ -65,6 +203,31 @@ impl CollectionView {
                     AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
                     true
                 };
+                let aggregation_context =
+                    this.view_model.current_session().and_then(|session_key| {
+                        let subview = this.state.read(cx).session_subview(&session_key);
+                        (subview == Some(CollectionSubview::Aggregation)).then_some(session_key)
+                    });
+                let body_focused =
+                    this.aggregation_stage_body_state.as_ref().is_some_and(|body_state| {
+                        body_state.read(cx).focus_handle(cx).is_focused(window)
+                    });
+
+                if let Some(session_key) = aggregation_context.clone()
+                    && cmd_or_ctrl
+                    && handle_aggregation_shortcut(
+                        this,
+                        &session_key,
+                        key.as_str(),
+                        modifiers,
+                        body_focused,
+                        window,
+                        cx,
+                    )
+                {
+                    cx.stop_propagation();
+                    return;
+                }
                 if is_escape {
                     if this.search_visible {
                         this.close_search(window, cx);
@@ -76,6 +239,24 @@ impl CollectionView {
                         this.view_model.clear_inline_edit();
                         window.focus(&this.documents_focus);
                         handled = true;
+                    }
+                    if !handled {
+                        let is_aggregation = this
+                            .view_model
+                            .current_session()
+                            .and_then(|session_key| {
+                                this.state.read(cx).session_subview(&session_key)
+                            })
+                            .is_some_and(|subview| subview == CollectionSubview::Aggregation);
+                        if is_aggregation
+                            && let Some(body_state) = this.aggregation_stage_body_state.clone()
+                        {
+                            let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
+                            if focused {
+                                window.focus(&this.aggregation_focus);
+                                handled = true;
+                            }
+                        }
                     }
                 } else if is_enter {
                     let modifiers = event.keystroke.modifiers;
@@ -216,6 +397,8 @@ impl CollectionView {
             state,
             view_model,
             documents_focus: cx.focus_handle(),
+            aggregation_focus: cx.focus_handle(),
+            aggregation_stage_list_scroll: UniformListScrollHandle::default(),
             filter_state: None,
             sort_state: None,
             projection_state: None,
@@ -224,10 +407,23 @@ impl CollectionView {
             search_matches: Vec::new(),
             search_index: None,
             input_session: None,
+            aggregation_input_session: None,
+            aggregation_selected_stage: None,
+            aggregation_stage_count: 0,
+            aggregation_drag_over: None,
+            aggregation_drag_source: None,
             filter_subscription: None,
             sort_subscription: None,
             projection_subscription: None,
             search_subscription: None,
+            aggregation_stage_body_state: None,
+            aggregation_results_tree_state: None,
+            aggregation_limit_state: None,
+            aggregation_results_expanded_nodes: HashSet::new(),
+            aggregation_results_signature: None,
+            aggregation_ignore_body_change: false,
+            aggregation_stage_body_subscription: None,
+            aggregation_limit_subscription: None,
             _subscriptions: subscriptions,
         }
     }

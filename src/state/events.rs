@@ -41,6 +41,8 @@ pub enum AppEvent {
     DocumentsUpdateFailed { session: SessionKey, error: String },
     DocumentsDeleted { session: SessionKey, deleted: u64 },
     DocumentsDeleteFailed { session: SessionKey, error: String },
+    AggregationCompleted { session: SessionKey, count: usize, preview: bool, limited: bool },
+    AggregationFailed { session: SessionKey, error: String },
 
     // View navigation
     ViewChanged,

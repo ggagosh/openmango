@@ -1,5 +1,8 @@
 //! Workspace persistence helpers for AppState.
 
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
 use gpui::Context;
 
 use crate::state::{AppEvent, WindowState};
@@ -16,6 +19,7 @@ impl AppState {
     pub fn set_workspace_expanded_nodes(&mut self, nodes: Vec<String>) {
         if self.workspace.expanded_nodes != nodes {
             self.workspace.expanded_nodes = nodes;
+            self.bump_workspace_generation();
             self.save_workspace();
         }
     }
@@ -24,6 +28,7 @@ impl AppState {
         let window_state = WindowState::from_bounds(bounds);
         if self.workspace.window_state.as_ref() != Some(&window_state) {
             self.workspace.window_state = Some(window_state);
+            self.bump_workspace_generation();
             self.save_workspace();
         }
     }
@@ -32,13 +37,29 @@ impl AppState {
         if self.workspace_restore_pending {
             return;
         }
-        let last_connection_id =
-            self.conn.selected_connection.or(self.workspace.last_connection_id);
-        self.workspace.last_connection_id = last_connection_id;
-
-        self.update_workspace_tabs();
-
+        self.update_workspace_from_state_inner();
+        self.bump_workspace_generation();
         self.save_workspace();
+    }
+
+    pub(in crate::state::app_state) fn update_workspace_from_state_debounced(&mut self) {
+        if self.workspace_restore_pending {
+            return;
+        }
+        self.update_workspace_from_state_inner();
+        let generation = self.bump_workspace_generation();
+        let workspace_snapshot = self.workspace.clone();
+        let config = self.config.clone();
+        let generation_counter = self.aggregation_workspace_save_gen.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            if generation_counter.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Err(err) = config.save_workspace(&workspace_snapshot) {
+                log::error!("Failed to save workspace: {err}");
+            }
+        });
     }
 
     pub fn restore_workspace_after_connect(&mut self, cx: &mut Context<Self>) {
@@ -98,6 +119,17 @@ impl AppState {
         self.update_workspace_from_state();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
+    }
+
+    fn update_workspace_from_state_inner(&mut self) {
+        let last_connection_id =
+            self.conn.selected_connection.or(self.workspace.last_connection_id);
+        self.workspace.last_connection_id = last_connection_id;
+        self.update_workspace_tabs();
+    }
+
+    fn bump_workspace_generation(&self) -> u64 {
+        self.aggregation_workspace_save_gen.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     fn save_workspace(&self) {

@@ -89,8 +89,8 @@ Non-exhaustive highlights; see each section below for full status.
 ## 5. Query & Aggregation
 
 - [x] P0: JSON filter input
-- [ ] P1: Aggregation pipeline editor
-- [ ] P1: Stage preview / explain plan
+- [x] P1: Aggregation pipeline editor (three-panel builder, stage preview, reorder, counts/timing)
+- [ ] P1: Explain plan / analysis badges
 - [ ] P1: Query history
 - [ ] P1: Saved queries
 - [ ] P2: Visual query builder

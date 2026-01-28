@@ -57,6 +57,7 @@ impl Render for CollectionView {
             indexes,
             indexes_loading,
             indexes_error,
+            aggregation,
         ) = if let Some(snapshot) = snapshot {
             (
                 snapshot.items,
@@ -77,6 +78,7 @@ impl Render for CollectionView {
                 snapshot.indexes,
                 snapshot.indexes_loading,
                 snapshot.indexes_error,
+                snapshot.aggregation,
             )
         } else {
             (
@@ -98,6 +100,7 @@ impl Render for CollectionView {
                 None,
                 false,
                 None,
+                Default::default(),
             )
         };
         let filter_active = !matches!(filter_raw.trim(), "" | "{}");
@@ -293,6 +296,7 @@ impl Render for CollectionView {
         match subview {
             CollectionSubview::Indexes => key_context.push_str(" Indexes"),
             CollectionSubview::Stats => key_context.push_str(" Stats"),
+            CollectionSubview::Aggregation => key_context.push_str(" Aggregation"),
             CollectionSubview::Documents => {}
         }
 
@@ -316,6 +320,7 @@ impl Render for CollectionView {
                 query_options_open,
                 subview,
                 stats_loading,
+                aggregation.loading,
                 window,
                 cx,
             ),
@@ -352,6 +357,10 @@ impl Render for CollectionView {
                     stats_error,
                     session_key,
                 ));
+            }
+            CollectionSubview::Aggregation => {
+                root =
+                    root.child(self.render_aggregation_view(aggregation, session_key, window, cx));
             }
         }
 

@@ -1,7 +1,10 @@
 use crate::theme::{borders, colors, sizing, spacing, typography};
 use gpui::*;
+use gpui_component::tooltip::Tooltip;
+use std::rc::Rc;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type TooltipAction = (Rc<Box<dyn Action>>, Option<SharedString>);
 
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum ButtonVariant {
@@ -22,6 +25,9 @@ pub struct Button {
     on_click: Option<ClickHandler>,
     disabled: bool,
     compact: bool,
+    focus_handle: Option<FocusHandle>,
+    tab_index: Option<isize>,
+    tooltip: Option<(SharedString, Option<TooltipAction>)>,
 }
 
 impl Button {
@@ -35,6 +41,9 @@ impl Button {
             on_click: None,
             disabled: false,
             compact: false,
+            focus_handle: None,
+            tab_index: None,
+            tooltip: None,
         }
     }
 
@@ -85,10 +94,38 @@ impl Button {
         self.disabled = disabled;
         self
     }
+
+    pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
+        self.focus_handle = Some(focus_handle.clone());
+        self
+    }
+
+    pub fn tab_index(mut self, index: isize) -> Self {
+        self.tab_index = Some(index);
+        self
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some((tooltip.into(), None));
+        self
+    }
+
+    pub fn tooltip_with_action(
+        mut self,
+        tooltip: impl Into<SharedString>,
+        action: &dyn Action,
+        context: Option<&str>,
+    ) -> Self {
+        self.tooltip = Some((
+            tooltip.into(),
+            Some((action.boxed_clone().into(), context.map(SharedString::new))),
+        ));
+        self
+    }
 }
 
 impl RenderOnce for Button {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let (bg, hover_bg, text_color, border_color) = match self.variant {
             ButtonVariant::Primary => (
                 colors::bg_button_primary(),
@@ -123,6 +160,11 @@ impl RenderOnce for Button {
         let text_size = if self.compact { typography::text_xs() } else { typography::text_sm() };
         // Keep buttons readable without feeling heavy in monospace UI fonts.
         let font_weight = FontWeight::NORMAL;
+        let focus_handle = self.focus_handle.clone();
+        let tab_index = self.tab_index;
+        let tooltip = self.tooltip.clone();
+        let is_focused =
+            focus_handle.as_ref().is_some_and(|focus_handle| focus_handle.is_focused(window));
 
         let mut el = div()
             .id(self.id)
@@ -140,6 +182,23 @@ impl RenderOnce for Button {
             .font_weight(font_weight)
             .text_color(text_color);
 
+        if let Some(focus_handle) = focus_handle {
+            let mut focus_handle = focus_handle;
+            if let Some(tab_index) = tab_index {
+                focus_handle = focus_handle.tab_index(tab_index);
+                focus_handle = focus_handle.tab_stop(true);
+            }
+            el = el.track_focus(&focus_handle);
+        }
+
+        if let Some(tab_index) = tab_index {
+            el = el.tab_index(tab_index);
+        }
+
+        if is_focused && !self.disabled {
+            el = el.border_color(colors::border_focus()).shadow_xs();
+        }
+
         if self.disabled {
             el = el.opacity(0.5).cursor_not_allowed();
         } else {
@@ -147,6 +206,19 @@ impl RenderOnce for Button {
             if let Some(handler) = self.on_click {
                 el = el.on_click(handler);
             }
+        }
+
+        if let Some((tooltip, action)) = tooltip {
+            el = el.tooltip(move |window, cx| {
+                let mut tooltip_el = Tooltip::new(tooltip.clone());
+                if let Some((action, context)) = action.clone() {
+                    tooltip_el = tooltip_el.action(
+                        action.boxed_clone().as_ref(),
+                        context.as_ref().map(|c| c.as_ref()),
+                    );
+                }
+                tooltip_el.build(window, cx)
+            });
         }
 
         let label = self.label;

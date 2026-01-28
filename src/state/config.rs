@@ -11,6 +11,7 @@ use crate::state::workspace::WorkspaceState;
 const APP_NAME: &str = "openmango";
 
 /// Manages persistent configuration files
+#[derive(Clone)]
 pub struct ConfigManager {
     config_dir: PathBuf,
 }

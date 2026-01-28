@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::bson::DocumentKey;
 use crate::models::connection::ActiveConnection;
+use crate::state::app_state::PipelineState;
 use mongodb::IndexModel;
 use mongodb::bson::{Bson, Document};
 use mongodb::results::{CollectionSpecification, CollectionType};
@@ -27,6 +28,7 @@ pub enum CollectionSubview {
     Documents,
     Indexes,
     Stats,
+    Aggregation,
 }
 
 impl CollectionSubview {
@@ -34,6 +36,7 @@ impl CollectionSubview {
         match index {
             1 => Self::Indexes,
             2 => Self::Stats,
+            3 => Self::Aggregation,
             _ => Self::Documents,
         }
     }
@@ -43,6 +46,7 @@ impl CollectionSubview {
             Self::Documents => 0,
             Self::Indexes => 1,
             Self::Stats => 2,
+            Self::Aggregation => 3,
         }
     }
 }
@@ -149,6 +153,7 @@ pub struct SessionData {
     pub indexes: Option<Vec<IndexModel>>,
     pub indexes_loading: bool,
     pub indexes_error: Option<String>,
+    pub aggregation: PipelineState,
 }
 
 impl Default for SessionData {
@@ -173,6 +178,7 @@ impl Default for SessionData {
             indexes: None,
             indexes_loading: false,
             indexes_error: None,
+            aggregation: PipelineState::default(),
         }
     }
 }
@@ -217,6 +223,7 @@ pub struct SessionSnapshot {
     pub indexes: Option<Vec<IndexModel>>,
     pub indexes_loading: bool,
     pub indexes_error: Option<String>,
+    pub aggregation: PipelineState,
 }
 
 #[derive(Debug, Clone)]

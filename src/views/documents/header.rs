@@ -11,6 +11,7 @@ use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 use crate::bson::DocumentKey;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::{format_bytes, format_number};
+use crate::keyboard::RunAggregation;
 use crate::state::{AppCommands, AppState, CollectionStats, CollectionSubview, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use mongodb::bson::Document;
@@ -38,6 +39,7 @@ impl CollectionView {
         query_options_open: bool,
         active_subview: CollectionSubview,
         stats_loading: bool,
+        aggregation_loading: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -75,6 +77,7 @@ impl CollectionView {
         let is_documents = active_subview == CollectionSubview::Documents;
         let is_indexes = active_subview == CollectionSubview::Indexes;
         let is_stats = active_subview == CollectionSubview::Stats;
+        let is_aggregation = active_subview == CollectionSubview::Aggregation;
         let breadcrumb = format!("{connection_name} / {db_name} / {collection_name}");
 
         let mut action_row = div().flex().items_center().gap(spacing::sm());
@@ -439,6 +442,31 @@ impl CollectionView {
                         }
                     }),
             );
+        } else if is_aggregation {
+            action_row = action_row
+                .child(
+                    Button::new("agg-run")
+                        .primary()
+                        .compact()
+                        .label("Run")
+                        .tooltip_with_action(
+                            "Run aggregation",
+                            &RunAggregation,
+                            Some("Documents Aggregation"),
+                        )
+                        .disabled(session_key.is_none() || aggregation_loading)
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state = self.state.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                AppCommands::run_aggregation(state.clone(), session_key, false, cx);
+                            }
+                        }),
+                )
+                .child(Button::new("agg-analyze").compact().label("Analyze").disabled(true));
         }
 
         let subview_tabs = TabBar::new("collection-subview-tabs")
@@ -477,6 +505,7 @@ impl CollectionView {
                 Tab::new().label("Documents"),
                 Tab::new().label("Indexes"),
                 Tab::new().label("Stats"),
+                Tab::new().label("Aggregation"),
             ]);
 
         let mut root = div()

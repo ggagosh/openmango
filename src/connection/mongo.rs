@@ -10,6 +10,18 @@ use tokio::runtime::Runtime;
 use crate::error::{Error, Result};
 use crate::models::SavedConnection;
 
+#[derive(Debug)]
+pub enum AggregatePipelineError {
+    Mongo(crate::error::Error),
+    Aborted,
+}
+
+impl From<crate::error::Error> for AggregatePipelineError {
+    fn from(value: crate::error::Error) -> Self {
+        Self::Mongo(value)
+    }
+}
+
 pub struct FindDocumentsOptions {
     pub filter: Option<mongodb::bson::Document>,
     pub sort: Option<mongodb::bson::Document>,
@@ -347,6 +359,47 @@ impl ConnectionManager {
             let cursor = coll.aggregate(pipeline).await?;
             let docs: Vec<mongodb::bson::Document> = cursor.try_collect().await?;
             Ok(docs)
+        })
+    }
+
+    /// Run an aggregation pipeline for a collection with abort support (runs in Tokio runtime)
+    #[allow(clippy::too_many_arguments)]
+    pub fn aggregate_pipeline_abortable(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        mut pipeline: Vec<mongodb::bson::Document>,
+        limit: Option<i64>,
+        append_limit: bool,
+        abort_registration: futures::future::AbortRegistration,
+    ) -> std::result::Result<Vec<mongodb::bson::Document>, AggregatePipelineError> {
+        use futures::TryStreamExt;
+        use futures::future::Abortable;
+
+        if append_limit
+            && let Some(limit) = limit
+            && limit > 0
+        {
+            pipeline.push(doc! { "$limit": limit });
+        }
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let fut = async move {
+                let cursor = coll.aggregate(pipeline).await?;
+                let docs: Vec<mongodb::bson::Document> = cursor.try_collect().await?;
+                Ok::<_, crate::error::Error>(docs)
+            };
+            match Abortable::new(fut, abort_registration).await {
+                Ok(result) => result.map_err(AggregatePipelineError::from),
+                Err(_aborted) => Err(AggregatePipelineError::Aborted),
+            }
         })
     }
 

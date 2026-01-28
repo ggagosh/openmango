@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::state::CollectionSubview;
+use crate::state::app_state::PipelineStage;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum WorkspaceTabKind {
@@ -34,6 +35,8 @@ pub struct WorkspaceTab {
     pub sort_raw: String,
     #[serde(default)]
     pub projection_raw: String,
+    #[serde(default)]
+    pub aggregation_pipeline: Vec<PipelineStage>,
     #[serde(default)]
     pub stats_open: bool,
     #[serde(default)]
