@@ -20,6 +20,7 @@ pub enum View {
     Collections,
     Documents,
     Database,
+    Transfer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -84,6 +85,251 @@ impl DatabaseKey {
 pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
+    Transfer(TransferTabKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TransferMode {
+    #[default]
+    Export,
+    Import,
+    Copy,
+}
+
+impl TransferMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            TransferMode::Export => "Export",
+            TransferMode::Import => "Import",
+            TransferMode::Copy => "Copy",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            TransferMode::Export => 0,
+            TransferMode::Import => 1,
+            TransferMode::Copy => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::Import,
+            2 => Self::Copy,
+            _ => Self::Export,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TransferScope {
+    #[default]
+    Collection,
+    Database,
+}
+
+impl TransferScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            TransferScope::Collection => "Collection",
+            TransferScope::Database => "Database",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TransferFormat {
+    #[default]
+    JsonLines,
+    JsonArray,
+    Csv,
+    Bson,
+}
+
+impl TransferFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            TransferFormat::JsonLines => "JSON Lines (.jsonl)",
+            TransferFormat::JsonArray => "JSON array (.json)",
+            TransferFormat::Csv => "CSV (.csv)",
+            TransferFormat::Bson => "BSON (mongodump)",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            TransferFormat::JsonLines => "jsonl",
+            TransferFormat::JsonArray => "json",
+            TransferFormat::Csv => "csv",
+            TransferFormat::Bson => "bson",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn available_for_collection(self) -> bool {
+        !matches!(self, TransferFormat::Bson)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum InsertMode {
+    #[default]
+    Insert,
+    Upsert,
+    Replace,
+}
+
+impl InsertMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            InsertMode::Insert => "Insert",
+            InsertMode::Upsert => "Upsert",
+            InsertMode::Replace => "Replace",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn description(self) -> &'static str {
+        match self {
+            InsertMode::Insert => "Insert new documents (fail on duplicates)",
+            InsertMode::Upsert => "Update existing documents or insert new ones",
+            InsertMode::Replace => "Replace existing documents or insert new ones",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExtendedJsonMode {
+    #[default]
+    Relaxed,
+    Canonical,
+}
+
+impl ExtendedJsonMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExtendedJsonMode::Relaxed => "Relaxed",
+            ExtendedJsonMode::Canonical => "Canonical",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BsonOutputFormat {
+    #[default]
+    Folder,
+    Archive,
+}
+
+impl BsonOutputFormat {
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            BsonOutputFormat::Folder => "Folder",
+            BsonOutputFormat::Archive => "Archive (.archive)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TransferTabKey {
+    pub id: Uuid,
+    pub connection_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferTabState {
+    pub mode: TransferMode,
+    pub scope: TransferScope,
+    pub source_connection_id: Option<Uuid>,
+    pub source_database: String,
+    pub source_collection: String,
+    pub destination_connection_id: Option<Uuid>,
+    pub destination_database: String,
+    pub destination_collection: String,
+    pub format: TransferFormat,
+    pub file_path: String,
+
+    // Import options
+    pub insert_mode: InsertMode,
+    pub drop_before_import: bool,
+    pub stop_on_error: bool,
+    pub batch_size: u32,
+
+    // JSON options
+    pub json_mode: ExtendedJsonMode,
+    pub pretty_print: bool,
+
+    // BSON options
+    pub bson_output: BsonOutputFormat,
+
+    // Preview state
+    #[serde(skip)]
+    pub preview_docs: Vec<String>,
+    #[serde(skip)]
+    pub preview_loading: bool,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+
+    // Transfer execution state
+    #[serde(skip)]
+    pub is_running: bool,
+    #[serde(skip)]
+    pub progress_count: u64,
+    #[serde(skip)]
+    pub error_message: Option<String>,
+}
+
+impl Default for TransferTabState {
+    fn default() -> Self {
+        Self {
+            mode: TransferMode::Export,
+            scope: TransferScope::Collection,
+            source_connection_id: None,
+            source_database: String::new(),
+            source_collection: String::new(),
+            destination_connection_id: None,
+            destination_database: String::new(),
+            destination_collection: String::new(),
+            format: TransferFormat::JsonLines,
+            file_path: String::new(),
+
+            insert_mode: InsertMode::Insert,
+            drop_before_import: false,
+            stop_on_error: true,
+            batch_size: 1000,
+
+            json_mode: ExtendedJsonMode::Relaxed,
+            pretty_print: false,
+
+            bson_output: BsonOutputFormat::Folder,
+
+            preview_docs: Vec::new(),
+            preview_loading: false,
+            warnings: Vec::new(),
+
+            is_running: false,
+            progress_count: 0,
+            error_message: None,
+        }
+    }
+}
+
+impl TransferTabState {
+    pub fn tab_label(&self) -> String {
+        let base = self.mode.label();
+        let source = if !self.source_database.is_empty() {
+            if self.scope == TransferScope::Collection && !self.source_collection.is_empty() {
+                format!("{}/{}", self.source_database, self.source_collection)
+            } else {
+                self.source_database.clone()
+            }
+        } else {
+            "New".to_string()
+        };
+        format!("{base}: {source}")
+    }
 }
 
 // ============================================================================

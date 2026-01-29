@@ -183,6 +183,7 @@ impl AppState {
             .filter(|(_, tab)| match tab {
                 super::types::TabKey::Collection(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
+                super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
             })
             .map(|(idx, _)| idx)
             .collect();

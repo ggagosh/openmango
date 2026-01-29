@@ -7,6 +7,7 @@ mod selection;
 mod sessions;
 mod status;
 mod tabs;
+mod transfer;
 mod types;
 mod workspace;
 
@@ -17,11 +18,13 @@ pub(crate) use aggregation::{
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{
-    ActiveTab, CollectionOverview, CollectionStats, CollectionSubview, DatabaseKey,
-    DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, View,
+    ActiveTab, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
+    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats, ExtendedJsonMode,
+    InsertMode, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
+    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 
+use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicU64};
 
 use gpui::EventEmitter;
@@ -43,6 +46,7 @@ pub struct AppState {
     tabs: TabState,
     sessions: SessionStore,
     db_sessions: DatabaseSessionStore,
+    transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
 
     // View state
     pub current_view: View,
@@ -80,6 +84,7 @@ impl AppState {
             tabs: TabState::default(),
             sessions: SessionStore::new(),
             db_sessions: DatabaseSessionStore::new(),
+            transfer_tabs: HashMap::new(),
             current_view: View::Welcome,
             status_message: None,
             config,

@@ -92,6 +92,20 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
                     }
+                    TabKey::Transfer(key) => {
+                        self.conn.selected_connection = Some(connection_id);
+                        if let Some(transfer) = self.transfer_tabs.get(&key.id) {
+                            if !transfer.source_database.is_empty() {
+                                self.conn.selected_database =
+                                    Some(transfer.source_database.clone());
+                            }
+                            if !transfer.source_collection.is_empty() {
+                                self.conn.selected_collection =
+                                    Some(transfer.source_collection.clone());
+                            }
+                        }
+                        self.current_view = View::Transfer;
+                    }
                 }
             }
         } else if let Some(selected_db) = self.workspace.selected_database.clone() {

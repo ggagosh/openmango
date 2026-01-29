@@ -5,9 +5,11 @@ use uuid::Uuid;
 use crate::components::{ConnectionManager, TreeNodeId, open_confirm_dialog};
 use crate::keyboard::{
     CopyConnectionUri, CopySelectionName, CreateCollection, DeleteSelection, DisconnectConnection,
-    EditConnection, OpenSelection, RefreshView, RenameCollection,
+    EditConnection, OpenSelection, RefreshView, RenameCollection, TransferCopy, TransferExport,
+    TransferImport,
 };
-use crate::state::{AppCommands, AppState};
+use crate::state::{AppCommands, AppState, TransferMode, TransferScope};
+use crate::theme::{colors, spacing};
 
 use super::dialogs::{open_create_collection_dialog, open_rename_collection_dialog};
 use super::sidebar::Sidebar;
@@ -107,6 +109,19 @@ pub(crate) fn build_connection_menu(
     menu
 }
 
+fn menu_item_with_shortcut(label: &'static str, shortcut: &'static str) -> PopupMenuItem {
+    PopupMenuItem::element(move |_window, _cx| {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .gap(spacing::lg())
+            .child(div().text_sm().child(label))
+            .child(div().text_xs().text_color(colors::text_muted()).child(shortcut))
+    })
+}
+
 pub(crate) fn build_database_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
@@ -120,6 +135,9 @@ pub(crate) fn build_database_menu(
     let database_for_create = database.clone();
     let database_for_refresh = database.clone();
     let database_for_drop = database.clone();
+    let database_for_export = database.clone();
+    let database_for_import = database.clone();
+    let database_for_transfer_copy = database.clone();
     let database_for_copy = database;
 
     menu = menu
@@ -167,6 +185,69 @@ pub(crate) fn build_database_menu(
                             database_for_refresh.clone(),
                             cx,
                         );
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Export...", "Cmd+Alt+E")
+                .action(Box::new(TransferExport))
+                .on_click({
+                    let state = state.clone();
+                    let database = database_for_export.clone();
+                    let connection_id = node_id.connection_id();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                None,
+                                TransferScope::Database,
+                                TransferMode::Export,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Import...", "Cmd+Alt+I")
+                .action(Box::new(TransferImport))
+                .on_click({
+                    let state = state.clone();
+                    let database = database_for_import.clone();
+                    let connection_id = node_id.connection_id();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                None,
+                                TransferScope::Database,
+                                TransferMode::Import,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Copy...", "Cmd+Alt+C")
+                .action(Box::new(TransferCopy))
+                .on_click({
+                    let state = state.clone();
+                    let database = database_for_transfer_copy.clone();
+                    let connection_id = node_id.connection_id();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                None,
+                                TransferScope::Database,
+                                TransferMode::Copy,
+                                cx,
+                            );
+                        });
                     }
                 }),
         )
@@ -269,6 +350,69 @@ pub(crate) fn build_collection_menu(
                 }
             },
         ))
+        .item(
+            menu_item_with_shortcut("Export...", "Cmd+Alt+E")
+                .action(Box::new(TransferExport))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                Some(collection.clone()),
+                                TransferScope::Collection,
+                                TransferMode::Export,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Import...", "Cmd+Alt+I")
+                .action(Box::new(TransferImport))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                Some(collection.clone()),
+                                TransferScope::Collection,
+                                TransferMode::Import,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Copy...", "Cmd+Alt+C")
+                .action(Box::new(TransferCopy))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_transfer_tab_with_prefill(
+                                connection_id,
+                                database.clone(),
+                                Some(collection.clone()),
+                                TransferScope::Collection,
+                                TransferMode::Copy,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
         .separator()
         .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
             move |_, _window, cx| {

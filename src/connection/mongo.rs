@@ -1,8 +1,12 @@
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
 use std::sync::LazyLock;
 
 use mongodb::Client;
 use mongodb::IndexModel;
 use mongodb::bson::doc;
+use mongodb::bson::{Bson, Document};
 use mongodb::results::{CollectionSpecification, UpdateResult};
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -14,6 +18,82 @@ use crate::models::SavedConnection;
 pub enum AggregatePipelineError {
     Mongo(crate::error::Error),
     Aborted,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub enum JsonTransferFormat {
+    JsonArray,
+    JsonLines,
+}
+
+/// Extended JSON output mode
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ExtendedJsonMode {
+    #[default]
+    Relaxed,
+    Canonical,
+}
+
+/// Insert mode for imports
+#[derive(Clone, Copy, Debug, Default)]
+pub enum InsertMode {
+    #[default]
+    Insert,
+    Upsert,
+    Replace,
+}
+
+/// Options for JSON export
+#[derive(Clone, Debug)]
+pub struct JsonExportOptions {
+    pub format: JsonTransferFormat,
+    pub json_mode: ExtendedJsonMode,
+    pub pretty_print: bool,
+}
+
+impl Default for JsonExportOptions {
+    fn default() -> Self {
+        Self {
+            format: JsonTransferFormat::JsonLines,
+            json_mode: ExtendedJsonMode::Relaxed,
+            pretty_print: false,
+        }
+    }
+}
+
+/// Options for JSON import
+#[derive(Clone, Debug)]
+pub struct JsonImportOptions {
+    pub format: JsonTransferFormat,
+    pub insert_mode: InsertMode,
+    pub stop_on_error: bool,
+    pub batch_size: usize,
+}
+
+impl Default for JsonImportOptions {
+    fn default() -> Self {
+        Self {
+            format: JsonTransferFormat::JsonLines,
+            insert_mode: InsertMode::Insert,
+            stop_on_error: true,
+            batch_size: 1000,
+        }
+    }
+}
+
+/// Options for CSV import
+#[derive(Clone, Debug)]
+pub struct CsvImportOptions {
+    pub insert_mode: InsertMode,
+    pub stop_on_error: bool,
+    pub batch_size: usize,
+}
+
+impl Default for CsvImportOptions {
+    fn default() -> Self {
+        Self { insert_mode: InsertMode::Insert, stop_on_error: true, batch_size: 1000 }
+    }
 }
 
 impl From<crate::error::Error> for AggregatePipelineError {
@@ -362,6 +442,397 @@ impl ConnectionManager {
         })
     }
 
+    /// Export a collection to JSON/JSONL (runs in Tokio runtime).
+    #[allow(dead_code)]
+    pub fn export_collection_json(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        format: JsonTransferFormat,
+        path: &Path,
+    ) -> Result<u64> {
+        self.export_collection_json_with_options(
+            client,
+            database,
+            collection,
+            path,
+            JsonExportOptions { format, ..Default::default() },
+        )
+    }
+
+    /// Export a collection to JSON/JSONL with full options (runs in Tokio runtime).
+    pub fn export_collection_json_with_options(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: JsonExportOptions,
+    ) -> Result<u64> {
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let mut cursor = coll.find(doc! {}).await?;
+            let file = File::create(&path)?;
+            let mut writer = BufWriter::new(file);
+            let mut count = 0u64;
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                writer.write_all(b"[")?;
+                if options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+            }
+
+            let mut first = true;
+            while let Some(doc) = cursor.try_next().await? {
+                let json_value = match options.json_mode {
+                    ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
+                    ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
+                };
+
+                let json = if options.pretty_print {
+                    serde_json::to_string_pretty(&json_value)?
+                } else {
+                    serde_json::to_string(&json_value)?
+                };
+
+                match options.format {
+                    JsonTransferFormat::JsonLines => {
+                        writer.write_all(json.as_bytes())?;
+                        writer.write_all(b"\n")?;
+                    }
+                    JsonTransferFormat::JsonArray => {
+                        if !first {
+                            writer.write_all(b",")?;
+                            if options.pretty_print {
+                                writer.write_all(b"\n")?;
+                            }
+                        }
+                        writer.write_all(json.as_bytes())?;
+                        first = false;
+                    }
+                }
+                count += 1;
+            }
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                if count > 0 && options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+                writer.write_all(b"]")?;
+            }
+
+            writer.flush()?;
+            Ok(count)
+        })
+    }
+
+    /// Export a collection to CSV (runs in Tokio runtime).
+    pub fn export_collection_csv(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+    ) -> Result<u64> {
+        use crate::connection::csv_utils::{collect_columns, flatten_document};
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            // First pass: collect all column names from first batch of documents
+            let sample_cursor = coll
+                .find(doc! {})
+                .with_options(mongodb::options::FindOptions::builder().limit(1000).build())
+                .await?;
+            let sample_docs: Vec<Document> = sample_cursor.try_collect().await?;
+            let columns = collect_columns(&sample_docs);
+
+            if columns.is_empty() {
+                return Ok(0);
+            }
+
+            // Write CSV
+            let file = File::create(&path)?;
+            let mut csv_writer = csv::Writer::from_writer(file);
+
+            // Write header
+            csv_writer.write_record(&columns)?;
+
+            // Second pass: write all documents
+            let mut cursor = coll.find(doc! {}).await?;
+            let mut count = 0u64;
+
+            while let Some(doc) = cursor.try_next().await? {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+            }
+
+            csv_writer.flush()?;
+            Ok(count)
+        })
+    }
+
+    /// Import a collection from JSON/JSONL (runs in Tokio runtime).
+    #[allow(dead_code)]
+    pub fn import_collection_json(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        format: JsonTransferFormat,
+        path: &Path,
+        batch_size: usize,
+    ) -> Result<u64> {
+        self.import_collection_json_with_options(
+            client,
+            database,
+            collection,
+            path,
+            JsonImportOptions { format, batch_size, ..Default::default() },
+        )
+    }
+
+    /// Import a collection from JSON/JSONL with full options (runs in Tokio runtime).
+    pub fn import_collection_json_with_options(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: JsonImportOptions,
+    ) -> Result<u64> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let mut processed = 0u64;
+
+            // Parse documents from file
+            let docs: Vec<Document> = match options.format {
+                JsonTransferFormat::JsonLines => {
+                    let file = File::open(&path)?;
+                    let reader = BufReader::new(file);
+                    let mut docs = Vec::new();
+                    for line in reader.lines() {
+                        let line = line?;
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        let doc =
+                            crate::bson::parse_document_from_json(&line).map_err(Error::Parse)?;
+                        docs.push(doc);
+                    }
+                    docs
+                }
+                JsonTransferFormat::JsonArray => {
+                    let text = std::fs::read_to_string(&path)?;
+                    crate::bson::parse_documents_from_json(&text).map_err(Error::Parse)?
+                }
+            };
+
+            // Process documents in batches according to insert mode
+            for batch in docs.chunks(options.batch_size) {
+                let result = match options.insert_mode {
+                    InsertMode::Insert => {
+                        import_batch_insert(&coll, batch, options.stop_on_error).await
+                    }
+                    InsertMode::Upsert => {
+                        import_batch_upsert(&coll, batch, options.stop_on_error).await
+                    }
+                    InsertMode::Replace => {
+                        import_batch_replace(&coll, batch, options.stop_on_error).await
+                    }
+                };
+
+                match result {
+                    Ok(count) => processed += count,
+                    Err(e) if options.stop_on_error => return Err(e),
+                    Err(_) => {} // Continue on error if stop_on_error is false
+                }
+            }
+
+            Ok(processed)
+        })
+    }
+
+    /// Import a collection from CSV (runs in Tokio runtime).
+    pub fn import_collection_csv(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: CsvImportOptions,
+    ) -> Result<u64> {
+        use crate::connection::csv_utils::unflatten_row;
+        use std::collections::HashMap;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            let file = File::open(&path)?;
+            let mut csv_reader = csv::Reader::from_reader(file);
+            let headers: Vec<String> =
+                csv_reader.headers()?.iter().map(|h| h.to_string()).collect();
+
+            let mut docs = Vec::new();
+            for result in csv_reader.records() {
+                let record = result?;
+                let mut row: HashMap<String, String> = HashMap::new();
+                for (i, value) in record.iter().enumerate() {
+                    if let Some(header) = headers.get(i) {
+                        row.insert(header.clone(), value.to_string());
+                    }
+                }
+                docs.push(unflatten_row(&row));
+            }
+
+            let mut processed = 0u64;
+            for batch in docs.chunks(options.batch_size) {
+                let result = match options.insert_mode {
+                    InsertMode::Insert => {
+                        import_batch_insert(&coll, batch, options.stop_on_error).await
+                    }
+                    InsertMode::Upsert => {
+                        import_batch_upsert(&coll, batch, options.stop_on_error).await
+                    }
+                    InsertMode::Replace => {
+                        import_batch_replace(&coll, batch, options.stop_on_error).await
+                    }
+                };
+
+                match result {
+                    Ok(count) => processed += count,
+                    Err(e) if options.stop_on_error => return Err(e),
+                    Err(_) => {}
+                }
+            }
+
+            Ok(processed)
+        })
+    }
+
+    /// Copy a collection from one connection/database to another (runs in Tokio runtime).
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_collection(
+        &self,
+        src_client: &Client,
+        src_database: &str,
+        src_collection: &str,
+        dest_client: &Client,
+        dest_database: &str,
+        dest_collection: &str,
+        batch_size: usize,
+    ) -> Result<u64> {
+        use futures::TryStreamExt;
+        use mongodb::options::InsertManyOptions;
+
+        let src_client = src_client.clone();
+        let dest_client = dest_client.clone();
+        let src_database = src_database.to_string();
+        let src_collection = src_collection.to_string();
+        let dest_database = dest_database.to_string();
+        let dest_collection = dest_collection.to_string();
+
+        self.runtime.block_on(async move {
+            let src_coll =
+                src_client.database(&src_database).collection::<Document>(&src_collection);
+            let dest_coll =
+                dest_client.database(&dest_database).collection::<Document>(&dest_collection);
+
+            let mut cursor = src_coll.find(doc! {}).await?;
+            let mut batch: Vec<Document> = Vec::with_capacity(batch_size);
+            let mut copied = 0u64;
+
+            let options = InsertManyOptions::builder().ordered(false).build();
+
+            while let Some(doc) = cursor.try_next().await? {
+                batch.push(doc);
+                if batch.len() >= batch_size {
+                    let docs = std::mem::take(&mut batch);
+                    copied += docs.len() as u64;
+                    dest_coll.insert_many(docs).with_options(options.clone()).await?;
+                }
+            }
+
+            // Flush remaining
+            if !batch.is_empty() {
+                copied += batch.len() as u64;
+                dest_coll.insert_many(batch).with_options(options).await?;
+            }
+
+            Ok(copied)
+        })
+    }
+
+    /// Copy all collections from one database to another (runs in Tokio runtime).
+    pub fn copy_database(
+        &self,
+        src_client: &Client,
+        src_database: &str,
+        dest_client: &Client,
+        dest_database: &str,
+        batch_size: usize,
+    ) -> Result<u64> {
+        let src_client = src_client.clone();
+        let dest_client = dest_client.clone();
+        let src_database = src_database.to_string();
+        let dest_database = dest_database.to_string();
+
+        self.runtime.block_on(async move {
+            let src_db = src_client.database(&src_database);
+            let collections = src_db.list_collection_names().await?;
+
+            let mut total_copied = 0u64;
+
+            for collection in collections {
+                // Skip system collections
+                if collection.starts_with("system.") {
+                    continue;
+                }
+
+                let count = get_connection_manager().copy_collection(
+                    &src_client,
+                    &src_database,
+                    &collection,
+                    &dest_client,
+                    &dest_database,
+                    &collection,
+                    batch_size,
+                )?;
+                total_copied += count;
+            }
+
+            Ok(total_copied)
+        })
+    }
+
     /// Run an aggregation pipeline for a collection with abort support (runs in Tokio runtime)
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_pipeline_abortable(
@@ -535,6 +1006,181 @@ impl Default for ConnectionManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Preview and tools functions
+
+/// Generate a preview of documents for export.
+pub fn generate_export_preview(
+    manager: &ConnectionManager,
+    client: &Client,
+    database: &str,
+    collection: &str,
+    json_mode: ExtendedJsonMode,
+    pretty_print: bool,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let docs = manager.sample_documents(client, database, collection, limit as i64)?;
+
+    let previews: Vec<String> = docs
+        .into_iter()
+        .map(|doc| {
+            let json_value = match json_mode {
+                ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
+                ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
+            };
+
+            if pretty_print {
+                serde_json::to_string_pretty(&json_value).unwrap_or_default()
+            } else {
+                serde_json::to_string(&json_value).unwrap_or_default()
+            }
+        })
+        .collect();
+
+    Ok(previews)
+}
+
+/// Check if mongodump/mongorestore tools are available.
+#[allow(dead_code)]
+pub fn tools_available() -> bool {
+    mongodump_path().is_some() && mongorestore_path().is_some()
+}
+
+/// Find the path to mongodump executable.
+#[allow(dead_code)]
+pub fn mongodump_path() -> Option<std::path::PathBuf> {
+    find_mongo_tool("mongodump")
+}
+
+/// Find the path to mongorestore executable.
+#[allow(dead_code)]
+pub fn mongorestore_path() -> Option<std::path::PathBuf> {
+    find_mongo_tool("mongorestore")
+}
+
+#[allow(dead_code)]
+fn find_mongo_tool(name: &str) -> Option<std::path::PathBuf> {
+    // 1. Check app bundle (macOS)
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            // In app bundle: ../Resources/bin/mongodump
+            if let Some(parent) = exe_path.parent() {
+                let bundle_path = parent.join("../Resources/bin").join(name);
+                if bundle_path.exists() {
+                    return Some(bundle_path);
+                }
+            }
+        }
+    }
+
+    // 2. Check resources/bin (dev mode)
+    let dev_path = std::path::PathBuf::from("resources/bin")
+        .join(if cfg!(target_os = "macos") { "macos" } else { "linux" })
+        .join(name);
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+
+    // 3. Check PATH
+    which::which(name).ok()
+}
+
+// Import mode helper functions
+
+async fn import_batch_insert(
+    coll: &mongodb::Collection<Document>,
+    batch: &[Document],
+    ordered: bool,
+) -> Result<u64> {
+    use mongodb::options::InsertManyOptions;
+
+    if batch.is_empty() {
+        return Ok(0);
+    }
+
+    let options = InsertManyOptions::builder().ordered(ordered).build();
+    coll.insert_many(batch.to_vec()).with_options(options).await?;
+    Ok(batch.len() as u64)
+}
+
+async fn import_batch_upsert(
+    coll: &mongodb::Collection<Document>,
+    batch: &[Document],
+    ordered: bool,
+) -> Result<u64> {
+    use mongodb::bson::doc;
+    use mongodb::options::UpdateOptions;
+
+    if batch.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0u64;
+    let options = UpdateOptions::builder().upsert(true).build();
+
+    for doc in batch {
+        // Use _id as the match filter, or entire document if no _id
+        let filter = if let Some(id) = doc.get("_id") {
+            doc! { "_id": id.clone() }
+        } else {
+            // If no _id, just insert
+            coll.insert_one(doc.clone()).await?;
+            count += 1;
+            continue;
+        };
+
+        // Remove _id from update doc to avoid immutable field error
+        let mut update_doc = doc.clone();
+        update_doc.remove("_id");
+
+        coll.update_one(filter, doc! { "$set": update_doc }).with_options(options.clone()).await?;
+        count += 1;
+
+        if !ordered {
+            // In unordered mode, we continue even on individual errors
+            // but this simple implementation just tries each doc
+        }
+    }
+
+    Ok(count)
+}
+
+async fn import_batch_replace(
+    coll: &mongodb::Collection<Document>,
+    batch: &[Document],
+    ordered: bool,
+) -> Result<u64> {
+    use mongodb::bson::doc;
+    use mongodb::options::ReplaceOptions;
+
+    if batch.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0u64;
+    let options = ReplaceOptions::builder().upsert(true).build();
+
+    for doc in batch {
+        let filter = if let Some(id) = doc.get("_id") {
+            doc! { "_id": id.clone() }
+        } else {
+            // If no _id, just insert
+            coll.insert_one(doc.clone()).await?;
+            count += 1;
+            continue;
+        };
+
+        coll.replace_one(filter, doc.clone()).with_options(options.clone()).await?;
+        count += 1;
+
+        if !ordered {
+            // Continue on individual errors in unordered mode
+        }
+    }
+
+    Ok(count)
 }
 
 // No public server info returned yet.

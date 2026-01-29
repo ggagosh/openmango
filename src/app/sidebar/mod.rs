@@ -5,7 +5,7 @@ use gpui_component::input::InputState;
 use uuid::Uuid;
 
 use crate::components::{ConnectionDialog, ConnectionManager, TreeNodeId, open_confirm_dialog};
-use crate::state::{AppCommands, AppEvent, AppState};
+use crate::state::{AppCommands, AppEvent, AppState, TransferMode, TransferScope};
 
 use super::dialogs::open_rename_collection_dialog;
 use super::search::{SidebarSearchResult, search_results};
@@ -112,7 +112,11 @@ impl Sidebar {
             | AppEvent::DocumentsUpdated { .. }
             | AppEvent::DocumentsUpdateFailed { .. }
             | AppEvent::AggregationCompleted { .. }
-            | AppEvent::AggregationFailed { .. } => {}
+            | AppEvent::AggregationFailed { .. }
+            | AppEvent::TransferPreviewLoaded { .. }
+            | AppEvent::TransferStarted { .. }
+            | AppEvent::TransferCompleted { .. }
+            | AppEvent::TransferFailed { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }
@@ -198,6 +202,42 @@ impl Sidebar {
     pub(crate) fn mark_database_loading(&mut self, node_id: TreeNodeId, cx: &mut Context<Self>) {
         self.model.loading_databases.insert(node_id);
         cx.notify();
+    }
+
+    pub(crate) fn handle_transfer_action(&mut self, mode: TransferMode, cx: &mut Context<Self>) {
+        let Some(node_id) = self.model.selected_tree_id.clone() else {
+            return;
+        };
+
+        match node_id {
+            TreeNodeId::Database { connection, database } => {
+                let state = self.state.clone();
+                state.update(cx, |state, cx| {
+                    state.open_transfer_tab_with_prefill(
+                        connection,
+                        database,
+                        None,
+                        TransferScope::Database,
+                        mode,
+                        cx,
+                    );
+                });
+            }
+            TreeNodeId::Collection { connection, database, collection } => {
+                let state = self.state.clone();
+                state.update(cx, |state, cx| {
+                    state.open_transfer_tab_with_prefill(
+                        connection,
+                        database,
+                        Some(collection),
+                        TransferScope::Collection,
+                        mode,
+                        cx,
+                    );
+                });
+            }
+            _ => {}
+        }
     }
 
     fn sync_selection_from_state(&mut self, cx: &mut Context<Self>) {

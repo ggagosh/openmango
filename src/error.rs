@@ -15,6 +15,13 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("CSV error: {0}")]
+    Csv(#[from] csv::Error),
+
+    #[error("Parse error: {0}")]
+    #[allow(dead_code)]
+    Parse(String),
+
     #[error("Timeout: {0}")]
     Timeout(String),
 }

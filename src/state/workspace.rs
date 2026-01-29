@@ -3,13 +3,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::state::CollectionSubview;
-use crate::state::app_state::PipelineStage;
+use crate::state::app_state::{PipelineStage, TransferTabState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum WorkspaceTabKind {
     #[default]
     Collection,
     Database,
+    Transfer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,6 +30,8 @@ pub struct WorkspaceTab {
     pub collection: String,
     #[serde(default)]
     pub kind: WorkspaceTabKind,
+    #[serde(default)]
+    pub transfer: Option<TransferTabState>,
     #[serde(default)]
     pub filter_raw: String,
     #[serde(default)]

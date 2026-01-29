@@ -6,7 +6,7 @@ use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, colors, spacing};
-use crate::views::{CollectionView, DatabaseView};
+use crate::views::{CollectionView, DatabaseView, TransferView};
 
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
@@ -18,9 +18,10 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) has_collection: bool,
     pub(crate) collection_view: Option<&'a Entity<CollectionView>>,
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
+    pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
 }
 
-pub(crate) fn render_tabs_host(host: TabsHost<'_>) -> AnyElement {
+pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let selected_index = match host.active_tab {
         ActiveTab::Preview => host.tabs.len(),
         ActiveTab::Index(index) => index.min(host.tabs.len().saturating_sub(1)),
@@ -55,6 +56,9 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>) -> AnyElement {
                             dirty_tabs.contains(tab),
                         ),
                         TabKey::Database(tab) => (tab.database.clone(), false),
+                        TabKey::Transfer(tab) => {
+                            (host.state.read(cx).transfer_tab_label(tab.id), false)
+                        }
                     };
                     let state = host.state.clone();
                     let close_button = div()
@@ -121,6 +125,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>) -> AnyElement {
     let content = match host.current_view {
         View::Database => host
             .database_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Transfer => host
+            .transfer_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         _ => {

@@ -10,9 +10,9 @@ use crate::components::{ConnectionManager, TreeNodeId};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenSelection, OpenSelectionPreview,
-    RenameCollection,
+    RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
-use crate::state::AppCommands;
+use crate::state::{AppCommands, TransferMode};
 use crate::theme::{borders, colors, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
@@ -90,6 +90,15 @@ impl Render for Sidebar {
             }))
             .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
                 this.handle_delete_selection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TransferExport, _window, cx| {
+                this.handle_transfer_action(TransferMode::Export, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TransferImport, _window, cx| {
+                this.handle_transfer_action(TransferMode::Import, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TransferCopy, _window, cx| {
+                this.handle_transfer_action(TransferMode::Copy, cx);
             }))
             .on_action(cx.listener(|this, _: &FindInSidebar, window, cx| {
                 this.open_search(window, cx);
@@ -568,6 +577,8 @@ impl Render for Sidebar {
                                             // Label
                                             .child(
                                                 div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
                                                     .text_sm()
                                                     .text_color(if selected {
                                                         colors::text_primary()
@@ -581,6 +592,8 @@ impl Render for Sidebar {
                                             .when(is_connecting || is_loading_db, |this| {
                                                 this.child(Spinner::new().xsmall())
                                             });
+
+                                        let row = row;
 
                                         let row = row.context_menu({
                                             let menu_node_id = node_id.clone();

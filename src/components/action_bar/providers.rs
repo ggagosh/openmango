@@ -73,6 +73,13 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (key.database.clone(), conn_name)
             }
+            TabKey::Transfer(key) => {
+                let conn_name = key
+                    .connection_id
+                    .and_then(|id| state.connection_name(id))
+                    .unwrap_or_else(|| "Connection".to_string());
+                (state.transfer_tab_label(key.id), conn_name)
+            }
         };
 
         actions.push(ActionItem {

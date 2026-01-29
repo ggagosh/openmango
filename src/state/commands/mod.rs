@@ -51,3 +51,4 @@ mod databases;
 mod documents;
 mod indexes;
 mod stats;
+mod transfer;

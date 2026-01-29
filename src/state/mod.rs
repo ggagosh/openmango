@@ -9,9 +9,10 @@ pub mod status;
 pub mod workspace;
 
 pub use app_state::{
-    ActiveTab, AppState, CollectionOverview, CollectionStats, CollectionSubview, DatabaseKey,
-    DatabaseSessionData, DatabaseSessionState, DatabaseStats, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, View,
+    ActiveTab, AppState, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
+    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats, ExtendedJsonMode,
+    InsertMode, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
+    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;

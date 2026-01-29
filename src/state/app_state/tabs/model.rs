@@ -8,7 +8,10 @@ use uuid::Uuid;
 use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
-use crate::state::app_state::types::{ActiveTab, DatabaseKey, SessionKey, TabKey, View};
+use crate::state::app_state::types::{
+    ActiveTab, DatabaseKey, SessionKey, TabKey, TransferMode, TransferScope, TransferTabKey,
+    TransferTabState, View,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::state::app_state) enum TabOpenMode {
@@ -246,6 +249,86 @@ impl AppState {
         cx.notify();
     }
 
+    pub(crate) fn open_transfer_tab(&mut self, cx: &mut Context<Self>) {
+        let connection_id = self.conn.selected_connection;
+        let mut transfer_state = TransferTabState::default();
+        transfer_state.source_connection_id = connection_id;
+        transfer_state.source_database = self.conn.selected_database.clone().unwrap_or_default();
+        transfer_state.source_collection =
+            self.conn.selected_collection.clone().unwrap_or_default();
+        transfer_state.destination_connection_id = connection_id;
+        transfer_state.destination_database = transfer_state.source_database.clone();
+        transfer_state.destination_collection = transfer_state.source_collection.clone();
+        if transfer_state.source_database.is_empty() {
+            transfer_state.scope = TransferScope::Collection;
+        } else if transfer_state.source_collection.is_empty() {
+            transfer_state.scope = TransferScope::Database;
+        } else {
+            transfer_state.scope = TransferScope::Collection;
+        }
+        self.push_transfer_tab(transfer_state, connection_id, cx);
+    }
+
+    pub(crate) fn open_transfer_tab_with_prefill(
+        &mut self,
+        connection_id: Uuid,
+        database: String,
+        collection: Option<String>,
+        scope: TransferScope,
+        mode: TransferMode,
+        cx: &mut Context<Self>,
+    ) {
+        let mut transfer_state = TransferTabState::default();
+        transfer_state.mode = mode;
+        transfer_state.scope = scope;
+        transfer_state.source_connection_id = Some(connection_id);
+        transfer_state.source_database = database;
+        transfer_state.source_collection = collection.unwrap_or_default();
+        transfer_state.destination_connection_id = Some(connection_id);
+        transfer_state.destination_database = transfer_state.source_database.clone();
+        transfer_state.destination_collection = transfer_state.source_collection.clone();
+        if scope == TransferScope::Database {
+            transfer_state.source_collection.clear();
+            transfer_state.destination_collection.clear();
+        }
+
+        self.push_transfer_tab(transfer_state, Some(connection_id), cx);
+    }
+
+    fn push_transfer_tab(
+        &mut self,
+        transfer_state: TransferTabState,
+        connection_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_database = if transfer_state.source_database.is_empty() {
+            None
+        } else {
+            Some(transfer_state.source_database.clone())
+        };
+        let selected_collection = if transfer_state.source_collection.is_empty() {
+            None
+        } else {
+            Some(transfer_state.source_collection.clone())
+        };
+
+        let id = Uuid::new_v4();
+        let key = TransferTabKey { id, connection_id };
+        self.transfer_tabs.insert(id, transfer_state);
+        self.tabs.open.push(TabKey::Transfer(key.clone()));
+        self.set_active_index(self.tabs.open.len() - 1);
+        if let Some(conn_id) = connection_id {
+            self.set_selected_connection_internal(conn_id);
+        }
+        self.conn.selected_database = selected_database;
+        self.conn.selected_collection = selected_collection;
+        self.current_view = View::Transfer;
+        self.update_workspace_from_state();
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
     pub(in crate::state::app_state) fn close_database_tabs(&mut self, cx: &mut Context<Self>) {
         let Some(conn_id) = self.conn.selected_connection else {
             return;
@@ -300,6 +383,20 @@ impl AppState {
                 self.conn.selected_collection = None;
                 self.current_view = View::Database;
                 self.ensure_database_session(tab);
+            }
+            TabKey::Transfer(tab) => {
+                if let Some(conn_id) = tab.connection_id {
+                    self.set_selected_connection_internal(conn_id);
+                }
+                if let Some(state) = self.transfer_tabs.get(&tab.id) {
+                    if !state.source_database.is_empty() {
+                        self.conn.selected_database = Some(state.source_database.clone());
+                    }
+                    if !state.source_collection.is_empty() {
+                        self.conn.selected_collection = Some(state.source_collection.clone());
+                    }
+                }
+                self.current_view = View::Transfer;
             }
         }
         self.update_workspace_from_state();
@@ -362,6 +459,9 @@ impl AppState {
             TabKey::Database(key) => {
                 self.db_sessions.remove(key);
             }
+            TabKey::Transfer(key) => {
+                self.transfer_tabs.remove(&key.id);
+            }
         }
 
         if let Some(active) = self.active_index()
@@ -413,6 +513,21 @@ impl AppState {
                         self.current_view = View::Database;
                         self.ensure_database_session(tab);
                     }
+                    TabKey::Transfer(tab) => {
+                        if let Some(conn_id) = tab.connection_id {
+                            self.set_selected_connection_internal(conn_id);
+                        }
+                        if let Some(state) = self.transfer_tabs.get(&tab.id) {
+                            if !state.source_database.is_empty() {
+                                self.conn.selected_database = Some(state.source_database.clone());
+                            }
+                            if !state.source_collection.is_empty() {
+                                self.conn.selected_collection =
+                                    Some(state.source_collection.clone());
+                            }
+                        }
+                        self.current_view = View::Transfer;
+                    }
                 }
                 cx.emit(AppEvent::ViewChanged);
             }
@@ -451,6 +566,22 @@ impl AppState {
                             self.current_view = View::Database;
                             self.ensure_database_session(tab);
                         }
+                        TabKey::Transfer(tab) => {
+                            if let Some(conn_id) = tab.connection_id {
+                                self.set_selected_connection_internal(conn_id);
+                            }
+                            if let Some(state) = self.transfer_tabs.get(&tab.id) {
+                                if !state.source_database.is_empty() {
+                                    self.conn.selected_database =
+                                        Some(state.source_database.clone());
+                                }
+                                if !state.source_collection.is_empty() {
+                                    self.conn.selected_collection =
+                                        Some(state.source_collection.clone());
+                                }
+                            }
+                            self.current_view = View::Transfer;
+                        }
                     }
                     cx.emit(AppEvent::ViewChanged);
                 }
@@ -471,6 +602,21 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
                         self.ensure_database_session(tab);
+                    }
+                    TabKey::Transfer(tab) => {
+                        if let Some(conn_id) = tab.connection_id {
+                            self.set_selected_connection_internal(conn_id);
+                        }
+                        if let Some(state) = self.transfer_tabs.get(&tab.id) {
+                            if !state.source_database.is_empty() {
+                                self.conn.selected_database = Some(state.source_database.clone());
+                            }
+                            if !state.source_collection.is_empty() {
+                                self.conn.selected_collection =
+                                    Some(state.source_collection.clone());
+                            }
+                        }
+                        self.current_view = View::Transfer;
                     }
                 }
                 cx.emit(AppEvent::ViewChanged);
@@ -544,6 +690,7 @@ impl AppState {
                 TabKey::Database(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
+                TabKey::Transfer(_) => false,
             })
             .map(|(idx, _)| idx)
             .collect();

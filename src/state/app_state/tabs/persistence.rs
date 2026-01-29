@@ -1,6 +1,8 @@
 use crate::bson::parse_document_from_json;
 use crate::state::app_state::StageDocCounts;
-use crate::state::{CollectionSubview, WorkspaceTab, WorkspaceTabKind};
+use crate::state::{
+    CollectionSubview, TransferTabKey, TransferTabState, WorkspaceTab, WorkspaceTabKind,
+};
 use uuid::Uuid;
 
 use super::super::AppState;
@@ -19,6 +21,7 @@ impl AppState {
             .filter(|tab| match (selected_connection, tab) {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+                (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
                 _ => false,
             })
             .and_then(|tab| {
@@ -31,6 +34,7 @@ impl AppState {
             .filter(|tab| match (selected_connection, tab) {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+                (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
                 _ => false,
             })
             .map(|tab| self.build_workspace_tab(tab))
@@ -69,6 +73,23 @@ impl AppState {
                         restored_tabs.push(TabKey::Database(key));
                     }
                 }
+                WorkspaceTabKind::Transfer => {
+                    let mut transfer_state = tab.transfer.clone().unwrap_or_default();
+                    if transfer_state.source_connection_id.is_none() {
+                        transfer_state.source_connection_id = Some(connection_id);
+                    }
+                    if transfer_state.source_database.is_empty() && !tab.database.is_empty() {
+                        transfer_state.source_database = tab.database.clone();
+                    }
+                    if transfer_state.source_collection.is_empty() && !tab.collection.is_empty() {
+                        transfer_state.source_collection = tab.collection.clone();
+                    }
+                    let id = Uuid::new_v4();
+                    let key =
+                        TransferTabKey { id, connection_id: transfer_state.source_connection_id };
+                    self.transfer_tabs.insert(id, transfer_state);
+                    restored_tabs.push(TabKey::Transfer(key));
+                }
             }
         }
 
@@ -84,6 +105,12 @@ impl AppState {
                     }
                     (WorkspaceTabKind::Database, TabKey::Database(database)) => {
                         database.database == tab.database
+                    }
+                    (WorkspaceTabKind::Transfer, TabKey::Transfer(transfer)) => {
+                        let Some(state) = self.transfer_tabs.get(&transfer.id) else {
+                            return false;
+                        };
+                        state.source_database == tab.database
                     }
                     _ => false,
                 })
@@ -166,6 +193,7 @@ impl AppState {
                     database: key.database.clone(),
                     collection: key.collection.clone(),
                     kind: WorkspaceTabKind::Collection,
+                    transfer: None,
                     filter_raw,
                     sort_raw,
                     projection_raw,
@@ -178,6 +206,7 @@ impl AppState {
                 database: key.database.clone(),
                 collection: String::new(),
                 kind: WorkspaceTabKind::Database,
+                transfer: None,
                 filter_raw: String::new(),
                 sort_raw: String::new(),
                 projection_raw: String::new(),
@@ -185,6 +214,21 @@ impl AppState {
                 stats_open: false,
                 subview: CollectionSubview::Documents,
             },
+            TabKey::Transfer(key) => {
+                let transfer = self.transfer_tabs.get(&key.id).cloned().unwrap_or_default();
+                WorkspaceTab {
+                    database: transfer.source_database.clone(),
+                    collection: transfer.source_collection.clone(),
+                    kind: WorkspaceTabKind::Transfer,
+                    transfer: Some(transfer),
+                    filter_raw: String::new(),
+                    sort_raw: String::new(),
+                    projection_raw: String::new(),
+                    aggregation_pipeline: Vec::new(),
+                    stats_open: false,
+                    subview: CollectionSubview::Documents,
+                }
+            }
         }
     }
 
@@ -200,6 +244,18 @@ impl AppState {
                 TabKey::Database(key) => {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
+                }
+                TabKey::Transfer(key) => {
+                    if let Some(transfer) = self.transfer_tabs.get(&key.id) {
+                        if !transfer.source_database.is_empty() {
+                            self.workspace.selected_database =
+                                Some(transfer.source_database.clone());
+                        }
+                        if !transfer.source_collection.is_empty() {
+                            self.workspace.selected_collection =
+                                Some(transfer.source_collection.clone());
+                        }
+                    }
                 }
             }
         } else {

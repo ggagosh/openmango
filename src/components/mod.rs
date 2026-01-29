@@ -6,6 +6,7 @@ pub mod confirm;
 pub mod connection_dialog;
 pub mod connection_manager;
 mod content;
+pub mod file_picker;
 mod status_bar;
 pub mod tree;
 

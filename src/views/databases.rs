@@ -105,6 +105,18 @@ impl Render for DatabaseView {
                     AppCommands::load_database_overview(state.clone(), key, true, cx);
                 }
             });
+        let transfer_button = Button::new("open-transfer-db")
+            .compact()
+            .label("Transfer")
+            .disabled(database_key.is_none())
+            .on_click({
+                let state = state.clone();
+                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                    state.update(cx, |state, cx| {
+                        state.open_transfer_tab(cx);
+                    });
+                }
+            });
 
         let header = div()
             .flex()
@@ -122,7 +134,14 @@ impl Render for DatabaseView {
                     .text_color(colors::text_primary())
                     .child(database_name.clone()),
             )
-            .child(refresh_button);
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(transfer_button)
+                    .child(refresh_button),
+            );
 
         let content = div()
             .flex()

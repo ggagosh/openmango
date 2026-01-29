@@ -12,7 +12,10 @@ use crate::bson::DocumentKey;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::{format_bytes, format_number};
 use crate::keyboard::RunAggregation;
-use crate::state::{AppCommands, AppState, CollectionStats, CollectionSubview, SessionKey};
+use crate::state::{
+    AppCommands, AppState, CollectionStats, CollectionSubview, SessionKey, TransferMode,
+    TransferScope,
+};
 use crate::theme::{borders, colors, spacing};
 use mongodb::bson::Document;
 
@@ -57,6 +60,7 @@ impl CollectionView {
         let state_for_subview = self.state.clone();
         let state_for_stats_refresh = self.state.clone();
         let state_for_indexes_refresh = self.state.clone();
+        let state_for_transfer = self.state.clone();
         let connection_name = {
             let state_ref = self.state.read(cx);
             state_ref
@@ -360,6 +364,81 @@ impl CollectionView {
                             }
                         })
                 })
+                .child(
+                    Button::new("export-collection")
+                        .compact()
+                        .label("Export")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Export,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("import-collection")
+                        .compact()
+                        .label("Import")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Import,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("copy-collection")
+                        .compact()
+                        .label("Copy")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Copy,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                )
                 .child(
                     Button::new("refresh")
                         .ghost()

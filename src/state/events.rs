@@ -1,4 +1,5 @@
-// Application events for reactive UI updates
+//! Application events for reactive UI updates
+
 use uuid::Uuid;
 
 use crate::bson::DocumentKey;
@@ -6,6 +7,7 @@ use crate::state::SessionKey;
 
 /// Events emitted by AppState for UI reactivity
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AppEvent {
     // Connection lifecycle
     ConnectionAdded,
@@ -43,6 +45,12 @@ pub enum AppEvent {
     DocumentsDeleteFailed { session: SessionKey, error: String },
     AggregationCompleted { session: SessionKey, count: usize, preview: bool, limited: bool },
     AggregationFailed { session: SessionKey, error: String },
+
+    // Transfer events
+    TransferPreviewLoaded { transfer_id: Uuid },
+    TransferStarted { transfer_id: Uuid },
+    TransferCompleted { transfer_id: Uuid, count: u64 },
+    TransferFailed { transfer_id: Uuid, error: String },
 
     // View navigation
     ViewChanged,
