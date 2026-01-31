@@ -159,6 +159,7 @@ pub fn default_export_path_from_settings(
 /// Generate export filename from template WITHOUT expanding placeholders.
 /// Used when user browses for folder - shows template with placeholders visible.
 /// For BSON format, use `unexpanded_export_filename_bson` instead to specify output mode.
+#[allow(dead_code)]
 pub fn unexpanded_export_filename(
     settings: &crate::state::AppSettings,
     format: crate::state::TransferFormat,
@@ -170,6 +171,7 @@ pub fn unexpanded_export_filename(
 /// Generate export filename for BSON format based on output mode.
 /// - Archive mode: uses `.archive` extension
 /// - Folder mode: no extension (template is the folder name)
+#[allow(dead_code)]
 pub fn unexpanded_export_filename_bson(
     settings: &crate::state::AppSettings,
     output_mode: crate::state::BsonOutputFormat,
@@ -178,5 +180,46 @@ pub fn unexpanded_export_filename_bson(
     match output_mode {
         crate::state::BsonOutputFormat::Archive => format!("{}.archive", template),
         crate::state::BsonOutputFormat::Folder => template.clone(),
+    }
+}
+
+/// Database-scope template (excludes ${collection})
+const DATABASE_SCOPE_TEMPLATE: &str = "${database}_${datetime}";
+
+/// Generate export filename from template, using scope-appropriate template.
+/// For database scope, uses a template without ${collection} and no extension (it's a directory).
+/// For collection scope, uses the full template from settings with file extension.
+pub fn unexpanded_export_filename_for_scope(
+    settings: &crate::state::AppSettings,
+    format: crate::state::TransferFormat,
+    scope: crate::state::TransferScope,
+) -> String {
+    match scope {
+        crate::state::TransferScope::Database => {
+            // Database scope: path is a directory, no extension
+            DATABASE_SCOPE_TEMPLATE.to_string()
+        }
+        crate::state::TransferScope::Collection => {
+            // Collection scope: path is a file with extension
+            format!("{}.{}", settings.transfer.export_filename_template, format.extension())
+        }
+    }
+}
+
+/// Generate export filename for BSON format based on output mode and scope.
+/// For database scope, uses a template without ${collection}.
+/// For collection scope, uses the full template from settings.
+pub fn unexpanded_export_filename_bson_for_scope(
+    settings: &crate::state::AppSettings,
+    output_mode: crate::state::BsonOutputFormat,
+    scope: crate::state::TransferScope,
+) -> String {
+    let template = match scope {
+        crate::state::TransferScope::Database => DATABASE_SCOPE_TEMPLATE,
+        crate::state::TransferScope::Collection => &settings.transfer.export_filename_template,
+    };
+    match output_mode {
+        crate::state::BsonOutputFormat::Archive => format!("{}.archive", template),
+        crate::state::BsonOutputFormat::Folder => template.to_string(),
     }
 }

@@ -699,6 +699,209 @@ impl ConnectionManager {
         })
     }
 
+    /// Export all collections in a database to JSON files (runs in Tokio runtime).
+    /// Creates one file per collection in the specified directory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_database_json(
+        &self,
+        client: &Client,
+        database: &str,
+        directory: &Path,
+        options: JsonExportOptions,
+        exclude_collections: &[String],
+    ) -> Result<u64> {
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let directory = directory.to_path_buf();
+        let exclude_collections = exclude_collections.to_vec();
+
+        self.runtime.block_on(async move {
+            let db = client.database(&database);
+            let collections = db.list_collection_names().await?;
+
+            // Create directory if it doesn't exist
+            std::fs::create_dir_all(&directory)?;
+
+            let mut total_count = 0u64;
+
+            for coll_name in collections {
+                // Skip system collections
+                if coll_name.starts_with("system.") {
+                    continue;
+                }
+
+                // Skip excluded collections
+                if exclude_collections.contains(&coll_name) {
+                    continue;
+                }
+
+                // Create file path for this collection
+                let extension = match options.format {
+                    JsonTransferFormat::JsonLines => "jsonl",
+                    JsonTransferFormat::JsonArray => "json",
+                };
+                let file_name = format!("{}_{}.{}", database, coll_name, extension);
+                let file_path = directory.join(&file_name);
+
+                // Export this collection (inlined to avoid nested block_on)
+                let coll = client.database(&database).collection::<Document>(&coll_name);
+                let mut cursor = coll.find(doc! {}).await?;
+                let file = File::create(&file_path)?;
+
+                let mut writer: Box<dyn Write> = if options.gzip {
+                    Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
+                } else {
+                    Box::new(BufWriter::new(file))
+                };
+
+                let mut count = 0u64;
+
+                if matches!(options.format, JsonTransferFormat::JsonArray) {
+                    writer.write_all(b"[")?;
+                    if options.pretty_print {
+                        writer.write_all(b"\n")?;
+                    }
+                }
+
+                let mut first = true;
+                while let Some(doc) = cursor.try_next().await? {
+                    let json_value = match options.json_mode {
+                        ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
+                        ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
+                    };
+
+                    let json = if options.pretty_print {
+                        serde_json::to_string_pretty(&json_value)?
+                    } else {
+                        serde_json::to_string(&json_value)?
+                    };
+
+                    match options.format {
+                        JsonTransferFormat::JsonLines => {
+                            writer.write_all(json.as_bytes())?;
+                            writer.write_all(b"\n")?;
+                        }
+                        JsonTransferFormat::JsonArray => {
+                            if !first {
+                                writer.write_all(b",")?;
+                                if options.pretty_print {
+                                    writer.write_all(b"\n")?;
+                                }
+                            }
+                            writer.write_all(json.as_bytes())?;
+                            first = false;
+                        }
+                    }
+                    count += 1;
+                }
+
+                if matches!(options.format, JsonTransferFormat::JsonArray) {
+                    if count > 0 && options.pretty_print {
+                        writer.write_all(b"\n")?;
+                    }
+                    writer.write_all(b"]")?;
+                }
+
+                writer.flush()?;
+                total_count += count;
+            }
+
+            Ok(total_count)
+        })
+    }
+
+    /// Export all collections in a database to CSV files (runs in Tokio runtime).
+    /// Creates one file per collection in the specified directory.
+    pub fn export_database_csv(
+        &self,
+        client: &Client,
+        database: &str,
+        directory: &Path,
+        gzip: bool,
+        exclude_collections: &[String],
+    ) -> Result<u64> {
+        use crate::connection::csv_utils::{collect_columns, flatten_document};
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let directory = directory.to_path_buf();
+        let exclude_collections = exclude_collections.to_vec();
+
+        self.runtime.block_on(async move {
+            let db = client.database(&database);
+            let collections = db.list_collection_names().await?;
+
+            // Create directory if it doesn't exist
+            std::fs::create_dir_all(&directory)?;
+
+            let mut total_count = 0u64;
+
+            for coll_name in collections {
+                // Skip system collections
+                if coll_name.starts_with("system.") {
+                    continue;
+                }
+
+                // Skip excluded collections
+                if exclude_collections.contains(&coll_name) {
+                    continue;
+                }
+
+                // Create file path for this collection
+                let file_name = format!("{}_{}.csv", database, coll_name);
+                let file_path = directory.join(&file_name);
+
+                // Export this collection (inlined to avoid nested block_on)
+                let coll = client.database(&database).collection::<Document>(&coll_name);
+
+                // First pass: collect column names from sample
+                let mut sample_options = mongodb::options::FindOptions::default();
+                sample_options.limit = Some(1000);
+                let sample_cursor = coll.find(doc! {}).with_options(sample_options).await?;
+                let sample_docs: Vec<Document> = sample_cursor.try_collect().await?;
+                let columns = collect_columns(&sample_docs);
+
+                if columns.is_empty() {
+                    continue;
+                }
+
+                // Write CSV
+                let file = File::create(&file_path)?;
+                let mut csv_writer = if gzip {
+                    csv::Writer::from_writer(
+                        Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
+                    )
+                } else {
+                    csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
+                };
+
+                csv_writer.write_record(&columns)?;
+
+                // Second pass: write all documents
+                let mut cursor = coll.find(doc! {}).await?;
+                let mut count = 0u64;
+
+                while let Some(doc) = cursor.try_next().await? {
+                    let flat = flatten_document(&doc);
+                    let row: Vec<String> = columns
+                        .iter()
+                        .map(|col| flat.get(col).cloned().unwrap_or_default())
+                        .collect();
+                    csv_writer.write_record(&row)?;
+                    count += 1;
+                }
+
+                csv_writer.flush()?;
+                total_count += count;
+            }
+
+            Ok(total_count)
+        })
+    }
+
     /// Import a collection from JSON/JSONL (runs in Tokio runtime).
     #[allow(dead_code)]
     pub fn import_collection_json(
@@ -873,6 +1076,7 @@ impl ConnectionManager {
         dest_database: &str,
         dest_collection: &str,
         batch_size: usize,
+        copy_indexes: bool,
     ) -> Result<u64> {
         use futures::TryStreamExt;
         use mongodb::options::InsertManyOptions;
@@ -884,7 +1088,7 @@ impl ConnectionManager {
         let dest_database = dest_database.to_string();
         let dest_collection = dest_collection.to_string();
 
-        self.runtime.block_on(async move {
+        let copied = self.runtime.block_on(async {
             let src_coll =
                 src_client.database(&src_database).collection::<Document>(&src_collection);
             let dest_coll =
@@ -911,11 +1115,58 @@ impl ConnectionManager {
                 dest_coll.insert_many(batch).with_options(options).await?;
             }
 
-            Ok(copied)
-        })
+            Ok::<u64, Error>(copied)
+        })?;
+
+        // Copy indexes if requested (after documents are copied)
+        if copy_indexes {
+            let indexes = self.list_indexes(&src_client, &src_database, &src_collection)?;
+            for index in indexes {
+                // Skip _id_ index (auto-created)
+                let name = index
+                    .options
+                    .as_ref()
+                    .and_then(|opts| opts.name.as_ref())
+                    .map(|n| n.as_str())
+                    .unwrap_or("");
+                if name == "_id_" {
+                    continue;
+                }
+
+                // Build index doc from IndexModel
+                let mut index_doc = doc! { "key": index.keys.clone() };
+                if let Some(opts) = &index.options {
+                    if let Some(n) = &opts.name {
+                        index_doc.insert("name", n.clone());
+                    }
+                    if let Some(u) = opts.unique {
+                        index_doc.insert("unique", u);
+                    }
+                    if let Some(s) = opts.sparse {
+                        index_doc.insert("sparse", s);
+                    }
+                    if let Some(exp) = opts.expire_after {
+                        index_doc.insert("expireAfterSeconds", exp.as_secs() as i64);
+                    }
+                    if let Some(bg) = opts.background {
+                        index_doc.insert("background", bg);
+                    }
+                }
+
+                // Non-fatal: log warning if index creation fails
+                if let Err(e) =
+                    self.create_index(&dest_client, &dest_database, &dest_collection, index_doc)
+                {
+                    log::warn!("Failed to copy index '{}': {}", name, e);
+                }
+            }
+        }
+
+        Ok(copied)
     }
 
     /// Copy all collections from one database to another (runs in Tokio runtime).
+    #[allow(clippy::too_many_arguments)]
     pub fn copy_database(
         &self,
         src_client: &Client,
@@ -923,11 +1174,14 @@ impl ConnectionManager {
         dest_client: &Client,
         dest_database: &str,
         batch_size: usize,
+        copy_indexes: bool,
+        exclude_collections: &[String],
     ) -> Result<u64> {
         let src_client = src_client.clone();
         let dest_client = dest_client.clone();
         let src_database = src_database.to_string();
         let dest_database = dest_database.to_string();
+        let exclude_collections = exclude_collections.to_vec();
 
         self.runtime.block_on(async move {
             let src_db = src_client.database(&src_database);
@@ -941,6 +1195,11 @@ impl ConnectionManager {
                     continue;
                 }
 
+                // Skip excluded collections
+                if exclude_collections.contains(&collection) {
+                    continue;
+                }
+
                 let count = get_connection_manager().copy_collection(
                     &src_client,
                     &src_database,
@@ -949,6 +1208,7 @@ impl ConnectionManager {
                     &dest_database,
                     &collection,
                     batch_size,
+                    copy_indexes,
                 )?;
                 total_copied += count;
             }

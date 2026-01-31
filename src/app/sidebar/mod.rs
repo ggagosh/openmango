@@ -118,7 +118,8 @@ impl Sidebar {
             | AppEvent::TransferPreviewLoaded { .. }
             | AppEvent::TransferStarted { .. }
             | AppEvent::TransferCompleted { .. }
-            | AppEvent::TransferFailed { .. } => {}
+            | AppEvent::TransferFailed { .. }
+            | AppEvent::TransferCancelled { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }

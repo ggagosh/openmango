@@ -15,12 +15,13 @@ use crate::bson::{format_relaxed_json_compact, parse_value_from_relaxed_json};
 use crate::components::Button;
 use crate::components::file_picker::{
     FilePickerMode, filters_for_format, open_file_dialog_async, open_folder_dialog_async,
-    unexpanded_export_filename, unexpanded_export_filename_bson,
+    unexpanded_export_filename_bson_for_scope, unexpanded_export_filename_for_scope,
 };
 use crate::connection::tools_available;
 use crate::state::{
-    AppCommands, AppState, BsonOutputFormat, CompressionMode, DEFAULT_FILENAME_TEMPLATE, Encoding,
-    ExtendedJsonMode, InsertMode, TransferFormat, TransferMode, TransferScope, TransferTabState,
+    AppCommands, AppState, BsonOutputFormat, CompressionMode, DATABASE_SCOPE_FILENAME_TEMPLATE,
+    DEFAULT_FILENAME_TEMPLATE, Encoding, ExtendedJsonMode, InsertMode, TransferFormat,
+    TransferMode, TransferScope, TransferTabState,
 };
 use crate::theme::{borders, colors, sizing, spacing};
 
@@ -917,18 +918,29 @@ impl Render for TransferView {
                 div().into_any_element()
             };
 
-        // Run button
+        // Run or Cancel button (depending on is_running state)
         let can_run = can_execute_transfer(&transfer_state);
-        let run_button = {
+        let action_button = if transfer_state.is_running {
+            let state = state.clone();
+            Button::new("transfer-cancel")
+                .ghost()
+                .compact()
+                .label("Cancel")
+                .on_click(move |_, _, cx| {
+                    AppCommands::cancel_transfer(state.clone(), transfer_id, cx);
+                })
+                .into_any_element()
+        } else {
             let state = state.clone();
             Button::new("transfer-run")
                 .primary()
                 .compact()
                 .label(transfer_state.mode.label())
-                .disabled(!can_run || transfer_state.is_running)
+                .disabled(!can_run)
                 .on_click(move |_, _, cx| {
                     AppCommands::execute_transfer(state.clone(), transfer_id, cx);
                 })
+                .into_any_element()
         };
 
         // Header
@@ -967,7 +979,7 @@ impl Render for TransferView {
                     .gap(spacing::sm())
                     .child(scope_button)
                     .child(format_control)
-                    .child(run_button),
+                    .child(action_button),
             );
 
         // Source panel
@@ -1183,6 +1195,7 @@ impl TransferView {
                     let state = state.clone();
                     let format = transfer_state.format;
                     let bson_output = transfer_state.bson_output;
+                    let scope = transfer_state.scope;
                     let settings = settings.clone();
                     Button::new("browse-export-folder").compact().icon(IconName::Folder).on_click(
                         move |_, _, cx| {
@@ -1192,11 +1205,17 @@ impl TransferView {
                                 if let Some(folder_path) = open_folder_dialog_async().await {
                                     cx.update(|cx| {
                                         // Generate unexpanded filename from template
-                                        // Use BSON-specific function for BSON format
+                                        // Use scope-aware function for appropriate template
                                         let filename = if matches!(format, TransferFormat::Bson) {
-                                            unexpanded_export_filename_bson(&settings, bson_output)
+                                            unexpanded_export_filename_bson_for_scope(
+                                                &settings,
+                                                bson_output,
+                                                scope,
+                                            )
                                         } else {
-                                            unexpanded_export_filename(&settings, format)
+                                            unexpanded_export_filename_for_scope(
+                                                &settings, format, scope,
+                                            )
                                         };
                                         let full_path =
                                             folder_path.join(&filename).display().to_string();
@@ -1225,6 +1244,7 @@ impl TransferView {
                     let export_path_input = export_path_input_state.clone();
                     let format = transfer_state.format;
                     let bson_output = transfer_state.bson_output;
+                    let scope = transfer_state.scope;
                     MenuButton::new("placeholder-dropdown")
                         .compact()
                         .label("${}")
@@ -1291,28 +1311,50 @@ impl TransferView {
                                                 .parent()
                                                 .map(|p| p.to_path_buf());
 
-                                            // Generate default filename based on format
-                                            let default_filename =
-                                                if matches!(format, TransferFormat::Bson) {
-                                                    // BSON: use .archive or no extension
-                                                    match bson_output {
-                                                        BsonOutputFormat::Archive => {
-                                                            format!(
-                                                                "{}.archive",
-                                                                DEFAULT_FILENAME_TEMPLATE
-                                                            )
-                                                        }
-                                                        BsonOutputFormat::Folder => {
-                                                            DEFAULT_FILENAME_TEMPLATE.to_string()
-                                                        }
+                                            // Generate default filename based on format and scope
+                                            let default_filename = match scope {
+                                                TransferScope::Database => {
+                                                    // Database scope: path is a directory
+                                                    if matches!(format, TransferFormat::Bson)
+                                                        && matches!(
+                                                            bson_output,
+                                                            BsonOutputFormat::Archive
+                                                        )
+                                                    {
+                                                        // BSON Archive is a file
+                                                        format!(
+                                                            "{}.archive",
+                                                            DATABASE_SCOPE_FILENAME_TEMPLATE
+                                                        )
+                                                    } else {
+                                                        // JSON/CSV/BSON Folder: directory, no extension
+                                                        DATABASE_SCOPE_FILENAME_TEMPLATE.to_string()
                                                     }
-                                                } else {
-                                                    format!(
-                                                        "{}.{}",
-                                                        DEFAULT_FILENAME_TEMPLATE,
-                                                        format.extension()
-                                                    )
-                                                };
+                                                }
+                                                TransferScope::Collection => {
+                                                    // Collection scope: path is a file
+                                                    if matches!(format, TransferFormat::Bson) {
+                                                        match bson_output {
+                                                            BsonOutputFormat::Archive => {
+                                                                format!(
+                                                                    "{}.archive",
+                                                                    DEFAULT_FILENAME_TEMPLATE
+                                                                )
+                                                            }
+                                                            BsonOutputFormat::Folder => {
+                                                                DEFAULT_FILENAME_TEMPLATE
+                                                                    .to_string()
+                                                            }
+                                                        }
+                                                    } else {
+                                                        format!(
+                                                            "{}.{}",
+                                                            DEFAULT_FILENAME_TEMPLATE,
+                                                            format.extension()
+                                                        )
+                                                    }
+                                                }
+                                            };
 
                                             // Combine folder + default filename
                                             let new_path = if let Some(folder) = folder {
@@ -1745,8 +1787,10 @@ impl TransferView {
                         }
                     }
 
-                    // Database scope options
-                    if matches!(transfer_state.scope, TransferScope::Database) {
+                    // Database scope options (only for BSON format - indexes can't be stored in JSON/CSV)
+                    if matches!(transfer_state.scope, TransferScope::Database)
+                        && matches!(transfer_state.format, TransferFormat::Bson)
+                    {
                         let include_indexes_checkbox = {
                             let state = state.clone();
                             let checked = transfer_state.include_indexes;
@@ -1773,88 +1817,77 @@ impl TransferView {
                             .into_any_element(),
                         );
 
-                        // Collection Filter section (only for BSON export + Database scope)
-                        if matches!(transfer_state.format, TransferFormat::Bson) {
-                            let exclude_select =
-                                if let Some(ref exclude_state) = self.exclude_coll_state {
-                                    Select::new(exclude_state)
-                                        .small()
-                                        .w_full()
-                                        .placeholder("Search collections to exclude...")
-                                        .into_any_element()
-                                } else {
-                                    div().into_any_element()
-                                };
-
-                            // Render tags for excluded collections
-                            let excluded_tags = {
-                                let state = state.clone();
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .gap(spacing::xs())
-                                    .mt(spacing::xs())
-                                    .children(
-                                        transfer_state.exclude_collections.iter().enumerate().map(
-                                            |(idx, coll)| {
-                                                let coll_name = coll.clone();
-                                                let state = state.clone();
-
-                                                div()
-                                                    .id(("exclude-tag", idx))
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(spacing::xs())
-                                                    .px(spacing::sm())
-                                                    .py_1()
-                                                    .rounded(borders::radius_sm())
-                                                    .bg(colors::bg_header())
-                                                    .border_1()
-                                                    .border_color(colors::border_subtle())
-                                                    .text_sm()
-                                                    .child(coll.clone())
-                                                    .child(
-                                                        div()
-                                                            .id(("exclude-tag-remove", idx))
-                                                            .cursor_pointer()
-                                                            .text_color(colors::text_muted())
-                                                            .hover(|s| {
-                                                                s.text_color(colors::text_primary())
-                                                            })
-                                                            .on_click(move |_, _, cx| {
-                                                                let coll_name = coll_name.clone();
-                                                                state.update(cx, |state, cx| {
-                                                                    if let Some(id) = state
-                                                                        .active_transfer_tab_id()
-                                                                        && let Some(tab) = state
-                                                                            .transfer_tab_mut(id)
-                                                                    {
-                                                                        tab.exclude_collections
-                                                                            .retain(|c| {
-                                                                                c != &coll_name
-                                                                            });
-                                                                        cx.notify();
-                                                                    }
-                                                                });
-                                                            })
-                                                            .child("×"),
-                                                    )
-                                            },
-                                        ),
-                                    )
+                        // Collection Filter section
+                        let exclude_select =
+                            if let Some(ref exclude_state) = self.exclude_coll_state {
+                                Select::new(exclude_state)
+                                    .small()
+                                    .w_full()
+                                    .placeholder("Search collections to exclude...")
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
                             };
 
-                            sections.push(
-                                option_section(
-                                    "Collection Filter",
-                                    vec![
-                                        option_field("Exclude", exclude_select),
-                                        excluded_tags.into_any_element(),
-                                    ],
-                                )
-                                .into_any_element(),
-                            );
-                        }
+                        // Render tags for excluded collections
+                        let excluded_tags = {
+                            let state = state.clone();
+                            div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
+                                transfer_state.exclude_collections.iter().enumerate().map(
+                                    |(idx, coll)| {
+                                        let coll_name = coll.clone();
+                                        let state = state.clone();
+
+                                        div()
+                                            .id(("exclude-tag", idx))
+                                            .flex()
+                                            .items_center()
+                                            .gap(spacing::xs())
+                                            .px(spacing::sm())
+                                            .py_1()
+                                            .rounded(borders::radius_sm())
+                                            .bg(colors::bg_header())
+                                            .border_1()
+                                            .border_color(colors::border_subtle())
+                                            .text_sm()
+                                            .child(coll.clone())
+                                            .child(
+                                                div()
+                                                    .id(("exclude-tag-remove", idx))
+                                                    .cursor_pointer()
+                                                    .text_color(colors::text_muted())
+                                                    .hover(|s| s.text_color(colors::text_primary()))
+                                                    .on_click(move |_, _, cx| {
+                                                        let coll_name = coll_name.clone();
+                                                        state.update(cx, |state, cx| {
+                                                            if let Some(id) =
+                                                                state.active_transfer_tab_id()
+                                                                && let Some(tab) =
+                                                                    state.transfer_tab_mut(id)
+                                                            {
+                                                                tab.exclude_collections
+                                                                    .retain(|c| c != &coll_name);
+                                                                cx.notify();
+                                                            }
+                                                        });
+                                                    })
+                                                    .child("×"),
+                                            )
+                                    },
+                                ),
+                            )
+                        };
+
+                        sections.push(
+                            option_section(
+                                "Collection Filter",
+                                vec![
+                                    option_field("Exclude", exclude_select),
+                                    excluded_tags.into_any_element(),
+                                ],
+                            )
+                            .into_any_element(),
+                        );
                     }
                 }
                 TransferMode::Import => {
@@ -2053,8 +2086,10 @@ impl TransferView {
                         .into_any_element(),
                     );
 
-                    // Database scope options
-                    if matches!(transfer_state.scope, TransferScope::Database) {
+                    // Database scope options (only for BSON format - indexes can't be stored in JSON/CSV)
+                    if matches!(transfer_state.scope, TransferScope::Database)
+                        && matches!(transfer_state.format, TransferFormat::Bson)
+                    {
                         let restore_indexes_checkbox = {
                             let state = state.clone();
                             let checked = transfer_state.restore_indexes;
@@ -2083,7 +2118,7 @@ impl TransferView {
                     }
                 }
                 TransferMode::Copy => {
-                    // Copy Options with functional checkboxes
+                    // Copy Options - only show implemented options (copy_indexes, batch_size)
                     let copy_indexes_checkbox = {
                         let state = state.clone();
                         let checked = transfer_state.copy_indexes;
@@ -2099,51 +2134,6 @@ impl TransferView {
                         })
                     };
 
-                    let copy_options_checkbox = {
-                        let state = state.clone();
-                        let checked = transfer_state.copy_options;
-                        checkbox_field(("copy-options", key), checked, move |cx| {
-                            state.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.copy_options = !checked;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                    };
-
-                    let overwrite_checkbox = {
-                        let state = state.clone();
-                        let checked = transfer_state.overwrite_target;
-                        checkbox_field(("overwrite-target", key), checked, move |cx| {
-                            state.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.overwrite_target = !checked;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                    };
-
-                    let ordered_checkbox = {
-                        let state = state.clone();
-                        let checked = transfer_state.ordered;
-                        checkbox_field(("ordered", key), checked, move |cx| {
-                            state.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.ordered = !checked;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                    };
-
                     sections.push(
                         option_section(
                             "Copy Options",
@@ -2152,48 +2142,84 @@ impl TransferView {
                                     "Copy indexes",
                                     copy_indexes_checkbox.into_any_element(),
                                 ),
-                                option_field(
-                                    "Copy options",
-                                    copy_options_checkbox.into_any_element(),
-                                ),
-                                option_field(
-                                    "Overwrite target",
-                                    overwrite_checkbox.into_any_element(),
-                                ),
                                 option_field_static(
                                     "Batch size",
                                     transfer_state.batch_size.to_string(),
                                 ),
-                                option_field("Ordered", ordered_checkbox.into_any_element()),
                             ],
                         )
                         .into_any_element(),
                     );
 
-                    // Database scope options for Copy mode
+                    // Collection Filter section (for Copy mode + Database scope)
                     if matches!(transfer_state.scope, TransferScope::Database) {
-                        let include_indexes_checkbox = {
+                        let exclude_select =
+                            if let Some(ref exclude_state) = self.exclude_coll_state {
+                                Select::new(exclude_state)
+                                    .small()
+                                    .w_full()
+                                    .placeholder("Search collections to exclude...")
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            };
+
+                        // Render tags for excluded collections
+                        let excluded_tags = {
                             let state = state.clone();
-                            let checked = transfer_state.include_indexes;
-                            checkbox_field(("include-indexes-copy", key), checked, move |cx| {
-                                state.update(cx, |state, cx| {
-                                    if let Some(id) = state.active_transfer_tab_id()
-                                        && let Some(tab) = state.transfer_tab_mut(id)
-                                    {
-                                        tab.include_indexes = !checked;
-                                        cx.notify();
-                                    }
-                                });
-                            })
+                            div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
+                                transfer_state.exclude_collections.iter().enumerate().map(
+                                    |(idx, coll)| {
+                                        let coll_name = coll.clone();
+                                        let state = state.clone();
+
+                                        div()
+                                            .id(("exclude-tag-copy", idx))
+                                            .flex()
+                                            .items_center()
+                                            .gap(spacing::xs())
+                                            .px(spacing::sm())
+                                            .py_1()
+                                            .rounded(borders::radius_sm())
+                                            .bg(colors::bg_header())
+                                            .border_1()
+                                            .border_color(colors::border_subtle())
+                                            .text_sm()
+                                            .child(coll.clone())
+                                            .child(
+                                                div()
+                                                    .id(("exclude-tag-copy-remove", idx))
+                                                    .cursor_pointer()
+                                                    .text_color(colors::text_muted())
+                                                    .hover(|s| s.text_color(colors::text_primary()))
+                                                    .on_click(move |_, _, cx| {
+                                                        let coll_name = coll_name.clone();
+                                                        state.update(cx, |state, cx| {
+                                                            if let Some(id) =
+                                                                state.active_transfer_tab_id()
+                                                                && let Some(tab) =
+                                                                    state.transfer_tab_mut(id)
+                                                            {
+                                                                tab.exclude_collections
+                                                                    .retain(|c| c != &coll_name);
+                                                                cx.notify();
+                                                            }
+                                                        });
+                                                    })
+                                                    .child("×"),
+                                            )
+                                    },
+                                ),
+                            )
                         };
 
                         sections.push(
                             option_section(
-                                "Database",
-                                vec![option_field(
-                                    "Include indexes",
-                                    include_indexes_checkbox.into_any_element(),
-                                )],
+                                "Collection Filter",
+                                vec![
+                                    option_field("Exclude", exclude_select),
+                                    excluded_tags.into_any_element(),
+                                ],
                             )
                             .into_any_element(),
                         );

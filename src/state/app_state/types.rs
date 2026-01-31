@@ -1,10 +1,13 @@
 //! Type definitions for application state.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 
 use crate::bson::DocumentKey;
 use crate::models::connection::ActiveConnection;
 use crate::state::app_state::PipelineState;
+use futures::future::AbortHandle;
 use mongodb::IndexModel;
 use mongodb::bson::{Bson, Document};
 use mongodb::results::{CollectionSpecification, CollectionType};
@@ -336,6 +339,12 @@ pub struct TransferTabState {
     pub progress_count: u64,
     #[serde(skip)]
     pub error_message: Option<String>,
+
+    // Transfer cancellation state
+    #[serde(skip)]
+    pub transfer_generation: Arc<AtomicU64>,
+    #[serde(skip)]
+    pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
 }
 
 impl Default for TransferTabState {
@@ -387,6 +396,9 @@ impl Default for TransferTabState {
             is_running: false,
             progress_count: 0,
             error_message: None,
+
+            transfer_generation: Arc::new(AtomicU64::new(0)),
+            abort_handle: Arc::new(Mutex::new(None)),
         }
     }
 }

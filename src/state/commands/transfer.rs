@@ -1,6 +1,7 @@
 //! Transfer commands for import, export, and copy operations.
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
@@ -133,6 +134,29 @@ impl AppCommands {
         }
     }
 
+    /// Cancel a running transfer operation.
+    pub fn cancel_transfer(state: Entity<AppState>, transfer_id: Uuid, cx: &mut App) {
+        state.update(cx, |state, cx| {
+            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                // Increment generation to invalidate any running operation
+                tab.transfer_generation.fetch_add(1, Ordering::SeqCst);
+
+                // Abort any pending async operation
+                if let Ok(mut handle) = tab.abort_handle.lock()
+                    && let Some(h) = handle.take()
+                {
+                    h.abort();
+                }
+
+                tab.is_running = false;
+                tab.error_message = Some("Transfer cancelled".to_string());
+            }
+            state.set_status_message(Some(StatusMessage::info("Transfer cancelled")));
+            cx.emit(AppEvent::TransferCancelled { transfer_id });
+            cx.notify();
+        });
+    }
+
     fn execute_export(
         state: Entity<AppState>,
         transfer_id: Uuid,
@@ -251,25 +275,53 @@ impl AppCommands {
                         TransferFormat::JsonLines => JsonTransferFormat::JsonLines,
                         _ => JsonTransferFormat::JsonArray,
                     };
-                    manager.export_collection_json_with_query(
-                        &client,
-                        &database,
-                        &collection,
-                        &path,
-                        JsonExportOptions { format: json_format, json_mode, pretty_print, gzip },
-                        query_options,
-                    )
+                    let json_options =
+                        JsonExportOptions { format: json_format, json_mode, pretty_print, gzip };
+
+                    if matches!(scope, TransferScope::Database) {
+                        // Database scope: export all collections to directory
+                        manager.export_database_json(
+                            &client,
+                            &database,
+                            &path,
+                            json_options,
+                            &config.exclude_collections,
+                        )
+                    } else {
+                        // Collection scope: export single collection
+                        manager.export_collection_json_with_query(
+                            &client,
+                            &database,
+                            &collection,
+                            &path,
+                            json_options,
+                            query_options,
+                        )
+                    }
                 }
                 TransferFormat::Csv => {
                     let client = client.expect("client should be set for CSV export");
-                    manager.export_collection_csv_with_query(
-                        &client,
-                        &database,
-                        &collection,
-                        &path,
-                        gzip,
-                        query_options,
-                    )
+
+                    if matches!(scope, TransferScope::Database) {
+                        // Database scope: export all collections to directory
+                        manager.export_database_csv(
+                            &client,
+                            &database,
+                            &path,
+                            gzip,
+                            &config.exclude_collections,
+                        )
+                    } else {
+                        // Collection scope: export single collection
+                        manager.export_collection_csv_with_query(
+                            &client,
+                            &database,
+                            &collection,
+                            &path,
+                            gzip,
+                            query_options,
+                        )
+                    }
                 }
                 TransferFormat::Bson => {
                     // BSON export only supported for database scope
@@ -608,6 +660,8 @@ impl AppCommands {
         let batch_size = config.batch_size as usize;
         let drop_before = config.drop_before_import;
         let clear_before = config.clear_before_import;
+        let copy_indexes = config.copy_indexes;
+        let exclude_collections = config.exclude_collections.clone();
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -647,6 +701,7 @@ impl AppCommands {
                         &dest_database,
                         &dest_collection,
                         batch_size,
+                        copy_indexes,
                     )
                 }
                 TransferScope::Database => manager.copy_database(
@@ -655,6 +710,8 @@ impl AppCommands {
                     &dest_client,
                     &dest_database,
                     batch_size,
+                    copy_indexes,
+                    &exclude_collections,
                 ),
             }
         });

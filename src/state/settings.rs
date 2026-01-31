@@ -88,8 +88,11 @@ fn default_filename_template() -> String {
     "${database}_${collection}_${datetime}".to_string()
 }
 
-/// Default filename template constant
+/// Default filename template constant (for collection scope)
 pub const DEFAULT_FILENAME_TEMPLATE: &str = "${database}_${collection}_${datetime}";
+
+/// Filename template for database scope (excludes ${collection})
+pub const DATABASE_SCOPE_FILENAME_TEMPLATE: &str = "${database}_${datetime}";
 
 /// Available filename template placeholders
 pub const FILENAME_PLACEHOLDERS: &[(&str, &str)] = &[

@@ -51,6 +51,7 @@ pub enum AppEvent {
     TransferStarted { transfer_id: Uuid },
     TransferCompleted { transfer_id: Uuid, count: u64 },
     TransferFailed { transfer_id: Uuid, error: String },
+    TransferCancelled { transfer_id: Uuid },
 
     // View navigation
     ViewChanged,
