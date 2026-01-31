@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
+use std::process::Command;
 use std::sync::LazyLock;
 
 use mongodb::Client;
@@ -88,6 +89,14 @@ pub struct CsvImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
+}
+
+/// BSON output format for mongodump
+#[derive(Clone, Copy, Debug, Default)]
+pub enum BsonOutputFormat {
+    #[default]
+    Folder,
+    Archive,
 }
 
 impl Default for CsvImportOptions {
@@ -833,6 +842,93 @@ impl ConnectionManager {
         })
     }
 
+    /// Export a database to BSON format using mongodump (runs synchronously).
+    pub fn export_database_bson(
+        &self,
+        connection_string: &str,
+        database: &str,
+        output_format: BsonOutputFormat,
+        path: &Path,
+    ) -> Result<()> {
+        let mongodump = mongodump_path().ok_or_else(|| {
+            Error::ToolNotFound(
+                "mongodump not found. Run 'just download-tools' or install MongoDB Database Tools."
+                    .into(),
+            )
+        })?;
+
+        let mut cmd = Command::new(&mongodump);
+        cmd.arg(format!("--uri={}", connection_string)).arg("--db").arg(database);
+
+        match output_format {
+            BsonOutputFormat::Folder => {
+                cmd.arg("--out").arg(path);
+            }
+            BsonOutputFormat::Archive => {
+                let archive_path = if path.extension().map(|e| e == "archive").unwrap_or(false) {
+                    path.to_path_buf()
+                } else {
+                    path.with_extension("archive")
+                };
+                cmd.arg("--archive").arg(&archive_path);
+            }
+        }
+
+        let output = cmd.output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Parse(format!("mongodump failed: {}", stderr)));
+        }
+
+        Ok(())
+    }
+
+    /// Import a database from BSON format using mongorestore (runs synchronously).
+    pub fn import_database_bson(
+        &self,
+        connection_string: &str,
+        database: &str,
+        path: &Path,
+        drop_before: bool,
+    ) -> Result<()> {
+        let mongorestore = mongorestore_path().ok_or_else(|| {
+            Error::ToolNotFound(
+                "mongorestore not found. Run 'just download-tools' or install MongoDB Database Tools."
+                    .into(),
+            )
+        })?;
+
+        let mut cmd = Command::new(&mongorestore);
+        cmd.arg(format!("--uri={}", connection_string)).arg("--db").arg(database);
+
+        if drop_before {
+            cmd.arg("--drop");
+        }
+
+        // Detect if path is archive or folder
+        if path.extension().map(|e| e == "archive").unwrap_or(false) {
+            cmd.arg("--archive").arg(path);
+        } else {
+            // mongodump creates a subfolder with the database name
+            let db_path = path.join(database);
+            if db_path.exists() {
+                cmd.arg("--dir").arg(&db_path);
+            } else {
+                cmd.arg("--dir").arg(path);
+            }
+        }
+
+        let output = cmd.output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Parse(format!("mongorestore failed: {}", stderr)));
+        }
+
+        Ok(())
+    }
+
     /// Run an aggregation pipeline for a collection with abort support (runs in Tokio runtime)
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_pipeline_abortable(
@@ -1042,24 +1138,20 @@ pub fn generate_export_preview(
 }
 
 /// Check if mongodump/mongorestore tools are available.
-#[allow(dead_code)]
 pub fn tools_available() -> bool {
     mongodump_path().is_some() && mongorestore_path().is_some()
 }
 
 /// Find the path to mongodump executable.
-#[allow(dead_code)]
 pub fn mongodump_path() -> Option<std::path::PathBuf> {
     find_mongo_tool("mongodump")
 }
 
 /// Find the path to mongorestore executable.
-#[allow(dead_code)]
 pub fn mongorestore_path() -> Option<std::path::PathBuf> {
     find_mongo_tool("mongorestore")
 }
 
-#[allow(dead_code)]
 fn find_mongo_tool(name: &str) -> Option<std::path::PathBuf> {
     // 1. Check app bundle (macOS)
     #[cfg(target_os = "macos")]
@@ -1068,23 +1160,59 @@ fn find_mongo_tool(name: &str) -> Option<std::path::PathBuf> {
             // In app bundle: ../Resources/bin/mongodump
             if let Some(parent) = exe_path.parent() {
                 let bundle_path = parent.join("../Resources/bin").join(name);
-                if bundle_path.exists() {
+                if bundle_path.exists() && is_executable(&bundle_path) {
                     return Some(bundle_path);
                 }
             }
         }
     }
 
-    // 2. Check resources/bin (dev mode)
-    let dev_path = std::path::PathBuf::from("resources/bin")
-        .join(if cfg!(target_os = "macos") { "macos" } else { "linux" })
-        .join(name);
-    if dev_path.exists() {
+    // 2. Check resources/bin (dev mode) with architecture-specific paths
+    let arch_dir = dev_tools_arch();
+    let dev_path = std::path::PathBuf::from("resources/bin").join(arch_dir).join(name);
+    if dev_path.exists() && is_executable(&dev_path) {
         return Some(dev_path);
     }
 
     // 3. Check PATH
     which::which(name).ok()
+}
+
+/// Get the architecture-specific directory name for dev mode tools
+fn dev_tools_arch() -> &'static str {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "macos-arm64"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "macos-x86_64"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "linux-x86_64"
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64")
+    )))]
+    {
+        "unknown"
+    }
+}
+
+/// Check if a path is executable
+fn is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.exists()
+    }
 }
 
 // Import mode helper functions

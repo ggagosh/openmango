@@ -45,6 +45,14 @@ impl AppRoot {
                     return;
                 }
 
+                if cmd_or_ctrl && !alt && !shift && key == "," {
+                    this.state.update(cx, |state, cx| {
+                        state.open_settings_tab(cx);
+                    });
+                    cx.stop_propagation();
+                    return;
+                }
+
                 if cmd_or_ctrl && !alt && !shift && key == "n" {
                     match this.state.read(cx).current_view {
                         View::Documents => {
@@ -90,7 +98,7 @@ impl AppRoot {
                                 cx.stop_propagation();
                             }
                         }
-                        View::Transfer => {}
+                        View::Transfer | View::Settings => {}
                         View::Welcome | View::Databases | View::Collections => {
                             ConnectionDialog::open(this.state.clone(), window, cx);
                             cx.stop_propagation();
@@ -297,6 +305,11 @@ impl AppRoot {
                     AppCommands::disconnect(state.clone(), conn_id, cx);
                 }
             }
+            "cmd:settings" => {
+                state.update(cx, |state, cx| {
+                    state.open_settings_tab(cx);
+                });
+            }
             "view:documents" => {
                 if let Some(key) = state.read(cx).current_session_key() {
                     state.update(cx, |state, _cx| {
@@ -375,7 +388,7 @@ impl AppRoot {
                 };
                 AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
             }
-            View::Transfer => {}
+            View::Transfer | View::Settings => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

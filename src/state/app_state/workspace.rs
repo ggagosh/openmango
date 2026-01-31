@@ -106,6 +106,9 @@ impl AppState {
                         }
                         self.current_view = View::Transfer;
                     }
+                    TabKey::Settings => {
+                        self.current_view = View::Settings;
+                    }
                 }
             }
         } else if let Some(selected_db) = self.workspace.selected_database.clone() {

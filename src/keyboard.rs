@@ -61,6 +61,7 @@ actions!(
         FindInSidebar,
         CloseSidebarSearch,
         OpenActionBar,
+        OpenSettings,
     ]
 );
 
@@ -169,6 +170,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-c", CopyKey, Some("Documents && !Input")),
         KeyBinding::new("cmd-k", OpenActionBar, Some("Workspace")),
         KeyBinding::new("ctrl-k", OpenActionBar, Some("Workspace")),
+        KeyBinding::new("cmd-,", OpenSettings, Some("Workspace")),
+        KeyBinding::new("ctrl-,", OpenSettings, Some("Workspace")),
         KeyBinding::new("cmd-alt-1", ShowDocumentsSubview, Some("Documents")),
         KeyBinding::new("cmd-alt-2", ShowIndexesSubview, Some("Documents")),
         KeyBinding::new("cmd-alt-3", ShowStatsSubview, Some("Documents")),

@@ -25,6 +25,9 @@ debug/
 # Generated
 *.bak
 
+# MongoDB tools (downloaded during CI or via just download-tools)
+resources/bin/
+
 # Claude
 .claude/settings.local.json
 refs/

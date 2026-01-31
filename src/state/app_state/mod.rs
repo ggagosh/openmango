@@ -19,9 +19,10 @@ pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
-    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats, ExtendedJsonMode,
-    InsertMode, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    CompressionMode, DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats,
+    Encoding, ExtendedJsonMode, InsertMode, SessionData, SessionDocument, SessionKey, SessionState,
+    SessionViewState, TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey,
+    TransferTabState, View,
 };
 
 use std::collections::HashMap;
@@ -32,6 +33,7 @@ use gpui::EventEmitter;
 use crate::models::connection::SavedConnection;
 use crate::state::StatusMessage;
 use crate::state::events::AppEvent;
+use crate::state::settings::AppSettings;
 use crate::state::{ConfigManager, WorkspaceState};
 
 use types::*;
@@ -40,6 +42,7 @@ use types::*;
 pub struct AppState {
     // Persisted state
     pub connections: Vec<SavedConnection>,
+    pub settings: AppSettings,
 
     // Organized sub-states
     conn: ConnectionState,
@@ -71,6 +74,10 @@ impl AppState {
             log::warn!("Failed to load connections: {}", e);
             Vec::new()
         });
+        let settings = config.load_settings().unwrap_or_else(|e| {
+            log::warn!("Failed to load settings: {}", e);
+            AppSettings::default()
+        });
         let workspace = config.load_workspace().unwrap_or_else(|e| {
             log::warn!("Failed to load workspace: {}", e);
             WorkspaceState::default()
@@ -80,6 +87,7 @@ impl AppState {
 
         Self {
             connections,
+            settings,
             conn: ConnectionState::default(),
             tabs: TabState::default(),
             sessions: SessionStore::new(),
@@ -104,6 +112,13 @@ impl AppState {
 
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
+    }
+
+    /// Save settings to disk
+    pub fn save_settings(&self) {
+        if let Err(e) = self.config.save_settings(&self.settings) {
+            log::error!("Failed to save settings: {}", e);
+        }
     }
 }
 

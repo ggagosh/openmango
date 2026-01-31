@@ -22,6 +22,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
+                (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
                 _ => false,
             })
             .and_then(|tab| {
@@ -35,6 +36,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
+                (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
                 _ => false,
             })
             .map(|tab| self.build_workspace_tab(tab))
@@ -229,6 +231,21 @@ impl AppState {
                     subview: CollectionSubview::Documents,
                 }
             }
+            TabKey::Settings => {
+                // Settings tab is not persisted in workspace
+                WorkspaceTab {
+                    database: String::new(),
+                    collection: String::new(),
+                    kind: WorkspaceTabKind::Database, // Placeholder, won't be saved
+                    transfer: None,
+                    filter_raw: String::new(),
+                    sort_raw: String::new(),
+                    projection_raw: String::new(),
+                    aggregation_pipeline: Vec::new(),
+                    stats_open: false,
+                    subview: CollectionSubview::Documents,
+                }
+            }
         }
     }
 
@@ -256,6 +273,9 @@ impl AppState {
                                 Some(transfer.source_collection.clone());
                         }
                     }
+                }
+                TabKey::Settings => {
+                    // Settings tab doesn't affect selection
                 }
             }
         } else {

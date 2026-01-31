@@ -56,26 +56,26 @@ impl FileFilter {
     }
 }
 
-/// Open a file dialog synchronously.
+/// Open a file dialog asynchronously.
 /// Returns None if the user cancelled.
-pub fn open_file_dialog(
+pub async fn open_file_dialog_async(
     mode: FilePickerMode,
     filters: Vec<FileFilter>,
-    default_name: Option<&str>,
+    default_name: Option<String>,
 ) -> Option<PathBuf> {
     match mode {
         FilePickerMode::Open => {
-            let mut dialog = rfd::FileDialog::new();
+            let mut dialog = rfd::AsyncFileDialog::new();
 
             for filter in &filters {
                 let extensions: Vec<&str> = filter.extensions.iter().map(|s| s.as_str()).collect();
                 dialog = dialog.add_filter(&filter.name, &extensions);
             }
 
-            dialog.pick_file()
+            dialog.pick_file().await.map(|f| f.path().to_path_buf())
         }
         FilePickerMode::Save => {
-            let mut dialog = rfd::FileDialog::new();
+            let mut dialog = rfd::AsyncFileDialog::new();
 
             for filter in &filters {
                 let extensions: Vec<&str> = filter.extensions.iter().map(|s| s.as_str()).collect();
@@ -83,19 +83,19 @@ pub fn open_file_dialog(
             }
 
             if let Some(name) = default_name {
-                dialog = dialog.set_file_name(name);
+                dialog = dialog.set_file_name(&name);
             }
 
-            dialog.save_file()
+            dialog.save_file().await.map(|f| f.path().to_path_buf())
         }
     }
 }
 
-/// Open a folder picker dialog synchronously.
+/// Open a folder picker dialog asynchronously.
 /// Returns None if the user cancelled.
 #[allow(dead_code)]
-pub fn open_folder_dialog() -> Option<PathBuf> {
-    rfd::FileDialog::new().pick_folder()
+pub async fn open_folder_dialog_async() -> Option<PathBuf> {
+    rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf())
 }
 
 /// Get file filters for a specific transfer format.
@@ -111,6 +111,7 @@ pub fn filters_for_format(format: crate::state::TransferFormat) -> Vec<FileFilte
 }
 
 /// Generate a default filename for export based on database/collection.
+#[allow(dead_code)]
 pub fn default_export_filename(
     database: &str,
     collection: &str,
@@ -119,4 +120,35 @@ pub fn default_export_filename(
     let base = if collection.is_empty() { database.to_string() } else { collection.to_string() };
 
     format!("{}.{}", base, format.extension())
+}
+
+/// Generate a default filename for export using settings template.
+pub fn default_export_filename_from_settings(
+    settings: &crate::state::AppSettings,
+    database: &str,
+    collection: &str,
+    format: crate::state::TransferFormat,
+) -> String {
+    let base = crate::state::expand_filename_template(
+        &settings.transfer.export_filename_template,
+        database,
+        collection,
+    );
+    format!("{}.{}", base, format.extension())
+}
+
+/// Generate a default file path for export using settings.
+pub fn default_export_path_from_settings(
+    settings: &crate::state::AppSettings,
+    database: &str,
+    collection: &str,
+    format: crate::state::TransferFormat,
+) -> String {
+    let filename = default_export_filename_from_settings(settings, database, collection, format);
+    if settings.transfer.default_export_folder.is_empty() {
+        filename
+    } else {
+        let path = std::path::Path::new(&settings.transfer.default_export_folder).join(&filename);
+        path.display().to_string()
+    }
 }

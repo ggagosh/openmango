@@ -24,6 +24,9 @@ pub enum Error {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    #[error("Tool not found: {0}")]
+    ToolNotFound(String),
 }
 
 /// Convenience Result type using our Error

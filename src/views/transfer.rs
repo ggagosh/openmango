@@ -7,16 +7,18 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Icon, IconName, Sizable as _, Size};
+use gpui_component::{Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
 
 use crate::components::Button;
 use crate::components::file_picker::{
-    FilePickerMode, default_export_filename, filters_for_format, open_file_dialog,
+    FileFilter, FilePickerMode, default_export_path_from_settings, filters_for_format,
+    open_file_dialog_async, open_folder_dialog_async,
 };
+use crate::connection::tools_available;
 use crate::state::{
-    AppCommands, AppState, BsonOutputFormat, ExtendedJsonMode, InsertMode, TransferFormat,
-    TransferMode, TransferScope, TransferTabState,
+    AppCommands, AppState, BsonOutputFormat, CompressionMode, Encoding, ExtendedJsonMode,
+    InsertMode, TransferFormat, TransferMode, TransferScope, TransferTabState,
 };
 use crate::theme::{borders, colors, sizing, spacing};
 
@@ -150,20 +152,26 @@ impl TransferView {
                   cx| {
                 if let SelectEvent::Confirm(Some(db_name)) = event {
                     let db_str = db_name.to_string();
-                    state_clone.update(cx, |state, cx| {
+                    let conn_id = state_clone.update(cx, |state, cx| {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
                             tab.source_database = db_str.clone();
                             tab.source_collection.clear();
                             cx.notify();
+                            return tab.source_connection_id;
                         }
+                        None
                     });
                     // Clear collection select
                     if let Some(ref coll_state) = view.source_coll_state {
                         coll_state.update(cx, |s, cx| {
                             s.set_selected_index(None, window, cx);
                         });
+                    }
+                    // Load collections for the selected database
+                    if let Some(conn_id) = conn_id {
+                        AppCommands::load_collections(state_clone.clone(), conn_id, db_str, cx);
                     }
                     cx.notify();
                 }
@@ -270,12 +278,10 @@ impl Render for TransferView {
             (id, transfer, connections, databases, collections)
         };
 
-        // Update select items only when data changes (to preserve search state)
+        // Update select items and sync selected indices
         let conn_ids: Vec<Uuid> = connections.iter().map(|(id, _)| *id).collect();
-        let db_names: Vec<String> = databases.clone();
-        let coll_names: Vec<String> = collections.clone();
 
-        // Only update connection items if they changed
+        // Update connection items if changed
         if conn_ids != self.prev_conn_ids {
             let conn_items: Vec<ConnectionItem> = connections
                 .iter()
@@ -295,31 +301,105 @@ impl Render for TransferView {
                     s.set_items(SearchableVec::new(conn_items), window, cx);
                 });
             }
-            self.prev_conn_ids = conn_ids;
+            self.prev_conn_ids = conn_ids.clone();
         }
 
-        // Only update database items if they changed
+        // Sync source connection selected index
+        if let Some(ref source_conn_state) = self.source_conn_state {
+            let expected_row = transfer_state
+                .source_connection_id
+                .and_then(|id| conn_ids.iter().position(|c| *c == id));
+            source_conn_state.update(cx, |s, cx| {
+                let current_row = s.selected_index(cx).map(|ip| ip.row);
+                if current_row != expected_row {
+                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
+        }
+
+        // Sync destination connection selected index
+        if let Some(ref dest_conn_state) = self.dest_conn_state {
+            let expected_row = transfer_state
+                .destination_connection_id
+                .and_then(|id| conn_ids.iter().position(|c| *c == id));
+            dest_conn_state.update(cx, |s, cx| {
+                let current_row = s.selected_index(cx).map(|ip| ip.row);
+                if current_row != expected_row {
+                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
+        }
+
+        // Database items - only show if connection is selected
+        let db_names: Vec<String> = if transfer_state.source_connection_id.is_some() {
+            databases.clone()
+        } else {
+            Vec::new()
+        };
+
         if db_names != self.prev_db_names {
             let db_items: Vec<SharedString> =
-                databases.iter().map(|s| SharedString::from(s.clone())).collect();
+                db_names.iter().map(|s| SharedString::from(s.clone())).collect();
             if let Some(ref source_db_state) = self.source_db_state {
                 source_db_state.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(db_items), window, cx);
                 });
             }
-            self.prev_db_names = db_names;
+            self.prev_db_names = db_names.clone();
         }
 
-        // Only update collection items if they changed
+        // Sync database selected index
+        if let Some(ref source_db_state) = self.source_db_state {
+            let expected_row = if !transfer_state.source_database.is_empty() {
+                db_names.iter().position(|d| d == &transfer_state.source_database)
+            } else {
+                None
+            };
+            source_db_state.update(cx, |s, cx| {
+                let current_row = s.selected_index(cx).map(|ip| ip.row);
+                if current_row != expected_row {
+                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
+        }
+
+        // Collection items - only show if connection AND database are selected
+        let coll_names: Vec<String> = if transfer_state.source_connection_id.is_some()
+            && !transfer_state.source_database.is_empty()
+        {
+            collections.clone()
+        } else {
+            Vec::new()
+        };
+
         if coll_names != self.prev_coll_names {
             let coll_items: Vec<SharedString> =
-                collections.iter().map(|s| SharedString::from(s.clone())).collect();
+                coll_names.iter().map(|s| SharedString::from(s.clone())).collect();
             if let Some(ref source_coll_state) = self.source_coll_state {
                 source_coll_state.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(coll_items), window, cx);
                 });
             }
-            self.prev_coll_names = coll_names;
+            self.prev_coll_names = coll_names.clone();
+        }
+
+        // Sync collection selected index
+        if let Some(ref source_coll_state) = self.source_coll_state {
+            let expected_row = if !transfer_state.source_collection.is_empty() {
+                coll_names.iter().position(|c| c == &transfer_state.source_collection)
+            } else {
+                None
+            };
+            source_coll_state.update(cx, |s, cx| {
+                let current_row = s.selected_index(cx).map(|ip| ip.row);
+                if current_row != expected_row {
+                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
         }
 
         let state = self.state.clone();
@@ -419,6 +499,7 @@ impl Render for TransferView {
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
                                             tab.format = TransferFormat::JsonLines;
+                                            tab.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -431,6 +512,7 @@ impl Render for TransferView {
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
                                             tab.format = TransferFormat::JsonArray;
+                                            tab.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -442,6 +524,7 @@ impl Render for TransferView {
                                         && let Some(tab) = state.transfer_tab_mut(id)
                                     {
                                         tab.format = TransferFormat::Csv;
+                                        tab.file_path.clear();
                                         cx.notify();
                                     }
                                 });
@@ -455,6 +538,7 @@ impl Render for TransferView {
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
                                             tab.format = TransferFormat::Bson;
+                                            tab.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -525,7 +609,7 @@ impl Render for TransferView {
         let source_panel = self.render_source_panel(&transfer_state);
 
         // Destination panel
-        let destination_panel = self.render_destination_panel(&transfer_state);
+        let destination_panel = self.render_destination_panel(&transfer_state, cx);
 
         let source_conn_name = transfer_state
             .source_connection_id
@@ -541,7 +625,9 @@ impl Render for TransferView {
             })
             .unwrap_or_else(|| "Select connection".to_string());
 
-        let side_panel = render_side_panel(&transfer_state, &source_conn_name, &dest_conn_name);
+        // Summary panel (now inline)
+        let summary_panel =
+            render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name);
 
         // Warning banners
         let warnings = render_warnings(&transfer_state);
@@ -561,11 +647,17 @@ impl Render for TransferView {
                 .rounded(borders::radius_sm())
                 .text_sm()
                 .text_color(hsla(0.0, 0.7, 0.5, 1.0))
+                .overflow_hidden()
+                .max_h(px(120.0))
+                .overflow_y_scrollbar()
                 .child(error.clone())
                 .into_any_element()
         } else {
             div().into_any_element()
         };
+
+        // Section spacing
+        let section_gap = px(20.0);
 
         div()
             .flex()
@@ -578,36 +670,22 @@ impl Render for TransferView {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .gap(spacing::md())
-                    .p(spacing::md())
+                    .p(spacing::lg())
                     .overflow_y_scrollbar()
-                    .child(
-                        // Main content area with panels
-                        div()
-                            .flex()
-                            .gap(spacing::md())
-                            .items_start()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::md())
-                                    .flex_1()
-                                    .child(mode_tabs)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap(spacing::md())
-                                            .items_start()
-                                            .child(source_panel)
-                                            .child(destination_panel),
-                                    )
-                                    .child(warnings)
-                                    .child(error_display)
-                                    .child(options_panel),
-                            )
-                            .child(side_panel),
-                    ),
+                    // Mode tabs
+                    .child(div().mb(section_gap).child(mode_tabs))
+                    // Source panel - full width
+                    .child(div().mb(section_gap).child(source_panel))
+                    // Destination panel - full width
+                    .child(div().mb(section_gap).child(destination_panel))
+                    // Options panel - collapsible
+                    .child(div().mb(section_gap).child(options_panel))
+                    // Warnings (only shown when needed)
+                    .child(warnings)
+                    // Error display (only shown when needed)
+                    .child(error_display)
+                    // Summary at bottom - review before action
+                    .child(summary_panel),
             )
             .into_any_element()
     }
@@ -619,10 +697,10 @@ impl TransferView {
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
-            return panel("Source", div().child("Loading...")).flex_1();
+            return panel("Source", div().child("Loading..."));
         };
         let Some(ref source_db_state) = self.source_db_state else {
-            return panel("Source", div().child("Loading...")).flex_1();
+            return panel("Source", div().child("Loading..."));
         };
 
         let conn_select =
@@ -645,76 +723,174 @@ impl TransferView {
                 .flex()
                 .flex_col()
                 .gap(spacing::md())
-                .child(form_field("Connection", conn_select))
-                .child(form_field("Database", db_select))
-                .children(coll_select.map(|s| form_field("Collection", s))),
+                .child(form_row("Connection", conn_select))
+                .child(form_row("Database", db_select))
+                .children(coll_select.map(|s| form_row("Collection", s))),
         )
-        .flex_1()
     }
 
-    fn render_destination_panel(&self, transfer_state: &TransferTabState) -> impl IntoElement {
+    fn render_destination_panel(
+        &self,
+        transfer_state: &TransferTabState,
+        cx: &App,
+    ) -> impl IntoElement {
         let state = self.state.clone();
+        let settings = self.state.read(cx).settings.clone();
 
         match transfer_state.mode {
             TransferMode::Export => {
-                let file_path = if transfer_state.file_path.is_empty() {
-                    "No file selected".to_string()
-                } else {
-                    // Show just filename with ellipsis for long paths
-                    let path = std::path::Path::new(&transfer_state.file_path);
-                    path.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| transfer_state.file_path.clone())
-                };
+                // Check if we need a folder picker (BSON + Folder output) or file picker
+                let is_bson_folder = matches!(transfer_state.format, TransferFormat::Bson)
+                    && matches!(transfer_state.bson_output, BsonOutputFormat::Folder);
 
-                let browse_button = {
-                    let state = state.clone();
-                    let format = transfer_state.format;
-                    let db = transfer_state.source_database.clone();
-                    let coll = transfer_state.source_collection.clone();
-                    Button::new("browse-export").compact().label("Browse...").on_click(
-                        move |_, _, cx| {
-                            let filters = filters_for_format(format);
-                            let default_name = default_export_filename(&db, &coll, format);
-                            if let Some(path) =
-                                open_file_dialog(FilePickerMode::Save, filters, Some(&default_name))
-                            {
-                                state.update(cx, |state, cx| {
-                                    if let Some(tab_id) = state.active_transfer_tab_id()
-                                        && let Some(tab) = state.transfer_tab_mut(tab_id)
-                                    {
-                                        tab.file_path = path.display().to_string();
-                                        cx.notify();
+                if is_bson_folder {
+                    // BSON Folder output → use folder picker
+                    let folder_path = if transfer_state.file_path.is_empty() {
+                        "No folder selected".to_string()
+                    } else {
+                        // Show folder name
+                        std::path::Path::new(&transfer_state.file_path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| transfer_state.file_path.clone())
+                    };
+
+                    let browse_button = {
+                        let state = state.clone();
+                        Button::new("browse-export-folder").compact().label("Browse...").on_click(
+                            move |_, _, cx| {
+                                let state = state.clone();
+                                cx.spawn(async move |cx| {
+                                    if let Some(path) = open_folder_dialog_async().await {
+                                        cx.update(|cx| {
+                                            state.update(cx, |state, cx| {
+                                                if let Some(tab_id) = state.active_transfer_tab_id()
+                                                    && let Some(tab) =
+                                                        state.transfer_tab_mut(tab_id)
+                                                {
+                                                    tab.file_path = path.display().to_string();
+                                                    cx.notify();
+                                                }
+                                            });
+                                        })
+                                        .ok();
                                     }
-                                });
-                            }
-                        },
-                    )
-                };
+                                })
+                                .detach();
+                            },
+                        )
+                    };
 
-                let file_control = div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(
-                        value_box(file_path, transfer_state.file_path.is_empty())
-                            .flex_1()
-                            .overflow_x_hidden()
-                            .text_ellipsis(),
-                    )
-                    .child(browse_button);
-
-                panel(
-                    "Destination",
-                    div()
+                    let folder_control = div()
                         .flex()
-                        .flex_col()
-                        .gap(spacing::md())
-                        .child(form_field("File", file_control)),
-                )
-                .flex_1()
-                .into_any_element()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(
+                            value_box(folder_path, transfer_state.file_path.is_empty())
+                                .flex_1()
+                                .overflow_x_hidden()
+                                .text_ellipsis(),
+                        )
+                        .child(browse_button);
+
+                    panel(
+                        "Destination",
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(spacing::md())
+                            .child(form_row("Output Folder", folder_control)),
+                    )
+                    .into_any_element()
+                } else {
+                    // All other formats → use file picker
+                    let file_path = if transfer_state.file_path.is_empty() {
+                        "No file selected".to_string()
+                    } else {
+                        // Show just filename with ellipsis for long paths
+                        let path = std::path::Path::new(&transfer_state.file_path);
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| transfer_state.file_path.clone())
+                    };
+
+                    // Determine the label based on format
+                    let dest_label = if matches!(transfer_state.format, TransferFormat::Bson) {
+                        "Archive File"
+                    } else {
+                        "File"
+                    };
+
+                    let browse_button = {
+                        let state = state.clone();
+                        let format = transfer_state.format;
+                        let db = transfer_state.source_database.clone();
+                        let coll = transfer_state.source_collection.clone();
+                        let settings = settings.clone();
+                        let is_bson_archive = matches!(format, TransferFormat::Bson);
+                        Button::new("browse-export").compact().label("Browse...").on_click(
+                            move |_, _, cx| {
+                                // Use .archive filter for BSON Archive
+                                let filters = if is_bson_archive {
+                                    vec![FileFilter::bson_archive(), FileFilter::all()]
+                                } else {
+                                    filters_for_format(format)
+                                };
+                                let default_path = default_export_path_from_settings(
+                                    &settings, &db, &coll, format,
+                                );
+                                let state = state.clone();
+                                cx.spawn(async move |cx| {
+                                    if let Some(path) = open_file_dialog_async(
+                                        FilePickerMode::Save,
+                                        filters,
+                                        Some(default_path),
+                                    )
+                                    .await
+                                    {
+                                        cx.update(|cx| {
+                                            state.update(cx, |state, cx| {
+                                                if let Some(tab_id) = state.active_transfer_tab_id()
+                                                    && let Some(tab) =
+                                                        state.transfer_tab_mut(tab_id)
+                                                {
+                                                    tab.file_path = path.display().to_string();
+                                                    cx.notify();
+                                                }
+                                            });
+                                        })
+                                        .ok();
+                                    }
+                                })
+                                .detach();
+                            },
+                        )
+                    };
+
+                    let file_control = div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(
+                            value_box(file_path, transfer_state.file_path.is_empty())
+                                .flex_1()
+                                .overflow_x_hidden()
+                                .text_ellipsis(),
+                        )
+                        .child(browse_button);
+
+                    panel(
+                        "Destination",
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(spacing::md())
+                            .child(form_row(dest_label, file_control)),
+                    )
+                    .into_any_element()
+                }
             }
             TransferMode::Import => {
                 let file_path = if transfer_state.file_path.is_empty() {
@@ -733,28 +909,40 @@ impl TransferView {
                     Button::new("browse-import").compact().label("Browse...").on_click(
                         move |_, _, cx| {
                             let filters = filters_for_format(format);
-                            if let Some(path) =
-                                open_file_dialog(FilePickerMode::Open, filters, None)
-                            {
-                                state.update(cx, |state, cx| {
-                                    if let Some(tab_id) = state.active_transfer_tab_id()
-                                        && let Some(tab) = state.transfer_tab_mut(tab_id)
-                                    {
-                                        // Auto-detect format
-                                        if let Some(ext) = path.extension().and_then(|e| e.to_str())
-                                        {
-                                            tab.format = match ext {
-                                                "jsonl" | "ndjson" => TransferFormat::JsonLines,
-                                                "json" => TransferFormat::JsonArray,
-                                                "csv" => TransferFormat::Csv,
-                                                _ => tab.format,
-                                            };
-                                        }
-                                        tab.file_path = path.display().to_string();
-                                        cx.notify();
-                                    }
-                                });
-                            }
+                            let state = state.clone();
+                            cx.spawn(async move |cx| {
+                                if let Some(path) =
+                                    open_file_dialog_async(FilePickerMode::Open, filters, None)
+                                        .await
+                                {
+                                    cx.update(|cx| {
+                                        state.update(cx, |state, cx| {
+                                            if let Some(tab_id) = state.active_transfer_tab_id()
+                                                && let Some(tab) = state.transfer_tab_mut(tab_id)
+                                            {
+                                                // Auto-detect format
+                                                if let Some(ext) =
+                                                    path.extension().and_then(|e| e.to_str())
+                                                {
+                                                    tab.format = match ext {
+                                                        "jsonl" | "ndjson" => {
+                                                            TransferFormat::JsonLines
+                                                        }
+                                                        "json" => TransferFormat::JsonArray,
+                                                        "csv" => TransferFormat::Csv,
+                                                        "archive" | "bson" => TransferFormat::Bson,
+                                                        _ => tab.format,
+                                                    };
+                                                }
+                                                tab.file_path = path.display().to_string();
+                                                cx.notify();
+                                            }
+                                        });
+                                    })
+                                    .ok();
+                                }
+                            })
+                            .detach();
                         },
                     )
                 };
@@ -791,21 +979,18 @@ impl TransferView {
                         .flex()
                         .flex_col()
                         .gap(spacing::md())
-                        .child(form_field("File", file_control))
-                        .child(form_field_static("Target database", target_db))
+                        .child(form_row("File", file_control))
+                        .child(form_row_static("Target database", target_db))
                         .children(
-                            show_coll.then(|| form_field_static("Target collection", target_coll)),
+                            show_coll.then(|| form_row_static("Target collection", target_coll)),
                         ),
                 )
-                .flex_1()
                 .into_any_element()
             }
             TransferMode::Copy => {
                 // Searchable select for destination connection
                 let Some(ref dest_conn_state) = self.dest_conn_state else {
-                    return panel("Destination", div().child("Loading..."))
-                        .flex_1()
-                        .into_any_element();
+                    return panel("Destination", div().child("Loading...")).into_any_element();
                 };
 
                 let conn_select = Select::new(dest_conn_state)
@@ -833,11 +1018,10 @@ impl TransferView {
                         .flex()
                         .flex_col()
                         .gap(spacing::md())
-                        .child(form_field("Connection", conn_select))
-                        .child(form_field_static("Database", target_db))
-                        .children(show_coll.then(|| form_field_static("Collection", target_coll))),
+                        .child(form_row("Connection", conn_select))
+                        .child(form_row_static("Database", target_db))
+                        .children(show_coll.then(|| form_row_static("Collection", target_coll))),
                 )
-                .flex_1()
                 .into_any_element()
             }
         }
@@ -880,6 +1064,43 @@ impl TransferView {
         let content = if expanded {
             let mut sections = Vec::new();
 
+            // General section with compression dropdown
+            let compression_dropdown = {
+                let state = state.clone();
+                MenuButton::new(("compression", key))
+                    .compact()
+                    .label(transfer_state.compression.label())
+                    .dropdown_caret(true)
+                    .rounded(borders::radius_sm())
+                    .with_size(Size::XSmall)
+                    .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                        let s1 = state.clone();
+                        let s2 = state.clone();
+                        menu.item(PopupMenuItem::new("None").on_click(move |_, _, cx| {
+                            s1.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.compression = CompressionMode::None;
+                                    cx.notify();
+                                }
+                            });
+                        }))
+                        .item(PopupMenuItem::new("Gzip").on_click(
+                            move |_, _, cx| {
+                                s2.update(cx, |state, cx| {
+                                    if let Some(id) = state.active_transfer_tab_id()
+                                        && let Some(tab) = state.transfer_tab_mut(id)
+                                    {
+                                        tab.compression = CompressionMode::Gzip;
+                                        cx.notify();
+                                    }
+                                });
+                            },
+                        ))
+                    })
+            };
+
             sections.push(
                 option_section(
                     "General",
@@ -893,7 +1114,7 @@ impl TransferView {
                                 transfer_state.format.label()
                             },
                         ),
-                        option_field_static("Compression", "Off"),
+                        option_field("Compression", compression_dropdown.into_any_element()),
                     ],
                 )
                 .into_any_element(),
@@ -901,34 +1122,8 @@ impl TransferView {
 
             match transfer_state.mode {
                 TransferMode::Export => {
-                    sections.push(
-                        option_section(
-                            "Query",
-                            vec![
-                                option_field_static("Filter", "Query bar"),
-                                option_field_static("Projection", "Query bar"),
-                                option_field_static("Sort", "Query bar"),
-                                option_field_static("Limit", "None"),
-                            ],
-                        )
-                        .into_any_element(),
-                    );
-
+                    // Format-specific options
                     match transfer_state.format {
-                        TransferFormat::Csv => {
-                            sections.push(
-                                option_section(
-                                    "CSV Options",
-                                    vec![
-                                        option_field_static("Delimiter", ","),
-                                        option_field_static("Header row", "On"),
-                                        option_field_static("Flatten fields", "On"),
-                                        option_field_static("Encoding", "UTF-8"),
-                                    ],
-                                )
-                                .into_any_element(),
-                            );
-                        }
                         TransferFormat::Bson => {
                             let bson_output_dropdown = {
                                 let state = state.clone();
@@ -990,7 +1185,11 @@ impl TransferView {
                                 .into_any_element(),
                             );
                         }
+                        TransferFormat::Csv => {
+                            // CSV export - no options (removed)
+                        }
                         _ => {
+                            // JSON Options - Extended JSON dropdown + Pretty print only
                             let json_mode_dropdown =
                                 {
                                     let state = state.clone();
@@ -1042,31 +1241,16 @@ impl TransferView {
                             let pretty_checkbox = {
                                 let state = state.clone();
                                 let checked = transfer_state.pretty_print;
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(spacing::sm())
-                                    .child(
-                                        Checkbox::new(("pretty-print", key))
-                                            .checked(checked)
-                                            .on_click(move |_, _, cx| {
-                                                state.update(cx, |state, cx| {
-                                                    if let Some(id) = state.active_transfer_tab_id()
-                                                        && let Some(tab) =
-                                                            state.transfer_tab_mut(id)
-                                                    {
-                                                        tab.pretty_print = !checked;
-                                                        cx.notify();
-                                                    }
-                                                });
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(colors::text_secondary())
-                                            .child("Enabled"),
-                                    )
+                                checkbox_field(("pretty-print", key), checked, move |cx| {
+                                    state.update(cx, |state, cx| {
+                                        if let Some(id) = state.active_transfer_tab_id()
+                                            && let Some(tab) = state.transfer_tab_mut(id)
+                                        {
+                                            tab.pretty_print = !checked;
+                                            cx.notify();
+                                        }
+                                    });
+                                })
                             };
 
                             sections.push(
@@ -1081,14 +1265,6 @@ impl TransferView {
                                             "Pretty print",
                                             pretty_checkbox.into_any_element(),
                                         ),
-                                        option_field_static(
-                                            "Container",
-                                            match transfer_state.format {
-                                                TransferFormat::JsonArray => "JSON array",
-                                                _ => "JSON lines",
-                                            },
-                                        ),
-                                        option_field_static("Allow shell syntax", "On"),
                                     ],
                                 )
                                 .into_any_element(),
@@ -1096,29 +1272,108 @@ impl TransferView {
                         }
                     }
 
+                    // Database scope options
                     if matches!(transfer_state.scope, TransferScope::Database) {
+                        let include_indexes_checkbox = {
+                            let state = state.clone();
+                            let checked = transfer_state.include_indexes;
+                            checkbox_field(("include-indexes-export", key), checked, move |cx| {
+                                state.update(cx, |state, cx| {
+                                    if let Some(id) = state.active_transfer_tab_id()
+                                        && let Some(tab) = state.transfer_tab_mut(id)
+                                    {
+                                        tab.include_indexes = !checked;
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                        };
+
                         sections.push(
                             option_section(
                                 "Database",
-                                vec![
-                                    option_field_static("Include collections", "All"),
-                                    option_field_static("Exclude collections", "None"),
-                                    option_field_static("Include indexes/options", "On"),
-                                ],
-                            )
-                            .into_any_element(),
-                        );
-                    } else {
-                        sections.push(
-                            option_section(
-                                "Collection",
-                                vec![option_field_static("Include indexes", "Off")],
+                                vec![option_field(
+                                    "Include indexes",
+                                    include_indexes_checkbox.into_any_element(),
+                                )],
                             )
                             .into_any_element(),
                         );
                     }
                 }
                 TransferMode::Import => {
+                    // Input section
+                    let detect_format_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.detect_format;
+                        checkbox_field(("detect-format", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.detect_format = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
+                    let encoding_dropdown = {
+                        let state = state.clone();
+                        MenuButton::new(("encoding", key))
+                            .compact()
+                            .label(transfer_state.encoding.label())
+                            .dropdown_caret(true)
+                            .rounded(borders::radius_sm())
+                            .with_size(Size::XSmall)
+                            .dropdown_menu_with_anchor(
+                                Corner::BottomLeft,
+                                move |menu, _window, _cx| {
+                                    let s1 = state.clone();
+                                    let s2 = state.clone();
+                                    menu.item(PopupMenuItem::new("UTF-8").on_click(
+                                        move |_, _, cx| {
+                                            s1.update(cx, |state, cx| {
+                                                if let Some(id) = state.active_transfer_tab_id()
+                                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                                {
+                                                    tab.encoding = Encoding::Utf8;
+                                                    cx.notify();
+                                                }
+                                            });
+                                        },
+                                    ))
+                                    .item(
+                                        PopupMenuItem::new("Latin-1").on_click(move |_, _, cx| {
+                                            s2.update(cx, |state, cx| {
+                                                if let Some(id) = state.active_transfer_tab_id()
+                                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                                {
+                                                    tab.encoding = Encoding::Latin1;
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }),
+                                    )
+                                },
+                            )
+                    };
+
+                    sections.push(
+                        option_section(
+                            "Input",
+                            vec![
+                                option_field(
+                                    "Detect format",
+                                    detect_format_checkbox.into_any_element(),
+                                ),
+                                option_field("Encoding", encoding_dropdown.into_any_element()),
+                            ],
+                        )
+                        .into_any_element(),
+                    );
+
+                    // Insert section
                     let insert_mode_dropdown = {
                         let state = state.clone();
                         MenuButton::new(("insert-mode", key))
@@ -1174,68 +1429,32 @@ impl TransferView {
                     let drop_checkbox = {
                         let state = state.clone();
                         let checked = transfer_state.drop_before_import;
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
-                            .child(Checkbox::new(("drop-before", key)).checked(checked).on_click(
-                                move |_, _, cx| {
-                                    state.update(cx, |state, cx| {
-                                        if let Some(id) = state.active_transfer_tab_id()
-                                            && let Some(tab) = state.transfer_tab_mut(id)
-                                        {
-                                            tab.drop_before_import = !checked;
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(colors::text_secondary())
-                                    .child("Enabled"),
-                            )
+                        checkbox_field(("drop-before", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.drop_before_import = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
                     };
 
                     let stop_checkbox = {
                         let state = state.clone();
                         let checked = transfer_state.stop_on_error;
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
-                            .child(Checkbox::new(("stop-on-error", key)).checked(checked).on_click(
-                                move |_, _, cx| {
-                                    state.update(cx, |state, cx| {
-                                        if let Some(id) = state.active_transfer_tab_id()
-                                            && let Some(tab) = state.transfer_tab_mut(id)
-                                        {
-                                            tab.stop_on_error = !checked;
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(colors::text_secondary())
-                                    .child("Enabled"),
-                            )
+                        checkbox_field(("stop-on-error", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.stop_on_error = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
                     };
-
-                    sections.push(
-                        option_section(
-                            "Input",
-                            vec![
-                                option_field_static("Detect format", "Auto"),
-                                option_field_static("Encoding", "UTF-8"),
-                                option_field_static("Preview rows", "Off"),
-                            ],
-                        )
-                        .into_any_element(),
-                    );
 
                     sections.push(
                         option_section(
@@ -1259,87 +1478,147 @@ impl TransferView {
                         .into_any_element(),
                     );
 
-                    match transfer_state.format {
-                        TransferFormat::Csv => {
-                            sections.push(
-                                option_section(
-                                    "CSV Options",
-                                    vec![
-                                        option_field_static("Delimiter", ","),
-                                        option_field_static("Header row", "On"),
-                                        option_field_static("Columns have types", "Off"),
-                                        option_field_static("Ignore empty strings", "Off"),
-                                        option_field_static("Map columns", "Off"),
-                                    ],
-                                )
-                                .into_any_element(),
-                            );
-                        }
-                        _ => {
-                            sections.push(
-                                option_section(
-                                    "JSON Options",
-                                    vec![
-                                        option_field_static("Extended JSON", "Relaxed/Canonical"),
-                                        option_field_static("Allow shell syntax", "On"),
-                                    ],
-                                )
-                                .into_any_element(),
-                            );
-                        }
-                    }
-
+                    // Database scope options
                     if matches!(transfer_state.scope, TransferScope::Database) {
+                        let restore_indexes_checkbox = {
+                            let state = state.clone();
+                            let checked = transfer_state.restore_indexes;
+                            checkbox_field(("restore-indexes", key), checked, move |cx| {
+                                state.update(cx, |state, cx| {
+                                    if let Some(id) = state.active_transfer_tab_id()
+                                        && let Some(tab) = state.transfer_tab_mut(id)
+                                    {
+                                        tab.restore_indexes = !checked;
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                        };
+
                         sections.push(
                             option_section(
                                 "Database",
-                                vec![
-                                    option_field_static("Namespace mapping", "Off"),
-                                    option_field_static("Restore indexes/options", "On"),
-                                ],
+                                vec![option_field(
+                                    "Restore indexes",
+                                    restore_indexes_checkbox.into_any_element(),
+                                )],
                             )
                             .into_any_element(),
                         );
                     }
                 }
                 TransferMode::Copy => {
+                    // Copy Options with functional checkboxes
+                    let copy_indexes_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.copy_indexes;
+                        checkbox_field(("copy-indexes", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.copy_indexes = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
+                    let copy_options_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.copy_options;
+                        checkbox_field(("copy-options", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.copy_options = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
+                    let overwrite_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.overwrite_target;
+                        checkbox_field(("overwrite-target", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.overwrite_target = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
+                    let ordered_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.ordered;
+                        checkbox_field(("ordered", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.ordered = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
                     sections.push(
                         option_section(
                             "Copy Options",
                             vec![
-                                option_field_static("Copy indexes", "On"),
-                                option_field_static("Copy options", "On"),
-                                option_field_static("Overwrite target", "Off"),
+                                option_field(
+                                    "Copy indexes",
+                                    copy_indexes_checkbox.into_any_element(),
+                                ),
+                                option_field(
+                                    "Copy options",
+                                    copy_options_checkbox.into_any_element(),
+                                ),
+                                option_field(
+                                    "Overwrite target",
+                                    overwrite_checkbox.into_any_element(),
+                                ),
                                 option_field_static(
                                     "Batch size",
                                     transfer_state.batch_size.to_string(),
                                 ),
-                                option_field_static("Ordered", "On"),
+                                option_field("Ordered", ordered_checkbox.into_any_element()),
                             ],
                         )
                         .into_any_element(),
                     );
 
-                    sections.push(
-                        option_section(
-                            "Filters",
-                            vec![
-                                option_field_static("Filter", "Optional"),
-                                option_field_static("Projection", "Optional"),
-                                option_field_static("Pipeline", "Optional"),
-                            ],
-                        )
-                        .into_any_element(),
-                    );
-
+                    // Database scope options for Copy mode
                     if matches!(transfer_state.scope, TransferScope::Database) {
+                        let include_indexes_checkbox = {
+                            let state = state.clone();
+                            let checked = transfer_state.include_indexes;
+                            checkbox_field(("include-indexes-copy", key), checked, move |cx| {
+                                state.update(cx, |state, cx| {
+                                    if let Some(id) = state.active_transfer_tab_id()
+                                        && let Some(tab) = state.transfer_tab_mut(id)
+                                    {
+                                        tab.include_indexes = !checked;
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                        };
+
                         sections.push(
                             option_section(
-                                "Collections",
-                                vec![
-                                    option_field_static("Include collections", "All"),
-                                    option_field_static("Exclude collections", "None"),
-                                ],
+                                "Database",
+                                vec![option_field(
+                                    "Include indexes",
+                                    include_indexes_checkbox.into_any_element(),
+                                )],
                             )
                             .into_any_element(),
                         );
@@ -1392,50 +1671,14 @@ fn can_execute_transfer(state: &TransferTabState) -> bool {
     true
 }
 
-fn render_side_panel(
-    transfer_state: &TransferTabState,
-    source_conn_name: &str,
-    dest_conn_name: &str,
-) -> impl IntoElement {
-    let summary_panel = render_summary_panel(transfer_state, source_conn_name, dest_conn_name);
-    let secondary_panel = match transfer_state.mode {
-        TransferMode::Export => render_preview_panel(transfer_state).into_any_element(),
-        TransferMode::Import => render_plan_panel(
-            "Import plan",
-            vec![
-                "Choose a source file",
-                "Select target database/collection",
-                "Review options",
-                "Run import",
-            ],
-        )
-        .into_any_element(),
-        TransferMode::Copy => render_plan_panel(
-            "Copy plan",
-            vec!["Select destination connection", "Review copy options", "Run copy"],
-        )
-        .into_any_element(),
-    };
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(spacing::md())
-        .w(px(300.0))
-        .min_w(px(240.0))
-        .max_w(px(360.0))
-        .child(summary_panel)
-        .child(secondary_panel)
-}
-
 fn render_summary_panel(
     transfer_state: &TransferTabState,
-    source_conn_name: &str,
+    _source_conn_name: &str,
     dest_conn_name: &str,
 ) -> impl IntoElement {
-    let source_db = fallback_text(&transfer_state.source_database, "Select database");
+    let source_db = fallback_text(&transfer_state.source_database, "...");
     let source_coll = if matches!(transfer_state.scope, TransferScope::Collection) {
-        format!(" / {}", fallback_text(&transfer_state.source_collection, "Select collection"))
+        format!(".{}", fallback_text(&transfer_state.source_collection, "..."))
     } else {
         String::new()
     };
@@ -1452,135 +1695,95 @@ fn render_summary_panel(
         transfer_state.destination_collection.clone()
     };
 
-    let destination = match transfer_state.mode {
-        TransferMode::Export => fallback_text(&transfer_state.file_path, "Choose file"),
+    let source_desc = format!("{source_db}{source_coll}");
+
+    let dest_desc = match transfer_state.mode {
+        TransferMode::Export => {
+            let is_bson_folder = matches!(transfer_state.format, TransferFormat::Bson)
+                && matches!(transfer_state.bson_output, BsonOutputFormat::Folder);
+
+            if transfer_state.file_path.is_empty() {
+                if is_bson_folder {
+                    "Choose folder...".to_string()
+                } else {
+                    "Choose file...".to_string()
+                }
+            } else {
+                std::path::Path::new(&transfer_state.file_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| transfer_state.file_path.clone())
+            }
+        }
         TransferMode::Import => {
-            let mut label =
-                format!("{source_conn_name} / {}", fallback_text(&target_db, "Select database"));
+            let mut label = fallback_text(&target_db, "...");
             if matches!(transfer_state.scope, TransferScope::Collection) {
-                label.push_str(&format!(" / {}", fallback_text(&target_coll, "Select collection")));
+                label.push_str(&format!(".{}", fallback_text(&target_coll, "...")));
             }
             label
         }
         TransferMode::Copy => {
-            let mut label =
-                format!("{dest_conn_name} / {}", fallback_text(&target_db, "Select database"));
+            let conn = if dest_conn_name == "Select connection" { "..." } else { dest_conn_name };
+            let mut label = format!("{conn}:{}", fallback_text(&target_db, "..."));
             if matches!(transfer_state.scope, TransferScope::Collection) {
-                label.push_str(&format!(" / {}", fallback_text(&target_coll, "Select collection")));
+                label.push_str(&format!(".{}", fallback_text(&target_coll, "...")));
             }
             label
         }
     };
 
-    panel(
-        "Summary",
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .child(summary_row("Mode", transfer_state.mode.label()))
-            .child(summary_row("Scope", transfer_state.scope.label()))
-            .child(summary_row("Source", format!("{source_conn_name} / {source_db}{source_coll}")))
-            .child(summary_row("Destination", destination))
-            .child(summary_row(
-                "Format",
-                if matches!(transfer_state.mode, TransferMode::Copy) {
-                    "Live copy".to_string()
-                } else {
-                    transfer_state.format.label().to_string()
-                },
-            ))
-            .child(summary_row("Batch size", transfer_state.batch_size.to_string())),
-    )
-}
-
-fn render_plan_panel(title: &str, steps: Vec<&str>) -> impl IntoElement {
-    panel(
-        title,
-        div().flex().flex_col().gap(spacing::xs()).children(steps.into_iter().map(|step| {
-            div().text_sm().text_color(colors::text_secondary()).child(format!("• {step}"))
-        })),
-    )
-}
-
-fn render_preview_panel(transfer_state: &TransferTabState) -> impl IntoElement {
-    let content = if transfer_state.preview_loading {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h_full()
-            .text_sm()
-            .text_color(colors::text_muted())
-            .child("Loading preview...")
-            .into_any_element()
-    } else if transfer_state.preview_docs.is_empty() {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h_full()
-            .text_sm()
-            .text_color(colors::text_muted())
-            .child("Select a collection to preview")
-            .into_any_element()
-    } else {
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .children(transfer_state.preview_docs.iter().map(|doc| {
-                // Truncate long documents for preview
-                let display_doc =
-                    if doc.len() > 500 { format!("{}...", &doc[..500]) } else { doc.clone() };
-                div()
-                    .p(spacing::sm())
-                    .bg(colors::bg_header())
-                    .border_1()
-                    .border_color(colors::border_subtle())
-                    .rounded(borders::radius_sm())
-                    .text_xs()
-                    .font_family("monospace")
-                    .text_color(colors::text_secondary())
-                    .overflow_x_hidden()
-                    .child(display_doc)
-            }))
-            .into_any_element()
+    let format_label = match (transfer_state.mode, transfer_state.format) {
+        (TransferMode::Copy, _) => "Live copy".to_string(),
+        (_, TransferFormat::Bson) => {
+            // Include BSON output type
+            format!("BSON {}", transfer_state.bson_output.label())
+        }
+        _ => transfer_state.format.label().to_string(),
     };
 
-    panel(
-        "Preview",
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .child(div().text_xs().text_color(colors::text_muted()).child(format!(
-                "{} doc{}",
-                transfer_state.preview_docs.len(),
-                if transfer_state.preview_docs.len() == 1 { "" } else { "s" }
-            )))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(150.0))
-                    .max_h(px(320.0))
-                    .overflow_y_scrollbar()
-                    .child(content),
-            ),
-    )
+    // Add compression indicator if enabled
+    let format_label = match transfer_state.compression {
+        CompressionMode::Gzip => format!("{format_label} (gzip)"),
+        CompressionMode::None => format_label,
+    };
+
+    // Compact horizontal summary
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .p(spacing::md())
+        .bg(colors::bg_sidebar())
+        .border_1()
+        .border_color(colors::border())
+        .rounded(borders::radius_sm())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::lg())
+                .child(summary_item("From", source_desc))
+                .child(Icon::new(IconName::ArrowRight).xsmall().text_color(colors::text_muted()))
+                .child(summary_item("To", dest_desc))
+                .child(summary_item("Format", format_label)),
+        )
 }
 
 fn render_warnings(transfer_state: &TransferTabState) -> impl IntoElement {
     let mut warnings = Vec::new();
 
-    // CSV warning
-    if matches!(transfer_state.format, TransferFormat::Csv) {
-        warnings.push("CSV export will lose BSON type fidelity (dates, ObjectIds, etc.)");
-    }
+    // Only show format warnings for Export/Import modes (not Copy)
+    if matches!(transfer_state.mode, TransferMode::Export | TransferMode::Import) {
+        // CSV warning
+        if matches!(transfer_state.format, TransferFormat::Csv) {
+            warnings.push("CSV export will lose BSON type fidelity (dates, ObjectIds, etc.)");
+        }
 
-    // BSON warning
-    if matches!(transfer_state.format, TransferFormat::Bson) {
-        warnings.push("BSON format requires mongodump/mongorestore tools installed");
+        // BSON warning - only show if tools are NOT available
+        if matches!(transfer_state.format, TransferFormat::Bson) && !tools_available() {
+            warnings.push("BSON format requires mongodump/mongorestore. Run: just download-tools");
+        }
     }
 
     if warnings.is_empty() {
@@ -1591,6 +1794,7 @@ fn render_warnings(transfer_state: &TransferTabState) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(spacing::xs())
+        .mb(spacing::md())
         .children(warnings.into_iter().map(|warning| {
             div()
                 .flex()
@@ -1630,24 +1834,25 @@ fn panel(title: &str, content: impl IntoElement) -> Div {
         .child(content)
 }
 
-/// Form field with label above control (vertical layout)
-fn form_field(label: &str, control: impl IntoElement) -> impl IntoElement {
+/// Form row with horizontal label + control for cleaner alignment
+fn form_row(label: &str, control: impl IntoElement) -> impl IntoElement {
     div()
         .flex()
-        .flex_col()
-        .gap(spacing::xs())
-        .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
-        .child(control)
+        .items_center()
+        .gap(spacing::md())
+        .child(
+            div()
+                .w(px(100.0)) // Fixed label width for alignment
+                .text_sm()
+                .text_color(colors::text_muted())
+                .child(label.to_string()),
+        )
+        .child(div().flex_1().max_w(px(400.0)).child(control))
 }
 
-/// Static form field with label above value (vertical layout)
-fn form_field_static(label: &str, value: impl Into<String>) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(spacing::xs())
-        .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
-        .child(value_box(value, false))
+/// Static form row with horizontal label + value
+fn form_row_static(label: &str, value: impl Into<String>) -> impl IntoElement {
+    form_row(label, value_box(value, false))
 }
 
 fn value_box(value: impl Into<String>, muted: bool) -> Div {
@@ -1714,22 +1919,34 @@ fn option_field_static(label: &str, value: impl Into<String>) -> AnyElement {
     option_field(label, option_value_pill(value))
 }
 
-fn summary_row(label: &str, value: impl Into<String>) -> AnyElement {
+/// Creates a checkbox field with "Enabled" label
+fn checkbox_field<F>(id: impl Into<ElementId>, checked: bool, on_click: F) -> Div
+where
+    F: Fn(&mut App) + 'static,
+{
     div()
         .flex()
         .items_center()
         .gap(spacing::sm())
+        .child(Checkbox::new(id).checked(checked).on_click(move |_, _, cx| on_click(cx)))
+        .child(div().text_sm().text_color(colors::text_secondary()).child("Enabled"))
+}
+
+/// Compact summary item for horizontal summary bar
+fn summary_item(label: &str, value: impl Into<String>) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::xs())
         .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
         .child(
             div()
-                .flex_1()
                 .text_sm()
                 .text_color(colors::text_secondary())
                 .overflow_x_hidden()
                 .text_ellipsis()
                 .child(value.into()),
         )
-        .into_any_element()
 }
 
 /// Returns the value if non-empty, otherwise returns the fallback.

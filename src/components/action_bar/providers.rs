@@ -80,6 +80,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.transfer_tab_label(key.id), conn_name)
             }
+            TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
         };
 
         actions.push(ActionItem {
@@ -164,6 +165,15 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             shortcut: Some(SharedString::from("Cmd+Shift+D")),
             available: is_connected,
             priority: 30,
+        },
+        ActionItem {
+            id: SharedString::from("cmd:settings"),
+            label: SharedString::from("Settings"),
+            detail: Some(SharedString::from("Application settings")),
+            category: ActionCategory::Command,
+            shortcut: Some(SharedString::from("Cmd+,")),
+            available: true,
+            priority: 100,
         },
     ]
 }

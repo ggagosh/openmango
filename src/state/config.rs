@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::connection::SavedConnection;
+use crate::state::settings::AppSettings;
 use crate::state::workspace::WorkspaceState;
 
 const APP_NAME: &str = "openmango";
@@ -99,13 +100,20 @@ impl ConfigManager {
     }
 
     // =========================================================================
-    // Preferences (placeholder for future)
+    // Settings
     // =========================================================================
 
-    // const PREFERENCES_FILE: &'static str = "settings.bin";
-    //
-    // pub fn load_preferences(&self) -> Result<Preferences> { ... }
-    // pub fn save_preferences(&self, prefs: &Preferences) -> Result<()> { ... }
+    const SETTINGS_FILE: &'static str = "settings.bin";
+
+    /// Load application settings from disk
+    pub fn load_settings(&self) -> Result<AppSettings> {
+        Ok(self.load(Self::SETTINGS_FILE)?.unwrap_or_default())
+    }
+
+    /// Save application settings to disk
+    pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
+        self.save(Self::SETTINGS_FILE, settings)
+    }
 }
 
 impl Default for ConfigManager {

@@ -6,7 +6,7 @@ use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, colors, spacing};
-use crate::views::{CollectionView, DatabaseView, TransferView};
+use crate::views::{CollectionView, DatabaseView, SettingsView, TransferView};
 
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
@@ -19,6 +19,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) collection_view: Option<&'a Entity<CollectionView>>,
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
+    pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
 }
 
 pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
@@ -59,6 +60,7 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         TabKey::Transfer(tab) => {
                             (host.state.read(cx).transfer_tab_label(tab.id), false)
                         }
+                        TabKey::Settings => ("Settings".to_string(), false),
                     };
                     let state = host.state.clone();
                     let close_button = div()
@@ -129,6 +131,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::Transfer => host
             .transfer_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Settings => host
+            .settings_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         _ => {

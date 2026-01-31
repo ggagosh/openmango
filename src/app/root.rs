@@ -7,7 +7,7 @@ use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, EditConnection, NewConnection, NextTab,
-    OpenActionBar, PrevTab, QuitApp, RefreshView,
+    OpenActionBar, OpenSettings, PrevTab, QuitApp, RefreshView,
 };
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, colors, spacing};
@@ -76,6 +76,7 @@ impl Render for AppRoot {
         let connection_name = active_conn.map(|c| c.config.name.clone());
         let status_message = state.status_message();
         let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
+        let show_status_bar = state.settings.appearance.show_status_bar;
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
             state.current_session_key().and_then(|key| state.session_subview(&key))
@@ -99,6 +100,7 @@ impl Render for AppRoot {
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => key_context.push_str(" Transfer"),
             View::Welcome => key_context.push_str(" Welcome"),
+            View::Settings => key_context.push_str(" Settings"),
         }
 
         // Render dialog layer (Context derefs to App)
@@ -227,6 +229,11 @@ impl Render for AppRoot {
                     bar.toggle(window, cx);
                 });
             }))
+            .on_action(cx.listener(|this, _: &OpenSettings, _window, cx| {
+                this.state.update(cx, |state, cx| {
+                    state.open_settings_tab(cx);
+                });
+            }))
             .child(
                 div()
                     .flex()
@@ -236,7 +243,11 @@ impl Render for AppRoot {
                     .child(self.sidebar.clone())
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
-            .child(StatusBar::new(is_connected, connection_name, status_message, read_only))
+            .children(
+                show_status_bar.then(|| {
+                    StatusBar::new(is_connected, connection_name, status_message, read_only)
+                }),
+            )
             .children(dialog_layer)
             .child(self.action_bar.clone());
 

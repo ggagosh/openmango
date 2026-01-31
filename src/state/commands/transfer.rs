@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::connection::csv_utils::detect_problematic_fields;
 use crate::connection::get_connection_manager;
 use crate::connection::mongo::{
-    CsvImportOptions, ExtendedJsonMode, InsertMode, JsonExportOptions, JsonImportOptions,
-    JsonTransferFormat, generate_export_preview,
+    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExtendedJsonMode, InsertMode,
+    JsonExportOptions, JsonImportOptions, JsonTransferFormat, generate_export_preview,
 };
 use crate::state::{
     AppCommands, AppEvent, AppState, SessionKey, StatusMessage, TransferFormat, TransferMode,
@@ -147,9 +147,22 @@ impl AppCommands {
             return;
         };
 
-        let Some(client) = Self::active_client(&state, connection_id, cx) else {
-            return;
+        // For BSON export, we need the connection string instead of client
+        let connection_uri = if matches!(config.format, TransferFormat::Bson) {
+            state.read(cx).connection_uri(connection_id)
+        } else {
+            None
         };
+
+        let client = if matches!(config.format, TransferFormat::Bson) {
+            None
+        } else {
+            Self::active_client(&state, connection_id, cx)
+        };
+
+        if !matches!(config.format, TransferFormat::Bson) && client.is_none() {
+            return;
+        }
 
         if config.file_path.is_empty() {
             state.update(cx, |state, cx| {
@@ -163,11 +176,16 @@ impl AppCommands {
         let database = config.source_database.clone();
         let collection = config.source_collection.clone();
         let format = config.format;
+        let scope = config.scope;
         let json_mode = match config.json_mode {
             crate::state::ExtendedJsonMode::Relaxed => ExtendedJsonMode::Relaxed,
             crate::state::ExtendedJsonMode::Canonical => ExtendedJsonMode::Canonical,
         };
         let pretty_print = config.pretty_print;
+        let bson_output = match config.bson_output {
+            crate::state::BsonOutputFormat::Folder => MongoBsonOutputFormat::Folder,
+            crate::state::BsonOutputFormat::Archive => MongoBsonOutputFormat::Archive,
+        };
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -185,6 +203,7 @@ impl AppCommands {
 
             match format {
                 TransferFormat::JsonLines | TransferFormat::JsonArray => {
+                    let client = client.expect("client should be set for JSON export");
                     let json_format = match format {
                         TransferFormat::JsonLines => JsonTransferFormat::JsonLines,
                         _ => JsonTransferFormat::JsonArray,
@@ -198,13 +217,21 @@ impl AppCommands {
                     )
                 }
                 TransferFormat::Csv => {
+                    let client = client.expect("client should be set for CSV export");
                     manager.export_collection_csv(&client, &database, &collection, &path)
                 }
                 TransferFormat::Bson => {
-                    // BSON export requires mongodump - not implemented for collection scope
-                    Err(crate::error::Error::Parse(
-                        "BSON export is only supported for database scope".to_string(),
-                    ))
+                    // BSON export only supported for database scope
+                    if !matches!(scope, TransferScope::Database) {
+                        return Err(crate::error::Error::Parse(
+                            "BSON export is only supported for database scope".to_string(),
+                        ));
+                    }
+                    let uri = connection_uri.ok_or_else(|| {
+                        crate::error::Error::Parse("Connection URI not available".to_string())
+                    })?;
+                    manager.export_database_bson(&uri, &database, bson_output, &path)?;
+                    Ok(0) // mongodump doesn't return a count
                 }
             }
         });
@@ -271,9 +298,23 @@ impl AppCommands {
             return;
         }
 
-        let Some(client) = Self::active_client(&state, connection_id, cx) else {
-            return;
+        // For BSON import, we need the connection string instead of client
+        let connection_uri = if matches!(config.format, TransferFormat::Bson) {
+            state.read(cx).connection_uri(connection_id)
+        } else {
+            None
         };
+
+        let client = if matches!(config.format, TransferFormat::Bson) {
+            // For BSON, we may still need client for drop_before_import with non-BSON formats
+            None
+        } else {
+            Self::active_client(&state, connection_id, cx)
+        };
+
+        if !matches!(config.format, TransferFormat::Bson) && client.is_none() {
+            return;
+        }
 
         if config.file_path.is_empty() {
             state.update(cx, |state, cx| {
@@ -295,6 +336,7 @@ impl AppCommands {
             config.destination_collection.clone()
         };
         let format = config.format;
+        let scope = config.scope;
         let insert_mode = match config.insert_mode {
             crate::state::InsertMode::Insert => InsertMode::Insert,
             crate::state::InsertMode::Upsert => InsertMode::Upsert,
@@ -302,6 +344,7 @@ impl AppCommands {
         };
         let stop_on_error = config.stop_on_error;
         let batch_size = config.batch_size as usize;
+        let drop_before = config.drop_before_import;
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -319,6 +362,13 @@ impl AppCommands {
 
             match format {
                 TransferFormat::JsonLines | TransferFormat::JsonArray => {
+                    let client = client.expect("client should be set for JSON import");
+
+                    // Drop collection before import if requested
+                    if drop_before && matches!(scope, TransferScope::Collection) {
+                        let _ = manager.drop_collection(&client, &database, &collection);
+                    }
+
                     let json_format = match format {
                         TransferFormat::JsonLines => JsonTransferFormat::JsonLines,
                         _ => JsonTransferFormat::JsonArray,
@@ -336,16 +386,36 @@ impl AppCommands {
                         },
                     )
                 }
-                TransferFormat::Csv => manager.import_collection_csv(
-                    &client,
-                    &database,
-                    &collection,
-                    &path,
-                    CsvImportOptions { insert_mode, stop_on_error, batch_size },
-                ),
-                TransferFormat::Bson => Err(crate::error::Error::Parse(
-                    "BSON import is only supported for database scope".to_string(),
-                )),
+                TransferFormat::Csv => {
+                    let client = client.expect("client should be set for CSV import");
+
+                    // Drop collection before import if requested
+                    if drop_before && matches!(scope, TransferScope::Collection) {
+                        let _ = manager.drop_collection(&client, &database, &collection);
+                    }
+
+                    manager.import_collection_csv(
+                        &client,
+                        &database,
+                        &collection,
+                        &path,
+                        CsvImportOptions { insert_mode, stop_on_error, batch_size },
+                    )
+                }
+                TransferFormat::Bson => {
+                    // BSON import only supported for database scope
+                    if !matches!(scope, TransferScope::Database) {
+                        return Err(crate::error::Error::Parse(
+                            "BSON import is only supported for database scope".to_string(),
+                        ));
+                    }
+                    let uri = connection_uri.ok_or_else(|| {
+                        crate::error::Error::Parse("Connection URI not available".to_string())
+                    })?;
+                    // mongorestore handles --drop internally
+                    manager.import_database_bson(&uri, &database, &path, drop_before)?;
+                    Ok(0) // mongorestore doesn't return a count
+                }
             }
         });
 

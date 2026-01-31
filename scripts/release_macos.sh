@@ -32,10 +32,32 @@ else
 fi
 
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources/bin"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+
+# Bundle MongoDB tools if available
+TOOLS_DIR="$ROOT_DIR/resources/bin/$ARCH_SUFFIX"
+if [[ -d "$TOOLS_DIR" ]]; then
+    if [[ -f "$TOOLS_DIR/mongodump" ]]; then
+        cp "$TOOLS_DIR/mongodump" "$APP_DIR/Contents/Resources/bin/"
+        chmod +x "$APP_DIR/Contents/Resources/bin/mongodump"
+    fi
+    if [[ -f "$TOOLS_DIR/mongorestore" ]]; then
+        cp "$TOOLS_DIR/mongorestore" "$APP_DIR/Contents/Resources/bin/"
+        chmod +x "$APP_DIR/Contents/Resources/bin/mongorestore"
+    fi
+    echo "Bundled MongoDB tools from $TOOLS_DIR"
+else
+    echo "Warning: MongoDB tools not found at $TOOLS_DIR"
+    echo "BSON export/import will require system-installed tools"
+fi
+
+# Copy third-party notices (required for bundled tools attribution)
+if [[ -f "$ROOT_DIR/THIRD_PARTY_NOTICES" ]]; then
+    cp "$ROOT_DIR/THIRD_PARTY_NOTICES" "$APP_DIR/Contents/Resources/"
+fi
 
 HAS_ICON=false
 if [[ -f "$ICON_ICNS" ]]; then
@@ -83,6 +105,14 @@ EOF2
 SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     echo "Codesigning app with identity: $SIGNING_IDENTITY"
+    # Sign bundled tools first (required before signing the app bundle)
+    if [[ -f "$APP_DIR/Contents/Resources/bin/mongodump" ]]; then
+        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongodump"
+    fi
+    if [[ -f "$APP_DIR/Contents/Resources/bin/mongorestore" ]]; then
+        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongorestore"
+    fi
+    # Sign the main app bundle
     codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"
     codesign --verify --deep --strict "$APP_DIR"
 fi

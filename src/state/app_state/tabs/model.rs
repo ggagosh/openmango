@@ -251,7 +251,7 @@ impl AppState {
 
     pub(crate) fn open_transfer_tab(&mut self, cx: &mut Context<Self>) {
         let connection_id = self.conn.selected_connection;
-        let mut transfer_state = TransferTabState::default();
+        let mut transfer_state = TransferTabState::from_settings(&self.settings);
         transfer_state.source_connection_id = connection_id;
         transfer_state.source_database = self.conn.selected_database.clone().unwrap_or_default();
         transfer_state.source_collection =
@@ -278,7 +278,7 @@ impl AppState {
         mode: TransferMode,
         cx: &mut Context<Self>,
     ) {
-        let mut transfer_state = TransferTabState::default();
+        let mut transfer_state = TransferTabState::from_settings(&self.settings);
         transfer_state.mode = mode;
         transfer_state.scope = scope;
         transfer_state.source_connection_id = Some(connection_id);
@@ -324,6 +324,30 @@ impl AppState {
         self.conn.selected_collection = selected_collection;
         self.current_view = View::Transfer;
         self.update_workspace_from_state();
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    /// Open settings tab (singleton - only one settings tab allowed)
+    pub fn open_settings_tab(&mut self, cx: &mut Context<Self>) {
+        // Check if settings tab already exists
+        if let Some(index) = self.tabs.open.iter().position(|tab| matches!(tab, TabKey::Settings)) {
+            // Settings tab already open, just select it
+            if self.active_index() != Some(index) {
+                self.set_active_index(index);
+                self.current_view = View::Settings;
+                self.clear_error_status();
+                cx.emit(AppEvent::ViewChanged);
+                cx.notify();
+            }
+            return;
+        }
+
+        // Add new settings tab
+        self.tabs.open.push(TabKey::Settings);
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::Settings;
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
@@ -398,6 +422,9 @@ impl AppState {
                 }
                 self.current_view = View::Transfer;
             }
+            TabKey::Settings => {
+                self.current_view = View::Settings;
+            }
         }
         self.update_workspace_from_state();
         self.clear_error_status();
@@ -461,6 +488,9 @@ impl AppState {
             }
             TabKey::Transfer(key) => {
                 self.transfer_tabs.remove(&key.id);
+            }
+            TabKey::Settings => {
+                // No cleanup needed for settings tab
             }
         }
 
@@ -528,6 +558,9 @@ impl AppState {
                         }
                         self.current_view = View::Transfer;
                     }
+                    TabKey::Settings => {
+                        self.current_view = View::Settings;
+                    }
                 }
                 cx.emit(AppEvent::ViewChanged);
             }
@@ -582,6 +615,9 @@ impl AppState {
                             }
                             self.current_view = View::Transfer;
                         }
+                        TabKey::Settings => {
+                            self.current_view = View::Settings;
+                        }
                     }
                     cx.emit(AppEvent::ViewChanged);
                 }
@@ -617,6 +653,9 @@ impl AppState {
                             }
                         }
                         self.current_view = View::Transfer;
+                    }
+                    TabKey::Settings => {
+                        self.current_view = View::Settings;
                     }
                 }
                 cx.emit(AppEvent::ViewChanged);
@@ -691,6 +730,7 @@ impl AppState {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Transfer(_) => false,
+                TabKey::Settings => false,
             })
             .map(|(idx, _)| idx)
             .collect();

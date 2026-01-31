@@ -21,6 +21,7 @@ pub enum View {
     Documents,
     Database,
     Transfer,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -86,6 +87,7 @@ pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
     Transfer(TransferTabKey),
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -232,6 +234,38 @@ impl BsonOutputFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CompressionMode {
+    #[default]
+    None,
+    Gzip,
+}
+
+impl CompressionMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            CompressionMode::None => "None",
+            CompressionMode::Gzip => "Gzip",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Encoding {
+    #[default]
+    Utf8,
+    Latin1,
+}
+
+impl Encoding {
+    pub fn label(self) -> &'static str {
+        match self {
+            Encoding::Utf8 => "UTF-8",
+            Encoding::Latin1 => "Latin-1",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransferTabKey {
     pub id: Uuid,
@@ -251,11 +285,22 @@ pub struct TransferTabState {
     pub format: TransferFormat,
     pub file_path: String,
 
+    // Compression (all modes)
+    pub compression: CompressionMode,
+
+    // Database scope options (Export/Import/Copy)
+    pub include_collections: Vec<String>,
+    pub exclude_collections: Vec<String>,
+    pub include_indexes: bool,
+
     // Import options
     pub insert_mode: InsertMode,
     pub drop_before_import: bool,
     pub stop_on_error: bool,
     pub batch_size: u32,
+    pub detect_format: bool,
+    pub encoding: Encoding,
+    pub restore_indexes: bool,
 
     // JSON options
     pub json_mode: ExtendedJsonMode,
@@ -263,6 +308,12 @@ pub struct TransferTabState {
 
     // BSON options
     pub bson_output: BsonOutputFormat,
+
+    // Copy options
+    pub copy_indexes: bool,
+    pub copy_options: bool,
+    pub overwrite_target: bool,
+    pub ordered: bool,
 
     // Preview state
     #[serde(skip)]
@@ -295,15 +346,28 @@ impl Default for TransferTabState {
             format: TransferFormat::JsonLines,
             file_path: String::new(),
 
+            compression: CompressionMode::None,
+            include_collections: Vec::new(),
+            exclude_collections: Vec::new(),
+            include_indexes: true,
+
             insert_mode: InsertMode::Insert,
             drop_before_import: false,
             stop_on_error: true,
             batch_size: 1000,
+            detect_format: true,
+            encoding: Encoding::Utf8,
+            restore_indexes: true,
 
             json_mode: ExtendedJsonMode::Relaxed,
             pretty_print: false,
 
             bson_output: BsonOutputFormat::Folder,
+
+            copy_indexes: true,
+            copy_options: true,
+            overwrite_target: false,
+            ordered: true,
 
             preview_docs: Vec::new(),
             preview_loading: false,
@@ -329,6 +393,16 @@ impl TransferTabState {
             "New".to_string()
         };
         format!("{base}: {source}")
+    }
+
+    /// Create a new TransferTabState with defaults from settings.
+    pub fn from_settings(settings: &crate::state::settings::AppSettings) -> Self {
+        Self {
+            format: settings.transfer.default_export_format,
+            batch_size: settings.transfer.default_batch_size,
+            insert_mode: settings.transfer.default_import_mode,
+            ..Self::default()
+        }
     }
 }
 

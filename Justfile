@@ -55,3 +55,7 @@ ci: fmt-check lint check
 
 # All checks before commit
 precommit: ci test
+
+# Download MongoDB tools for BSON export/import support
+download-tools:
+    ./scripts/download_tools.sh
