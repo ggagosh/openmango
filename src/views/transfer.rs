@@ -3,6 +3,7 @@
 use gpui::*;
 use gpui_component::button::Button as MenuButton;
 use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Input, InputEvent, InputState, Position, RopeExt};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -10,17 +11,26 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
 
+use crate::bson::{format_relaxed_json_compact, parse_value_from_relaxed_json};
 use crate::components::Button;
 use crate::components::file_picker::{
-    FileFilter, FilePickerMode, default_export_path_from_settings, filters_for_format,
-    open_file_dialog_async, open_folder_dialog_async,
+    FilePickerMode, filters_for_format, open_file_dialog_async, open_folder_dialog_async,
+    unexpanded_export_filename, unexpanded_export_filename_bson,
 };
 use crate::connection::tools_available;
 use crate::state::{
-    AppCommands, AppState, BsonOutputFormat, CompressionMode, Encoding, ExtendedJsonMode,
-    InsertMode, TransferFormat, TransferMode, TransferScope, TransferTabState,
+    AppCommands, AppState, BsonOutputFormat, CompressionMode, DEFAULT_FILENAME_TEMPLATE, Encoding,
+    ExtendedJsonMode, InsertMode, TransferFormat, TransferMode, TransferScope, TransferTabState,
 };
 use crate::theme::{borders, colors, sizing, spacing};
+
+/// Which query field is being edited in the modal
+#[derive(Clone, Copy, PartialEq)]
+enum QueryEditField {
+    Filter,
+    Projection,
+    Sort,
+}
 
 // Custom SelectItem for connections (stores UUID + display name)
 #[derive(Clone, Debug)]
@@ -57,10 +67,20 @@ pub struct TransferView {
     source_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
     dest_conn_state: Option<Entity<SelectState<SearchableVec<ConnectionItem>>>>,
 
+    // Exclude collections multi-select state
+    exclude_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+
+    // Input state for export path (lazily initialized on first render)
+    export_path_input_state: Option<Entity<InputState>>,
+
     // Track previous items to avoid resetting search state on every render
     prev_conn_ids: Vec<Uuid>,
     prev_db_names: Vec<String>,
     prev_coll_names: Vec<String>,
+
+    // JSON editor modal state
+    query_edit_modal: Option<QueryEditField>, // Which field is being edited (None = closed)
+    query_edit_input: Option<Entity<InputState>>, // Textarea content for modal
 }
 
 impl TransferView {
@@ -76,10 +96,272 @@ impl TransferView {
             source_db_state: None,
             source_coll_state: None,
             dest_conn_state: None,
+            exclude_coll_state: None,
+            export_path_input_state: None,
             prev_conn_ids: Vec::new(),
             prev_db_names: Vec::new(),
             prev_coll_names: Vec::new(),
+            query_edit_modal: None,
+            query_edit_input: None,
         }
+    }
+
+    /// Open the query edit modal for the specified field
+    fn open_query_modal(
+        &mut self,
+        field: QueryEditField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Get current value for this field
+        let current_value = {
+            let state_ref = self.state.read(cx);
+            if let Some(id) = state_ref.active_transfer_tab_id()
+                && let Some(tab) = state_ref.transfer_tab(id)
+            {
+                match field {
+                    QueryEditField::Filter => tab.export_filter.clone(),
+                    QueryEditField::Projection => tab.export_projection.clone(),
+                    QueryEditField::Sort => tab.export_sort.clone(),
+                }
+            } else {
+                String::new()
+            }
+        };
+
+        // Create input state for modal textarea
+        let input_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(current_value, window, cx);
+            state
+        });
+
+        self.query_edit_modal = Some(field);
+        self.query_edit_input = Some(input_state);
+        cx.notify();
+    }
+
+    /// Save the query modal content and close
+    fn save_query_modal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = self.query_edit_modal else {
+            return;
+        };
+        let Some(ref input_state) = self.query_edit_input else {
+            return;
+        };
+
+        let new_value = input_state.read(cx).value().to_string();
+
+        self.state.update(cx, |state, cx| {
+            if let Some(id) = state.active_transfer_tab_id()
+                && let Some(tab) = state.transfer_tab_mut(id)
+            {
+                match field {
+                    QueryEditField::Filter => tab.export_filter = new_value,
+                    QueryEditField::Projection => tab.export_projection = new_value,
+                    QueryEditField::Sort => tab.export_sort = new_value,
+                }
+                cx.notify();
+            }
+        });
+
+        // Close modal
+        self.query_edit_modal = None;
+        self.query_edit_input = None;
+        cx.notify();
+    }
+
+    /// Close the query modal without saving
+    fn close_query_modal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.query_edit_modal = None;
+        self.query_edit_input = None;
+        cx.notify();
+    }
+
+    /// Format the JSON in the modal textarea (compact, single-line since Input doesn't support newlines)
+    fn format_query_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ref input_state) = self.query_edit_input else {
+            return;
+        };
+
+        let current_text = input_state.read(cx).value().to_string();
+        if current_text.is_empty() {
+            return;
+        }
+
+        // Try to parse using relaxed JSON parser, then output as compact relaxed JSON
+        // (Input component doesn't support newlines, so we use single-line format)
+        if let Ok(value) = parse_value_from_relaxed_json(&current_text) {
+            let formatted = format_relaxed_json_compact(&value);
+            input_state.update(cx, |state, cx| {
+                state.set_value(formatted, window, cx);
+            });
+        }
+    }
+
+    /// Clear the JSON in the modal textarea
+    fn clear_query_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ref input_state) = self.query_edit_input {
+            input_state.update(cx, |state, cx| {
+                state.set_value(String::new(), window, cx);
+            });
+        }
+    }
+
+    /// Render the query edit modal (returns empty if not open)
+    fn render_query_edit_modal(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(field) = self.query_edit_modal else {
+            return div().into_any_element();
+        };
+
+        let Some(ref input_state) = self.query_edit_input else {
+            return div().into_any_element();
+        };
+
+        let title = match field {
+            QueryEditField::Filter => "Edit Filter",
+            QueryEditField::Projection => "Edit Projection",
+            QueryEditField::Sort => "Edit Sort",
+        };
+
+        let current_text = input_state.read(cx).value().to_string();
+        let is_valid =
+            current_text.is_empty() || parse_value_from_relaxed_json(&current_text).is_ok();
+
+        let view = cx.entity();
+        let view_save = view.clone();
+        let view_cancel = view.clone();
+        let view_format = view.clone();
+        let view_clear = view.clone();
+
+        // Modal overlay
+        div()
+            .absolute()
+            .inset_0()
+            .bg(hsla(0.0, 0.0, 0.0, 0.5)) // Semi-transparent backdrop
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(500.0))
+                    .max_h(px(400.0))
+                    .bg(colors::bg_sidebar())
+                    .rounded(borders::radius_sm())
+                    .border_1()
+                    .border_color(colors::border())
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    // Header
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(spacing::md())
+                            .py(spacing::sm())
+                            .border_b_1()
+                            .border_color(colors::border_subtle())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(colors::text_primary())
+                                    .child(title),
+                            )
+                            .child(
+                                Button::new("modal-close")
+                                    .ghost()
+                                    .compact()
+                                    .icon(IconName::Close)
+                                    .on_click(move |_, window, cx| {
+                                        view_cancel.update(cx, |view, cx| {
+                                            view.close_query_modal(window, cx);
+                                        });
+                                    }),
+                            ),
+                    )
+                    // Body - textarea
+                    .child(
+                        div()
+                            .flex_1()
+                            .p(spacing::md())
+                            .min_h(px(200.0))
+                            .child(Input::new(input_state).h_full().w_full()),
+                    )
+                    // Validation status
+                    .child(
+                        div()
+                            .px(spacing::md())
+                            .pb(spacing::sm())
+                            .text_sm()
+                            .text_color(if is_valid {
+                                hsla(0.33, 0.7, 0.5, 1.0) // Green
+                            } else {
+                                hsla(0.0, 0.7, 0.5, 1.0) // Red
+                            })
+                            .child(if is_valid { "✓ Valid JSON" } else { "✗ Invalid JSON" }),
+                    )
+                    // Footer buttons
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap(spacing::sm())
+                            .px(spacing::md())
+                            .py(spacing::sm())
+                            .border_t_1()
+                            .border_color(colors::border_subtle())
+                            .child(
+                                Button::new("modal-format")
+                                    .ghost()
+                                    .compact()
+                                    .label("Format")
+                                    .on_click(move |_, window, cx| {
+                                        view_format.update(cx, |view, cx| {
+                                            view.format_query_modal(window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("modal-clear")
+                                    .ghost()
+                                    .compact()
+                                    .label("Clear")
+                                    .on_click(move |_, window, cx| {
+                                        view_clear.update(cx, |view, cx| {
+                                            view.clear_query_modal(window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("modal-cancel")
+                                    .ghost()
+                                    .compact()
+                                    .label("Cancel")
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |view, cx| {
+                                            view.close_query_modal(window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("modal-save")
+                                    .primary()
+                                    .compact()
+                                    .label("Save")
+                                    .disabled(!is_valid)
+                                    .on_click(move |_, window, cx| {
+                                        view_save.update(cx, |view, cx| {
+                                            view.save_query_modal(window, cx);
+                                        });
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Initialize select states on first render (when window is available)
@@ -101,6 +383,11 @@ impl TransferView {
             SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
         });
         let dest_conn_state = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
+        });
+
+        // Create exclude collections select state (searchable multi-select behavior)
+        let exclude_coll_state = cx.new(|cx| {
             SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
         });
 
@@ -224,11 +511,81 @@ impl TransferView {
             },
         );
 
-        self._select_subscriptions = vec![sub1, sub2, sub3, sub4];
+        // Subscribe to exclude collections select - append to exclude list (multi-select behavior)
+        let state_clone = state.clone();
+        let exclude_coll_state_clone = exclude_coll_state.clone();
+        let sub6 = cx.subscribe_in(
+            &exclude_coll_state,
+            window,
+            move |_view,
+                  _select_state,
+                  event: &SelectEvent<SearchableVec<SharedString>>,
+                  window,
+                  cx| {
+                if let SelectEvent::Confirm(Some(coll_name)) = event {
+                    let coll_str = coll_name.to_string();
+                    state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            // Only add if not already excluded
+                            if !tab.exclude_collections.contains(&coll_str) {
+                                tab.exclude_collections.push(coll_str);
+                            }
+                            cx.notify();
+                        }
+                    });
+                    // Clear selection after pick (multi-select behavior)
+                    exclude_coll_state_clone.update(cx, |s, cx| {
+                        s.set_selected_index(None, window, cx);
+                    });
+                }
+            },
+        );
+
+        // Create export path input state
+        let current_file_path = {
+            let state_ref = state.read(cx);
+            state_ref
+                .active_transfer_tab_id()
+                .and_then(|id| state_ref.transfer_tab(id).map(|tab| tab.file_path.clone()))
+                .unwrap_or_default()
+        };
+
+        let export_path_input_state = cx.new(|cx| {
+            let mut input_state =
+                InputState::new(window, cx).placeholder("Select folder or enter path...");
+            input_state.set_value(current_file_path, window, cx);
+            input_state
+        });
+
+        // Subscribe to export path input changes
+        let state_clone = state.clone();
+        let sub5 = cx.subscribe_in(
+            &export_path_input_state,
+            window,
+            move |_view, input_state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let new_path = input_state.read(cx).value().to_string();
+                    state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            tab.file_path = new_path;
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        );
+
+        self._select_subscriptions = vec![sub1, sub2, sub3, sub4, sub5, sub6];
         self.source_conn_state = Some(source_conn_state);
         self.source_db_state = Some(source_db_state);
         self.source_coll_state = Some(source_coll_state);
         self.dest_conn_state = Some(dest_conn_state);
+        self.exclude_coll_state = Some(exclude_coll_state);
+        self.export_path_input_state = Some(export_path_input_state);
     }
 }
 
@@ -380,7 +737,15 @@ impl Render for TransferView {
                 coll_names.iter().map(|s| SharedString::from(s.clone())).collect();
             if let Some(ref source_coll_state) = self.source_coll_state {
                 source_coll_state.update(cx, |s, cx| {
+                    s.set_items(SearchableVec::new(coll_items.clone()), window, cx);
+                });
+            }
+            // Update exclude collections dropdown with same items
+            if let Some(ref exclude_coll_state) = self.exclude_coll_state {
+                exclude_coll_state.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(coll_items), window, cx);
+                    // Clear selection (multi-select behavior)
+                    s.set_selected_index(None, window, cx);
                 });
             }
             self.prev_coll_names = coll_names.clone();
@@ -606,10 +971,10 @@ impl Render for TransferView {
             );
 
         // Source panel
-        let source_panel = self.render_source_panel(&transfer_state);
+        let source_panel = self.render_source_panel(&transfer_state, cx);
 
         // Destination panel
-        let destination_panel = self.render_destination_panel(&transfer_state, cx);
+        let destination_panel = self.render_destination_panel(&transfer_state, window, cx);
 
         let source_conn_name = transfer_state
             .source_connection_id
@@ -659,7 +1024,11 @@ impl Render for TransferView {
         // Section spacing
         let section_gap = px(20.0);
 
+        // Modal overlay for query editing
+        let modal_overlay = self.render_query_edit_modal(window, cx);
+
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -687,20 +1056,27 @@ impl Render for TransferView {
                     // Summary at bottom - review before action
                     .child(summary_panel),
             )
+            .child(modal_overlay)
             .into_any_element()
     }
 }
 
 impl TransferView {
-    fn render_source_panel(&self, transfer_state: &TransferTabState) -> impl IntoElement {
+    fn render_source_panel(
+        &self,
+        transfer_state: &TransferTabState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let show_collection = matches!(transfer_state.scope, TransferScope::Collection);
+        let show_query_options =
+            matches!(transfer_state.mode, TransferMode::Export) && show_collection;
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
-            return panel("Source", div().child("Loading..."));
+            return panel("Source", div().child("Loading...")).into_any_element();
         };
         let Some(ref source_db_state) = self.source_db_state else {
-            return panel("Source", div().child("Loading..."));
+            return panel("Source", div().child("Loading...")).into_any_element();
         };
 
         let conn_select =
@@ -717,6 +1093,40 @@ impl TransferView {
             None
         };
 
+        // Query options rows (Filter, Projection, Sort)
+        let view = cx.entity();
+        let state = self.state.clone();
+        let query_options = if show_query_options {
+            vec![
+                render_query_field_row(
+                    "Filter",
+                    QueryEditField::Filter,
+                    &transfer_state.export_filter,
+                    view.clone(),
+                    state.clone(),
+                )
+                .into_any_element(),
+                render_query_field_row(
+                    "Projection",
+                    QueryEditField::Projection,
+                    &transfer_state.export_projection,
+                    view.clone(),
+                    state.clone(),
+                )
+                .into_any_element(),
+                render_query_field_row(
+                    "Sort",
+                    QueryEditField::Sort,
+                    &transfer_state.export_sort,
+                    view,
+                    state,
+                )
+                .into_any_element(),
+            ]
+        } else {
+            vec![]
+        };
+
         panel(
             "Source",
             div()
@@ -725,172 +1135,235 @@ impl TransferView {
                 .gap(spacing::md())
                 .child(form_row("Connection", conn_select))
                 .child(form_row("Database", db_select))
-                .children(coll_select.map(|s| form_row("Collection", s))),
+                .children(coll_select.map(|s| form_row("Collection", s)))
+                .children(query_options),
         )
+        .into_any_element()
     }
 
     fn render_destination_panel(
         &self,
         transfer_state: &TransferTabState,
-        cx: &App,
-    ) -> impl IntoElement {
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let state = self.state.clone();
         let settings = self.state.read(cx).settings.clone();
 
         match transfer_state.mode {
             TransferMode::Export => {
-                // Check if we need a folder picker (BSON + Folder output) or file picker
-                let is_bson_folder = matches!(transfer_state.format, TransferFormat::Bson)
-                    && matches!(transfer_state.bson_output, BsonOutputFormat::Folder);
+                // All export formats use folder picker + editable input with placeholders
+                let Some(ref export_path_input_state) = self.export_path_input_state else {
+                    return panel("Destination", div().child("Loading...")).into_any_element();
+                };
 
-                if is_bson_folder {
-                    // BSON Folder output → use folder picker
-                    let folder_path = if transfer_state.file_path.is_empty() {
-                        "No folder selected".to_string()
-                    } else {
-                        // Show folder name
-                        std::path::Path::new(&transfer_state.file_path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| transfer_state.file_path.clone())
-                    };
-
-                    let browse_button = {
-                        let state = state.clone();
-                        Button::new("browse-export-folder").compact().label("Browse...").on_click(
-                            move |_, _, cx| {
-                                let state = state.clone();
-                                cx.spawn(async move |cx| {
-                                    if let Some(path) = open_folder_dialog_async().await {
-                                        cx.update(|cx| {
-                                            state.update(cx, |state, cx| {
-                                                if let Some(tab_id) = state.active_transfer_tab_id()
-                                                    && let Some(tab) =
-                                                        state.transfer_tab_mut(tab_id)
-                                                {
-                                                    tab.file_path = path.display().to_string();
-                                                    cx.notify();
-                                                }
-                                            });
-                                        })
-                                        .ok();
-                                    }
-                                })
-                                .detach();
-                            },
-                        )
-                    };
-
-                    let folder_control = div()
-                        .flex()
-                        .items_center()
-                        .gap(spacing::sm())
-                        .child(
-                            value_box(folder_path, transfer_state.file_path.is_empty())
-                                .flex_1()
-                                .overflow_x_hidden()
-                                .text_ellipsis(),
-                        )
-                        .child(browse_button);
-
-                    panel(
-                        "Destination",
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::md())
-                            .child(form_row("Output Folder", folder_control)),
-                    )
-                    .into_any_element()
-                } else {
-                    // All other formats → use file picker
-                    let file_path = if transfer_state.file_path.is_empty() {
-                        "No file selected".to_string()
-                    } else {
-                        // Show just filename with ellipsis for long paths
-                        let path = std::path::Path::new(&transfer_state.file_path);
-                        path.file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| transfer_state.file_path.clone())
-                    };
-
-                    // Determine the label based on format
-                    let dest_label = if matches!(transfer_state.format, TransferFormat::Bson) {
-                        "Archive File"
-                    } else {
-                        "File"
-                    };
-
-                    let browse_button = {
-                        let state = state.clone();
-                        let format = transfer_state.format;
-                        let db = transfer_state.source_database.clone();
-                        let coll = transfer_state.source_collection.clone();
-                        let settings = settings.clone();
-                        let is_bson_archive = matches!(format, TransferFormat::Bson);
-                        Button::new("browse-export").compact().label("Browse...").on_click(
-                            move |_, _, cx| {
-                                // Use .archive filter for BSON Archive
-                                let filters = if is_bson_archive {
-                                    vec![FileFilter::bson_archive(), FileFilter::all()]
-                                } else {
-                                    filters_for_format(format)
-                                };
-                                let default_path = default_export_path_from_settings(
-                                    &settings, &db, &coll, format,
-                                );
-                                let state = state.clone();
-                                cx.spawn(async move |cx| {
-                                    if let Some(path) = open_file_dialog_async(
-                                        FilePickerMode::Save,
-                                        filters,
-                                        Some(default_path),
-                                    )
-                                    .await
-                                    {
-                                        cx.update(|cx| {
-                                            state.update(cx, |state, cx| {
-                                                if let Some(tab_id) = state.active_transfer_tab_id()
-                                                    && let Some(tab) =
-                                                        state.transfer_tab_mut(tab_id)
-                                                {
-                                                    tab.file_path = path.display().to_string();
-                                                    cx.notify();
-                                                }
-                                            });
-                                        })
-                                        .ok();
-                                    }
-                                })
-                                .detach();
-                            },
-                        )
-                    };
-
-                    let file_control = div()
-                        .flex()
-                        .items_center()
-                        .gap(spacing::sm())
-                        .child(
-                            value_box(file_path, transfer_state.file_path.is_empty())
-                                .flex_1()
-                                .overflow_x_hidden()
-                                .text_ellipsis(),
-                        )
-                        .child(browse_button);
-
-                    panel(
-                        "Destination",
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::md())
-                            .child(form_row(dest_label, file_control)),
-                    )
-                    .into_any_element()
+                // Sync input state with transfer state file_path (when changed externally)
+                let input_value = export_path_input_state.read(cx).value().to_string();
+                if input_value != transfer_state.file_path {
+                    export_path_input_state.update(cx, |input_state, cx| {
+                        input_state.set_value(transfer_state.file_path.clone(), window, cx);
+                    });
                 }
+
+                let is_bson = matches!(transfer_state.format, TransferFormat::Bson);
+                let is_bson_folder =
+                    is_bson && matches!(transfer_state.bson_output, BsonOutputFormat::Folder);
+
+                // Determine the label based on format and output mode
+                let dest_label = if is_bson_folder {
+                    "Output Folder"
+                } else if is_bson {
+                    "Archive File"
+                } else {
+                    "File"
+                };
+
+                // Folder browse button - opens folder picker, then appends template filename
+                let browse_button = {
+                    let state = state.clone();
+                    let format = transfer_state.format;
+                    let bson_output = transfer_state.bson_output;
+                    let settings = settings.clone();
+                    Button::new("browse-export-folder").compact().icon(IconName::Folder).on_click(
+                        move |_, _, cx| {
+                            let state = state.clone();
+                            let settings = settings.clone();
+                            cx.spawn(async move |cx| {
+                                if let Some(folder_path) = open_folder_dialog_async().await {
+                                    cx.update(|cx| {
+                                        // Generate unexpanded filename from template
+                                        // Use BSON-specific function for BSON format
+                                        let filename = if matches!(format, TransferFormat::Bson) {
+                                            unexpanded_export_filename_bson(&settings, bson_output)
+                                        } else {
+                                            unexpanded_export_filename(&settings, format)
+                                        };
+                                        let full_path =
+                                            folder_path.join(&filename).display().to_string();
+
+                                        // Update tab state (InputState synced in render)
+                                        state.update(cx, |state, cx| {
+                                            if let Some(tab_id) = state.active_transfer_tab_id()
+                                                && let Some(tab) = state.transfer_tab_mut(tab_id)
+                                            {
+                                                tab.file_path = full_path;
+                                                cx.notify();
+                                            }
+                                        });
+                                    })
+                                    .ok();
+                                }
+                            })
+                            .detach();
+                        },
+                    )
+                };
+
+                // Placeholder dropdown button - insert placeholders at cursor
+                let placeholder_button = {
+                    let state = state.clone();
+                    let export_path_input = export_path_input_state.clone();
+                    let format = transfer_state.format;
+                    let bson_output = transfer_state.bson_output;
+                    MenuButton::new("placeholder-dropdown")
+                        .compact()
+                        .label("${}")
+                        .rounded(borders::radius_sm())
+                        .with_size(Size::XSmall)
+                        .dropdown_menu_with_anchor(
+                            Corner::BottomLeft,
+                            move |mut menu, _window, _cx| {
+                                // Only show user-insertable placeholders (date/time variants)
+                                let insertable_placeholders = [
+                                    ("${datetime}", "Date and time"),
+                                    ("${date}", "Date only"),
+                                    ("${time}", "Time only"),
+                                ];
+
+                                for (placeholder, description) in insertable_placeholders {
+                                    let p = placeholder.to_string();
+                                    let export_path_input = export_path_input.clone();
+                                    menu =
+                                        menu.item(
+                                            PopupMenuItem::new(format!(
+                                                "{} - {}",
+                                                placeholder, description
+                                            ))
+                                            .on_click(move |_, window, cx| {
+                                                // Insert placeholder at cursor position
+                                                export_path_input.update(cx, |input_state, cx| {
+                                                    let cursor = input_state.cursor();
+                                                    let text = input_state.value().to_string();
+                                                    let mut new_text =
+                                                        String::with_capacity(text.len() + p.len());
+                                                    new_text.push_str(&text[..cursor]);
+                                                    new_text.push_str(&p);
+                                                    new_text.push_str(&text[cursor..]);
+                                                    input_state.set_value(new_text, window, cx);
+                                                    // Move cursor to after inserted text
+                                                    let new_cursor_offset = cursor + p.len();
+                                                    let position = input_state
+                                                        .text()
+                                                        .offset_to_position(new_cursor_offset);
+                                                    input_state.set_cursor_position(
+                                                        Position::new(
+                                                            position.line,
+                                                            position.character,
+                                                        ),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                        );
+                                }
+
+                                // Add reset option
+                                let state = state.clone();
+                                let export_path_input = export_path_input.clone();
+                                menu = menu.separator().item(
+                                    PopupMenuItem::new("Reset to default").on_click(
+                                        move |_, window, cx| {
+                                            // Get current folder from path (if any)
+                                            let current_path =
+                                                export_path_input.read(cx).value().to_string();
+                                            let folder = std::path::Path::new(&current_path)
+                                                .parent()
+                                                .map(|p| p.to_path_buf());
+
+                                            // Generate default filename based on format
+                                            let default_filename =
+                                                if matches!(format, TransferFormat::Bson) {
+                                                    // BSON: use .archive or no extension
+                                                    match bson_output {
+                                                        BsonOutputFormat::Archive => {
+                                                            format!(
+                                                                "{}.archive",
+                                                                DEFAULT_FILENAME_TEMPLATE
+                                                            )
+                                                        }
+                                                        BsonOutputFormat::Folder => {
+                                                            DEFAULT_FILENAME_TEMPLATE.to_string()
+                                                        }
+                                                    }
+                                                } else {
+                                                    format!(
+                                                        "{}.{}",
+                                                        DEFAULT_FILENAME_TEMPLATE,
+                                                        format.extension()
+                                                    )
+                                                };
+
+                                            // Combine folder + default filename
+                                            let new_path = if let Some(folder) = folder {
+                                                folder.join(&default_filename).display().to_string()
+                                            } else {
+                                                default_filename
+                                            };
+
+                                            // Update input state
+                                            export_path_input.update(cx, |input_state, cx| {
+                                                input_state.set_value(new_path.clone(), window, cx);
+                                            });
+
+                                            // Update tab state
+                                            state.update(cx, |state, cx| {
+                                                if let Some(tab_id) = state.active_transfer_tab_id()
+                                                    && let Some(tab) =
+                                                        state.transfer_tab_mut(tab_id)
+                                                {
+                                                    tab.file_path = new_path;
+                                                    cx.notify();
+                                                }
+                                            });
+                                        },
+                                    ),
+                                );
+                                menu
+                            },
+                        )
+                };
+
+                // Editable input for file path
+                let file_input = Input::new(export_path_input_state).small().flex_1();
+
+                let file_control = div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(file_input)
+                    .child(placeholder_button)
+                    .child(browse_button);
+
+                panel(
+                    "Destination",
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::md())
+                        .child(form_row(dest_label, file_control)),
+                )
+                .into_any_element()
             }
             TransferMode::Import => {
                 let file_path = if transfer_state.file_path.is_empty() {
@@ -1299,6 +1772,89 @@ impl TransferView {
                             )
                             .into_any_element(),
                         );
+
+                        // Collection Filter section (only for BSON export + Database scope)
+                        if matches!(transfer_state.format, TransferFormat::Bson) {
+                            let exclude_select =
+                                if let Some(ref exclude_state) = self.exclude_coll_state {
+                                    Select::new(exclude_state)
+                                        .small()
+                                        .w_full()
+                                        .placeholder("Search collections to exclude...")
+                                        .into_any_element()
+                                } else {
+                                    div().into_any_element()
+                                };
+
+                            // Render tags for excluded collections
+                            let excluded_tags = {
+                                let state = state.clone();
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(spacing::xs())
+                                    .mt(spacing::xs())
+                                    .children(
+                                        transfer_state.exclude_collections.iter().enumerate().map(
+                                            |(idx, coll)| {
+                                                let coll_name = coll.clone();
+                                                let state = state.clone();
+
+                                                div()
+                                                    .id(("exclude-tag", idx))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(spacing::xs())
+                                                    .px(spacing::sm())
+                                                    .py_1()
+                                                    .rounded(borders::radius_sm())
+                                                    .bg(colors::bg_header())
+                                                    .border_1()
+                                                    .border_color(colors::border_subtle())
+                                                    .text_sm()
+                                                    .child(coll.clone())
+                                                    .child(
+                                                        div()
+                                                            .id(("exclude-tag-remove", idx))
+                                                            .cursor_pointer()
+                                                            .text_color(colors::text_muted())
+                                                            .hover(|s| {
+                                                                s.text_color(colors::text_primary())
+                                                            })
+                                                            .on_click(move |_, _, cx| {
+                                                                let coll_name = coll_name.clone();
+                                                                state.update(cx, |state, cx| {
+                                                                    if let Some(id) = state
+                                                                        .active_transfer_tab_id()
+                                                                        && let Some(tab) = state
+                                                                            .transfer_tab_mut(id)
+                                                                    {
+                                                                        tab.exclude_collections
+                                                                            .retain(|c| {
+                                                                                c != &coll_name
+                                                                            });
+                                                                        cx.notify();
+                                                                    }
+                                                                });
+                                                            })
+                                                            .child("×"),
+                                                    )
+                                            },
+                                        ),
+                                    )
+                            };
+
+                            sections.push(
+                                option_section(
+                                    "Collection Filter",
+                                    vec![
+                                        option_field("Exclude", exclude_select),
+                                        excluded_tags.into_any_element(),
+                                    ],
+                                )
+                                .into_any_element(),
+                            );
+                        }
                     }
                 }
                 TransferMode::Import => {
@@ -1441,6 +1997,21 @@ impl TransferView {
                         })
                     };
 
+                    let clear_checkbox = {
+                        let state = state.clone();
+                        let checked = transfer_state.clear_before_import;
+                        checkbox_field(("clear-before", key), checked, move |cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(id) = state.active_transfer_tab_id()
+                                    && let Some(tab) = state.transfer_tab_mut(id)
+                                {
+                                    tab.clear_before_import = !checked;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    };
+
                     let stop_checkbox = {
                         let state = state.clone();
                         let checked = transfer_state.stop_on_error;
@@ -1471,6 +2042,10 @@ impl TransferView {
                                 option_field(
                                     "Drop before import",
                                     drop_checkbox.into_any_element(),
+                                ),
+                                option_field(
+                                    "Clear before import",
+                                    clear_checkbox.into_any_element(),
                                 ),
                                 option_field("Stop on error", stop_checkbox.into_any_element()),
                             ],
@@ -1952,4 +2527,82 @@ fn summary_item(label: &str, value: impl Into<String>) -> impl IntoElement {
 /// Returns the value if non-empty, otherwise returns the fallback.
 fn fallback_text(value: &str, fallback: &str) -> String {
     if value.is_empty() { fallback.to_string() } else { value.to_string() }
+}
+
+/// Render a read-only query field row with Edit and Clear buttons
+fn render_query_field_row(
+    label: &str,
+    field: QueryEditField,
+    value: &str,
+    view: Entity<TransferView>,
+    state: Entity<AppState>,
+) -> impl IntoElement {
+    // Display text: truncated JSON or "(none)"
+    let display_text = if value.is_empty() {
+        "(none)".to_string()
+    } else {
+        // Truncate if longer than ~40 chars
+        if value.len() > 40 { format!("{}...", &value[..37]) } else { value.to_string() }
+    };
+
+    let is_empty = value.is_empty();
+
+    let value_box = div()
+        .flex_1()
+        .px(spacing::sm())
+        .py_1()
+        .rounded(borders::radius_sm())
+        .bg(colors::bg_app())
+        .border_1()
+        .border_color(colors::border())
+        .text_sm()
+        .text_color(if is_empty { colors::text_muted() } else { colors::text_primary() })
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(display_text);
+
+    let edit_button = Button::new(("edit-query", field as usize)).compact().label("Edit").on_click(
+        move |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.open_query_modal(field, window, cx);
+            });
+        },
+    );
+
+    // Clear button - only shown when field has a value
+    let clear_button = if !is_empty {
+        Some(
+            Button::new(("clear-query", field as usize))
+                .ghost()
+                .compact()
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                    state.update(cx, |state, cx| {
+                        if let Some(id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(id)
+                        {
+                            match field {
+                                QueryEditField::Filter => tab.export_filter.clear(),
+                                QueryEditField::Projection => tab.export_projection.clear(),
+                                QueryEditField::Sort => tab.export_sort.clear(),
+                            }
+                            cx.notify();
+                        }
+                    });
+                }),
+        )
+    } else {
+        None
+    };
+
+    form_row(
+        label,
+        div()
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .child(value_box)
+            .child(edit_button)
+            .children(clear_button),
+    )
 }

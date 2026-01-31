@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 /// File picker mode - determines whether we're opening or saving.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub enum FilePickerMode {
     Open,
     Save,
@@ -123,6 +124,7 @@ pub fn default_export_filename(
 }
 
 /// Generate a default filename for export using settings template.
+#[allow(dead_code)]
 pub fn default_export_filename_from_settings(
     settings: &crate::state::AppSettings,
     database: &str,
@@ -138,6 +140,7 @@ pub fn default_export_filename_from_settings(
 }
 
 /// Generate a default file path for export using settings.
+#[allow(dead_code)]
 pub fn default_export_path_from_settings(
     settings: &crate::state::AppSettings,
     database: &str,
@@ -150,5 +153,30 @@ pub fn default_export_path_from_settings(
     } else {
         let path = std::path::Path::new(&settings.transfer.default_export_folder).join(&filename);
         path.display().to_string()
+    }
+}
+
+/// Generate export filename from template WITHOUT expanding placeholders.
+/// Used when user browses for folder - shows template with placeholders visible.
+/// For BSON format, use `unexpanded_export_filename_bson` instead to specify output mode.
+pub fn unexpanded_export_filename(
+    settings: &crate::state::AppSettings,
+    format: crate::state::TransferFormat,
+) -> String {
+    let template = &settings.transfer.export_filename_template;
+    format!("{}.{}", template, format.extension())
+}
+
+/// Generate export filename for BSON format based on output mode.
+/// - Archive mode: uses `.archive` extension
+/// - Folder mode: no extension (template is the folder name)
+pub fn unexpanded_export_filename_bson(
+    settings: &crate::state::AppSettings,
+    output_mode: crate::state::BsonOutputFormat,
+) -> String {
+    let template = &settings.transfer.export_filename_template;
+    match output_mode {
+        crate::state::BsonOutputFormat::Archive => format!("{}.archive", template),
+        crate::state::BsonOutputFormat::Folder => template.clone(),
     }
 }

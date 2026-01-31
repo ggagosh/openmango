@@ -316,6 +316,11 @@ pub struct TransferTabState {
     pub overwrite_target: bool,
     pub ordered: bool,
 
+    // Export query options (Collection scope only)
+    pub export_filter: String, // JSON filter string, e.g. {"status": "active"}
+    pub export_projection: String, // JSON projection string, e.g. {"_id": 1, "name": 1}
+    pub export_sort: String,   // JSON sort string, e.g. {"createdAt": -1}
+
     // Preview state
     #[serde(skip)]
     pub preview_docs: Vec<String>,
@@ -370,6 +375,10 @@ impl Default for TransferTabState {
             copy_options: true,
             overwrite_target: false,
             ordered: true,
+
+            export_filter: String::new(),
+            export_projection: String::new(),
+            export_sort: String::new(),
 
             preview_docs: Vec::new(),
             preview_loading: false,

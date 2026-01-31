@@ -4,12 +4,17 @@ GPU-accelerated MongoDB GUI client built with Rust and GPUI (like Studio 3T).
 
 ## Quick Start
 
+**IMPORTANT: Always use `just` commands, never use `cargo` directly.**
+
 ```bash
 just dev      # Run in development mode
 just debug    # Run with debug logging
-just lint     # Run clippy
+just check    # Type check without building
+just lint     # Run clippy (with -D warnings)
 just fmt      # Format code
+just test     # Run tests
 just release  # Build release with mimalloc
+just precommit # Run all checks before commit
 ```
 
 ## Tech Stack

@@ -415,6 +415,57 @@ fn is_relaxed_key(key: &str) -> bool {
     true
 }
 
+/// Format a JSON value using relaxed MongoDB-style keys, compact single-line format.
+pub fn format_relaxed_json_compact(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(val) => val.to_string(),
+        Value::Number(num) => num.to_string(),
+        Value::String(text) => serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string()),
+        Value::Array(items) => format_relaxed_array_compact(items),
+        Value::Object(map) => format_relaxed_object_compact(map),
+    }
+}
+
+fn format_relaxed_array_compact(items: &[Value]) -> String {
+    if items.is_empty() {
+        return "[]".to_string();
+    }
+    let mut out = String::new();
+    out.push('[');
+    for (idx, item) in items.iter().enumerate() {
+        out.push_str(&format_relaxed_json_compact(item));
+        if idx + 1 < items.len() {
+            out.push_str(", ");
+        }
+    }
+    out.push(']');
+    out
+}
+
+fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String {
+    if map.is_empty() {
+        return "{}".to_string();
+    }
+    let mut out = String::new();
+    out.push('{');
+    let len = map.len();
+    for (idx, (key, value)) in map.iter().enumerate() {
+        if is_relaxed_key(key) {
+            out.push_str(key);
+        } else {
+            out.push_str(&serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string()));
+        }
+        out.push_str(": ");
+        out.push_str(&format_relaxed_json_compact(value));
+        if idx + 1 < len {
+            out.push_str(", ");
+        }
+    }
+    out.push('}');
+    out
+}
+
 /// Parse an edited string value back into BSON, matching the original type.
 pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> {
     let trimmed = input.trim();

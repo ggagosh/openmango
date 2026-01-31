@@ -126,6 +126,14 @@ impl Default for CsvImportOptions {
     }
 }
 
+/// Query options for collection-level exports
+#[derive(Clone, Debug, Default)]
+pub struct ExportQueryOptions {
+    pub filter: Option<Document>,
+    pub projection: Option<Document>,
+    pub sort: Option<Document>,
+}
+
 impl From<crate::error::Error> for AggregatePipelineError {
     fn from(value: crate::error::Error) -> Self {
         Self::Mongo(value)
@@ -500,6 +508,26 @@ impl ConnectionManager {
         path: &Path,
         options: JsonExportOptions,
     ) -> Result<u64> {
+        self.export_collection_json_with_query(
+            client,
+            database,
+            collection,
+            path,
+            options,
+            ExportQueryOptions::default(),
+        )
+    }
+
+    /// Export a collection to JSON/JSONL with full options and query options (runs in Tokio runtime).
+    pub fn export_collection_json_with_query(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: JsonExportOptions,
+        query: ExportQueryOptions,
+    ) -> Result<u64> {
         use futures::TryStreamExt;
 
         let client = client.clone();
@@ -509,7 +537,14 @@ impl ConnectionManager {
 
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
-            let mut cursor = coll.find(doc! {}).await?;
+
+            // Build find options with query options
+            let filter = query.filter.unwrap_or_default();
+            let mut find_options = mongodb::options::FindOptions::default();
+            find_options.projection = query.projection;
+            find_options.sort = query.sort;
+
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
             let file = File::create(&path)?;
 
             // Wrap writer with gzip encoder if compression is enabled
@@ -573,6 +608,7 @@ impl ConnectionManager {
     }
 
     /// Export a collection to CSV (runs in Tokio runtime).
+    #[allow(dead_code)]
     pub fn export_collection_csv(
         &self,
         client: &Client,
@@ -580,6 +616,26 @@ impl ConnectionManager {
         collection: &str,
         path: &Path,
         gzip: bool,
+    ) -> Result<u64> {
+        self.export_collection_csv_with_query(
+            client,
+            database,
+            collection,
+            path,
+            gzip,
+            ExportQueryOptions::default(),
+        )
+    }
+
+    /// Export a collection to CSV with query options (runs in Tokio runtime).
+    pub fn export_collection_csv_with_query(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        gzip: bool,
+        query: ExportQueryOptions,
     ) -> Result<u64> {
         use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
@@ -592,11 +648,15 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
 
+            // Build find options with query options
+            let filter = query.filter.clone().unwrap_or_default();
+            let mut find_options = mongodb::options::FindOptions::default();
+            find_options.projection = query.projection.clone();
+            find_options.sort = query.sort.clone();
+            find_options.limit = Some(1000);
+
             // First pass: collect all column names from first batch of documents
-            let sample_cursor = coll
-                .find(doc! {})
-                .with_options(mongodb::options::FindOptions::builder().limit(1000).build())
-                .await?;
+            let sample_cursor = coll.find(filter.clone()).with_options(find_options).await?;
             let sample_docs: Vec<Document> = sample_cursor.try_collect().await?;
             let columns = collect_columns(&sample_docs);
 
@@ -617,8 +677,13 @@ impl ConnectionManager {
             // Write header
             csv_writer.write_record(&columns)?;
 
+            // Build find options for full export (without limit)
+            let mut export_find_options = mongodb::options::FindOptions::default();
+            export_find_options.projection = query.projection;
+            export_find_options.sort = query.sort;
+
             // Second pass: write all documents
-            let mut cursor = coll.find(doc! {}).await?;
+            let mut cursor = coll.find(filter).with_options(export_find_options).await?;
             let mut count = 0u64;
 
             while let Some(doc) = cursor.try_next().await? {
@@ -900,6 +965,7 @@ impl ConnectionManager {
         output_format: BsonOutputFormat,
         path: &Path,
         gzip: bool,
+        exclude_collections: &[String],
     ) -> Result<()> {
         let mongodump = mongodump_path().ok_or_else(|| {
             Error::ToolNotFound(
@@ -913,6 +979,11 @@ impl ConnectionManager {
 
         if gzip {
             cmd.arg("--gzip");
+        }
+
+        // Add exclude collection flags
+        for collection in exclude_collections {
+            cmd.arg("--excludeCollection").arg(collection);
         }
 
         match output_format {

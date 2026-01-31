@@ -5,15 +5,17 @@ use std::path::PathBuf;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
+use crate::bson::parse_document_from_json;
 use crate::connection::csv_utils::detect_problematic_fields;
 use crate::connection::get_connection_manager;
 use crate::connection::mongo::{
-    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExtendedJsonMode, FileEncoding,
-    InsertMode, JsonExportOptions, JsonImportOptions, JsonTransferFormat, generate_export_preview,
+    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExportQueryOptions,
+    ExtendedJsonMode, FileEncoding, InsertMode, JsonExportOptions, JsonImportOptions,
+    JsonTransferFormat, generate_export_preview,
 };
 use crate::state::{
     AppCommands, AppEvent, AppState, SessionKey, StatusMessage, TransferFormat, TransferMode,
-    TransferScope,
+    TransferScope, expand_filename_template,
 };
 
 impl AppCommands {
@@ -172,9 +174,12 @@ impl AppCommands {
             return;
         }
 
-        let path = PathBuf::from(&config.file_path);
         let database = config.source_database.clone();
         let collection = config.source_collection.clone();
+
+        // Expand placeholders in file path (e.g., ${datetime}, ${database}, ${collection})
+        let expanded_path = expand_filename_template(&config.file_path, &database, &collection);
+        let path = PathBuf::from(&expanded_path);
         let format = config.format;
         let scope = config.scope;
         let json_mode = match config.json_mode {
@@ -187,6 +192,11 @@ impl AppCommands {
             crate::state::BsonOutputFormat::Archive => MongoBsonOutputFormat::Archive,
         };
         let gzip = matches!(config.compression, crate::state::CompressionMode::Gzip);
+
+        // Parse export query options (only for collection scope)
+        let export_filter = config.export_filter.clone();
+        let export_projection = config.export_projection.clone();
+        let export_sort = config.export_sort.clone();
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -202,6 +212,38 @@ impl AppCommands {
         let task = cx.background_spawn(async move {
             let manager = get_connection_manager();
 
+            // Parse query options for collection-level exports using relaxed JSON parser
+            let query_options = if matches!(scope, TransferScope::Collection) {
+                let filter = if !export_filter.is_empty() {
+                    Some(parse_document_from_json(&export_filter).map_err(|e| {
+                        crate::error::Error::Parse(format!("Invalid filter: {}", e))
+                    })?)
+                } else {
+                    None
+                };
+
+                let projection = if !export_projection.is_empty() {
+                    Some(parse_document_from_json(&export_projection).map_err(|e| {
+                        crate::error::Error::Parse(format!("Invalid projection: {}", e))
+                    })?)
+                } else {
+                    None
+                };
+
+                let sort =
+                    if !export_sort.is_empty() {
+                        Some(parse_document_from_json(&export_sort).map_err(|e| {
+                            crate::error::Error::Parse(format!("Invalid sort: {}", e))
+                        })?)
+                    } else {
+                        None
+                    };
+
+                ExportQueryOptions { filter, projection, sort }
+            } else {
+                ExportQueryOptions::default()
+            };
+
             match format {
                 TransferFormat::JsonLines | TransferFormat::JsonArray => {
                     let client = client.expect("client should be set for JSON export");
@@ -209,17 +251,25 @@ impl AppCommands {
                         TransferFormat::JsonLines => JsonTransferFormat::JsonLines,
                         _ => JsonTransferFormat::JsonArray,
                     };
-                    manager.export_collection_json_with_options(
+                    manager.export_collection_json_with_query(
                         &client,
                         &database,
                         &collection,
                         &path,
                         JsonExportOptions { format: json_format, json_mode, pretty_print, gzip },
+                        query_options,
                     )
                 }
                 TransferFormat::Csv => {
                     let client = client.expect("client should be set for CSV export");
-                    manager.export_collection_csv(&client, &database, &collection, &path, gzip)
+                    manager.export_collection_csv_with_query(
+                        &client,
+                        &database,
+                        &collection,
+                        &path,
+                        gzip,
+                        query_options,
+                    )
                 }
                 TransferFormat::Bson => {
                     // BSON export only supported for database scope
@@ -231,7 +281,14 @@ impl AppCommands {
                     let uri = connection_uri.ok_or_else(|| {
                         crate::error::Error::Parse("Connection URI not available".to_string())
                     })?;
-                    manager.export_database_bson(&uri, &database, bson_output, &path, gzip)?;
+                    manager.export_database_bson(
+                        &uri,
+                        &database,
+                        bson_output,
+                        &path,
+                        gzip,
+                        &config.exclude_collections,
+                    )?;
                     Ok(0) // mongodump doesn't return a count
                 }
             }
