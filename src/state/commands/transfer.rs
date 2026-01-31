@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::connection::csv_utils::detect_problematic_fields;
 use crate::connection::get_connection_manager;
 use crate::connection::mongo::{
-    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExtendedJsonMode, InsertMode,
-    JsonExportOptions, JsonImportOptions, JsonTransferFormat, generate_export_preview,
+    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExtendedJsonMode, FileEncoding,
+    InsertMode, JsonExportOptions, JsonImportOptions, JsonTransferFormat, generate_export_preview,
 };
 use crate::state::{
     AppCommands, AppEvent, AppState, SessionKey, StatusMessage, TransferFormat, TransferMode,
@@ -186,6 +186,7 @@ impl AppCommands {
             crate::state::BsonOutputFormat::Folder => MongoBsonOutputFormat::Folder,
             crate::state::BsonOutputFormat::Archive => MongoBsonOutputFormat::Archive,
         };
+        let gzip = matches!(config.compression, crate::state::CompressionMode::Gzip);
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -213,12 +214,12 @@ impl AppCommands {
                         &database,
                         &collection,
                         &path,
-                        JsonExportOptions { format: json_format, json_mode, pretty_print },
+                        JsonExportOptions { format: json_format, json_mode, pretty_print, gzip },
                     )
                 }
                 TransferFormat::Csv => {
                     let client = client.expect("client should be set for CSV export");
-                    manager.export_collection_csv(&client, &database, &collection, &path)
+                    manager.export_collection_csv(&client, &database, &collection, &path, gzip)
                 }
                 TransferFormat::Bson => {
                     // BSON export only supported for database scope
@@ -230,7 +231,7 @@ impl AppCommands {
                     let uri = connection_uri.ok_or_else(|| {
                         crate::error::Error::Parse("Connection URI not available".to_string())
                     })?;
-                    manager.export_database_bson(&uri, &database, bson_output, &path)?;
+                    manager.export_database_bson(&uri, &database, bson_output, &path, gzip)?;
                     Ok(0) // mongodump doesn't return a count
                 }
             }
@@ -335,7 +336,14 @@ impl AppCommands {
         } else {
             config.destination_collection.clone()
         };
-        let format = config.format;
+
+        // Auto-detect format from file extension if enabled
+        let format = if config.detect_format {
+            detect_format_from_path(&config.file_path).unwrap_or(config.format)
+        } else {
+            config.format
+        };
+
         let scope = config.scope;
         let insert_mode = match config.insert_mode {
             crate::state::InsertMode::Insert => InsertMode::Insert,
@@ -345,6 +353,11 @@ impl AppCommands {
         let stop_on_error = config.stop_on_error;
         let batch_size = config.batch_size as usize;
         let drop_before = config.drop_before_import;
+        let clear_before = config.clear_before_import;
+        let encoding = match config.encoding {
+            crate::state::Encoding::Utf8 => FileEncoding::Utf8,
+            crate::state::Encoding::Latin1 => FileEncoding::Latin1,
+        };
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -364,9 +377,19 @@ impl AppCommands {
                 TransferFormat::JsonLines | TransferFormat::JsonArray => {
                     let client = client.expect("client should be set for JSON import");
 
-                    // Drop collection before import if requested
-                    if drop_before && matches!(scope, TransferScope::Collection) {
-                        let _ = manager.drop_collection(&client, &database, &collection);
+                    // Drop or clear collection before import if requested
+                    if matches!(scope, TransferScope::Collection) {
+                        if drop_before {
+                            let _ = manager.drop_collection(&client, &database, &collection);
+                        } else if clear_before {
+                            // Delete all documents but preserve collection and indexes
+                            let _ = manager.delete_documents(
+                                &client,
+                                &database,
+                                &collection,
+                                mongodb::bson::doc! {},
+                            );
+                        }
                     }
 
                     let json_format = match format {
@@ -383,15 +406,26 @@ impl AppCommands {
                             insert_mode,
                             stop_on_error,
                             batch_size,
+                            encoding,
                         },
                     )
                 }
                 TransferFormat::Csv => {
                     let client = client.expect("client should be set for CSV import");
 
-                    // Drop collection before import if requested
-                    if drop_before && matches!(scope, TransferScope::Collection) {
-                        let _ = manager.drop_collection(&client, &database, &collection);
+                    // Drop or clear collection before import if requested
+                    if matches!(scope, TransferScope::Collection) {
+                        if drop_before {
+                            let _ = manager.drop_collection(&client, &database, &collection);
+                        } else if clear_before {
+                            // Delete all documents but preserve collection and indexes
+                            let _ = manager.delete_documents(
+                                &client,
+                                &database,
+                                &collection,
+                                mongodb::bson::doc! {},
+                            );
+                        }
                     }
 
                     manager.import_collection_csv(
@@ -399,7 +433,7 @@ impl AppCommands {
                         &database,
                         &collection,
                         &path,
-                        CsvImportOptions { insert_mode, stop_on_error, batch_size },
+                        CsvImportOptions { insert_mode, stop_on_error, batch_size, encoding },
                     )
                 }
                 TransferFormat::Bson => {
@@ -515,6 +549,8 @@ impl AppCommands {
         };
         let scope = config.scope;
         let batch_size = config.batch_size as usize;
+        let drop_before = config.drop_before_import;
+        let clear_before = config.clear_before_import;
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -531,15 +567,31 @@ impl AppCommands {
             let manager = get_connection_manager();
 
             match scope {
-                TransferScope::Collection => manager.copy_collection(
-                    &src_client,
-                    &src_database,
-                    &src_collection,
-                    &dest_client,
-                    &dest_database,
-                    &dest_collection,
-                    batch_size,
-                ),
+                TransferScope::Collection => {
+                    // Drop or clear destination collection before copy if requested
+                    if drop_before {
+                        let _ =
+                            manager.drop_collection(&dest_client, &dest_database, &dest_collection);
+                    } else if clear_before {
+                        // Delete all documents but preserve collection and indexes
+                        let _ = manager.delete_documents(
+                            &dest_client,
+                            &dest_database,
+                            &dest_collection,
+                            mongodb::bson::doc! {},
+                        );
+                    }
+
+                    manager.copy_collection(
+                        &src_client,
+                        &src_database,
+                        &src_collection,
+                        &dest_client,
+                        &dest_database,
+                        &dest_collection,
+                        batch_size,
+                    )
+                }
                 TransferScope::Database => manager.copy_database(
                     &src_client,
                     &src_database,
@@ -722,5 +774,24 @@ impl AppCommands {
             }
         })
         .detach();
+    }
+}
+
+/// Detect transfer format from file path extension.
+fn detect_format_from_path(path: &str) -> Option<TransferFormat> {
+    let path = std::path::Path::new(path);
+    let ext = path.extension().and_then(|e| e.to_str())?.to_lowercase();
+
+    match ext.as_str() {
+        "jsonl" | "ndjson" => Some(TransferFormat::JsonLines),
+        "json" => Some(TransferFormat::JsonArray),
+        "csv" => Some(TransferFormat::Csv),
+        "archive" | "bson" => Some(TransferFormat::Bson),
+        "gz" => {
+            // Check double extension: file.jsonl.gz
+            let stem = path.file_stem()?.to_str()?;
+            detect_format_from_path(stem)
+        }
+        _ => None,
     }
 }

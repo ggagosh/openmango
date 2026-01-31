@@ -65,8 +65,8 @@ Non-exhaustive highlights; see each section below for full status.
 - [ ] P1: Collection stats (extended)
 - [x] P1: Index management (list/drop)
 - [x] P1: Index management (create)
-- [ ] P1: Import (JSON/CSV)
-- [ ] P1: Export (JSON/CSV/BSON)
+- [x] P1: Import (JSON/CSV)
+- [x] P1: Export (JSON/CSV/BSON)
 - [ ] P2: Schema analysis / explorer
 - [ ] P2: Validation rules editor
 

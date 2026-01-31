@@ -296,6 +296,7 @@ pub struct TransferTabState {
     // Import options
     pub insert_mode: InsertMode,
     pub drop_before_import: bool,
+    pub clear_before_import: bool,
     pub stop_on_error: bool,
     pub batch_size: u32,
     pub detect_format: bool,
@@ -353,6 +354,7 @@ impl Default for TransferTabState {
 
             insert_mode: InsertMode::Insert,
             drop_before_import: false,
+            clear_before_import: false,
             stop_on_error: true,
             batch_size: 1000,
             detect_format: true,

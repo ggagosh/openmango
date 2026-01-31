@@ -1,8 +1,11 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
 
 use mongodb::Client;
 use mongodb::IndexModel;
@@ -51,6 +54,7 @@ pub struct JsonExportOptions {
     pub format: JsonTransferFormat,
     pub json_mode: ExtendedJsonMode,
     pub pretty_print: bool,
+    pub gzip: bool,
 }
 
 impl Default for JsonExportOptions {
@@ -59,8 +63,17 @@ impl Default for JsonExportOptions {
             format: JsonTransferFormat::JsonLines,
             json_mode: ExtendedJsonMode::Relaxed,
             pretty_print: false,
+            gzip: false,
         }
     }
+}
+
+/// Text encoding for file imports
+#[derive(Clone, Copy, Debug, Default)]
+pub enum FileEncoding {
+    #[default]
+    Utf8,
+    Latin1,
 }
 
 /// Options for JSON import
@@ -70,6 +83,7 @@ pub struct JsonImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
+    pub encoding: FileEncoding,
 }
 
 impl Default for JsonImportOptions {
@@ -79,6 +93,7 @@ impl Default for JsonImportOptions {
             insert_mode: InsertMode::Insert,
             stop_on_error: true,
             batch_size: 1000,
+            encoding: FileEncoding::Utf8,
         }
     }
 }
@@ -89,6 +104,7 @@ pub struct CsvImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
+    pub encoding: FileEncoding,
 }
 
 /// BSON output format for mongodump
@@ -101,7 +117,12 @@ pub enum BsonOutputFormat {
 
 impl Default for CsvImportOptions {
     fn default() -> Self {
-        Self { insert_mode: InsertMode::Insert, stop_on_error: true, batch_size: 1000 }
+        Self {
+            insert_mode: InsertMode::Insert,
+            stop_on_error: true,
+            batch_size: 1000,
+            encoding: FileEncoding::Utf8,
+        }
     }
 }
 
@@ -490,7 +511,14 @@ impl ConnectionManager {
             let coll = client.database(&database).collection::<Document>(&collection);
             let mut cursor = coll.find(doc! {}).await?;
             let file = File::create(&path)?;
-            let mut writer = BufWriter::new(file);
+
+            // Wrap writer with gzip encoder if compression is enabled
+            let mut writer: Box<dyn Write> = if options.gzip {
+                Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
+            } else {
+                Box::new(BufWriter::new(file))
+            };
+
             let mut count = 0u64;
 
             if matches!(options.format, JsonTransferFormat::JsonArray) {
@@ -551,6 +579,7 @@ impl ConnectionManager {
         database: &str,
         collection: &str,
         path: &Path,
+        gzip: bool,
     ) -> Result<u64> {
         use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
@@ -575,9 +604,15 @@ impl ConnectionManager {
                 return Ok(0);
             }
 
-            // Write CSV
+            // Write CSV with optional gzip compression
             let file = File::create(&path)?;
-            let mut csv_writer = csv::Writer::from_writer(file);
+            let mut csv_writer = if gzip {
+                csv::Writer::from_writer(
+                    Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
+                )
+            } else {
+                csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
+            };
 
             // Write header
             csv_writer.write_record(&columns)?;
@@ -637,26 +672,32 @@ impl ConnectionManager {
             let coll = client.database(&database).collection::<Document>(&collection);
             let mut processed = 0u64;
 
-            // Parse documents from file
+            // Read and decode file content based on encoding
+            let bytes = std::fs::read(&path)?;
+            let content = match options.encoding {
+                FileEncoding::Utf8 => String::from_utf8_lossy(&bytes).into_owned(),
+                FileEncoding::Latin1 => {
+                    let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+                    decoded.into_owned()
+                }
+            };
+
+            // Parse documents from decoded content
             let docs: Vec<Document> = match options.format {
                 JsonTransferFormat::JsonLines => {
-                    let file = File::open(&path)?;
-                    let reader = BufReader::new(file);
                     let mut docs = Vec::new();
-                    for line in reader.lines() {
-                        let line = line?;
+                    for line in content.lines() {
                         if line.trim().is_empty() {
                             continue;
                         }
                         let doc =
-                            crate::bson::parse_document_from_json(&line).map_err(Error::Parse)?;
+                            crate::bson::parse_document_from_json(line).map_err(Error::Parse)?;
                         docs.push(doc);
                     }
                     docs
                 }
                 JsonTransferFormat::JsonArray => {
-                    let text = std::fs::read_to_string(&path)?;
-                    crate::bson::parse_documents_from_json(&text).map_err(Error::Parse)?
+                    crate::bson::parse_documents_from_json(&content).map_err(Error::Parse)?
                 }
             };
 
@@ -705,8 +746,17 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
 
-            let file = File::open(&path)?;
-            let mut csv_reader = csv::Reader::from_reader(file);
+            // Read and decode file content based on encoding
+            let bytes = std::fs::read(&path)?;
+            let content = match options.encoding {
+                FileEncoding::Utf8 => String::from_utf8_lossy(&bytes).into_owned(),
+                FileEncoding::Latin1 => {
+                    let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+                    decoded.into_owned()
+                }
+            };
+
+            let mut csv_reader = csv::Reader::from_reader(content.as_bytes());
             let headers: Vec<String> =
                 csv_reader.headers()?.iter().map(|h| h.to_string()).collect();
 
@@ -849,6 +899,7 @@ impl ConnectionManager {
         database: &str,
         output_format: BsonOutputFormat,
         path: &Path,
+        gzip: bool,
     ) -> Result<()> {
         let mongodump = mongodump_path().ok_or_else(|| {
             Error::ToolNotFound(
@@ -859,6 +910,10 @@ impl ConnectionManager {
 
         let mut cmd = Command::new(&mongodump);
         cmd.arg(format!("--uri={}", connection_string)).arg("--db").arg(database);
+
+        if gzip {
+            cmd.arg("--gzip");
+        }
 
         match output_format {
             BsonOutputFormat::Folder => {
