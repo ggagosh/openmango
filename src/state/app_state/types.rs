@@ -683,3 +683,10 @@ fn bson_to_u64(value: &Bson) -> Option<u64> {
         _ => None,
     }
 }
+
+/// Item copied from the sidebar tree for paste operation (internal clipboard)
+#[derive(Clone, Debug)]
+pub enum CopiedTreeItem {
+    Database { connection_id: Uuid, database: String },
+    Collection { connection_id: Uuid, database: String, collection: String },
+}

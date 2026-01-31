@@ -8,9 +8,9 @@ use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::{ConnectionManager, TreeNodeId};
 use crate::keyboard::{
-    CloseSidebarSearch, CopyConnectionUri, CopySelectionName, DeleteSelection,
+    CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenSelection, OpenSelectionPreview,
-    RenameCollection, TransferCopy, TransferExport, TransferImport,
+    PasteTreeItem, RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::state::{AppCommands, TransferMode};
 use crate::theme::{borders, colors, sizing, spacing};
@@ -99,6 +99,12 @@ impl Render for Sidebar {
             }))
             .on_action(cx.listener(|this, _: &TransferCopy, _window, cx| {
                 this.handle_transfer_action(TransferMode::Copy, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CopyTreeItem, _window, cx| {
+                this.handle_copy_tree_item(cx);
+            }))
+            .on_action(cx.listener(|this, _: &PasteTreeItem, _window, cx| {
+                this.handle_paste_tree_item(cx);
             }))
             .on_action(cx.listener(|this, _: &FindInSidebar, window, cx| {
                 this.open_search(window, cx);

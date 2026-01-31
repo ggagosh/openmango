@@ -295,6 +295,48 @@ impl AppState {
         self.push_transfer_tab(transfer_state, Some(connection_id), cx);
     }
 
+    /// Open a Transfer tab for Copy mode with separate source and destination prefills.
+    /// Used when pasting a copied tree item to a different location.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_transfer_tab_for_paste(
+        &mut self,
+        source_connection_id: Uuid,
+        source_database: String,
+        source_collection: Option<String>,
+        dest_connection_id: Option<Uuid>,
+        dest_database: Option<String>,
+        scope: TransferScope,
+        cx: &mut Context<Self>,
+    ) {
+        let mut transfer_state = TransferTabState::from_settings(&self.settings);
+        transfer_state.mode = TransferMode::Copy;
+        transfer_state.scope = scope;
+        transfer_state.source_connection_id = Some(source_connection_id);
+        transfer_state.source_database = source_database.clone();
+        transfer_state.source_collection = source_collection.clone().unwrap_or_default();
+
+        // Set destination based on provided values, falling back to source
+        transfer_state.destination_connection_id =
+            dest_connection_id.or(Some(source_connection_id));
+        transfer_state.destination_database =
+            dest_database.unwrap_or_else(|| source_database.clone());
+        // For collection scope, keep destination collection empty so user can fill it
+        // For database scope, collection is not relevant
+        transfer_state.destination_collection = if scope == TransferScope::Collection {
+            // If copying a collection, suggest the same collection name at destination
+            source_collection.unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        if scope == TransferScope::Database {
+            transfer_state.source_collection.clear();
+            transfer_state.destination_collection.clear();
+        }
+
+        self.push_transfer_tab(transfer_state, Some(source_connection_id), cx);
+    }
+
     fn push_transfer_tab(
         &mut self,
         transfer_state: TransferTabState,

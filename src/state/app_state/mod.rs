@@ -19,10 +19,10 @@ pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
-    CompressionMode, DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats,
-    Encoding, ExtendedJsonMode, InsertMode, SessionData, SessionDocument, SessionKey, SessionState,
-    SessionViewState, TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey,
-    TransferTabState, View,
+    CompressionMode, CopiedTreeItem, DatabaseKey, DatabaseSessionData, DatabaseSessionState,
+    DatabaseStats, Encoding, ExtendedJsonMode, InsertMode, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 use std::collections::HashMap;
@@ -54,6 +54,9 @@ pub struct AppState {
     // View state
     pub current_view: View,
     status_message: Option<StatusMessage>,
+
+    /// Copied tree item for paste operation (internal clipboard)
+    pub copied_tree_item: Option<CopiedTreeItem>,
 
     // Config manager for persistence
     pub(crate) config: ConfigManager,
@@ -95,6 +98,7 @@ impl AppState {
             transfer_tabs: HashMap::new(),
             current_view: View::Welcome,
             status_message: None,
+            copied_tree_item: None,
             config,
             workspace,
             workspace_restore_pending,

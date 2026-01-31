@@ -5,7 +5,9 @@ use gpui_component::input::InputState;
 use uuid::Uuid;
 
 use crate::components::{ConnectionDialog, ConnectionManager, TreeNodeId, open_confirm_dialog};
-use crate::state::{AppCommands, AppEvent, AppState, TransferMode, TransferScope};
+use crate::state::{
+    AppCommands, AppEvent, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
+};
 
 use super::dialogs::open_rename_collection_dialog;
 use super::search::{SidebarSearchResult, search_results};
@@ -469,6 +471,122 @@ impl Sidebar {
         if let Some(uri) = self.state.read(cx).connection_uri(connection_id) {
             cx.write_to_clipboard(ClipboardItem::new_string(uri));
         }
+    }
+
+    fn handle_copy_tree_item(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.model.selected_tree_id.clone() else {
+            return;
+        };
+
+        match &node_id {
+            TreeNodeId::Connection(connection_id) => {
+                // For connections, just copy the name to OS clipboard (no internal clipboard)
+                if let Some(name) = self.state.read(cx).connection_name(*connection_id) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(name));
+                }
+            }
+            TreeNodeId::Database { connection, database } => {
+                // Copy name to OS clipboard
+                cx.write_to_clipboard(ClipboardItem::new_string(database.clone()));
+                // Set internal clipboard
+                self.state.update(cx, |state, cx| {
+                    state.copied_tree_item = Some(CopiedTreeItem::Database {
+                        connection_id: *connection,
+                        database: database.clone(),
+                    });
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Copied database: {}",
+                        database
+                    ))));
+                    cx.notify();
+                });
+            }
+            TreeNodeId::Collection { connection, database, collection } => {
+                // Copy name to OS clipboard (as db/collection format)
+                cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                    "{}/{}",
+                    database, collection
+                )));
+                // Set internal clipboard
+                self.state.update(cx, |state, cx| {
+                    state.copied_tree_item = Some(CopiedTreeItem::Collection {
+                        connection_id: *connection,
+                        database: database.clone(),
+                        collection: collection.clone(),
+                    });
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Copied collection: {}.{}",
+                        database, collection
+                    ))));
+                    cx.notify();
+                });
+            }
+        }
+    }
+
+    fn handle_paste_tree_item(&mut self, cx: &mut Context<Self>) {
+        let copied = self.state.read(cx).copied_tree_item.clone();
+        let Some(item) = copied else {
+            self.state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error("Nothing to paste")));
+                cx.notify();
+            });
+            return;
+        };
+
+        // Verify the source connection still exists
+        let source_connection_id = match &item {
+            CopiedTreeItem::Database { connection_id, .. } => *connection_id,
+            CopiedTreeItem::Collection { connection_id, .. } => *connection_id,
+        };
+
+        if self.state.read(cx).connection_by_id(source_connection_id).is_none() {
+            self.state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error(
+                    "Source connection no longer exists",
+                )));
+                state.copied_tree_item = None;
+                cx.notify();
+            });
+            return;
+        }
+
+        // Get destination from current sidebar selection
+        let (dest_connection_id, dest_database) = match &self.model.selected_tree_id {
+            Some(TreeNodeId::Connection(conn_id)) => (Some(*conn_id), None),
+            Some(TreeNodeId::Database { connection, database }) => {
+                (Some(*connection), Some(database.clone()))
+            }
+            Some(TreeNodeId::Collection { connection, database, .. }) => {
+                (Some(*connection), Some(database.clone()))
+            }
+            None => (None, None),
+        };
+
+        self.state.update(cx, |state, cx| match item {
+            CopiedTreeItem::Database { connection_id, database } => {
+                state.open_transfer_tab_for_paste(
+                    connection_id,
+                    database,
+                    None,
+                    dest_connection_id,
+                    dest_database,
+                    TransferScope::Database,
+                    cx,
+                );
+            }
+            CopiedTreeItem::Collection { connection_id, database, collection } => {
+                state.open_transfer_tab_for_paste(
+                    connection_id,
+                    database,
+                    Some(collection),
+                    dest_connection_id,
+                    dest_database,
+                    TransferScope::Collection,
+                    cx,
+                );
+            }
+        });
     }
 
     fn handle_rename_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {

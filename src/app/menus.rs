@@ -1,14 +1,17 @@
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use uuid::Uuid;
 
 use crate::components::{ConnectionManager, TreeNodeId, open_confirm_dialog};
 use crate::keyboard::{
-    CopyConnectionUri, CopySelectionName, CreateCollection, DeleteSelection, DisconnectConnection,
-    EditConnection, OpenSelection, RefreshView, RenameCollection, TransferCopy, TransferExport,
-    TransferImport,
+    CopyConnectionUri, CopySelectionName, CopyTreeItem, CreateCollection, DeleteSelection,
+    DisconnectConnection, EditConnection, OpenSelection, PasteTreeItem, RefreshView,
+    RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
-use crate::state::{AppCommands, AppState, TransferMode, TransferScope};
+use crate::state::{
+    AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
+};
 use crate::theme::{colors, spacing};
 
 use super::dialogs::{open_create_collection_dialog, open_rename_collection_dialog};
@@ -231,7 +234,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy...", "Cmd+Alt+C")
+            menu_item_with_shortcut("Copy to...", "Cmd+Alt+C")
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();
@@ -270,11 +273,81 @@ pub(crate) fn build_database_menu(
             }
         }))
         .separator()
-        .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
+        .item(menu_item_with_shortcut("Copy", "⌘C").action(Box::new(CopyTreeItem)).on_click({
+            let state = state.clone();
+            let connection_id = node_id.connection_id();
+            let database = database_for_copy.clone();
             move |_, _window, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(database_for_copy.clone()));
+                cx.write_to_clipboard(ClipboardItem::new_string(database.clone()));
+                state.update(cx, |state, cx| {
+                    state.copied_tree_item = Some(CopiedTreeItem::Database {
+                        connection_id,
+                        database: database.clone(),
+                    });
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Copied database: {}",
+                        database
+                    ))));
+                    cx.notify();
+                });
             }
-        }));
+        }))
+        .when(state.read(_cx).copied_tree_item.is_some(), |menu: PopupMenu| {
+            let dest_connection_id = node_id.connection_id();
+            let dest_database = database_for_copy.clone();
+            menu.item(
+                menu_item_with_shortcut("Paste", "⌘V").action(Box::new(PasteTreeItem)).on_click({
+                    let state = state.clone();
+                    move |_, _window, cx| {
+                        let copied = state.read(cx).copied_tree_item.clone();
+                        let Some(item) = copied else {
+                            return;
+                        };
+
+                        let source_connection_id = match &item {
+                            CopiedTreeItem::Database { connection_id, .. } => *connection_id,
+                            CopiedTreeItem::Collection { connection_id, .. } => *connection_id,
+                        };
+
+                        if state.read(cx).connection_by_id(source_connection_id).is_none() {
+                            state.update(cx, |state, cx| {
+                                state.set_status_message(Some(StatusMessage::error(
+                                    "Source connection no longer exists",
+                                )));
+                                state.copied_tree_item = None;
+                                cx.notify();
+                            });
+                            return;
+                        }
+
+                        state.update(cx, |state, cx| match item {
+                            CopiedTreeItem::Database { connection_id, database } => {
+                                state.open_transfer_tab_for_paste(
+                                    connection_id,
+                                    database,
+                                    None,
+                                    Some(dest_connection_id),
+                                    Some(dest_database.clone()),
+                                    TransferScope::Database,
+                                    cx,
+                                );
+                            }
+                            CopiedTreeItem::Collection { connection_id, database, collection } => {
+                                state.open_transfer_tab_for_paste(
+                                    connection_id,
+                                    database,
+                                    Some(collection),
+                                    Some(dest_connection_id),
+                                    Some(dest_database.clone()),
+                                    TransferScope::Collection,
+                                    cx,
+                                );
+                            }
+                        });
+                    }
+                }),
+            )
+        });
 
     menu
 }
@@ -288,6 +361,10 @@ pub(crate) fn build_collection_menu(
     label: String,
     _cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let label_for_copy = label.clone();
+    let database_for_copy = database.clone();
+    let collection_for_copy = collection.clone();
+
     menu = menu
         .item(PopupMenuItem::new("Open Collection").action(Box::new(OpenSelection)).on_click({
             let state = state.clone();
@@ -393,7 +470,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy...", "Cmd+Alt+C")
+            menu_item_with_shortcut("Copy to...", "Cmd+Alt+C")
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();
@@ -414,9 +491,94 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .separator()
+        .item(menu_item_with_shortcut("Copy", "⌘C").action(Box::new(CopyTreeItem)).on_click({
+            let state = state.clone();
+            let database = database_for_copy.clone();
+            let collection = collection_for_copy.clone();
+            move |_, _window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                    "{}/{}",
+                    database, collection
+                )));
+                state.update(cx, |state, cx| {
+                    state.copied_tree_item = Some(CopiedTreeItem::Collection {
+                        connection_id,
+                        database: database.clone(),
+                        collection: collection.clone(),
+                    });
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Copied collection: {}.{}",
+                        database, collection
+                    ))));
+                    cx.notify();
+                });
+            }
+        }))
+        .when(state.read(_cx).copied_tree_item.is_some(), |menu: PopupMenu| {
+            let dest_database = database_for_copy.clone();
+            menu.item(
+                menu_item_with_shortcut("Paste", "⌘V").action(Box::new(PasteTreeItem)).on_click({
+                    let state = state.clone();
+                    move |_, _window, cx| {
+                        let copied = state.read(cx).copied_tree_item.clone();
+                        let Some(item) = copied else {
+                            return;
+                        };
+
+                        let source_connection_id = match &item {
+                            CopiedTreeItem::Database { connection_id, .. } => *connection_id,
+                            CopiedTreeItem::Collection { connection_id, .. } => *connection_id,
+                        };
+
+                        if state.read(cx).connection_by_id(source_connection_id).is_none() {
+                            state.update(cx, |state, cx| {
+                                state.set_status_message(Some(StatusMessage::error(
+                                    "Source connection no longer exists",
+                                )));
+                                state.copied_tree_item = None;
+                                cx.notify();
+                            });
+                            return;
+                        }
+
+                        state.update(cx, |state, cx| match item {
+                            CopiedTreeItem::Database {
+                                connection_id: src_conn,
+                                database: src_db,
+                            } => {
+                                state.open_transfer_tab_for_paste(
+                                    src_conn,
+                                    src_db,
+                                    None,
+                                    Some(connection_id),
+                                    Some(dest_database.clone()),
+                                    TransferScope::Database,
+                                    cx,
+                                );
+                            }
+                            CopiedTreeItem::Collection {
+                                connection_id: src_conn,
+                                database: src_db,
+                                collection: src_col,
+                            } => {
+                                state.open_transfer_tab_for_paste(
+                                    src_conn,
+                                    src_db,
+                                    Some(src_col),
+                                    Some(connection_id),
+                                    Some(dest_database.clone()),
+                                    TransferScope::Collection,
+                                    cx,
+                                );
+                            }
+                        });
+                    }
+                }),
+            )
+        })
         .item(PopupMenuItem::new("Copy Name").action(Box::new(CopySelectionName)).on_click({
             move |_, _window, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(label.clone()));
+                cx.write_to_clipboard(ClipboardItem::new_string(label_for_copy.clone()));
             }
         }));
 
