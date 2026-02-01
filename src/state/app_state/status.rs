@@ -190,15 +190,34 @@ impl AppState {
                 documents_processed,
                 documents_total,
             } => {
-                // Update collection progress
-                if let Some(tab) = self.transfer_tab_mut(*transfer_id)
-                    && let Some(ref mut db_progress) = tab.database_progress
-                    && let Some(coll) =
-                        db_progress.collections.iter_mut().find(|c| c.name == *collection_name)
-                {
-                    coll.status = status.clone();
-                    coll.documents_processed = *documents_processed;
-                    coll.documents_total = *documents_total;
+                // Update collection progress (or add if not exists for BSON exports)
+                if let Some(tab) = self.transfer_tab_mut(*transfer_id) {
+                    // Initialize database_progress if not set (for BSON exports that start empty)
+                    if tab.database_progress.is_none() {
+                        tab.database_progress = Some(DatabaseTransferProgress {
+                            collections: vec![],
+                            panel_expanded: true,
+                        });
+                    }
+
+                    if let Some(ref mut db_progress) = tab.database_progress {
+                        // Find existing collection or add new one
+                        if let Some(coll) =
+                            db_progress.collections.iter_mut().find(|c| c.name == *collection_name)
+                        {
+                            coll.status = status.clone();
+                            coll.documents_processed = *documents_processed;
+                            coll.documents_total = *documents_total;
+                        } else {
+                            // Collection not in list yet - add it (happens with BSON exports)
+                            db_progress.collections.push(CollectionProgress {
+                                name: collection_name.clone(),
+                                status: status.clone(),
+                                documents_processed: *documents_processed,
+                                documents_total: *documents_total,
+                            });
+                        }
+                    }
                 }
             }
             _ => {}

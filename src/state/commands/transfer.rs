@@ -16,9 +16,9 @@ use crate::connection::get_connection_manager;
 /// Maximum number of collections to process concurrently for database-scope operations.
 const PARALLEL_COLLECTION_LIMIT: usize = 4;
 use crate::connection::mongo::{
-    BsonOutputFormat as MongoBsonOutputFormat, CsvImportOptions, ExportQueryOptions,
-    ExtendedJsonMode, FileEncoding, InsertMode, JsonExportOptions, JsonImportOptions,
-    JsonTransferFormat, generate_export_preview,
+    BsonOutputFormat as MongoBsonOutputFormat, BsonToolProgress, CsvImportOptions,
+    ExportQueryOptions, ExtendedJsonMode, FileEncoding, InsertMode, JsonExportOptions,
+    JsonImportOptions, JsonTransferFormat, generate_export_preview,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{
@@ -430,79 +430,42 @@ impl AppCommands {
             return;
         }
 
-        // BSON format (database scope only) - use simple background task
-        let task = cx.background_spawn(async move {
-            let manager = get_connection_manager();
-
-            match format {
-                TransferFormat::Bson => {
-                    // BSON export only supported for database scope
-                    if !matches!(scope, TransferScope::Database) {
-                        return Err(crate::error::Error::Parse(
-                            "BSON export is only supported for database scope".to_string(),
-                        ));
-                    }
-                    let uri = connection_uri.ok_or_else(|| {
-                        crate::error::Error::Parse("Connection URI not available".to_string())
-                    })?;
-                    manager.export_database_bson(
-                        &uri,
-                        &database,
-                        bson_output,
-                        &path,
-                        gzip,
-                        &exclude_collections,
-                    )?;
-                    Ok(0) // mongodump doesn't return a count
-                }
-                _ => Err(crate::error::Error::Parse(
-                    "Unexpected format for simple export path".to_string(),
-                )),
-            }
-        });
-
-        cx.spawn({
-            let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
-                let result = task.await;
-                let _ = cx.update(|cx| {
+        // BSON format (database scope only) - use progress tracking
+        if matches!(format, TransferFormat::Bson) && matches!(scope, TransferScope::Database) {
+            let uri = match connection_uri {
+                Some(uri) => uri,
+                None => {
                     state.update(cx, |state, cx| {
-                        if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                            tab.is_running = false;
-                        }
-
-                        match result {
-                            Ok(count) => {
-                                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                    tab.progress_count = count;
-                                }
-                                let message = format!(
-                                    "Exported {} document{}",
-                                    count,
-                                    if count == 1 { "" } else { "s" }
-                                );
-                                state.set_status_message(Some(StatusMessage::info(message)));
-                                cx.emit(AppEvent::TransferCompleted { transfer_id, count });
-                            }
-                            Err(err) => {
-                                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                    tab.error_message = Some(err.to_string());
-                                }
-                                state.set_status_message(Some(StatusMessage::error(format!(
-                                    "Export failed: {err}"
-                                ))));
-                                cx.emit(AppEvent::TransferFailed {
-                                    transfer_id,
-                                    error: err.to_string(),
-                                });
-                            }
-                        }
+                        state.set_status_message(Some(StatusMessage::error(
+                            "Connection URI not available",
+                        )));
                         cx.notify();
                     });
-                });
+                    return;
+                }
+            };
+            Self::execute_bson_export_with_progress(
+                state,
+                transfer_id,
+                uri,
+                database,
+                path,
+                bson_output,
+                gzip,
+                exclude_collections,
+                cx,
+            );
+            return;
+        }
+
+        // Fallback for unexpected cases
+        state.update(cx, |state, cx| {
+            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                tab.is_running = false;
+                tab.error_message = Some("Unexpected export configuration".to_string());
             }
-        })
-        .detach();
+            cx.notify();
+        });
     }
 
     /// Execute database export with per-collection progress tracking.
@@ -844,6 +807,175 @@ impl AppCommands {
         .detach();
     }
 
+    /// Execute BSON database export with progress tracking via mongodump stderr parsing.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_bson_export_with_progress(
+        state: Entity<AppState>,
+        transfer_id: Uuid,
+        connection_uri: String,
+        database: String,
+        path: PathBuf,
+        output_format: MongoBsonOutputFormat,
+        gzip: bool,
+        exclude_collections: Vec<String>,
+        cx: &mut App,
+    ) {
+        let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
+
+        // Spawn background task that runs mongodump with progress parsing
+        cx.background_spawn({
+            async move {
+                let manager = get_connection_manager();
+
+                // We don't know collection list upfront for BSON, but we'll discover them
+                // Send a placeholder started message
+                let _ = tx.unbounded_send(TransferProgressMessage::Started {
+                    collections: vec![], // Will be discovered during export
+                });
+
+                let progress_tx = tx.clone();
+                let result = manager.export_database_bson_with_progress(
+                    &connection_uri,
+                    &database,
+                    output_format,
+                    &path,
+                    gzip,
+                    &exclude_collections,
+                    move |progress| {
+                        let msg = match progress {
+                            BsonToolProgress::Started { collection } => {
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::InProgress,
+                                    documents_processed: 0,
+                                    documents_total: None,
+                                }
+                            }
+                            BsonToolProgress::Progress { collection, current, total, .. } => {
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::InProgress,
+                                    documents_processed: current,
+                                    documents_total: Some(total),
+                                }
+                            }
+                            BsonToolProgress::Completed { collection, documents } => {
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::Completed,
+                                    documents_processed: documents,
+                                    documents_total: Some(documents),
+                                }
+                            }
+                        };
+                        let _ = progress_tx.unbounded_send(msg);
+                    },
+                );
+
+                match result {
+                    Ok(()) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Completed {
+                            total_count: 0, // mongodump doesn't provide total count
+                            had_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+
+        // Spawn UI task to receive progress updates
+        cx.spawn({
+            let state = state.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let mut rx = rx;
+                let mut progress_count = 0u32;
+                const BATCH_SIZE: u32 = 50;
+
+                while let Some(msg) = rx.next().await {
+                    let should_notify = match &msg {
+                        TransferProgressMessage::Started { .. }
+                        | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Failed { .. } => true,
+                        TransferProgressMessage::CollectionProgress { .. } => {
+                            progress_count += 1;
+                            progress_count.is_multiple_of(BATCH_SIZE)
+                        }
+                    };
+
+                    let _ = cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            match msg {
+                                TransferProgressMessage::Started { collections } => {
+                                    let event = AppEvent::DatabaseTransferStarted {
+                                        transfer_id,
+                                        collections,
+                                    };
+                                    state.update_status_from_event(&event);
+                                    cx.emit(event);
+                                }
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name,
+                                    status,
+                                    documents_processed,
+                                    documents_total,
+                                } => {
+                                    let event = AppEvent::CollectionProgressUpdate {
+                                        transfer_id,
+                                        collection_name,
+                                        status,
+                                        documents_processed,
+                                        documents_total,
+                                    };
+                                    state.update_status_from_event(&event);
+                                    cx.emit(event);
+                                }
+                                TransferProgressMessage::Completed { total_count, had_error } => {
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.is_running = false;
+                                        tab.progress_count = total_count;
+                                    }
+                                    if had_error {
+                                        state.set_status_message(Some(StatusMessage::error(
+                                            "BSON export completed with errors".to_string(),
+                                        )));
+                                    } else {
+                                        state.set_status_message(Some(StatusMessage::info(
+                                            "BSON export completed".to_string(),
+                                        )));
+                                    }
+                                    cx.emit(AppEvent::TransferCompleted {
+                                        transfer_id,
+                                        count: total_count,
+                                    });
+                                }
+                                TransferProgressMessage::Failed { error } => {
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.is_running = false;
+                                        tab.error_message = Some(error.clone());
+                                    }
+                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                        "BSON export failed: {error}"
+                                    ))));
+                                    cx.emit(AppEvent::TransferFailed { transfer_id, error });
+                                }
+                            }
+                            if should_notify {
+                                cx.notify();
+                            }
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Execute collection export with progress tracking.
     /// Uses a channel to send progress from background thread to UI thread.
     #[allow(clippy::too_many_arguments)]
@@ -1157,70 +1289,204 @@ impl AppCommands {
             return;
         }
 
-        // BSON import (database scope only) - no progress available
-        let task = cx.background_spawn(async move {
-            let manager = get_connection_manager();
-
-            match format {
-                TransferFormat::Bson => {
-                    // BSON import only supported for database scope
-                    if !matches!(scope, TransferScope::Database) {
-                        return Err(crate::error::Error::Parse(
-                            "BSON import is only supported for database scope".to_string(),
-                        ));
-                    }
-                    let uri = connection_uri.ok_or_else(|| {
-                        crate::error::Error::Parse("Connection URI not available".to_string())
-                    })?;
-                    // mongorestore handles --drop internally
-                    manager.import_database_bson(&uri, &database, &path, drop_before)?;
-                    Ok(0) // mongorestore doesn't return a count
-                }
-                _ => Err(crate::error::Error::Parse(
-                    "Unexpected format for simple import path".to_string(),
-                )),
-            }
-        });
-
-        cx.spawn({
-            let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
-                let result = task.await;
-                let _ = cx.update(|cx| {
+        // BSON import (database scope only) - use progress tracking
+        if matches!(format, TransferFormat::Bson) && matches!(scope, TransferScope::Database) {
+            let uri = match connection_uri {
+                Some(uri) => uri,
+                None => {
                     state.update(cx, |state, cx| {
+                        state.set_status_message(Some(StatusMessage::error(
+                            "Connection URI not available",
+                        )));
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                             tab.is_running = false;
                         }
-
-                        match result {
-                            Ok(count) => {
-                                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                    tab.progress_count = count;
-                                }
-                                let message = format!(
-                                    "Imported {} document{}",
-                                    count,
-                                    if count == 1 { "" } else { "s" }
-                                );
-                                state.set_status_message(Some(StatusMessage::info(message)));
-                                cx.emit(AppEvent::TransferCompleted { transfer_id, count });
-                            }
-                            Err(err) => {
-                                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                    tab.error_message = Some(err.to_string());
-                                }
-                                state.set_status_message(Some(StatusMessage::error(format!(
-                                    "Import failed: {err}"
-                                ))));
-                                cx.emit(AppEvent::TransferFailed {
-                                    transfer_id,
-                                    error: err.to_string(),
-                                });
-                            }
-                        }
                         cx.notify();
                     });
+                    return;
+                }
+            };
+            Self::execute_bson_import_with_progress(
+                state,
+                transfer_id,
+                uri,
+                database,
+                path,
+                drop_before,
+                cx,
+            );
+            return;
+        }
+
+        // Fallback for unexpected cases
+        state.update(cx, |state, cx| {
+            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                tab.is_running = false;
+                tab.error_message = Some("Unexpected import configuration".to_string());
+            }
+            cx.notify();
+        });
+    }
+
+    /// Execute BSON database import with progress tracking via mongorestore stderr parsing.
+    fn execute_bson_import_with_progress(
+        state: Entity<AppState>,
+        transfer_id: Uuid,
+        connection_uri: String,
+        database: String,
+        path: PathBuf,
+        drop_before: bool,
+        cx: &mut App,
+    ) {
+        let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
+
+        // Spawn background task that runs mongorestore with progress parsing
+        cx.background_spawn({
+            async move {
+                let manager = get_connection_manager();
+
+                // Send a placeholder started message
+                let _ = tx.unbounded_send(TransferProgressMessage::Started {
+                    collections: vec![], // Will be discovered during import
                 });
+
+                let progress_tx = tx.clone();
+                let result = manager.import_database_bson_with_progress(
+                    &connection_uri,
+                    &database,
+                    &path,
+                    drop_before,
+                    move |progress| {
+                        let msg = match progress {
+                            BsonToolProgress::Started { collection } => {
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::InProgress,
+                                    documents_processed: 0,
+                                    documents_total: None,
+                                }
+                            }
+                            BsonToolProgress::Progress { collection, current, total, .. } => {
+                                // mongorestore reports bytes, not documents
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::InProgress,
+                                    documents_processed: current,
+                                    documents_total: Some(total),
+                                }
+                            }
+                            BsonToolProgress::Completed { collection, documents } => {
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name: collection,
+                                    status: CollectionTransferStatus::Completed,
+                                    documents_processed: documents,
+                                    documents_total: Some(documents),
+                                }
+                            }
+                        };
+                        let _ = progress_tx.unbounded_send(msg);
+                    },
+                );
+
+                match result {
+                    Ok(()) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Completed {
+                            total_count: 0, // mongorestore doesn't provide total count
+                            had_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+
+        // Spawn UI task to receive progress updates
+        cx.spawn({
+            let state = state.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let mut rx = rx;
+                let mut progress_count = 0u32;
+                const BATCH_SIZE: u32 = 50;
+
+                while let Some(msg) = rx.next().await {
+                    let should_notify = match &msg {
+                        TransferProgressMessage::Started { .. }
+                        | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Failed { .. } => true,
+                        TransferProgressMessage::CollectionProgress { .. } => {
+                            progress_count += 1;
+                            progress_count.is_multiple_of(BATCH_SIZE)
+                        }
+                    };
+
+                    let _ = cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            match msg {
+                                TransferProgressMessage::Started { collections } => {
+                                    let event = AppEvent::DatabaseTransferStarted {
+                                        transfer_id,
+                                        collections,
+                                    };
+                                    state.update_status_from_event(&event);
+                                    cx.emit(event);
+                                }
+                                TransferProgressMessage::CollectionProgress {
+                                    collection_name,
+                                    status,
+                                    documents_processed,
+                                    documents_total,
+                                } => {
+                                    let event = AppEvent::CollectionProgressUpdate {
+                                        transfer_id,
+                                        collection_name,
+                                        status,
+                                        documents_processed,
+                                        documents_total,
+                                    };
+                                    state.update_status_from_event(&event);
+                                    cx.emit(event);
+                                }
+                                TransferProgressMessage::Completed { total_count, had_error } => {
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.is_running = false;
+                                        tab.progress_count = total_count;
+                                    }
+                                    if had_error {
+                                        state.set_status_message(Some(StatusMessage::error(
+                                            "BSON import completed with errors".to_string(),
+                                        )));
+                                    } else {
+                                        state.set_status_message(Some(StatusMessage::info(
+                                            "BSON import completed".to_string(),
+                                        )));
+                                    }
+                                    cx.emit(AppEvent::TransferCompleted {
+                                        transfer_id,
+                                        count: total_count,
+                                    });
+                                }
+                                TransferProgressMessage::Failed { error } => {
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.is_running = false;
+                                        tab.error_message = Some(error.clone());
+                                    }
+                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                        "BSON import failed: {error}"
+                                    ))));
+                                    cx.emit(AppEvent::TransferFailed { transfer_id, error });
+                                }
+                            }
+                            if should_notify {
+                                cx.notify();
+                            }
+                        });
+                    });
+                }
             }
         })
         .detach();
