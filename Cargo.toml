@@ -45,6 +45,7 @@ cargo-husky = { version = "1", default-features = false, features = [
 ] }
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["mongo"] }
+tempfile = "3.24"
 
 [profile.dev]
 opt-level = 1
