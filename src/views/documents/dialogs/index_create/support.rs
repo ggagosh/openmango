@@ -1,20 +1,22 @@
+//! Support types and functions for the index create dialog.
+
 use std::collections::HashMap;
 
 use mongodb::bson::{Bson, Document};
 
-pub(super) const SAMPLE_SIZE: i64 = 500;
-pub(super) const MAX_SUGGESTIONS: usize = 12;
-pub(super) const MAX_ARRAY_SCAN: usize = 20;
-pub(super) const MAX_DEPTH: usize = 8;
+pub const SAMPLE_SIZE: i64 = 500;
+pub const MAX_SUGGESTIONS: usize = 12;
+const MAX_ARRAY_SCAN: usize = 20;
+const MAX_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum IndexMode {
+pub enum IndexMode {
     Form,
     Json,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum IndexKeyKind {
+pub enum IndexKeyKind {
     Asc,
     Desc,
     Text,
@@ -24,7 +26,7 @@ pub(super) enum IndexKeyKind {
 }
 
 impl IndexKeyKind {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             IndexKeyKind::Asc => "1",
             IndexKeyKind::Desc => "-1",
@@ -35,7 +37,7 @@ impl IndexKeyKind {
         }
     }
 
-    pub(super) fn as_bson(self) -> Bson {
+    pub fn as_bson(self) -> Bson {
         match self {
             IndexKeyKind::Asc => Bson::Int32(1),
             IndexKeyKind::Desc => Bson::Int32(-1),
@@ -48,34 +50,34 @@ impl IndexKeyKind {
 }
 
 #[derive(Default, Clone, Copy)]
-pub(super) struct IndexKeySummary {
-    pub(super) key_count: usize,
-    pub(super) has_text: bool,
-    pub(super) has_hashed: bool,
-    pub(super) has_wildcard: bool,
-    pub(super) has_special: bool,
+pub struct IndexKeySummary {
+    pub key_count: usize,
+    pub has_text: bool,
+    pub has_hashed: bool,
+    pub has_wildcard: bool,
+    pub has_special: bool,
 }
 
 #[derive(Clone)]
-pub(super) struct FieldSuggestion {
-    pub(super) path: String,
-    pub(super) count: usize,
+pub struct FieldSuggestion {
+    pub path: String,
+    pub count: usize,
 }
 
 #[derive(Clone)]
-pub(super) struct IndexEditTarget {
-    pub(super) original_name: String,
+pub struct IndexEditTarget {
+    pub original_name: String,
 }
 
 #[derive(Clone)]
-pub(super) enum SampleStatus {
+pub enum SampleStatus {
     Idle,
     Loading,
     Ready,
     Error(String),
 }
 
-pub(super) fn build_field_suggestions(docs: &[Document]) -> Vec<FieldSuggestion> {
+pub fn build_field_suggestions(docs: &[Document]) -> Vec<FieldSuggestion> {
     let mut counts: HashMap<String, usize> = HashMap::new();
 
     for doc in docs {
@@ -94,7 +96,7 @@ pub(super) fn build_field_suggestions(docs: &[Document]) -> Vec<FieldSuggestion>
     suggestions
 }
 
-pub(super) fn index_kind_from_bson(key: &str, value: &Bson) -> IndexKeyKind {
+pub fn index_kind_from_bson(key: &str, value: &Bson) -> IndexKeyKind {
     if key == "$**" {
         return IndexKeyKind::Wildcard;
     }

@@ -1,21 +1,21 @@
 //! Bulk update/replace dialog for documents.
 
 use gpui::*;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::{Sizable as _, Size, StyledExt as _, WindowExt as _};
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{colors, spacing};
 
 use super::bulk_update_support::{
     BulkUpdateMode, BulkUpdateScope, parse_update_doc, validate_update_doc,
 };
+use super::shared::{escape_key_subscription, status_text, styled_dropdown_button};
 
 pub struct BulkUpdateDialog {
     state: Entity<AppState>,
@@ -121,14 +121,7 @@ impl BulkUpdateDialog {
             });
         dialog._subscriptions.push(subscription);
 
-        let subscription = cx.intercept_keystrokes(move |event, window, cx| {
-            let key = event.keystroke.key.to_ascii_lowercase();
-            if key == "escape" {
-                window.close_dialog(cx);
-                cx.stop_propagation();
-            }
-        });
-        dialog._subscriptions.push(subscription);
+        dialog._subscriptions.push(escape_key_subscription(cx));
 
         dialog
     }
@@ -280,31 +273,9 @@ impl BulkUpdateDialog {
         has_filter: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let variant = ButtonCustomVariant::new(cx)
-            .color(colors::bg_button_secondary().into())
-            .foreground(colors::text_primary().into())
-            .border(colors::border_subtle().into())
-            .hover(colors::bg_button_secondary_hover().into())
-            .active(colors::bg_button_secondary_hover().into())
-            .shadow(false);
-
-        MenuButton::new("bulk-scope")
-            .compact()
-            .label(self.scope.label())
-            .dropdown_caret(true)
-            .custom(variant)
-            .rounded(borders::radius_sm())
-            .with_size(Size::XSmall)
-            .refine_style(
-                &StyleRefinement::default()
-                    .font_family(crate::theme::fonts::ui())
-                    .font_weight(FontWeight::NORMAL)
-                    .text_size(crate::theme::typography::text_xs())
-                    .h(px(22.0))
-                    .px(spacing::sm())
-                    .py(px(2.0)),
-            )
-            .dropdown_menu_with_anchor(Corner::BottomLeft, {
+        styled_dropdown_button("bulk-scope", self.scope.label(), cx).dropdown_menu_with_anchor(
+            Corner::BottomLeft,
+            {
                 let view = view.clone();
                 move |menu: PopupMenu, _window, _cx| {
                     menu.item(
@@ -350,35 +321,14 @@ impl BulkUpdateDialog {
                         }),
                     )
                 }
-            })
+            },
+        )
     }
 
     fn mode_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = ButtonCustomVariant::new(cx)
-            .color(colors::bg_button_secondary().into())
-            .foreground(colors::text_primary().into())
-            .border(colors::border_subtle().into())
-            .hover(colors::bg_button_secondary_hover().into())
-            .active(colors::bg_button_secondary_hover().into())
-            .shadow(false);
-
-        MenuButton::new("bulk-mode")
-            .compact()
-            .label(self.mode.label())
-            .dropdown_caret(true)
-            .custom(variant)
-            .rounded(borders::radius_sm())
-            .with_size(Size::XSmall)
-            .refine_style(
-                &StyleRefinement::default()
-                    .font_family(crate::theme::fonts::ui())
-                    .font_weight(FontWeight::NORMAL)
-                    .text_size(crate::theme::typography::text_xs())
-                    .h(px(22.0))
-                    .px(spacing::sm())
-                    .py(px(2.0)),
-            )
-            .dropdown_menu_with_anchor(Corner::BottomLeft, {
+        styled_dropdown_button("bulk-mode", self.mode.label(), cx).dropdown_menu_with_anchor(
+            Corner::BottomLeft,
+            {
                 let view = view.clone();
                 move |menu: PopupMenu, _window, _cx| {
                     menu.item(PopupMenuItem::new(BulkUpdateMode::Update.label()).on_click({
@@ -400,7 +350,8 @@ impl BulkUpdateDialog {
                         }),
                     )
                 }
-            })
+            },
+        )
     }
 }
 
@@ -410,13 +361,8 @@ impl Render for BulkUpdateDialog {
         let has_selected = self.selected_doc.is_some();
         let has_filter = !self.current_filter(cx).is_empty();
 
-        let status_text = if let Some(error) = &self.error_message {
-            (error.clone(), colors::text_error())
-        } else if self.updating {
-            ("Applying update...".to_string(), colors::text_muted())
-        } else {
-            ("".to_string(), colors::text_muted())
-        };
+        let status =
+            status_text(self.error_message.as_ref(), self.updating, "Applying update...", "");
 
         let scope_row = div()
             .flex()
@@ -490,13 +436,7 @@ impl Render for BulkUpdateDialog {
                     .items_center()
                     .justify_between()
                     .pt(spacing::xs())
-                    .child(
-                        div()
-                            .min_h(px(18.0))
-                            .text_sm()
-                            .text_color(status_text.1)
-                            .child(status_text.0),
-                    )
+                    .child(div().min_h(px(18.0)).text_sm().text_color(status.1).child(status.0))
                     .child(
                         div()
                             .flex()

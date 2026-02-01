@@ -1,4 +1,24 @@
-pub mod csv_utils;
-pub mod mongo;
+//! MongoDB connection management and operations.
+//!
+//! This module provides:
+//! - `ConnectionManager`: Core connection management and basic operations
+//! - `ops`: Database operations (documents, export, import, indexes, stats, aggregation, copy, bson_tools)
+//! - `tools`: MongoDB tools (mongodump/mongorestore) path detection
+//! - `types`: Shared types for all operations
+//! - `csv_utils`: CSV flattening/unflattening utilities
 
-pub use mongo::{FindDocumentsOptions, get_connection_manager, tools_available};
+pub mod csv_utils;
+pub mod manager;
+pub mod ops;
+pub mod tools;
+pub mod types;
+
+// Re-export commonly used items at the crate level
+pub use manager::{ConnectionManager, get_connection_manager};
+pub use ops::export::generate_export_preview;
+pub use tools::tools_available;
+pub use types::{
+    AggregatePipelineError, BsonOutputFormat, BsonToolProgress, CopyOptions, CsvImportOptions,
+    ExportQueryOptions, ExtendedJsonMode, FileEncoding, FindDocumentsOptions, InsertMode,
+    JsonExportOptions, JsonImportOptions, JsonTransferFormat, ProgressCallback,
+};

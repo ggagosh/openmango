@@ -1,23 +1,23 @@
 //! Property-level edit dialogs for document fields.
 
 use gpui::*;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants};
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::{Disableable as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_component::{Disableable as _, WindowExt as _};
 use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
 use crate::components::Button;
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
 
 use super::property_dialog_support::{
     PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
     format_bson_for_input, parent_path, parse_bool, parse_date, parse_f64, parse_i32, parse_i64,
 };
+use super::shared::{escape_key_subscription, status_text, styled_dropdown_button};
 
 pub struct PropertyActionDialog {
     state: Entity<AppState>,
@@ -322,14 +322,7 @@ impl PropertyActionDialog {
             });
         dialog._subscriptions.push(subscription);
 
-        let subscription = cx.intercept_keystrokes(move |event, window, cx| {
-            let key = event.keystroke.key.to_ascii_lowercase();
-            if key == "escape" {
-                window.close_dialog(cx);
-                cx.stop_propagation();
-            }
-        });
-        dialog._subscriptions.push(subscription);
+        dialog._subscriptions.push(escape_key_subscription(cx));
 
         dialog
     }
@@ -500,30 +493,7 @@ impl PropertyActionDialog {
     }
 
     fn scope_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = ButtonCustomVariant::new(cx)
-            .color(colors::bg_button_secondary().into())
-            .foreground(colors::text_primary().into())
-            .border(colors::border_subtle().into())
-            .hover(colors::bg_button_secondary_hover().into())
-            .active(colors::bg_button_secondary_hover().into())
-            .shadow(false);
-
-        MenuButton::new("property-scope")
-            .compact()
-            .label(self.effective_scope().label())
-            .dropdown_caret(true)
-            .custom(variant)
-            .rounded(borders::radius_sm())
-            .with_size(Size::XSmall)
-            .refine_style(
-                &StyleRefinement::default()
-                    .font_family(crate::theme::fonts::ui())
-                    .font_weight(FontWeight::NORMAL)
-                    .text_size(crate::theme::typography::text_xs())
-                    .h(px(22.0))
-                    .px(spacing::sm())
-                    .py(px(2.0)),
-            )
+        styled_dropdown_button("property-scope", self.effective_scope().label(), cx)
             .disabled(!self.allow_bulk)
             .dropdown_menu_with_anchor(Corner::BottomLeft, {
                 let view = view.clone();
@@ -559,30 +529,7 @@ impl PropertyActionDialog {
     }
 
     fn type_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = ButtonCustomVariant::new(cx)
-            .color(colors::bg_button_secondary().into())
-            .foreground(colors::text_primary().into())
-            .border(colors::border_subtle().into())
-            .hover(colors::bg_button_secondary_hover().into())
-            .active(colors::bg_button_secondary_hover().into())
-            .shadow(false);
-
-        MenuButton::new("property-type")
-            .compact()
-            .label(self.value_type.label())
-            .dropdown_caret(true)
-            .custom(variant)
-            .rounded(borders::radius_sm())
-            .with_size(Size::XSmall)
-            .refine_style(
-                &StyleRefinement::default()
-                    .font_family(crate::theme::fonts::ui())
-                    .font_weight(FontWeight::NORMAL)
-                    .text_size(crate::theme::typography::text_xs())
-                    .h(px(22.0))
-                    .px(spacing::sm())
-                    .py(px(2.0)),
-            )
+        styled_dropdown_button("property-type", self.value_type.label(), cx)
             .dropdown_menu_with_anchor(Corner::BottomLeft, {
                 let view = view.clone();
                 move |menu, _window, _cx| {
@@ -648,15 +595,13 @@ impl Render for PropertyActionDialog {
             PropertyActionKind::RemoveMatchingValues => "Remove",
         };
 
-        let status_text = if let Some(error) = &self.error_message {
-            (error.clone(), colors::text_error())
-        } else if self.updating {
-            ("Applying update...".to_string(), colors::text_muted())
-        } else if !self.allow_bulk {
-            ("Scope locked to current document.".to_string(), colors::text_muted())
-        } else {
-            ("".to_string(), colors::text_muted())
-        };
+        let default_label = if !self.allow_bulk { "Scope locked to current document." } else { "" };
+        let status = status_text(
+            self.error_message.as_ref(),
+            self.updating,
+            "Applying update...",
+            default_label,
+        );
 
         let scope_row = if show_type {
             div()
@@ -765,13 +710,7 @@ impl Render for PropertyActionDialog {
                     .items_center()
                     .justify_between()
                     .pt(spacing::xs())
-                    .child(
-                        div()
-                            .min_h(px(18.0))
-                            .text_sm()
-                            .text_color(status_text.1)
-                            .child(status_text.0),
-                    )
+                    .child(div().min_h(px(18.0)).text_sm().text_color(status.1).child(status.0))
                     .child(
                         div()
                             .flex()

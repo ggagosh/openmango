@@ -9,8 +9,7 @@ use std::time::Instant;
 use gpui::{App, AppContext as _, Entity};
 
 use crate::bson::parse_bson_from_relaxed_json;
-use crate::connection::get_connection_manager;
-use crate::connection::mongo::{AggregatePipelineError, ConnectionManager};
+use crate::connection::{AggregatePipelineError, ConnectionManager, get_connection_manager};
 use crate::state::app_state::{PipelineStage, StageDocCounts, StageStatsMode};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey, StatusMessage};
 use mongodb::bson::{Bson, Document, doc};
