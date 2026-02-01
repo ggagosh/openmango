@@ -1346,7 +1346,7 @@ fn parse_pipeline_stages(raw: &str) -> Result<Vec<PipelineStage>, String> {
     if trimmed.is_empty() {
         return Err("Pipeline JSON is required".to_string());
     }
-    let value: JsonValue = serde_json::from_str(trimmed).map_err(|err| err.to_string())?;
+    let value: JsonValue = crate::bson::parse_value_from_relaxed_json(trimmed)?;
     let stages = value.as_array().ok_or_else(|| "Pipeline must be a JSON array".to_string())?;
     if stages.is_empty() {
         return Err("Pipeline is empty".to_string());

@@ -203,6 +203,7 @@ pub fn render_tree_row(
     ListItem::new(ix).selected(_selected).child(row)
 }
 
+#[allow(dead_code)]
 pub fn render_readonly_tree_row(
     ix: usize,
     entry: &TreeEntry,
@@ -512,6 +513,7 @@ fn render_inline_editor(
         .into_any_element()
 }
 
+#[allow(dead_code)]
 fn render_value_column_readonly(value_label: &str, value_color: Rgba) -> impl IntoElement {
     div().flex().items_center().gap(spacing::xs()).flex_1().min_w(px(0.0)).child(
         div()

@@ -9,6 +9,10 @@ use crate::models::connection::SavedConnection;
 use crate::state::settings::AppSettings;
 use crate::state::workspace::WorkspaceState;
 
+#[cfg(debug_assertions)]
+const APP_NAME: &str = "openmango-dev";
+
+#[cfg(not(debug_assertions))]
 const APP_NAME: &str = "openmango";
 
 /// Manages persistent configuration files

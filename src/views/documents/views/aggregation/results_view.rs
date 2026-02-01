@@ -2,10 +2,8 @@ use gpui::*;
 use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::input::Input;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::switch::Switch;
-use gpui_component::tree::tree;
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
@@ -13,12 +11,11 @@ use crate::helpers::format_number;
 use crate::state::app_state::{PipelineState, StageStatsMode};
 use crate::state::{AppCommands, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
-use crate::views::documents::tree::document_tree::build_documents_tree;
-use crate::views::documents::tree::tree_row::render_readonly_tree_row;
+use crate::views::documents::tree::lazy_row::{compute_row_meta, render_lazy_readonly_row};
+use crate::views::documents::tree::lazy_tree::build_visible_rows;
 
 use crate::views::CollectionView;
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -389,9 +386,6 @@ fn render_results_tree(
     _window: &mut Window,
     cx: &mut Context<CollectionView>,
 ) -> AnyElement {
-    let Some(tree_state) = view.aggregation_results_tree_state.clone() else {
-        return div().into_any_element();
-    };
     let view_entity = cx.entity();
 
     if pipeline.loading {
@@ -431,29 +425,30 @@ fn render_results_tree(
             .into_any_element();
     }
 
-    let documents: Vec<SessionDocument> = results
-        .iter()
-        .enumerate()
-        .map(|(idx, doc)| SessionDocument {
-            key: DocumentKey::from_document(doc, idx),
-            doc: doc.clone(),
-        })
-        .collect();
+    // Build documents from results
+    let documents: Arc<Vec<SessionDocument>> = Arc::new(
+        results
+            .iter()
+            .enumerate()
+            .map(|(idx, doc)| SessionDocument {
+                key: DocumentKey::from_document(doc, idx),
+                doc: doc.clone(),
+            })
+            .collect(),
+    );
 
+    // Check if results changed - if so, clear expanded state
     let signature = results_signature(&documents);
     if view.aggregation_results_signature != Some(signature) {
         view.aggregation_results_signature = Some(signature);
         view.aggregation_results_expanded_nodes.clear();
     }
 
+    // Build visible rows lazily based on expanded state
     let expanded_nodes = &view.aggregation_results_expanded_nodes;
-    let (items, meta, _) = build_documents_tree(&documents, &HashMap::new(), expanded_nodes);
-    let node_meta = Arc::new(meta);
-
-    tree_state.update(cx, |tree, cx| {
-        tree.set_items(items, cx);
-        tree.set_selected_index(None, cx);
-    });
+    let visible_rows = Arc::new(build_visible_rows(&documents, expanded_nodes));
+    let row_count = visible_rows.len();
+    let scroll_handle = view.aggregation_results_scroll.clone();
 
     div()
         .flex()
@@ -490,24 +485,36 @@ fn render_results_tree(
                 )
                 .child(div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Type")),
         )
-        .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(tree(
-            &tree_state,
-            {
-                let node_meta = node_meta.clone();
-                let view_entity = view_entity.clone();
-                let tree_state = tree_state.clone();
-                move |ix, entry, selected, _window, _cx| {
-                    render_readonly_tree_row(
-                        ix,
-                        entry,
-                        selected,
-                        &node_meta,
-                        view_entity.clone(),
-                        tree_state.clone(),
-                    )
-                }
-            },
-        )))
+        .child(
+            div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
+                uniform_list(
+                    "agg-results-tree",
+                    row_count,
+                    cx.processor({
+                        let documents = documents.clone();
+                        let visible_rows = visible_rows.clone();
+                        let view_entity = view_entity.clone();
+                        move |_view, range: std::ops::Range<usize>, _window, _cx| {
+                            range
+                                .map(|ix| {
+                                    let row = &visible_rows[ix];
+                                    let meta = compute_row_meta(row, &documents);
+                                    render_lazy_readonly_row(
+                                        ix,
+                                        row,
+                                        &meta,
+                                        false,
+                                        view_entity.clone(),
+                                    )
+                                })
+                                .collect()
+                        }
+                    }),
+                )
+                .flex_1()
+                .track_scroll(scroll_handle),
+            ),
+        )
         .into_any_element()
 }
 
