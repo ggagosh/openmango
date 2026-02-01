@@ -5,6 +5,7 @@ use gpui_component::button::Button as MenuButton;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState, Position, RopeExt};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::progress::Progress;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::tab::{Tab, TabBar};
@@ -18,6 +19,9 @@ use crate::components::file_picker::{
     unexpanded_export_filename_bson_for_scope, unexpanded_export_filename_for_scope,
 };
 use crate::connection::tools_available;
+use crate::state::app_state::{
+    CollectionProgress, CollectionTransferStatus, DatabaseTransferProgress,
+};
 use crate::state::{
     AppCommands, AppState, BsonOutputFormat, CompressionMode, DATABASE_SCOPE_FILENAME_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE, Encoding, ExtendedJsonMode, InsertMode, TransferFormat,
@@ -1006,6 +1010,14 @@ impl Render for TransferView {
         let summary_panel =
             render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name);
 
+        // Progress panel for database-scope operations (only shown when running)
+        let progress_panel: AnyElement =
+            if let Some(ref db_progress) = transfer_state.database_progress {
+                render_progress_panel(db_progress, state.clone(), transfer_id).into_any_element()
+            } else {
+                div().into_any_element()
+            };
+
         // Warning banners
         let warnings = render_warnings(&transfer_state);
 
@@ -1066,7 +1078,9 @@ impl Render for TransferView {
                     // Error display (only shown when needed)
                     .child(error_display)
                     // Summary at bottom - review before action
-                    .child(summary_panel),
+                    .child(summary_panel)
+                    // Progress panel for database-scope operations
+                    .child(div().mt(spacing::md()).child(progress_panel)),
             )
             .child(modal_overlay)
             .into_any_element()
@@ -2369,6 +2383,157 @@ fn render_summary_panel(
                 .child(summary_item("To", dest_desc))
                 .child(summary_item("Format", format_label)),
         )
+}
+
+fn render_progress_panel(
+    db_progress: &DatabaseTransferProgress,
+    state: Entity<AppState>,
+    transfer_id: Uuid,
+) -> impl IntoElement {
+    let completed = db_progress.completed_count();
+    let total = db_progress.collections.len();
+
+    // Collapsible header - use a button for click handling
+    let expanded = db_progress.panel_expanded;
+    let header = {
+        let state = state.clone();
+        div()
+            .id("progress-panel-header")
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    if let Some(tab) = state.transfer_tab_mut(transfer_id)
+                        && let Some(ref mut db_progress) = tab.database_progress
+                    {
+                        db_progress.panel_expanded = !db_progress.panel_expanded;
+                    }
+                    cx.notify();
+                });
+            })
+            .child(
+                Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .xsmall()
+                    .text_color(colors::text_muted()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors::text_secondary())
+                    .child("Progress Details"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors::text_muted())
+                    .child(format!("({}/{})", completed, total)),
+            )
+    };
+
+    // Content - per-collection progress rows (scrollable with max height)
+    let content = if expanded {
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::xs())
+            .mt(spacing::sm())
+            .max_h(px(300.0)) // Limit height for scrolling
+            .overflow_y_scrollbar()
+            .children(db_progress.collections.iter().map(render_collection_progress_row))
+            .into_any_element()
+    } else {
+        div().into_any_element()
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .p(spacing::md())
+        .bg(colors::bg_sidebar())
+        .border_1()
+        .border_color(colors::border_subtle())
+        .rounded(borders::radius_sm())
+        .child(header)
+        .child(content)
+}
+
+fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement {
+    // Status indicator (icon + color)
+    // Use available icons: ChevronRight for pending, ArrowRight for in-progress,
+    // Check for completed, Close for failed/cancelled
+    let (status_icon, status_color) = match &coll.status {
+        CollectionTransferStatus::Pending => (IconName::ChevronRight, colors::text_muted()),
+        CollectionTransferStatus::InProgress => (IconName::ArrowRight, colors::syntax_string()), // Blue
+        CollectionTransferStatus::Completed => (IconName::Check, colors::status_success()),
+        CollectionTransferStatus::Failed(_) => (IconName::Close, colors::status_error()),
+        CollectionTransferStatus::Cancelled => (IconName::Close, colors::status_warning()),
+    };
+
+    // Progress percentage
+    let percentage = coll.percentage().unwrap_or(0.0);
+
+    // Progress text
+    let progress_text = match (coll.documents_processed, coll.documents_total) {
+        (processed, Some(total)) => format!("{} / {} ({:.0}%)", processed, total, percentage),
+        (processed, None) => format!("{} docs", processed),
+    };
+
+    // Error message (if failed)
+    let error_row: AnyElement = if let CollectionTransferStatus::Failed(err) = &coll.status {
+        div()
+            .ml(px(20.0)) // Align with collection name
+            .text_xs()
+            .text_color(colors::status_error())
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(err.clone())
+            .into_any_element()
+    } else {
+        div().into_any_element()
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(spacing::xs())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .min_w_0() // Allow shrinking for flex children
+                // Status icon
+                .child(Icon::new(status_icon).xsmall().text_color(status_color))
+                // Collection name (flexible with min/max width)
+                .child(
+                    div()
+                        .min_w(px(120.0))
+                        .max_w(px(240.0))
+                        .flex_shrink_0()
+                        .text_sm()
+                        .text_color(colors::text_primary())
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(coll.name.clone()),
+                )
+                // Progress bar (flexible)
+                .child(div().flex_1().min_w(px(100.0)).child(Progress::new().value(percentage)))
+                // Progress text (fixed width, accommodates large numbers)
+                .child(
+                    div()
+                        .w(px(180.0))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_right()
+                        .text_color(colors::text_muted())
+                        .child(progress_text),
+                ),
+        )
+        // Error message row (if present)
+        .child(error_row)
 }
 
 fn render_warnings(transfer_state: &TransferTabState) -> impl IntoElement {

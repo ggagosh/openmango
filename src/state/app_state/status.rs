@@ -1,6 +1,9 @@
 //! Status message updates derived from events.
 
 use crate::state::StatusMessage;
+use crate::state::app_state::{
+    CollectionProgress, CollectionTransferStatus, DatabaseTransferProgress,
+};
 use crate::state::events::AppEvent;
 
 use super::AppState;
@@ -162,6 +165,41 @@ impl AppState {
                 self.set_status_message(Some(StatusMessage::error(format!(
                     "Aggregation failed: {error}"
                 ))));
+            }
+            AppEvent::DatabaseTransferStarted { transfer_id, collections } => {
+                // Initialize database progress tracking
+                if let Some(tab) = self.transfer_tab_mut(*transfer_id) {
+                    tab.database_progress = Some(DatabaseTransferProgress {
+                        collections: collections
+                            .iter()
+                            .map(|name| CollectionProgress {
+                                name: name.clone(),
+                                status: CollectionTransferStatus::Pending,
+                                documents_processed: 0,
+                                documents_total: None,
+                            })
+                            .collect(),
+                        panel_expanded: true,
+                    });
+                }
+            }
+            AppEvent::CollectionProgressUpdate {
+                transfer_id,
+                collection_name,
+                status,
+                documents_processed,
+                documents_total,
+            } => {
+                // Update collection progress
+                if let Some(tab) = self.transfer_tab_mut(*transfer_id)
+                    && let Some(ref mut db_progress) = tab.database_progress
+                    && let Some(coll) =
+                        db_progress.collections.iter_mut().find(|c| c.name == *collection_name)
+                {
+                    coll.status = status.clone();
+                    coll.documents_processed = *documents_processed;
+                    coll.documents_total = *documents_total;
+                }
             }
             _ => {}
         }

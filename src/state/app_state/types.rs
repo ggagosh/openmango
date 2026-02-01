@@ -345,6 +345,10 @@ pub struct TransferTabState {
     pub transfer_generation: Arc<AtomicU64>,
     #[serde(skip)]
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+
+    // Database-scope progress tracking
+    #[serde(skip)]
+    pub database_progress: Option<DatabaseTransferProgress>,
 }
 
 impl Default for TransferTabState {
@@ -399,6 +403,7 @@ impl Default for TransferTabState {
 
             transfer_generation: Arc::new(AtomicU64::new(0)),
             abort_handle: Arc::new(Mutex::new(None)),
+            database_progress: None,
         }
     }
 }
@@ -701,4 +706,79 @@ fn bson_to_u64(value: &Bson) -> Option<u64> {
 pub enum CopiedTreeItem {
     Database { connection_id: Uuid, database: String },
     Collection { connection_id: Uuid, database: String, collection: String },
+}
+
+// ============================================================================
+// Progress tracking for database-scope transfer operations
+// ============================================================================
+
+/// Status of a single collection transfer
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum CollectionTransferStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Failed(String),
+    Cancelled,
+}
+
+/// Progress tracking for a single collection
+#[derive(Clone, Debug, Default)]
+pub struct CollectionProgress {
+    pub name: String,
+    pub status: CollectionTransferStatus,
+    pub documents_processed: u64,
+    pub documents_total: Option<u64>, // None = unknown/estimating
+}
+
+impl CollectionProgress {
+    pub fn percentage(&self) -> Option<f32> {
+        self.documents_total.map(|total| {
+            if total == 0 {
+                100.0
+            } else {
+                (self.documents_processed as f32 / total as f32) * 100.0
+            }
+        })
+    }
+}
+
+/// Progress tracking for database-scope operations
+#[derive(Clone, Debug, Default)]
+pub struct DatabaseTransferProgress {
+    pub collections: Vec<CollectionProgress>,
+    pub panel_expanded: bool,
+}
+
+#[allow(dead_code)]
+impl DatabaseTransferProgress {
+    pub fn total_documents_processed(&self) -> u64 {
+        self.collections.iter().map(|c| c.documents_processed).sum()
+    }
+
+    pub fn total_documents_total(&self) -> Option<u64> {
+        let totals: Vec<u64> = self.collections.iter().filter_map(|c| c.documents_total).collect();
+        if totals.len() == self.collections.len() && !totals.is_empty() {
+            Some(totals.iter().sum())
+        } else {
+            None
+        }
+    }
+
+    pub fn overall_percentage(&self) -> Option<f32> {
+        let total = self.total_documents_total()?;
+        if total == 0 {
+            return Some(100.0);
+        }
+        Some((self.total_documents_processed() as f32 / total as f32) * 100.0)
+    }
+
+    pub fn completed_count(&self) -> usize {
+        self.collections
+            .iter()
+            .filter(|c| matches!(c.status, CollectionTransferStatus::Completed))
+            .count()
+    }
 }

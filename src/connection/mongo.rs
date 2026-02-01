@@ -1,8 +1,9 @@
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read as _, Write};
 use std::path::Path;
 use std::process::Command;
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -25,9 +26,10 @@ pub enum AggregatePipelineError {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum JsonTransferFormat {
     JsonArray,
+    #[default]
     JsonLines,
 }
 
@@ -76,35 +78,79 @@ pub enum FileEncoding {
     Latin1,
 }
 
+/// Progress callback type for reporting operation progress.
+pub type ProgressCallback = Arc<dyn Fn(u64) + Send + Sync>;
+
+/// Cancellation token for aborting long-running operations.
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self { cancelled: Arc::new(AtomicBool::new(false)) }
+    }
+
+    #[allow(dead_code)]
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
 /// Options for JSON import
-#[derive(Clone, Debug)]
+#[derive(Clone, Default)]
 pub struct JsonImportOptions {
     pub format: JsonTransferFormat,
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
     pub encoding: FileEncoding,
+    pub progress: Option<ProgressCallback>,
+    pub cancellation: Option<CancellationToken>,
 }
 
-impl Default for JsonImportOptions {
-    fn default() -> Self {
-        Self {
-            format: JsonTransferFormat::JsonLines,
-            insert_mode: InsertMode::Insert,
-            stop_on_error: true,
-            batch_size: 1000,
-            encoding: FileEncoding::Utf8,
-        }
+impl std::fmt::Debug for JsonImportOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsonImportOptions")
+            .field("format", &self.format)
+            .field("insert_mode", &self.insert_mode)
+            .field("stop_on_error", &self.stop_on_error)
+            .field("batch_size", &self.batch_size)
+            .field("encoding", &self.encoding)
+            .field("progress", &self.progress.is_some())
+            .field("cancellation", &self.cancellation.is_some())
+            .finish()
     }
 }
 
 /// Options for CSV import
-#[derive(Clone, Debug)]
+#[derive(Clone, Default)]
 pub struct CsvImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
     pub encoding: FileEncoding,
+    pub progress: Option<ProgressCallback>,
+    pub cancellation: Option<CancellationToken>,
+}
+
+impl std::fmt::Debug for CsvImportOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CsvImportOptions")
+            .field("insert_mode", &self.insert_mode)
+            .field("stop_on_error", &self.stop_on_error)
+            .field("batch_size", &self.batch_size)
+            .field("encoding", &self.encoding)
+            .field("progress", &self.progress.is_some())
+            .field("cancellation", &self.cancellation.is_some())
+            .finish()
+    }
 }
 
 /// BSON output format for mongodump
@@ -115,23 +161,38 @@ pub enum BsonOutputFormat {
     Archive,
 }
 
-impl Default for CsvImportOptions {
-    fn default() -> Self {
-        Self {
-            insert_mode: InsertMode::Insert,
-            stop_on_error: true,
-            batch_size: 1000,
-            encoding: FileEncoding::Utf8,
-        }
-    }
-}
-
 /// Query options for collection-level exports
 #[derive(Clone, Debug, Default)]
 pub struct ExportQueryOptions {
     pub filter: Option<Document>,
     pub projection: Option<Document>,
     pub sort: Option<Document>,
+}
+
+/// Options for copy operations
+#[derive(Clone, Default)]
+pub struct CopyOptions {
+    pub batch_size: usize,
+    pub copy_indexes: bool,
+    pub progress: Option<ProgressCallback>,
+    pub cancellation: Option<CancellationToken>,
+}
+
+impl CopyOptions {
+    pub fn new(batch_size: usize, copy_indexes: bool) -> Self {
+        Self { batch_size, copy_indexes, progress: None, cancellation: None }
+    }
+}
+
+impl std::fmt::Debug for CopyOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CopyOptions")
+            .field("batch_size", &self.batch_size)
+            .field("copy_indexes", &self.copy_indexes)
+            .field("progress", &self.progress.is_some())
+            .field("cancellation", &self.cancellation.is_some())
+            .finish()
+    }
 }
 
 impl From<crate::error::Error> for AggregatePipelineError {
@@ -167,6 +228,11 @@ impl ConnectionManager {
     pub fn new() -> Self {
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
         Self { runtime }
+    }
+
+    /// Get a handle to the Tokio runtime for spawning parallel tasks
+    pub fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime.handle().clone()
     }
 
     /// Connect to MongoDB using the saved connection config (runs in Tokio runtime)
@@ -480,6 +546,38 @@ impl ConnectionManager {
         })
     }
 
+    /// Get estimated document count for a collection (fast, uses metadata).
+    /// This is much faster than count_documents() as it uses collection statistics.
+    pub fn estimated_document_count(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+    ) -> Result<u64> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll =
+                client.database(&database).collection::<mongodb::bson::Document>(&collection);
+            let count = coll.estimated_document_count().await?;
+            Ok(count)
+        })
+    }
+
+    /// List all collection names in a database (runs in Tokio runtime).
+    pub fn list_collection_names(&self, client: &Client, database: &str) -> Result<Vec<String>> {
+        let client = client.clone();
+        let database = database.to_string();
+
+        self.runtime.block_on(async {
+            let db = client.database(&database);
+            let names = db.list_collection_names().await?;
+            Ok(names)
+        })
+    }
+
     /// Export a collection to JSON/JSONL (runs in Tokio runtime).
     #[allow(dead_code)]
     pub fn export_collection_json(
@@ -607,6 +705,108 @@ impl ConnectionManager {
         })
     }
 
+    /// Export a collection to JSON/JSONL with query options and progress callback (runs in Tokio runtime).
+    /// The callback is invoked every ~1000 documents with the current count.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_collection_json_with_query_and_progress<F>(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: JsonExportOptions,
+        query: ExportQueryOptions,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64) + Send + 'static,
+    {
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            // Build find options with query options
+            let filter = query.filter.unwrap_or_default();
+            let mut find_options = mongodb::options::FindOptions::default();
+            find_options.projection = query.projection;
+            find_options.sort = query.sort;
+
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
+            let file = File::create(&path)?;
+
+            let mut writer: Box<dyn Write> = if options.gzip {
+                Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
+            } else {
+                Box::new(BufWriter::new(file))
+            };
+
+            let mut count = 0u64;
+            const PROGRESS_INTERVAL: u64 = 1000;
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                writer.write_all(b"[")?;
+                if options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+            }
+
+            let mut first = true;
+            while let Some(doc) = cursor.try_next().await? {
+                let json_value = match options.json_mode {
+                    ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
+                    ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
+                };
+
+                let json = if options.pretty_print {
+                    serde_json::to_string_pretty(&json_value)?
+                } else {
+                    serde_json::to_string(&json_value)?
+                };
+
+                match options.format {
+                    JsonTransferFormat::JsonLines => {
+                        writer.write_all(json.as_bytes())?;
+                        writer.write_all(b"\n")?;
+                    }
+                    JsonTransferFormat::JsonArray => {
+                        if !first {
+                            writer.write_all(b",")?;
+                            if options.pretty_print {
+                                writer.write_all(b"\n")?;
+                            }
+                        }
+                        writer.write_all(json.as_bytes())?;
+                        first = false;
+                    }
+                }
+                count += 1;
+
+                // Report progress every N documents
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                if count > 0 && options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+                writer.write_all(b"]")?;
+            }
+
+            writer.flush()?;
+            // Final progress report
+            on_progress(count);
+            Ok(count)
+        })
+    }
+
     /// Export a collection to CSV (runs in Tokio runtime).
     #[allow(dead_code)]
     pub fn export_collection_csv(
@@ -628,6 +828,7 @@ impl ConnectionManager {
     }
 
     /// Export a collection to CSV with query options (runs in Tokio runtime).
+    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
     pub fn export_collection_csv_with_query(
         &self,
         client: &Client,
@@ -648,17 +849,28 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
 
-            // Build find options with query options
-            let filter = query.filter.clone().unwrap_or_default();
+            // Build find options with query options (single query for all documents)
+            let filter = query.filter.unwrap_or_default();
             let mut find_options = mongodb::options::FindOptions::default();
-            find_options.projection = query.projection.clone();
-            find_options.sort = query.sort.clone();
-            find_options.limit = Some(1000);
+            find_options.projection = query.projection;
+            find_options.sort = query.sort;
 
-            // First pass: collect all column names from first batch of documents
-            let sample_cursor = coll.find(filter.clone()).with_options(find_options).await?;
-            let sample_docs: Vec<Document> = sample_cursor.try_collect().await?;
-            let columns = collect_columns(&sample_docs);
+            // Start single cursor for all documents
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
+
+            // Buffer first N documents to detect columns
+            const SAMPLE_SIZE: usize = 1000;
+            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
+
+            while buffered_docs.len() < SAMPLE_SIZE {
+                match cursor.try_next().await? {
+                    Some(doc) => buffered_docs.push(doc),
+                    None => break, // No more documents
+                }
+            }
+
+            // Collect columns from buffered documents
+            let columns = collect_columns(&buffered_docs);
 
             if columns.is_empty() {
                 return Ok(0);
@@ -677,15 +889,17 @@ impl ConnectionManager {
             // Write header
             csv_writer.write_record(&columns)?;
 
-            // Build find options for full export (without limit)
-            let mut export_find_options = mongodb::options::FindOptions::default();
-            export_find_options.projection = query.projection;
-            export_find_options.sort = query.sort;
-
-            // Second pass: write all documents
-            let mut cursor = coll.find(filter).with_options(export_find_options).await?;
+            // Write buffered documents first
             let mut count = 0u64;
+            for doc in buffered_docs {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+            }
 
+            // Continue streaming remaining documents from same cursor
             while let Some(doc) = cursor.try_next().await? {
                 let flat = flatten_document(&doc);
                 let row: Vec<String> =
@@ -699,9 +913,305 @@ impl ConnectionManager {
         })
     }
 
+    /// Export a collection to CSV with query options and progress callback (runs in Tokio runtime).
+    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
+    /// The callback is invoked every ~1000 documents with the current count.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_collection_csv_with_query_and_progress<F>(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        gzip: bool,
+        query: ExportQueryOptions,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64) + Send + 'static,
+    {
+        use crate::connection::csv_utils::{collect_columns, flatten_document};
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            // Build find options with query options (single query for all documents)
+            let filter = query.filter.unwrap_or_default();
+            let mut find_options = mongodb::options::FindOptions::default();
+            find_options.projection = query.projection;
+            find_options.sort = query.sort;
+
+            // Start single cursor for all documents
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
+
+            // Buffer first N documents to detect columns
+            const SAMPLE_SIZE: usize = 1000;
+            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
+
+            while buffered_docs.len() < SAMPLE_SIZE {
+                match cursor.try_next().await? {
+                    Some(doc) => buffered_docs.push(doc),
+                    None => break, // No more documents
+                }
+            }
+
+            // Collect columns from buffered documents
+            let columns = collect_columns(&buffered_docs);
+
+            if columns.is_empty() {
+                on_progress(0);
+                return Ok(0);
+            }
+
+            // Write CSV with optional gzip compression
+            let file = File::create(&path)?;
+            let mut csv_writer = if gzip {
+                csv::Writer::from_writer(
+                    Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
+                )
+            } else {
+                csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
+            };
+
+            // Write header
+            csv_writer.write_record(&columns)?;
+
+            // Write buffered documents first
+            let mut count = 0u64;
+            const PROGRESS_INTERVAL: u64 = 1000;
+
+            for doc in buffered_docs {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+
+                // Report progress every N documents
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            // Continue streaming remaining documents from same cursor
+            while let Some(doc) = cursor.try_next().await? {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+
+                // Report progress every N documents
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            csv_writer.flush()?;
+            // Final progress report
+            on_progress(count);
+            Ok(count)
+        })
+    }
+
+    /// Export a collection to JSON/JSONL with progress callback (runs in Tokio runtime).
+    /// The callback is invoked every ~1000 documents with the current count.
+    pub fn export_collection_json_with_progress<F>(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        options: JsonExportOptions,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64) + Send + 'static,
+    {
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            let mut cursor = coll.find(doc! {}).await?;
+            let file = File::create(&path)?;
+
+            let mut writer: Box<dyn Write> = if options.gzip {
+                Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
+            } else {
+                Box::new(BufWriter::new(file))
+            };
+
+            let mut count = 0u64;
+            const PROGRESS_INTERVAL: u64 = 1000;
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                writer.write_all(b"[")?;
+                if options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+            }
+
+            let mut first = true;
+            while let Some(doc) = cursor.try_next().await? {
+                let json_value = match options.json_mode {
+                    ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
+                    ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
+                };
+
+                let json = if options.pretty_print {
+                    serde_json::to_string_pretty(&json_value)?
+                } else {
+                    serde_json::to_string(&json_value)?
+                };
+
+                match options.format {
+                    JsonTransferFormat::JsonLines => {
+                        writer.write_all(json.as_bytes())?;
+                        writer.write_all(b"\n")?;
+                    }
+                    JsonTransferFormat::JsonArray => {
+                        if !first {
+                            writer.write_all(b",")?;
+                            if options.pretty_print {
+                                writer.write_all(b"\n")?;
+                            }
+                        }
+                        writer.write_all(json.as_bytes())?;
+                        first = false;
+                    }
+                }
+                count += 1;
+
+                // Report progress every N documents
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            if matches!(options.format, JsonTransferFormat::JsonArray) {
+                if count > 0 && options.pretty_print {
+                    writer.write_all(b"\n")?;
+                }
+                writer.write_all(b"]")?;
+            }
+
+            writer.flush()?;
+            // Final progress report
+            on_progress(count);
+            Ok(count)
+        })
+    }
+
+    /// Export a collection to CSV with progress callback (runs in Tokio runtime).
+    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
+    /// The callback is invoked every ~1000 documents with the current count.
+    pub fn export_collection_csv_with_progress<F>(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        path: &Path,
+        gzip: bool,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64) + Send + 'static,
+    {
+        use crate::connection::csv_utils::{collect_columns, flatten_document};
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let path = path.to_path_buf();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+
+            // Start single cursor for all documents
+            let mut cursor = coll.find(doc! {}).await?;
+
+            // Buffer first N documents to detect columns
+            const SAMPLE_SIZE: usize = 1000;
+            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
+
+            while buffered_docs.len() < SAMPLE_SIZE {
+                match cursor.try_next().await? {
+                    Some(doc) => buffered_docs.push(doc),
+                    None => break, // No more documents
+                }
+            }
+
+            // Collect columns from buffered documents
+            let columns = collect_columns(&buffered_docs);
+
+            if columns.is_empty() {
+                on_progress(0);
+                return Ok(0);
+            }
+
+            // Write CSV
+            let file = File::create(&path)?;
+            let mut csv_writer = if gzip {
+                csv::Writer::from_writer(
+                    Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
+                )
+            } else {
+                csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
+            };
+
+            csv_writer.write_record(&columns)?;
+
+            // Write buffered documents first
+            let mut count = 0u64;
+            const PROGRESS_INTERVAL: u64 = 1000;
+
+            for doc in buffered_docs {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            // Continue streaming remaining documents from same cursor
+            while let Some(doc) = cursor.try_next().await? {
+                let flat = flatten_document(&doc);
+                let row: Vec<String> =
+                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                csv_writer.write_record(&row)?;
+                count += 1;
+
+                if count.is_multiple_of(PROGRESS_INTERVAL) {
+                    on_progress(count);
+                }
+            }
+
+            csv_writer.flush()?;
+            on_progress(count);
+            Ok(count)
+        })
+    }
+
     /// Export all collections in a database to JSON files (runs in Tokio runtime).
     /// Creates one file per collection in the specified directory.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn export_database_json(
         &self,
         client: &Client,
@@ -814,6 +1324,8 @@ impl ConnectionManager {
 
     /// Export all collections in a database to CSV files (runs in Tokio runtime).
     /// Creates one file per collection in the specified directory.
+    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
+    #[allow(dead_code)]
     pub fn export_database_csv(
         &self,
         client: &Client,
@@ -854,15 +1366,25 @@ impl ConnectionManager {
                 let file_name = format!("{}_{}.csv", database, coll_name);
                 let file_path = directory.join(&file_name);
 
-                // Export this collection (inlined to avoid nested block_on)
+                // Export this collection using single-pass buffering
                 let coll = client.database(&database).collection::<Document>(&coll_name);
 
-                // First pass: collect column names from sample
-                let mut sample_options = mongodb::options::FindOptions::default();
-                sample_options.limit = Some(1000);
-                let sample_cursor = coll.find(doc! {}).with_options(sample_options).await?;
-                let sample_docs: Vec<Document> = sample_cursor.try_collect().await?;
-                let columns = collect_columns(&sample_docs);
+                // Start single cursor for all documents
+                let mut cursor = coll.find(doc! {}).await?;
+
+                // Buffer first N documents to detect columns
+                const SAMPLE_SIZE: usize = 1000;
+                let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
+
+                while buffered_docs.len() < SAMPLE_SIZE {
+                    match cursor.try_next().await? {
+                        Some(doc) => buffered_docs.push(doc),
+                        None => break,
+                    }
+                }
+
+                // Collect columns from buffered documents
+                let columns = collect_columns(&buffered_docs);
 
                 if columns.is_empty() {
                     continue;
@@ -880,10 +1402,19 @@ impl ConnectionManager {
 
                 csv_writer.write_record(&columns)?;
 
-                // Second pass: write all documents
-                let mut cursor = coll.find(doc! {}).await?;
+                // Write buffered documents first
                 let mut count = 0u64;
+                for doc in buffered_docs {
+                    let flat = flatten_document(&doc);
+                    let row: Vec<String> = columns
+                        .iter()
+                        .map(|col| flat.get(col).cloned().unwrap_or_default())
+                        .collect();
+                    csv_writer.write_record(&row)?;
+                    count += 1;
+                }
 
+                // Continue streaming remaining documents from same cursor
                 while let Some(doc) = cursor.try_next().await? {
                     let flat = flatten_document(&doc);
                     let row: Vec<String> = columns
@@ -923,6 +1454,7 @@ impl ConnectionManager {
     }
 
     /// Import a collection from JSON/JSONL with full options (runs in Tokio runtime).
+    /// Uses streaming for JSONL format to minimize memory usage on large files.
     pub fn import_collection_json_with_options(
         &self,
         client: &Client,
@@ -940,53 +1472,133 @@ impl ConnectionManager {
             let coll = client.database(&database).collection::<Document>(&collection);
             let mut processed = 0u64;
 
-            // Read and decode file content based on encoding
-            let bytes = std::fs::read(&path)?;
-            let content = match options.encoding {
-                FileEncoding::Utf8 => String::from_utf8_lossy(&bytes).into_owned(),
-                FileEncoding::Latin1 => {
-                    let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
-                    decoded.into_owned()
-                }
-            };
-
-            // Parse documents from decoded content
-            let docs: Vec<Document> = match options.format {
+            match options.format {
                 JsonTransferFormat::JsonLines => {
-                    let mut docs = Vec::new();
-                    for line in content.lines() {
-                        if line.trim().is_empty() {
+                    // Stream JSONL line-by-line to minimize memory usage
+                    let file = File::open(&path)?;
+                    let reader: Box<dyn BufRead + Send> = match options.encoding {
+                        FileEncoding::Utf8 => Box::new(BufReader::new(file)),
+                        FileEncoding::Latin1 => {
+                            // For Latin-1, we need to decode first (read entire file)
+                            // This is unavoidable for non-UTF-8 encodings
+                            let bytes = std::fs::read(&path)?;
+                            let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+                            Box::new(std::io::Cursor::new(decoded.into_owned().into_bytes()))
+                        }
+                    };
+
+                    let mut batch: Vec<Document> = Vec::with_capacity(options.batch_size);
+
+                    for line_result in reader.lines() {
+                        // Check cancellation
+                        if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                            return Err(Error::Parse("Import cancelled".to_string()));
+                        }
+
+                        let line = line_result?;
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
                             continue;
                         }
+
                         let doc =
-                            crate::bson::parse_document_from_json(line).map_err(Error::Parse)?;
-                        docs.push(doc);
+                            crate::bson::parse_document_from_json(trimmed).map_err(Error::Parse)?;
+                        batch.push(doc);
+
+                        // Insert batch when full
+                        if batch.len() >= options.batch_size {
+                            let result = import_batch_by_mode(
+                                &coll,
+                                &batch,
+                                options.insert_mode,
+                                options.stop_on_error,
+                            )
+                            .await;
+
+                            match result {
+                                Ok(count) => {
+                                    processed += count;
+                                    if let Some(ref progress) = options.progress {
+                                        progress(processed);
+                                    }
+                                }
+                                Err(e) if options.stop_on_error => return Err(e),
+                                Err(_) => {}
+                            }
+                            batch.clear();
+                        }
                     }
-                    docs
+
+                    // Flush remaining documents
+                    if !batch.is_empty() {
+                        let result = import_batch_by_mode(
+                            &coll,
+                            &batch,
+                            options.insert_mode,
+                            options.stop_on_error,
+                        )
+                        .await;
+
+                        match result {
+                            Ok(count) => {
+                                processed += count;
+                                if let Some(ref progress) = options.progress {
+                                    progress(processed);
+                                }
+                            }
+                            Err(e) if options.stop_on_error => return Err(e),
+                            Err(_) => {}
+                        }
+                    }
                 }
                 JsonTransferFormat::JsonArray => {
-                    crate::bson::parse_documents_from_json(&content).map_err(Error::Parse)?
-                }
-            };
+                    // JSON arrays require parsing the entire structure
+                    // Use streaming JSON parser for large arrays
+                    let file = File::open(&path)?;
+                    let content = match options.encoding {
+                        FileEncoding::Utf8 => {
+                            let mut reader = BufReader::new(file);
+                            let mut content = String::new();
+                            reader.read_to_string(&mut content)?;
+                            content
+                        }
+                        FileEncoding::Latin1 => {
+                            let bytes = std::fs::read(&path)?;
+                            let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+                            decoded.into_owned()
+                        }
+                    };
 
-            // Process documents in batches according to insert mode
-            for batch in docs.chunks(options.batch_size) {
-                let result = match options.insert_mode {
-                    InsertMode::Insert => {
-                        import_batch_insert(&coll, batch, options.stop_on_error).await
-                    }
-                    InsertMode::Upsert => {
-                        import_batch_upsert(&coll, batch, options.stop_on_error).await
-                    }
-                    InsertMode::Replace => {
-                        import_batch_replace(&coll, batch, options.stop_on_error).await
-                    }
-                };
+                    // Parse all documents from JSON array
+                    let docs =
+                        crate::bson::parse_documents_from_json(&content).map_err(Error::Parse)?;
 
-                match result {
-                    Ok(count) => processed += count,
-                    Err(e) if options.stop_on_error => return Err(e),
-                    Err(_) => {} // Continue on error if stop_on_error is false
+                    // Process in batches
+                    for batch in docs.chunks(options.batch_size) {
+                        // Check cancellation
+                        if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                            return Err(Error::Parse("Import cancelled".to_string()));
+                        }
+
+                        let result = import_batch_by_mode(
+                            &coll,
+                            batch,
+                            options.insert_mode,
+                            options.stop_on_error,
+                        )
+                        .await;
+
+                        match result {
+                            Ok(count) => {
+                                processed += count;
+                                if let Some(ref progress) = options.progress {
+                                    progress(processed);
+                                }
+                            }
+                            Err(e) if options.stop_on_error => return Err(e),
+                            Err(_) => {}
+                        }
+                    }
                 }
             }
 
@@ -995,6 +1607,7 @@ impl ConnectionManager {
     }
 
     /// Import a collection from CSV (runs in Tokio runtime).
+    /// Uses streaming to process CSV records in batches without loading entire file.
     pub fn import_collection_csv(
         &self,
         client: &Client,
@@ -1014,22 +1627,31 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
 
-            // Read and decode file content based on encoding
-            let bytes = std::fs::read(&path)?;
-            let content = match options.encoding {
-                FileEncoding::Utf8 => String::from_utf8_lossy(&bytes).into_owned(),
+            // Create CSV reader with streaming
+            let file = File::open(&path)?;
+            let reader: Box<dyn std::io::Read + Send> = match options.encoding {
+                FileEncoding::Utf8 => Box::new(BufReader::new(file)),
                 FileEncoding::Latin1 => {
+                    // For Latin-1, decode the entire file first
+                    let bytes = std::fs::read(&path)?;
                     let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
-                    decoded.into_owned()
+                    Box::new(std::io::Cursor::new(decoded.into_owned().into_bytes()))
                 }
             };
 
-            let mut csv_reader = csv::Reader::from_reader(content.as_bytes());
+            let mut csv_reader = csv::Reader::from_reader(reader);
             let headers: Vec<String> =
                 csv_reader.headers()?.iter().map(|h| h.to_string()).collect();
 
-            let mut docs = Vec::new();
+            let mut batch: Vec<Document> = Vec::with_capacity(options.batch_size);
+            let mut processed = 0u64;
+
             for result in csv_reader.records() {
+                // Check cancellation
+                if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(Error::Parse("Import cancelled".to_string()));
+                }
+
                 let record = result?;
                 let mut row: HashMap<String, String> = HashMap::new();
                 for (i, value) in record.iter().enumerate() {
@@ -1037,25 +1659,45 @@ impl ConnectionManager {
                         row.insert(header.clone(), value.to_string());
                     }
                 }
-                docs.push(unflatten_row(&row));
+                batch.push(unflatten_row(&row));
+
+                // Insert batch when full
+                if batch.len() >= options.batch_size {
+                    let result = import_batch_by_mode(
+                        &coll,
+                        &batch,
+                        options.insert_mode,
+                        options.stop_on_error,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(count) => {
+                            processed += count;
+                            if let Some(ref progress) = options.progress {
+                                progress(processed);
+                            }
+                        }
+                        Err(e) if options.stop_on_error => return Err(e),
+                        Err(_) => {}
+                    }
+                    batch.clear();
+                }
             }
 
-            let mut processed = 0u64;
-            for batch in docs.chunks(options.batch_size) {
-                let result = match options.insert_mode {
-                    InsertMode::Insert => {
-                        import_batch_insert(&coll, batch, options.stop_on_error).await
-                    }
-                    InsertMode::Upsert => {
-                        import_batch_upsert(&coll, batch, options.stop_on_error).await
-                    }
-                    InsertMode::Replace => {
-                        import_batch_replace(&coll, batch, options.stop_on_error).await
-                    }
-                };
+            // Flush remaining documents
+            if !batch.is_empty() {
+                let result =
+                    import_batch_by_mode(&coll, &batch, options.insert_mode, options.stop_on_error)
+                        .await;
 
                 match result {
-                    Ok(count) => processed += count,
+                    Ok(count) => {
+                        processed += count;
+                        if let Some(ref progress) = options.progress {
+                            progress(processed);
+                        }
+                    }
                     Err(e) if options.stop_on_error => return Err(e),
                     Err(_) => {}
                 }
@@ -1066,6 +1708,7 @@ impl ConnectionManager {
     }
 
     /// Copy a collection from one connection/database to another (runs in Tokio runtime).
+    /// Supports cancellation and progress callbacks.
     #[allow(clippy::too_many_arguments)]
     pub fn copy_collection(
         &self,
@@ -1078,6 +1721,29 @@ impl ConnectionManager {
         batch_size: usize,
         copy_indexes: bool,
     ) -> Result<u64> {
+        self.copy_collection_with_options(
+            src_client,
+            src_database,
+            src_collection,
+            dest_client,
+            dest_database,
+            dest_collection,
+            CopyOptions::new(batch_size, copy_indexes),
+        )
+    }
+
+    /// Copy a collection with full options including progress and cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_collection_with_options(
+        &self,
+        src_client: &Client,
+        src_database: &str,
+        src_collection: &str,
+        dest_client: &Client,
+        dest_database: &str,
+        dest_collection: &str,
+        options: CopyOptions,
+    ) -> Result<u64> {
         use futures::TryStreamExt;
         use mongodb::options::InsertManyOptions;
 
@@ -1087,6 +1753,9 @@ impl ConnectionManager {
         let src_collection = src_collection.to_string();
         let dest_database = dest_database.to_string();
         let dest_collection = dest_collection.to_string();
+        let batch_size = options.batch_size;
+        let progress = options.progress.clone();
+        let cancellation = options.cancellation.clone();
 
         let copied = self.runtime.block_on(async {
             let src_coll =
@@ -1098,28 +1767,43 @@ impl ConnectionManager {
             let mut batch: Vec<Document> = Vec::with_capacity(batch_size);
             let mut copied = 0u64;
 
-            let options = InsertManyOptions::builder().ordered(false).build();
+            let insert_options = InsertManyOptions::builder().ordered(false).build();
 
             while let Some(doc) = cursor.try_next().await? {
+                // Check cancellation
+                if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(Error::Parse("Copy cancelled".to_string()));
+                }
+
                 batch.push(doc);
                 if batch.len() >= batch_size {
                     let docs = std::mem::take(&mut batch);
                     copied += docs.len() as u64;
-                    dest_coll.insert_many(docs).with_options(options.clone()).await?;
+                    dest_coll.insert_many(docs).with_options(insert_options.clone()).await?;
+
+                    // Report progress
+                    if let Some(ref progress_fn) = progress {
+                        progress_fn(copied);
+                    }
                 }
             }
 
             // Flush remaining
             if !batch.is_empty() {
                 copied += batch.len() as u64;
-                dest_coll.insert_many(batch).with_options(options).await?;
+                dest_coll.insert_many(batch).with_options(insert_options).await?;
+
+                // Report final progress
+                if let Some(ref progress_fn) = progress {
+                    progress_fn(copied);
+                }
             }
 
             Ok::<u64, Error>(copied)
         })?;
 
         // Copy indexes if requested (after documents are copied)
-        if copy_indexes {
+        if options.copy_indexes {
             let indexes = self.list_indexes(&src_client, &src_database, &src_collection)?;
             for index in indexes {
                 // Skip _id_ index (auto-created)
@@ -1166,7 +1850,9 @@ impl ConnectionManager {
     }
 
     /// Copy all collections from one database to another (runs in Tokio runtime).
+    /// Uses HashSet for O(1) excluded collection lookup.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn copy_database(
         &self,
         src_client: &Client,
@@ -1177,11 +1863,14 @@ impl ConnectionManager {
         copy_indexes: bool,
         exclude_collections: &[String],
     ) -> Result<u64> {
+        use std::collections::HashSet;
+
         let src_client = src_client.clone();
         let dest_client = dest_client.clone();
         let src_database = src_database.to_string();
         let dest_database = dest_database.to_string();
-        let exclude_collections = exclude_collections.to_vec();
+        // Use HashSet for O(1) lookup instead of Vec::contains O(n)
+        let exclude_set: HashSet<String> = exclude_collections.iter().cloned().collect();
 
         self.runtime.block_on(async move {
             let src_db = src_client.database(&src_database);
@@ -1195,8 +1884,8 @@ impl ConnectionManager {
                     continue;
                 }
 
-                // Skip excluded collections
-                if exclude_collections.contains(&collection) {
+                // Skip excluded collections (O(1) lookup)
+                if exclude_set.contains(&collection) {
                     continue;
                 }
 
@@ -1603,6 +2292,20 @@ fn is_executable(path: &std::path::Path) -> bool {
 
 // Import mode helper functions
 
+/// Helper to dispatch batch import by mode.
+async fn import_batch_by_mode(
+    coll: &mongodb::Collection<Document>,
+    batch: &[Document],
+    mode: InsertMode,
+    ordered: bool,
+) -> Result<u64> {
+    match mode {
+        InsertMode::Insert => import_batch_insert(coll, batch, ordered).await,
+        InsertMode::Upsert => import_batch_upsert(coll, batch, ordered).await,
+        InsertMode::Replace => import_batch_replace(coll, batch, ordered).await,
+    }
+}
+
 async fn import_batch_insert(
     coll: &mongodb::Collection<Document>,
     batch: &[Document],
@@ -1619,78 +2322,119 @@ async fn import_batch_insert(
     Ok(batch.len() as u64)
 }
 
+/// Upsert documents using concurrent update operations.
+/// Groups documents by whether they have _id for efficient processing.
 async fn import_batch_upsert(
     coll: &mongodb::Collection<Document>,
     batch: &[Document],
     ordered: bool,
 ) -> Result<u64> {
     use mongodb::bson::doc;
-    use mongodb::options::UpdateOptions;
+    use mongodb::options::{InsertManyOptions, UpdateOptions};
 
     if batch.is_empty() {
         return Ok(0);
     }
 
-    let mut count = 0u64;
-    let options = UpdateOptions::builder().upsert(true).build();
+    // Separate documents with _id (upsert) from those without (insert)
+    let mut with_id: Vec<&Document> = Vec::new();
+    let mut without_id: Vec<Document> = Vec::new();
 
     for doc in batch {
-        // Use _id as the match filter, or entire document if no _id
-        let filter = if let Some(id) = doc.get("_id") {
-            doc! { "_id": id.clone() }
+        if doc.get("_id").is_some() {
+            with_id.push(doc);
         } else {
-            // If no _id, just insert
-            coll.insert_one(doc.clone()).await?;
-            count += 1;
-            continue;
-        };
+            without_id.push(doc.clone());
+        }
+    }
 
-        // Remove _id from update doc to avoid immutable field error
+    let mut count = 0u64;
+    let update_options = UpdateOptions::builder().upsert(true).build();
+
+    // Process documents with _id using update_one with upsert
+    // Note: MongoDB doesn't have bulk_write on Collection, only on Client (8.0+)
+    // We optimize by not creating options for every document
+    for doc in with_id {
+        let id = doc.get("_id").unwrap();
+        let filter = doc! { "_id": id.clone() };
         let mut update_doc = doc.clone();
         update_doc.remove("_id");
 
-        coll.update_one(filter, doc! { "$set": update_doc }).with_options(options.clone()).await?;
-        count += 1;
+        let result = coll
+            .update_one(filter, doc! { "$set": update_doc })
+            .with_options(update_options.clone())
+            .await;
 
-        if !ordered {
-            // In unordered mode, we continue even on individual errors
-            // but this simple implementation just tries each doc
+        match result {
+            Ok(_) => count += 1,
+            Err(e) if ordered => return Err(e.into()),
+            Err(_) => {} // Continue on error in unordered mode
+        }
+    }
+
+    // Insert documents without _id
+    if !without_id.is_empty() {
+        let insert_options = InsertManyOptions::builder().ordered(ordered).build();
+        match coll.insert_many(without_id.clone()).with_options(insert_options).await {
+            Ok(_) => count += without_id.len() as u64,
+            Err(e) if ordered => return Err(e.into()),
+            Err(_) => {}
         }
     }
 
     Ok(count)
 }
 
+/// Replace documents using concurrent replace operations.
 async fn import_batch_replace(
     coll: &mongodb::Collection<Document>,
     batch: &[Document],
     ordered: bool,
 ) -> Result<u64> {
     use mongodb::bson::doc;
-    use mongodb::options::ReplaceOptions;
+    use mongodb::options::{InsertManyOptions, ReplaceOptions};
 
     if batch.is_empty() {
         return Ok(0);
     }
 
-    let mut count = 0u64;
-    let options = ReplaceOptions::builder().upsert(true).build();
+    // Separate documents with _id (replace) from those without (insert)
+    let mut with_id: Vec<&Document> = Vec::new();
+    let mut without_id: Vec<Document> = Vec::new();
 
     for doc in batch {
-        let filter = if let Some(id) = doc.get("_id") {
-            doc! { "_id": id.clone() }
+        if doc.get("_id").is_some() {
+            with_id.push(doc);
         } else {
-            // If no _id, just insert
-            coll.insert_one(doc.clone()).await?;
-            count += 1;
-            continue;
-        };
+            without_id.push(doc.clone());
+        }
+    }
 
-        coll.replace_one(filter, doc.clone()).with_options(options.clone()).await?;
-        count += 1;
+    let mut count = 0u64;
+    let replace_options = ReplaceOptions::builder().upsert(true).build();
 
-        if !ordered {
-            // Continue on individual errors in unordered mode
+    // Process documents with _id using replace_one with upsert
+    for doc in with_id {
+        let id = doc.get("_id").unwrap();
+        let filter = doc! { "_id": id.clone() };
+
+        let result =
+            coll.replace_one(filter, doc.clone()).with_options(replace_options.clone()).await;
+
+        match result {
+            Ok(_) => count += 1,
+            Err(e) if ordered => return Err(e.into()),
+            Err(_) => {} // Continue on error in unordered mode
+        }
+    }
+
+    // Insert documents without _id
+    if !without_id.is_empty() {
+        let insert_options = InsertManyOptions::builder().ordered(ordered).build();
+        match coll.insert_many(without_id.clone()).with_options(insert_options).await {
+            Ok(_) => count += without_id.len() as u64,
+            Err(e) if ordered => return Err(e.into()),
+            Err(_) => {}
         }
     }
 

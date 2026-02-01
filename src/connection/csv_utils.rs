@@ -1,34 +1,48 @@
 //! CSV utilities for BSON document flattening and unflattening.
 
-use std::collections::{BTreeMap, HashMap};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use mongodb::bson::{Bson, Document};
 
 /// Flatten a BSON document into a map of dot-notation keys to string values.
 /// Nested documents use dot notation (e.g., "address.city").
 /// Arrays are serialized as JSON strings.
+///
+/// Optimized to avoid cloning the document - iterates by reference.
 pub fn flatten_document(doc: &Document) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    flatten_value(&Bson::Document(doc.clone()), "", &mut result);
+    flatten_document_ref(doc, "", &mut result);
     result
 }
 
-fn flatten_value(value: &Bson, prefix: &str, result: &mut BTreeMap<String, String>) {
+/// Internal: Flatten document by reference without wrapping in Bson::Document.
+fn flatten_document_ref(doc: &Document, prefix: &str, result: &mut BTreeMap<String, String>) {
+    for (key, value) in doc {
+        // Avoid allocation for top-level keys (empty prefix)
+        let new_key: Cow<str> = if prefix.is_empty() {
+            Cow::Borrowed(key)
+        } else {
+            Cow::Owned(format!("{prefix}.{key}"))
+        };
+
+        flatten_value_ref(value, &new_key, result);
+    }
+}
+
+/// Internal: Flatten a BSON value by reference.
+fn flatten_value_ref(value: &Bson, key: &str, result: &mut BTreeMap<String, String>) {
     match value {
         Bson::Document(doc) => {
-            for (key, val) in doc {
-                let new_key =
-                    if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
-                flatten_value(val, &new_key, result);
-            }
+            flatten_document_ref(doc, key, result);
         }
         Bson::Array(_) => {
             // Serialize arrays as JSON strings
             let json = bson_to_json_string(value);
-            result.insert(prefix.to_string(), json);
+            result.insert(key.to_string(), json);
         }
         _ => {
-            result.insert(prefix.to_string(), bson_to_csv_string(value));
+            result.insert(key.to_string(), bson_to_csv_string(value));
         }
     }
 }
@@ -56,20 +70,42 @@ fn bson_to_json_string(value: &Bson) -> String {
 }
 
 /// Collect all unique column names from a set of documents.
+/// Optimized to extract keys without computing values (skips value serialization).
 pub fn collect_columns(docs: &[Document]) -> Vec<String> {
-    let mut columns_set = std::collections::HashSet::new();
+    let mut columns_set = HashSet::new();
     let mut columns_order = Vec::new();
 
     for doc in docs {
-        let flat = flatten_document(doc);
-        for key in flat.keys() {
-            if columns_set.insert(key.clone()) {
-                columns_order.push(key.clone());
-            }
-        }
+        collect_keys_from_doc(doc, "", &mut columns_set, &mut columns_order);
     }
 
     columns_order
+}
+
+/// Extract flattened keys from a document without computing values.
+/// More efficient than flatten_document when only keys are needed.
+fn collect_keys_from_doc(
+    doc: &Document,
+    prefix: &str,
+    seen: &mut HashSet<String>,
+    order: &mut Vec<String>,
+) {
+    for (key, value) in doc {
+        let full_key = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+
+        match value {
+            Bson::Document(nested) => {
+                // Recurse into nested documents
+                collect_keys_from_doc(nested, &full_key, seen, order);
+            }
+            _ => {
+                // Leaf value (including arrays which become single columns)
+                if seen.insert(full_key.clone()) {
+                    order.push(full_key);
+                }
+            }
+        }
+    }
 }
 
 /// Unflatten a CSV row (map of column name -> value) back into a BSON Document.
