@@ -23,13 +23,13 @@ pub(super) fn render_export_options(
     exclude_coll_state: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
 ) {
     // Format-specific options
-    match transfer_state.format {
+    match transfer_state.config.format {
         TransferFormat::Bson => {
             let bson_output_dropdown = {
                 let state = state.clone();
                 MenuButton::new(("bson-output", key))
                     .compact()
-                    .label(transfer_state.bson_output.label())
+                    .label(transfer_state.options.bson_output.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(gpui_component::Size::XSmall)
@@ -41,7 +41,7 @@ pub(super) fn render_export_options(
                                 if let Some(id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
-                                    tab.bson_output = BsonOutputFormat::Folder;
+                                    tab.options.bson_output = BsonOutputFormat::Folder;
                                     cx.notify();
                                 }
                             });
@@ -52,7 +52,7 @@ pub(super) fn render_export_options(
                                     if let Some(id) = state.active_transfer_tab_id()
                                         && let Some(tab) = state.transfer_tab_mut(id)
                                     {
-                                        tab.bson_output = BsonOutputFormat::Archive;
+                                        tab.options.bson_output = BsonOutputFormat::Archive;
                                         cx.notify();
                                     }
                                 });
@@ -78,7 +78,7 @@ pub(super) fn render_export_options(
                 let state = state.clone();
                 MenuButton::new(("json-mode", key))
                     .compact()
-                    .label(transfer_state.json_mode.label())
+                    .label(transfer_state.options.json_mode.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(gpui_component::Size::XSmall)
@@ -90,7 +90,7 @@ pub(super) fn render_export_options(
                                 if let Some(id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
-                                    tab.json_mode = ExtendedJsonMode::Relaxed;
+                                    tab.options.json_mode = ExtendedJsonMode::Relaxed;
                                     cx.notify();
                                 }
                             });
@@ -101,7 +101,7 @@ pub(super) fn render_export_options(
                                     if let Some(id) = state.active_transfer_tab_id()
                                         && let Some(tab) = state.transfer_tab_mut(id)
                                     {
-                                        tab.json_mode = ExtendedJsonMode::Canonical;
+                                        tab.options.json_mode = ExtendedJsonMode::Canonical;
                                         cx.notify();
                                     }
                                 });
@@ -112,13 +112,13 @@ pub(super) fn render_export_options(
 
             let pretty_checkbox = {
                 let state = state.clone();
-                let checked = transfer_state.pretty_print;
+                let checked = transfer_state.options.pretty_print;
                 checkbox_field(("pretty-print", key), checked, move |cx| {
                     state.update(cx, |state, cx| {
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.pretty_print = !checked;
+                            tab.options.pretty_print = !checked;
                             cx.notify();
                         }
                     });
@@ -139,18 +139,18 @@ pub(super) fn render_export_options(
     }
 
     // Database scope options (only for BSON format - indexes can't be stored in JSON/CSV)
-    if matches!(transfer_state.scope, TransferScope::Database)
-        && matches!(transfer_state.format, TransferFormat::Bson)
+    if matches!(transfer_state.config.scope, TransferScope::Database)
+        && matches!(transfer_state.config.format, TransferFormat::Bson)
     {
         let include_indexes_checkbox = {
             let state = state.clone();
-            let checked = transfer_state.include_indexes;
+            let checked = transfer_state.options.include_indexes;
             checkbox_field(("include-indexes-export", key), checked, move |cx| {
                 state.update(cx, |state, cx| {
                     if let Some(id) = state.active_transfer_tab_id()
                         && let Some(tab) = state.transfer_tab_mut(id)
                     {
-                        tab.include_indexes = !checked;
+                        tab.options.include_indexes = !checked;
                         cx.notify();
                     }
                 });
@@ -180,7 +180,7 @@ pub(super) fn render_export_options(
         let excluded_tags = {
             let state = state.clone();
             div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
-                transfer_state.exclude_collections.iter().enumerate().map(|(idx, coll)| {
+                transfer_state.options.exclude_collections.iter().enumerate().map(|(idx, coll)| {
                     let coll_name = coll.clone();
                     let state = state.clone();
 
@@ -209,7 +209,9 @@ pub(super) fn render_export_options(
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.exclude_collections.retain(|c| c != &coll_name);
+                                            tab.options
+                                                .exclude_collections
+                                                .retain(|c| c != &coll_name);
                                             cx.notify();
                                         }
                                     });
@@ -240,13 +242,13 @@ pub(super) fn render_import_options(
     // Input section
     let detect_format_checkbox = {
         let state = state.clone();
-        let checked = transfer_state.detect_format;
+        let checked = transfer_state.options.detect_format;
         checkbox_field(("detect-format", key), checked, move |cx| {
             state.update(cx, |state, cx| {
                 if let Some(id) = state.active_transfer_tab_id()
                     && let Some(tab) = state.transfer_tab_mut(id)
                 {
-                    tab.detect_format = !checked;
+                    tab.options.detect_format = !checked;
                     cx.notify();
                 }
             });
@@ -257,7 +259,7 @@ pub(super) fn render_import_options(
         let state = state.clone();
         MenuButton::new(("encoding", key))
             .compact()
-            .label(transfer_state.encoding.label())
+            .label(transfer_state.options.encoding.label())
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(gpui_component::Size::XSmall)
@@ -269,7 +271,7 @@ pub(super) fn render_import_options(
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.encoding = Encoding::Utf8;
+                            tab.options.encoding = Encoding::Utf8;
                             cx.notify();
                         }
                     });
@@ -279,7 +281,7 @@ pub(super) fn render_import_options(
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.encoding = Encoding::Latin1;
+                            tab.options.encoding = Encoding::Latin1;
                             cx.notify();
                         }
                     });
@@ -303,7 +305,7 @@ pub(super) fn render_import_options(
         let state = state.clone();
         MenuButton::new(("insert-mode", key))
             .compact()
-            .label(transfer_state.insert_mode.label())
+            .label(transfer_state.options.insert_mode.label())
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(gpui_component::Size::XSmall)
@@ -316,7 +318,7 @@ pub(super) fn render_import_options(
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.insert_mode = InsertMode::Insert;
+                            tab.options.insert_mode = InsertMode::Insert;
                             cx.notify();
                         }
                     });
@@ -326,7 +328,7 @@ pub(super) fn render_import_options(
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.insert_mode = InsertMode::Upsert;
+                            tab.options.insert_mode = InsertMode::Upsert;
                             cx.notify();
                         }
                     });
@@ -336,7 +338,7 @@ pub(super) fn render_import_options(
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.insert_mode = InsertMode::Replace;
+                            tab.options.insert_mode = InsertMode::Replace;
                             cx.notify();
                         }
                     });
@@ -346,13 +348,13 @@ pub(super) fn render_import_options(
 
     let drop_checkbox = {
         let state = state.clone();
-        let checked = transfer_state.drop_before_import;
+        let checked = transfer_state.options.drop_before_import;
         checkbox_field(("drop-before", key), checked, move |cx| {
             state.update(cx, |state, cx| {
                 if let Some(id) = state.active_transfer_tab_id()
                     && let Some(tab) = state.transfer_tab_mut(id)
                 {
-                    tab.drop_before_import = !checked;
+                    tab.options.drop_before_import = !checked;
                     cx.notify();
                 }
             });
@@ -361,13 +363,13 @@ pub(super) fn render_import_options(
 
     let clear_checkbox = {
         let state = state.clone();
-        let checked = transfer_state.clear_before_import;
+        let checked = transfer_state.options.clear_before_import;
         checkbox_field(("clear-before", key), checked, move |cx| {
             state.update(cx, |state, cx| {
                 if let Some(id) = state.active_transfer_tab_id()
                     && let Some(tab) = state.transfer_tab_mut(id)
                 {
-                    tab.clear_before_import = !checked;
+                    tab.options.clear_before_import = !checked;
                     cx.notify();
                 }
             });
@@ -376,13 +378,13 @@ pub(super) fn render_import_options(
 
     let stop_checkbox = {
         let state = state.clone();
-        let checked = transfer_state.stop_on_error;
+        let checked = transfer_state.options.stop_on_error;
         checkbox_field(("stop-on-error", key), checked, move |cx| {
             state.update(cx, |state, cx| {
                 if let Some(id) = state.active_transfer_tab_id()
                     && let Some(tab) = state.transfer_tab_mut(id)
                 {
-                    tab.stop_on_error = !checked;
+                    tab.options.stop_on_error = !checked;
                     cx.notify();
                 }
             });
@@ -394,7 +396,7 @@ pub(super) fn render_import_options(
             "Insert",
             vec![
                 option_field("Insert mode", insert_mode_dropdown.into_any_element()),
-                option_field_static("Batch size", transfer_state.batch_size.to_string()),
+                option_field_static("Batch size", transfer_state.options.batch_size.to_string()),
                 option_field("Drop before import", drop_checkbox.into_any_element()),
                 option_field("Clear before import", clear_checkbox.into_any_element()),
                 option_field("Stop on error", stop_checkbox.into_any_element()),
@@ -404,18 +406,18 @@ pub(super) fn render_import_options(
     );
 
     // Database scope options (only for BSON format - indexes can't be stored in JSON/CSV)
-    if matches!(transfer_state.scope, TransferScope::Database)
-        && matches!(transfer_state.format, TransferFormat::Bson)
+    if matches!(transfer_state.config.scope, TransferScope::Database)
+        && matches!(transfer_state.config.format, TransferFormat::Bson)
     {
         let restore_indexes_checkbox = {
             let state = state.clone();
-            let checked = transfer_state.restore_indexes;
+            let checked = transfer_state.options.restore_indexes;
             checkbox_field(("restore-indexes", key), checked, move |cx| {
                 state.update(cx, |state, cx| {
                     if let Some(id) = state.active_transfer_tab_id()
                         && let Some(tab) = state.transfer_tab_mut(id)
                     {
-                        tab.restore_indexes = !checked;
+                        tab.options.restore_indexes = !checked;
                         cx.notify();
                     }
                 });
@@ -443,13 +445,13 @@ pub(super) fn render_copy_options(
     // Copy Options - only show implemented options (copy_indexes, batch_size)
     let copy_indexes_checkbox = {
         let state = state.clone();
-        let checked = transfer_state.copy_indexes;
+        let checked = transfer_state.options.copy_indexes;
         checkbox_field(("copy-indexes", key), checked, move |cx| {
             state.update(cx, |state, cx| {
                 if let Some(id) = state.active_transfer_tab_id()
                     && let Some(tab) = state.transfer_tab_mut(id)
                 {
-                    tab.copy_indexes = !checked;
+                    tab.options.copy_indexes = !checked;
                     cx.notify();
                 }
             });
@@ -461,14 +463,14 @@ pub(super) fn render_copy_options(
             "Copy Options",
             vec![
                 option_field("Copy indexes", copy_indexes_checkbox.into_any_element()),
-                option_field_static("Batch size", transfer_state.batch_size.to_string()),
+                option_field_static("Batch size", transfer_state.options.batch_size.to_string()),
             ],
         )
         .into_any_element(),
     );
 
     // Collection Filter section (for Copy mode + Database scope)
-    if matches!(transfer_state.scope, TransferScope::Database) {
+    if matches!(transfer_state.config.scope, TransferScope::Database) {
         let exclude_select = if let Some(exclude_state) = exclude_coll_state {
             Select::new(exclude_state)
                 .small()
@@ -483,7 +485,7 @@ pub(super) fn render_copy_options(
         let excluded_tags = {
             let state = state.clone();
             div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
-                transfer_state.exclude_collections.iter().enumerate().map(|(idx, coll)| {
+                transfer_state.options.exclude_collections.iter().enumerate().map(|(idx, coll)| {
                     let coll_name = coll.clone();
                     let state = state.clone();
 
@@ -512,7 +514,9 @@ pub(super) fn render_copy_options(
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.exclude_collections.retain(|c| c != &coll_name);
+                                            tab.options
+                                                .exclude_collections
+                                                .retain(|c| c != &coll_name);
                                             cx.notify();
                                         }
                                     });

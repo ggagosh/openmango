@@ -1,10 +1,11 @@
-use crate::state::{AppCommands, CollectionStats, CollectionSubview, SessionKey};
+use crate::state::{CollectionStats, CollectionSubview, SessionKey};
 use crate::theme::{colors, spacing};
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
 use super::CollectionView;
+use super::header::render_stats_row;
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search_state.is_none() {
@@ -111,29 +112,6 @@ impl Render for CollectionView {
         let display_page = page.min(total_pages.saturating_sub(1));
         let range_start = if total == 0 { 0 } else { display_page * per_page_u64 + 1 };
         let range_end = if total == 0 { 0 } else { ((display_page + 1) * per_page_u64).min(total) };
-
-        if let Some(session_key) = session_key.clone() {
-            if subview == CollectionSubview::Indexes
-                && indexes.is_none()
-                && !indexes_loading
-                && indexes_error.is_none()
-            {
-                AppCommands::load_collection_indexes(
-                    self.state.clone(),
-                    session_key.clone(),
-                    false,
-                    cx,
-                );
-            }
-
-            if subview == CollectionSubview::Stats
-                && stats.is_none()
-                && !stats_loading
-                && stats_error.is_none()
-            {
-                AppCommands::load_collection_stats(self.state.clone(), session_key, cx);
-            }
-        }
 
         if self.filter_state.is_none() {
             let filter_state = cx.new(|cx| {
@@ -383,7 +361,7 @@ impl CollectionView {
             .min_w(px(0.0))
             .overflow_y_scrollbar()
             .p(spacing::lg())
-            .child(Self::render_stats_row(
+            .child(render_stats_row(
                 stats,
                 stats_loading,
                 stats_error,

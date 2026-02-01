@@ -5,8 +5,7 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::switch::Switch;
 
-use crate::components::Button;
-use crate::connection::get_connection_manager;
+use crate::components::{Button, cancel_button};
 use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
 use crate::models::SavedConnection;
 use crate::state::AppState;
@@ -149,6 +148,8 @@ impl ConnectionDialog {
             return;
         }
 
+        let manager = view.read(cx).state.read(cx).connection_manager();
+
         view.update(cx, |this, cx| {
             this.status = TestStatus::Testing;
             this.pending_test_uri = Some(uri.clone());
@@ -159,7 +160,6 @@ impl ConnectionDialog {
         let task = cx.background_spawn({
             let uri = uri.clone();
             async move {
-                let manager = get_connection_manager();
                 let temp = SavedConnection::new("Test".to_string(), uri);
                 manager.test_connection(&temp, std::time::Duration::from_secs(5))?;
                 Ok::<(), crate::error::Error>(())
@@ -297,9 +297,7 @@ impl Render for ConnectionDialog {
                                 }
                             }),
                     )
-                    .child(Button::new("cancel").label("Cancel").on_click(|_, window, cx| {
-                        window.close_dialog(cx);
-                    }))
+                    .child(cancel_button("cancel"))
                     .child(
                         Button::new("save-connection")
                             .primary()

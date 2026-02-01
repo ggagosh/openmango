@@ -275,8 +275,13 @@ pub struct TransferTabKey {
     pub connection_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransferTabState {
+// ============================================================================
+// Transfer Tab State - Split into focused sub-structs
+// ============================================================================
+
+/// Core transfer configuration (mode, scope, source/destination)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransferConfig {
     pub mode: TransferMode,
     pub scope: TransferScope,
     pub source_connection_id: Option<Uuid>,
@@ -287,7 +292,11 @@ pub struct TransferTabState {
     pub destination_collection: String,
     pub format: TransferFormat,
     pub file_path: String,
+}
 
+/// Mode-specific transfer options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferOptions {
     // Compression (all modes)
     pub compression: CompressionMode,
 
@@ -320,51 +329,14 @@ pub struct TransferTabState {
     pub ordered: bool,
 
     // Export query options (Collection scope only)
-    pub export_filter: String, // JSON filter string, e.g. {"status": "active"}
-    pub export_projection: String, // JSON projection string, e.g. {"_id": 1, "name": 1}
-    pub export_sort: String,   // JSON sort string, e.g. {"createdAt": -1}
-
-    // Preview state
-    #[serde(skip)]
-    pub preview_docs: Vec<String>,
-    #[serde(skip)]
-    pub preview_loading: bool,
-    #[serde(skip)]
-    pub warnings: Vec<String>,
-
-    // Transfer execution state
-    #[serde(skip)]
-    pub is_running: bool,
-    #[serde(skip)]
-    pub progress_count: u64,
-    #[serde(skip)]
-    pub error_message: Option<String>,
-
-    // Transfer cancellation state
-    #[serde(skip)]
-    pub transfer_generation: Arc<AtomicU64>,
-    #[serde(skip)]
-    pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
-
-    // Database-scope progress tracking
-    #[serde(skip)]
-    pub database_progress: Option<DatabaseTransferProgress>,
+    pub export_filter: String,
+    pub export_projection: String,
+    pub export_sort: String,
 }
 
-impl Default for TransferTabState {
+impl Default for TransferOptions {
     fn default() -> Self {
         Self {
-            mode: TransferMode::Export,
-            scope: TransferScope::Collection,
-            source_connection_id: None,
-            source_database: String::new(),
-            source_collection: String::new(),
-            destination_connection_id: None,
-            destination_database: String::new(),
-            destination_collection: String::new(),
-            format: TransferFormat::JsonLines,
-            file_path: String::new(),
-
             compression: CompressionMode::None,
             include_collections: Vec::new(),
             exclude_collections: Vec::new(),
@@ -392,30 +364,85 @@ impl Default for TransferTabState {
             export_filter: String::new(),
             export_projection: String::new(),
             export_sort: String::new(),
-
-            preview_docs: Vec::new(),
-            preview_loading: false,
-            warnings: Vec::new(),
-
-            is_running: false,
-            progress_count: 0,
-            error_message: None,
-
-            transfer_generation: Arc::new(AtomicU64::new(0)),
-            abort_handle: Arc::new(Mutex::new(None)),
-            database_progress: None,
         }
     }
 }
 
+/// Runtime transfer execution state (not serialized)
+#[derive(Default)]
+pub struct TransferRuntime {
+    pub is_running: bool,
+    pub progress_count: u64,
+    pub error_message: Option<String>,
+    pub transfer_generation: Arc<AtomicU64>,
+    pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    pub database_progress: Option<DatabaseTransferProgress>,
+}
+
+impl Clone for TransferRuntime {
+    fn clone(&self) -> Self {
+        Self {
+            is_running: self.is_running,
+            progress_count: self.progress_count,
+            error_message: self.error_message.clone(),
+            transfer_generation: Arc::new(AtomicU64::new(
+                self.transfer_generation.load(std::sync::atomic::Ordering::SeqCst),
+            )),
+            abort_handle: Arc::new(Mutex::new(None)),
+            database_progress: self.database_progress.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for TransferRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransferRuntime")
+            .field("is_running", &self.is_running)
+            .field("progress_count", &self.progress_count)
+            .field("error_message", &self.error_message)
+            .field("database_progress", &self.database_progress)
+            .finish()
+    }
+}
+
+/// Preview state for transfer operations
+#[derive(Debug, Clone, Default)]
+pub struct TransferPreview {
+    pub docs: Vec<String>,
+    pub loading: bool,
+    pub warnings: Vec<String>,
+}
+
+/// Complete transfer tab state - composed of focused sub-structs
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransferTabState {
+    /// Core configuration (mode, scope, source/destination)
+    #[serde(flatten)]
+    pub config: TransferConfig,
+
+    /// Mode-specific options
+    #[serde(flatten)]
+    pub options: TransferOptions,
+
+    /// Runtime execution state (not serialized)
+    #[serde(skip)]
+    pub runtime: TransferRuntime,
+
+    /// Preview state (not serialized)
+    #[serde(skip)]
+    pub preview: TransferPreview,
+}
+
 impl TransferTabState {
     pub fn tab_label(&self) -> String {
-        let base = self.mode.label();
-        let source = if !self.source_database.is_empty() {
-            if self.scope == TransferScope::Collection && !self.source_collection.is_empty() {
-                format!("{}/{}", self.source_database, self.source_collection)
+        let base = self.config.mode.label();
+        let source = if !self.config.source_database.is_empty() {
+            if self.config.scope == TransferScope::Collection
+                && !self.config.source_collection.is_empty()
+            {
+                format!("{}/{}", self.config.source_database, self.config.source_collection)
             } else {
-                self.source_database.clone()
+                self.config.source_database.clone()
             }
         } else {
             "New".to_string()
@@ -426,10 +453,16 @@ impl TransferTabState {
     /// Create a new TransferTabState with defaults from settings.
     pub fn from_settings(settings: &crate::state::settings::AppSettings) -> Self {
         Self {
-            format: settings.transfer.default_export_format,
-            batch_size: settings.transfer.default_batch_size,
-            insert_mode: settings.transfer.default_import_mode,
-            ..Self::default()
+            config: TransferConfig {
+                format: settings.transfer.default_export_format,
+                ..Default::default()
+            },
+            options: TransferOptions {
+                batch_size: settings.transfer.default_batch_size,
+                insert_mode: settings.transfer.default_import_mode,
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 }

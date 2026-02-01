@@ -8,7 +8,7 @@ use gpui_component::{Disableable as _, WindowExt as _};
 use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
-use crate::components::Button;
+use crate::components::{Button, cancel_button};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
@@ -716,11 +716,7 @@ impl Render for PropertyActionDialog {
                             .flex()
                             .items_center()
                             .gap(spacing::sm())
-                            .child(Button::new("cancel-property").label("Cancel").on_click(
-                                |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    window.close_dialog(cx);
-                                },
-                            ))
+                            .child(cancel_button("cancel-property"))
                             .child(
                                 Button::new("apply-property")
                                     .primary()

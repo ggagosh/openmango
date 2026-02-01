@@ -2,7 +2,7 @@ use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
 use crate::bson::DocumentKey;
-use crate::connection::{FindDocumentsOptions, get_connection_manager};
+use crate::connection::FindDocumentsOptions;
 use crate::state::{AppEvent, AppState, SessionDocument, SessionKey};
 
 use crate::state::AppCommands;
@@ -54,6 +54,7 @@ impl AppCommands {
         };
 
         // Mark session as loading and bump request id
+        let manager = state.read(cx).connection_manager();
         state.update(cx, |state, cx| {
             let session = state.ensure_session(session_key.clone());
             session.data.is_loading = true;
@@ -66,7 +67,6 @@ impl AppCommands {
             let database_for_task = database.clone();
             let collection_for_task = collection.clone();
             async move {
-                let manager = get_connection_manager();
                 manager.find_documents(
                     &client,
                     &database_for_task,

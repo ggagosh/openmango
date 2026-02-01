@@ -11,7 +11,6 @@ use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::csv_utils::detect_problematic_fields;
-use crate::connection::get_connection_manager;
 use crate::connection::{ExtendedJsonMode, JsonTransferFormat, generate_export_preview};
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{
@@ -120,29 +119,29 @@ impl AppCommands {
             };
 
             // Only load preview for export mode with a valid source
-            if !matches!(tab.mode, TransferMode::Export) {
+            if !matches!(tab.config.mode, TransferMode::Export) {
                 return;
             }
 
-            let Some(conn_id) = tab.source_connection_id else {
+            let Some(conn_id) = tab.config.source_connection_id else {
                 return;
             };
 
-            if tab.source_database.is_empty() || tab.source_collection.is_empty() {
+            if tab.config.source_database.is_empty() || tab.config.source_collection.is_empty() {
                 return;
             }
 
-            let json_mode = match tab.json_mode {
+            let json_mode = match tab.options.json_mode {
                 crate::state::ExtendedJsonMode::Relaxed => ExtendedJsonMode::Relaxed,
                 crate::state::ExtendedJsonMode::Canonical => ExtendedJsonMode::Canonical,
             };
 
             (
                 conn_id,
-                tab.source_database.clone(),
-                tab.source_collection.clone(),
+                tab.config.source_database.clone(),
+                tab.config.source_collection.clone(),
                 json_mode,
-                tab.pretty_print,
+                tab.options.pretty_print,
             )
         };
 
@@ -150,21 +149,21 @@ impl AppCommands {
             return;
         };
 
+        let manager = state.read(cx).connection_manager();
+
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.preview_loading = true;
-                tab.preview_docs.clear();
-                tab.warnings.clear();
+                tab.preview.loading = true;
+                tab.preview.docs.clear();
+                tab.preview.warnings.clear();
             }
             cx.notify();
         });
 
         let task = cx.background_spawn(async move {
-            let manager = get_connection_manager();
-
             // Generate preview docs
             let preview = generate_export_preview(
-                manager,
+                &manager,
                 &client,
                 &database,
                 &collection,
@@ -187,14 +186,14 @@ impl AppCommands {
                 let _ = cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                            tab.preview_loading = false;
+                            tab.preview.loading = false;
                             match result {
                                 Ok((preview, warnings)) => {
-                                    tab.preview_docs = preview;
-                                    tab.warnings = warnings;
+                                    tab.preview.docs = preview;
+                                    tab.preview.warnings = warnings;
                                 }
                                 Err(e) => {
-                                    tab.error_message = Some(e.to_string());
+                                    tab.runtime.error_message = Some(e.to_string());
                                 }
                             }
                         }
@@ -217,53 +216,53 @@ impl AppCommands {
                 return;
             };
 
-            match tab.mode {
+            match tab.config.mode {
                 TransferMode::Export => TransferConfigVariant::Export(ExportConfig {
-                    source_connection_id: tab.source_connection_id,
-                    source_database: tab.source_database.clone(),
-                    source_collection: tab.source_collection.clone(),
-                    file_path: tab.file_path.clone(),
-                    format: tab.format,
-                    scope: tab.scope,
-                    json_mode: tab.json_mode,
-                    pretty_print: tab.pretty_print,
-                    bson_output: tab.bson_output,
-                    compression: tab.compression,
-                    export_filter: tab.export_filter.clone(),
-                    export_projection: tab.export_projection.clone(),
-                    export_sort: tab.export_sort.clone(),
-                    exclude_collections: tab.exclude_collections.clone(),
+                    source_connection_id: tab.config.source_connection_id,
+                    source_database: tab.config.source_database.clone(),
+                    source_collection: tab.config.source_collection.clone(),
+                    file_path: tab.config.file_path.clone(),
+                    format: tab.config.format,
+                    scope: tab.config.scope,
+                    json_mode: tab.options.json_mode,
+                    pretty_print: tab.options.pretty_print,
+                    bson_output: tab.options.bson_output,
+                    compression: tab.options.compression,
+                    export_filter: tab.options.export_filter.clone(),
+                    export_projection: tab.options.export_projection.clone(),
+                    export_sort: tab.options.export_sort.clone(),
+                    exclude_collections: tab.options.exclude_collections.clone(),
                 }),
                 TransferMode::Import => TransferConfigVariant::Import(ImportConfig {
-                    source_connection_id: tab.source_connection_id,
-                    source_database: tab.source_database.clone(),
-                    source_collection: tab.source_collection.clone(),
-                    destination_database: tab.destination_database.clone(),
-                    destination_collection: tab.destination_collection.clone(),
-                    file_path: tab.file_path.clone(),
-                    format: tab.format,
-                    scope: tab.scope,
-                    insert_mode: tab.insert_mode,
-                    stop_on_error: tab.stop_on_error,
-                    batch_size: tab.batch_size,
-                    drop_before_import: tab.drop_before_import,
-                    clear_before_import: tab.clear_before_import,
-                    encoding: tab.encoding,
-                    detect_format: tab.detect_format,
+                    source_connection_id: tab.config.source_connection_id,
+                    source_database: tab.config.source_database.clone(),
+                    source_collection: tab.config.source_collection.clone(),
+                    destination_database: tab.config.destination_database.clone(),
+                    destination_collection: tab.config.destination_collection.clone(),
+                    file_path: tab.config.file_path.clone(),
+                    format: tab.config.format,
+                    scope: tab.config.scope,
+                    insert_mode: tab.options.insert_mode,
+                    stop_on_error: tab.options.stop_on_error,
+                    batch_size: tab.options.batch_size,
+                    drop_before_import: tab.options.drop_before_import,
+                    clear_before_import: tab.options.clear_before_import,
+                    encoding: tab.options.encoding,
+                    detect_format: tab.options.detect_format,
                 }),
                 TransferMode::Copy => TransferConfigVariant::Copy(CopyConfig {
-                    source_connection_id: tab.source_connection_id,
-                    destination_connection_id: tab.destination_connection_id,
-                    source_database: tab.source_database.clone(),
-                    source_collection: tab.source_collection.clone(),
-                    destination_database: tab.destination_database.clone(),
-                    destination_collection: tab.destination_collection.clone(),
-                    scope: tab.scope,
-                    batch_size: tab.batch_size,
-                    drop_before_import: tab.drop_before_import,
-                    clear_before_import: tab.clear_before_import,
-                    copy_indexes: tab.copy_indexes,
-                    exclude_collections: tab.exclude_collections.clone(),
+                    source_connection_id: tab.config.source_connection_id,
+                    destination_connection_id: tab.config.destination_connection_id,
+                    source_database: tab.config.source_database.clone(),
+                    source_collection: tab.config.source_collection.clone(),
+                    destination_database: tab.config.destination_database.clone(),
+                    destination_collection: tab.config.destination_collection.clone(),
+                    scope: tab.config.scope,
+                    batch_size: tab.options.batch_size,
+                    drop_before_import: tab.options.drop_before_import,
+                    clear_before_import: tab.options.clear_before_import,
+                    copy_indexes: tab.options.copy_indexes,
+                    exclude_collections: tab.options.exclude_collections.clone(),
                 }),
             }
         };
@@ -280,17 +279,17 @@ impl AppCommands {
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 // Increment generation to invalidate any running operation
-                tab.transfer_generation.fetch_add(1, Ordering::SeqCst);
+                tab.runtime.transfer_generation.fetch_add(1, Ordering::SeqCst);
 
                 // Abort any pending async operation
-                if let Ok(mut handle) = tab.abort_handle.lock()
+                if let Ok(mut handle) = tab.runtime.abort_handle.lock()
                     && let Some(h) = handle.take()
                 {
                     h.abort();
                 }
 
-                tab.is_running = false;
-                tab.error_message = Some("Transfer cancelled".to_string());
+                tab.runtime.is_running = false;
+                tab.runtime.error_message = Some("Transfer cancelled".to_string());
             }
             state.set_status_message(Some(StatusMessage::info("Transfer cancelled")));
             cx.emit(AppEvent::TransferCancelled { transfer_id });
@@ -314,18 +313,20 @@ impl AppCommands {
 
         let (database, collection) = (session_key.database.clone(), session_key.collection.clone());
 
+        let manager = state.read(cx).connection_manager();
+
         state.update(cx, |state, cx| {
             state.set_status_message(Some(StatusMessage::info("Exporting collection...")));
             cx.notify();
         });
 
-        let task = cx.background_spawn({
-            let path = path.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.export_collection_json(&client, &database, &collection, format, &path)
-            }
-        });
+        let task =
+            cx.background_spawn({
+                let path = path.clone();
+                async move {
+                    manager.export_collection_json(&client, &database, &collection, format, &path)
+                }
+            });
 
         cx.spawn({
             let state = state.clone();
@@ -379,6 +380,8 @@ impl AppCommands {
 
         let (database, collection) = (session_key.database.clone(), session_key.collection.clone());
 
+        let manager = state.read(cx).connection_manager();
+
         state.update(cx, |state, cx| {
             state.set_status_message(Some(StatusMessage::info("Importing collection...")));
             cx.notify();
@@ -387,7 +390,6 @@ impl AppCommands {
         let task = cx.background_spawn({
             let path = path.clone();
             async move {
-                let manager = get_connection_manager();
                 manager.import_collection_json(&client, &database, &collection, format, &path, 1000)
             }
         });

@@ -32,7 +32,7 @@ impl TransferView {
         let state = self.state.clone();
         let settings = self.state.read(cx).settings.clone();
 
-        match transfer_state.mode {
+        match transfer_state.config.mode {
             TransferMode::Export => {
                 render_export_destination(self, transfer_state, &state, &settings, window, cx)
             }
@@ -58,14 +58,15 @@ fn render_export_destination(
 
     // Sync input state with transfer state file_path (when changed externally)
     let input_value = export_path_input_state.read(cx).value().to_string();
-    if input_value != transfer_state.file_path {
+    if input_value != transfer_state.config.file_path {
         export_path_input_state.update(cx, |input_state, cx| {
-            input_state.set_value(transfer_state.file_path.clone(), window, cx);
+            input_state.set_value(transfer_state.config.file_path.clone(), window, cx);
         });
     }
 
-    let is_bson = matches!(transfer_state.format, TransferFormat::Bson);
-    let is_bson_folder = is_bson && matches!(transfer_state.bson_output, BsonOutputFormat::Folder);
+    let is_bson = matches!(transfer_state.config.format, TransferFormat::Bson);
+    let is_bson_folder =
+        is_bson && matches!(transfer_state.options.bson_output, BsonOutputFormat::Folder);
 
     // Determine the label based on format and output mode
     let dest_label = if is_bson_folder {
@@ -79,9 +80,9 @@ fn render_export_destination(
     // Folder browse button - opens folder picker, then appends template filename
     let browse_button = {
         let state = state.clone();
-        let format = transfer_state.format;
-        let bson_output = transfer_state.bson_output;
-        let scope = transfer_state.scope;
+        let format = transfer_state.config.format;
+        let bson_output = transfer_state.options.bson_output;
+        let scope = transfer_state.config.scope;
         let settings = settings.clone();
         Button::new("browse-export-folder").compact().icon(IconName::Folder).on_click(
             move |_, _, cx| {
@@ -108,7 +109,7 @@ fn render_export_destination(
                                 if let Some(tab_id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(tab_id)
                                 {
-                                    tab.file_path = full_path;
+                                    tab.config.file_path = full_path;
                                     cx.notify();
                                 }
                             });
@@ -125,9 +126,9 @@ fn render_export_destination(
     let placeholder_button = {
         let state = state.clone();
         let export_path_input = export_path_input_state.clone();
-        let format = transfer_state.format;
-        let bson_output = transfer_state.bson_output;
-        let scope = transfer_state.scope;
+        let format = transfer_state.config.format;
+        let bson_output = transfer_state.options.bson_output;
+        let scope = transfer_state.config.scope;
         MenuButton::new("placeholder-dropdown")
             .compact()
             .label("${}")
@@ -229,7 +230,7 @@ fn render_export_destination(
                             if let Some(tab_id) = state.active_transfer_tab_id()
                                 && let Some(tab) = state.transfer_tab_mut(tab_id)
                             {
-                                tab.file_path = new_path;
+                                tab.config.file_path = new_path;
                                 cx.notify();
                             }
                         });
@@ -264,19 +265,19 @@ fn render_import_destination(
     state: &Entity<AppState>,
     _cx: &mut App,
 ) -> AnyElement {
-    let file_path = if transfer_state.file_path.is_empty() {
+    let file_path = if transfer_state.config.file_path.is_empty() {
         "No file selected".to_string()
     } else {
-        let path = std::path::Path::new(&transfer_state.file_path);
+        let path = std::path::Path::new(&transfer_state.config.file_path);
         path.file_name()
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| transfer_state.file_path.clone())
+            .unwrap_or_else(|| transfer_state.config.file_path.clone())
     };
 
     let browse_button = {
         let state = state.clone();
-        let format = transfer_state.format;
+        let format = transfer_state.config.format;
         Button::new("browse-import").compact().label("Browse...").on_click(move |_, _, cx| {
             let filters = filters_for_format(format);
             let state = state.clone();
@@ -291,15 +292,15 @@ fn render_import_destination(
                             {
                                 // Auto-detect format
                                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                                    tab.format = match ext {
+                                    tab.config.format = match ext {
                                         "jsonl" | "ndjson" => TransferFormat::JsonLines,
                                         "json" => TransferFormat::JsonArray,
                                         "csv" => TransferFormat::Csv,
                                         "archive" | "bson" => TransferFormat::Bson,
-                                        _ => tab.format,
+                                        _ => tab.config.format,
                                     };
                                 }
-                                tab.file_path = path.display().to_string();
+                                tab.config.file_path = path.display().to_string();
                                 cx.notify();
                             }
                         });
@@ -311,26 +312,26 @@ fn render_import_destination(
         })
     };
 
-    let target_db = if transfer_state.destination_database.is_empty() {
-        &transfer_state.source_database
+    let target_db = if transfer_state.config.destination_database.is_empty() {
+        &transfer_state.config.source_database
     } else {
-        &transfer_state.destination_database
+        &transfer_state.config.destination_database
     };
 
-    let target_coll = if transfer_state.destination_collection.is_empty() {
-        &transfer_state.source_collection
+    let target_coll = if transfer_state.config.destination_collection.is_empty() {
+        &transfer_state.config.source_collection
     } else {
-        &transfer_state.destination_collection
+        &transfer_state.config.destination_collection
     };
 
-    let show_coll = matches!(transfer_state.scope, TransferScope::Collection);
+    let show_coll = matches!(transfer_state.config.scope, TransferScope::Collection);
 
     let file_control = div()
         .flex()
         .items_center()
         .gap(spacing::sm())
         .child(
-            value_box(file_path, transfer_state.file_path.is_empty())
+            value_box(file_path, transfer_state.config.file_path.is_empty())
                 .flex_1()
                 .overflow_x_hidden()
                 .text_ellipsis(),
@@ -364,19 +365,19 @@ fn render_copy_destination(
     let conn_select =
         Select::new(dest_conn_state).small().w_full().placeholder("Select connection...");
 
-    let target_db = if transfer_state.destination_database.is_empty() {
-        &transfer_state.source_database
+    let target_db = if transfer_state.config.destination_database.is_empty() {
+        &transfer_state.config.source_database
     } else {
-        &transfer_state.destination_database
+        &transfer_state.config.destination_database
     };
 
-    let target_coll = if transfer_state.destination_collection.is_empty() {
-        &transfer_state.source_collection
+    let target_coll = if transfer_state.config.destination_collection.is_empty() {
+        &transfer_state.config.source_collection
     } else {
-        &transfer_state.destination_collection
+        &transfer_state.config.destination_collection
     };
 
-    let show_coll = matches!(transfer_state.scope, TransferScope::Collection);
+    let show_coll = matches!(transfer_state.config.scope, TransferScope::Collection);
 
     panel(
         "Destination",

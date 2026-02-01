@@ -7,7 +7,7 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 
-use crate::components::Button;
+use crate::components::{Button, cancel_button};
 use crate::state::StatusMessage;
 use crate::state::app_state::{PipelineStage, SessionKey};
 use crate::theme::{colors, spacing};
@@ -387,11 +387,7 @@ pub(super) fn open_import_pipeline_dialog(
                         .items_center()
                         .justify_end()
                         .gap(spacing::xs())
-                        .child(Button::new("agg-import-cancel").label("Cancel").on_click(
-                            |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                window.close_dialog(cx);
-                            },
-                        ))
+                        .child(cancel_button("agg-import-cancel"))
                         .child(
                             Button::new("agg-import-confirm").primary().label("Import").on_click({
                                 let pipeline_state = pipeline_state.clone();

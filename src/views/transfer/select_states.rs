@@ -71,9 +71,9 @@ impl TransferView {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
-                            tab.source_connection_id = Some(*conn_id);
-                            tab.source_database.clear();
-                            tab.source_collection.clear();
+                            tab.config.source_connection_id = Some(*conn_id);
+                            tab.config.source_database.clear();
+                            tab.config.source_collection.clear();
                             cx.notify();
                             return Some(tab_id);
                         }
@@ -112,10 +112,10 @@ impl TransferView {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
-                            tab.source_database = db_str.clone();
-                            tab.source_collection.clear();
+                            tab.config.source_database = db_str.clone();
+                            tab.config.source_collection.clear();
                             cx.notify();
-                            return tab.source_connection_id;
+                            return tab.config.source_connection_id;
                         }
                         None
                     });
@@ -149,7 +149,7 @@ impl TransferView {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
-                            tab.source_collection = coll_str.clone();
+                            tab.config.source_collection = coll_str.clone();
                             cx.notify();
                             return Some(tab_id);
                         }
@@ -172,7 +172,7 @@ impl TransferView {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
-                            tab.destination_connection_id = Some(*conn_id);
+                            tab.config.destination_connection_id = Some(*conn_id);
                             cx.notify();
                         }
                     });
@@ -198,8 +198,8 @@ impl TransferView {
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
                             // Only add if not already excluded
-                            if !tab.exclude_collections.contains(&coll_str) {
-                                tab.exclude_collections.push(coll_str);
+                            if !tab.options.exclude_collections.contains(&coll_str) {
+                                tab.options.exclude_collections.push(coll_str);
                             }
                             cx.notify();
                         }
@@ -217,7 +217,7 @@ impl TransferView {
             let state_ref = state.read(cx);
             state_ref
                 .active_transfer_tab_id()
-                .and_then(|id| state_ref.transfer_tab(id).map(|tab| tab.file_path.clone()))
+                .and_then(|id| state_ref.transfer_tab(id).map(|tab| tab.config.file_path.clone()))
                 .unwrap_or_default()
         };
 
@@ -240,7 +240,7 @@ impl TransferView {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
-                            tab.file_path = new_path;
+                            tab.config.file_path = new_path;
                             cx.notify();
                         }
                     });

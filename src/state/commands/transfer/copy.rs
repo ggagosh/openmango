@@ -7,7 +7,6 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::connection::get_connection_manager;
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferScope};
 
@@ -76,10 +75,10 @@ impl AppCommands {
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.is_running = true;
-                tab.progress_count = 0;
-                tab.error_message = None;
-                tab.database_progress = None; // Reset on new copy
+                tab.runtime.is_running = true;
+                tab.runtime.progress_count = 0;
+                tab.runtime.error_message = None;
+                tab.runtime.database_progress = None; // Reset on new copy
             }
             state.set_status_message(Some(StatusMessage::info("Copying...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -141,12 +140,12 @@ impl AppCommands {
         // Create channel for progress updates from background thread
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             let exclude_set: HashSet<String> = exclude_collections.iter().cloned().collect();
             async move {
-                let manager = get_connection_manager();
-
                 // Get collection list
                 let collections = match manager.list_collection_names(&src_client, &src_database) {
                     Ok(colls) => colls
@@ -179,6 +178,7 @@ impl AppCommands {
                             let src_database = src_database.clone();
                             let dest_database = dest_database.clone();
                             let handle = runtime_handle.clone();
+                            let manager = manager.clone();
 
                             async move {
                                 // Send InProgress status
@@ -196,8 +196,6 @@ impl AppCommands {
                                 let copy_collection = collection_name.clone();
                                 let result = handle
                                     .spawn_blocking(move || {
-                                        let manager = get_connection_manager();
-
                                         // Get estimated count
                                         let estimated_count = manager
                                             .estimated_document_count(
@@ -359,8 +357,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = total_count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = total_count;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -385,8 +383,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "Copy failed: {error}"
@@ -428,11 +426,11 @@ impl AppCommands {
         // Create channel for progress updates from background thread
         let (tx, rx) = mpsc::unbounded::<CollectionProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             async move {
-                let manager = get_connection_manager();
-
                 // Drop or clear destination collection before copy if requested
                 if drop_before {
                     let _ = manager.drop_collection(&dest_client, &dest_database, &dest_collection);
@@ -509,13 +507,13 @@ impl AppCommands {
                             match msg {
                                 CollectionProgressMessage::Progress(processed) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.progress_count = processed;
+                                        tab.runtime.progress_count = processed;
                                     }
                                 }
                                 CollectionProgressMessage::Completed(count) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = count;
                                     }
                                     let message = format!(
                                         "Copied {} document{}",
@@ -527,8 +525,8 @@ impl AppCommands {
                                 }
                                 CollectionProgressMessage::Failed(error) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "Copy failed: {error}"

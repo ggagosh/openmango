@@ -7,8 +7,7 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState, Position};
 use uuid::Uuid;
 
-use crate::components::{Button, open_confirm_dialog};
-use crate::connection::get_connection_manager;
+use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
 use crate::models::SavedConnection;
 use crate::state::AppState;
@@ -229,6 +228,8 @@ impl ConnectionManager {
             return;
         }
 
+        let manager = view.read(cx).state.read(cx).connection_manager();
+
         view.update(cx, |this, cx| {
             this.status = TestStatus::Testing;
             this.pending_test_uri = Some(uri.clone());
@@ -239,7 +240,6 @@ impl ConnectionManager {
         let task = cx.background_spawn({
             let uri = uri.clone();
             async move {
-                let manager = get_connection_manager();
                 let temp = SavedConnection::new("Test".to_string(), uri);
                 manager.test_connection(&temp, std::time::Duration::from_secs(5))?;
                 Ok::<(), crate::error::Error>(())
@@ -466,12 +466,7 @@ impl ConnectionManager {
                         let view = view.clone();
                         let input_state = input_state.clone();
                         vec![
-                            Button::new("cancel-import-uri")
-                                .label("Cancel")
-                                .on_click(|_, window, cx| {
-                                    window.close_dialog(cx);
-                                })
-                                .into_any_element(),
+                            cancel_button("cancel-import-uri"),
                             Button::new("confirm-import-uri")
                                 .primary()
                                 .label("Import")

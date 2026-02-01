@@ -3,8 +3,8 @@
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
 
+use crate::connection::ConnectionManager;
 use crate::connection::types::CopyOptions;
-use crate::connection::{ConnectionManager, get_connection_manager};
 use crate::error::{Error, Result};
 
 impl ConnectionManager {
@@ -173,37 +173,40 @@ impl ConnectionManager {
         // Use HashSet for O(1) lookup instead of Vec::contains O(n)
         let exclude_set: HashSet<String> = exclude_collections.iter().cloned().collect();
 
-        self.runtime.block_on(async move {
+        // List collections first (blocking)
+        let collections = self.runtime.block_on(async {
             let src_db = src_client.database(&src_database);
-            let collections = src_db.list_collection_names().await?;
+            src_db.list_collection_names().await
+        })?;
 
-            let mut total_copied = 0u64;
+        let mut total_copied = 0u64;
 
-            for collection in collections {
-                // Skip system collections
-                if collection.starts_with("system.") {
-                    continue;
-                }
-
-                // Skip excluded collections (O(1) lookup)
-                if exclude_set.contains(&collection) {
-                    continue;
-                }
-
-                let count = get_connection_manager().copy_collection(
-                    &src_client,
-                    &src_database,
-                    &collection,
-                    &dest_client,
-                    &dest_database,
-                    &collection,
-                    batch_size,
-                    copy_indexes,
-                )?;
-                total_copied += count;
+        for collection in collections {
+            // Skip system collections
+            if collection.starts_with("system.") {
+                continue;
             }
 
-            Ok(total_copied)
-        })
+            // Skip excluded collections (O(1) lookup)
+            if exclude_set.contains(&collection) {
+                continue;
+            }
+
+            // Call copy_collection directly on self (no nested block_on issue since
+            // copy_collection_with_options runs its own block_on sequentially)
+            let count = self.copy_collection(
+                &src_client,
+                &src_database,
+                &collection,
+                &dest_client,
+                &dest_database,
+                &collection,
+                batch_size,
+                copy_indexes,
+            )?;
+            total_copied += count;
+        }
+
+        Ok(total_copied)
     }
 }

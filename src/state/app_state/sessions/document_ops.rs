@@ -1,0 +1,159 @@
+//! Document operations for sessions (drafts, node selection, expansion).
+
+use mongodb::bson::{Bson, Document};
+
+use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
+use crate::state::AppState;
+use crate::state::app_state::types::SessionKey;
+
+impl AppState {
+    pub fn session_draft(&self, key: &SessionKey, doc_key: &DocumentKey) -> Option<Document> {
+        self.session_view(key).and_then(|view| view.drafts.get(doc_key).cloned())
+    }
+
+    pub fn session_draft_or_document(
+        &self,
+        key: &SessionKey,
+        doc_key: &DocumentKey,
+    ) -> Option<Document> {
+        self.session_draft(key, doc_key).or_else(|| self.document_for_key(key, doc_key))
+    }
+
+    pub fn document_index(&self, session_key: &SessionKey, doc_key: &DocumentKey) -> Option<usize> {
+        let session = self.session(session_key)?;
+        session.data.index_by_key.get(doc_key).copied()
+    }
+
+    pub fn document_for_key(
+        &self,
+        session_key: &SessionKey,
+        doc_key: &DocumentKey,
+    ) -> Option<Document> {
+        let session = self.session(session_key)?;
+        let index = session.data.index_by_key.get(doc_key)?;
+        session.data.items.get(*index).map(|item| item.doc.clone())
+    }
+
+    pub fn set_selected_node(
+        &mut self,
+        session_key: &SessionKey,
+        doc_key: DocumentKey,
+        node_id: String,
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_doc = Some(doc_key);
+            session.view.selected_node_id = Some(node_id);
+        }
+    }
+
+    pub fn toggle_expanded_node(&mut self, session_key: &SessionKey, node_id: &str) {
+        if let Some(session) = self.session_mut(session_key) {
+            if session.view.expanded_nodes.contains(node_id) {
+                session.view.expanded_nodes.remove(node_id);
+            } else {
+                session.view.expanded_nodes.insert(node_id.to_string());
+            }
+        }
+    }
+
+    pub fn expand_path(
+        &mut self,
+        session_key: &SessionKey,
+        doc_key: &DocumentKey,
+        path: &[PathSegment],
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            for depth in 0..=path.len() {
+                session.view.expanded_nodes.insert(path_to_id(doc_key, &path[..depth]));
+            }
+        }
+    }
+
+    pub fn set_draft(&mut self, session_key: &SessionKey, doc_key: DocumentKey, doc: Document) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.drafts.insert(doc_key.clone(), doc);
+            session.view.dirty.insert(doc_key);
+        }
+    }
+
+    pub fn clear_draft(&mut self, session_key: &SessionKey, doc_key: &DocumentKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.drafts.remove(doc_key);
+            session.view.dirty.remove(doc_key);
+        }
+    }
+
+    pub fn clear_all_drafts(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.drafts.clear();
+            session.view.dirty.clear();
+        }
+    }
+
+    pub fn update_draft_value(
+        &mut self,
+        session_key: &SessionKey,
+        doc_key: &DocumentKey,
+        original: &Document,
+        path: &[PathSegment],
+        new_value: Bson,
+    ) -> bool {
+        let Some(session) = self.session_mut(session_key) else {
+            return false;
+        };
+
+        let draft = session.view.drafts.entry(doc_key.clone()).or_insert_with(|| original.clone());
+
+        if set_bson_at_path(draft, path, new_value) {
+            if draft == original {
+                session.view.drafts.remove(doc_key);
+                session.view.dirty.remove(doc_key);
+            } else {
+                session.view.dirty.insert(doc_key.clone());
+            }
+            return true;
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mongodb::bson::{Bson, doc};
+
+    use crate::bson::{DocumentKey, PathSegment};
+    use crate::state::{AppState, SessionKey};
+
+    #[test]
+    fn update_draft_value_tracks_dirty_and_clears() {
+        let mut state = AppState::new();
+        let session_key = SessionKey::new(uuid::Uuid::new_v4(), "db", "col");
+        state.ensure_session(session_key.clone());
+
+        let original = doc! { "_id": "doc1", "name": "alpha" };
+        let doc_key = DocumentKey::from_document(&original, 0);
+        let path = vec![PathSegment::Key("name".to_string())];
+
+        let updated = state.update_draft_value(
+            &session_key,
+            &doc_key,
+            &original,
+            &path,
+            Bson::String("beta".to_string()),
+        );
+        assert!(updated);
+        let session = state.session(&session_key).unwrap();
+        assert!(session.view.dirty.contains(&doc_key));
+
+        let cleared = state.update_draft_value(
+            &session_key,
+            &doc_key,
+            &original,
+            &path,
+            Bson::String("alpha".to_string()),
+        );
+        assert!(cleared);
+        let session = state.session(&session_key).unwrap();
+        assert!(!session.view.dirty.contains(&doc_key));
+    }
+}

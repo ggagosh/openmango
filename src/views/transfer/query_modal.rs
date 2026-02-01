@@ -33,9 +33,9 @@ impl TransferView {
                 && let Some(tab) = state_ref.transfer_tab(id)
             {
                 match field {
-                    QueryEditField::Filter => tab.export_filter.clone(),
-                    QueryEditField::Projection => tab.export_projection.clone(),
-                    QueryEditField::Sort => tab.export_sort.clone(),
+                    QueryEditField::Filter => tab.options.export_filter.clone(),
+                    QueryEditField::Projection => tab.options.export_projection.clone(),
+                    QueryEditField::Sort => tab.options.export_sort.clone(),
                 }
             } else {
                 String::new()
@@ -70,9 +70,9 @@ impl TransferView {
                 && let Some(tab) = state.transfer_tab_mut(id)
             {
                 match field {
-                    QueryEditField::Filter => tab.export_filter = new_value,
-                    QueryEditField::Projection => tab.export_projection = new_value,
-                    QueryEditField::Sort => tab.export_sort = new_value,
+                    QueryEditField::Filter => tab.options.export_filter = new_value,
+                    QueryEditField::Projection => tab.options.export_projection = new_value,
+                    QueryEditField::Sort => tab.options.export_sort = new_value,
                 }
                 cx.notify();
             }

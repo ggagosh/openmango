@@ -18,9 +18,9 @@ impl TransferView {
         transfer_state: &TransferTabState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let show_collection = matches!(transfer_state.scope, TransferScope::Collection);
+        let show_collection = matches!(transfer_state.config.scope, TransferScope::Collection);
         let show_query_options =
-            matches!(transfer_state.mode, TransferMode::Export) && show_collection;
+            matches!(transfer_state.config.mode, TransferMode::Export) && show_collection;
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
@@ -52,7 +52,7 @@ impl TransferView {
                 render_query_field_row(
                     "Filter",
                     QueryEditField::Filter,
-                    &transfer_state.export_filter,
+                    &transfer_state.options.export_filter,
                     view.clone(),
                     state.clone(),
                 )
@@ -60,7 +60,7 @@ impl TransferView {
                 render_query_field_row(
                     "Projection",
                     QueryEditField::Projection,
-                    &transfer_state.export_projection,
+                    &transfer_state.options.export_projection,
                     view.clone(),
                     state.clone(),
                 )
@@ -68,7 +68,7 @@ impl TransferView {
                 render_query_field_row(
                     "Sort",
                     QueryEditField::Sort,
-                    &transfer_state.export_sort,
+                    &transfer_state.options.export_sort,
                     view,
                     state,
                 )

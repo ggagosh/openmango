@@ -111,16 +111,18 @@ impl Render for TransferView {
                 active.iter().map(|(id, conn)| (*id, conn.config.name.clone())).collect();
 
             let databases: Vec<String> = transfer
+                .config
                 .source_connection_id
                 .and_then(|conn_id| active.get(&conn_id).map(|conn| conn.databases.clone()))
                 .unwrap_or_default();
 
             let collections: Vec<String> = transfer
+                .config
                 .source_connection_id
                 .and_then(|conn_id| {
-                    if !transfer.source_database.is_empty() {
+                    if !transfer.config.source_database.is_empty() {
                         active.get(&conn_id).and_then(|conn| {
-                            conn.collections.get(&transfer.source_database).cloned()
+                            conn.collections.get(&transfer.config.source_database).cloned()
                         })
                     } else {
                         None
@@ -160,6 +162,7 @@ impl Render for TransferView {
         // Sync source connection selected index
         if let Some(ref source_conn_state) = self.source_conn_state {
             let expected_row = transfer_state
+                .config
                 .source_connection_id
                 .and_then(|id| conn_ids.iter().position(|c| *c == id));
             source_conn_state.update(cx, |s, cx| {
@@ -174,6 +177,7 @@ impl Render for TransferView {
         // Sync destination connection selected index
         if let Some(ref dest_conn_state) = self.dest_conn_state {
             let expected_row = transfer_state
+                .config
                 .destination_connection_id
                 .and_then(|id| conn_ids.iter().position(|c| *c == id));
             dest_conn_state.update(cx, |s, cx| {
@@ -186,7 +190,7 @@ impl Render for TransferView {
         }
 
         // Database items - only show if connection is selected
-        let db_names: Vec<String> = if transfer_state.source_connection_id.is_some() {
+        let db_names: Vec<String> = if transfer_state.config.source_connection_id.is_some() {
             databases.clone()
         } else {
             Vec::new()
@@ -205,8 +209,8 @@ impl Render for TransferView {
 
         // Sync database selected index
         if let Some(ref source_db_state) = self.source_db_state {
-            let expected_row = if !transfer_state.source_database.is_empty() {
-                db_names.iter().position(|d| d == &transfer_state.source_database)
+            let expected_row = if !transfer_state.config.source_database.is_empty() {
+                db_names.iter().position(|d| d == &transfer_state.config.source_database)
             } else {
                 None
             };
@@ -220,8 +224,8 @@ impl Render for TransferView {
         }
 
         // Collection items - only show if connection AND database are selected
-        let coll_names: Vec<String> = if transfer_state.source_connection_id.is_some()
-            && !transfer_state.source_database.is_empty()
+        let coll_names: Vec<String> = if transfer_state.config.source_connection_id.is_some()
+            && !transfer_state.config.source_database.is_empty()
         {
             collections.clone()
         } else {
@@ -249,8 +253,8 @@ impl Render for TransferView {
 
         // Sync collection selected index
         if let Some(ref source_coll_state) = self.source_coll_state {
-            let expected_row = if !transfer_state.source_collection.is_empty() {
-                coll_names.iter().position(|c| c == &transfer_state.source_collection)
+            let expected_row = if !transfer_state.config.source_collection.is_empty() {
+                coll_names.iter().position(|c| c == &transfer_state.config.source_collection)
             } else {
                 None
             };
@@ -272,7 +276,7 @@ impl Render for TransferView {
         let mode_tabs = TabBar::new(("transfer-mode", transfer_key))
             .underline()
             .small()
-            .selected_index(transfer_state.mode.index())
+            .selected_index(transfer_state.config.mode.index())
             .on_click({
                 let state = state.clone();
                 move |index, _window, cx| {
@@ -281,7 +285,7 @@ impl Render for TransferView {
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
-                            tab.mode = mode;
+                            tab.config.mode = mode;
                             cx.notify();
                         }
                     });
@@ -298,7 +302,7 @@ impl Render for TransferView {
             let state = state.clone();
             MenuButton::new(("transfer-scope", transfer_key))
                 .compact()
-                .label(transfer_state.scope.label())
+                .label(transfer_state.config.scope.label())
                 .dropdown_caret(true)
                 .rounded(borders::radius_sm())
                 .with_size(Size::XSmall)
@@ -311,9 +315,9 @@ impl Render for TransferView {
                                 if let Some(id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
-                                    tab.scope = TransferScope::Collection;
-                                    if matches!(tab.format, TransferFormat::Bson) {
-                                        tab.format = TransferFormat::JsonLines;
+                                    tab.config.scope = TransferScope::Collection;
+                                    if matches!(tab.config.format, TransferFormat::Bson) {
+                                        tab.config.format = TransferFormat::JsonLines;
                                     }
                                     cx.notify();
                                 }
@@ -326,7 +330,7 @@ impl Render for TransferView {
                                 if let Some(id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
-                                    tab.scope = TransferScope::Database;
+                                    tab.config.scope = TransferScope::Database;
                                     cx.notify();
                                 }
                             });
@@ -337,12 +341,13 @@ impl Render for TransferView {
 
         // Format dropdown
         let format_control =
-            if matches!(transfer_state.mode, TransferMode::Export | TransferMode::Import) {
+            if matches!(transfer_state.config.mode, TransferMode::Export | TransferMode::Import) {
                 let state = state.clone();
-                let is_collection = matches!(transfer_state.scope, TransferScope::Collection);
+                let is_collection =
+                    matches!(transfer_state.config.scope, TransferScope::Collection);
                 MenuButton::new(("transfer-format", transfer_key))
                     .compact()
-                    .label(transfer_state.format.label())
+                    .label(transfer_state.config.format.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(Size::XSmall)
@@ -359,8 +364,8 @@ impl Render for TransferView {
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.format = TransferFormat::JsonLines;
-                                            tab.file_path.clear();
+                                            tab.config.format = TransferFormat::JsonLines;
+                                            tab.config.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -372,8 +377,8 @@ impl Render for TransferView {
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.format = TransferFormat::JsonArray;
-                                            tab.file_path.clear();
+                                            tab.config.format = TransferFormat::JsonArray;
+                                            tab.config.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -384,8 +389,8 @@ impl Render for TransferView {
                                     if let Some(id) = state.active_transfer_tab_id()
                                         && let Some(tab) = state.transfer_tab_mut(id)
                                     {
-                                        tab.format = TransferFormat::Csv;
-                                        tab.file_path.clear();
+                                        tab.config.format = TransferFormat::Csv;
+                                        tab.config.file_path.clear();
                                         cx.notify();
                                     }
                                 });
@@ -398,8 +403,8 @@ impl Render for TransferView {
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.format = TransferFormat::Bson;
-                                            tab.file_path.clear();
+                                            tab.config.format = TransferFormat::Bson;
+                                            tab.config.file_path.clear();
                                             cx.notify();
                                         }
                                     });
@@ -415,7 +420,7 @@ impl Render for TransferView {
 
         // Run or Cancel button (depending on is_running state)
         let can_run = can_execute_transfer(&transfer_state);
-        let action_button = if transfer_state.is_running {
+        let action_button = if transfer_state.runtime.is_running {
             let state = state.clone();
             Button::new("transfer-cancel")
                 .ghost()
@@ -430,7 +435,7 @@ impl Render for TransferView {
             Button::new("transfer-run")
                 .primary()
                 .compact()
-                .label(transfer_state.mode.label())
+                .label(transfer_state.config.mode.label())
                 .disabled(!can_run)
                 .on_click(move |_, _, cx| {
                     AppCommands::execute_transfer(state.clone(), transfer_id, cx);
@@ -484,6 +489,7 @@ impl Render for TransferView {
         let destination_panel = self.render_destination_panel(&transfer_state, window, cx);
 
         let source_conn_name = transfer_state
+            .config
             .source_connection_id
             .and_then(|id| {
                 connections.iter().find(|(cid, _)| *cid == id).map(|(_, name)| name.clone())
@@ -491,6 +497,7 @@ impl Render for TransferView {
             .unwrap_or_else(|| "Select connection".to_string());
 
         let dest_conn_name = transfer_state
+            .config
             .destination_connection_id
             .and_then(|id| {
                 connections.iter().find(|(cid, _)| *cid == id).map(|(_, name)| name.clone())
@@ -503,7 +510,7 @@ impl Render for TransferView {
 
         // Progress panel for database-scope operations (only shown when running)
         let progress_panel: AnyElement =
-            if let Some(ref db_progress) = transfer_state.database_progress {
+            if let Some(ref db_progress) = transfer_state.runtime.database_progress {
                 render_progress_panel(db_progress, state.clone(), transfer_id).into_any_element()
             } else {
                 div().into_any_element()
@@ -517,7 +524,7 @@ impl Render for TransferView {
             self.render_options_panel(transfer_key, &transfer_state, options_expanded, view);
 
         // Error message
-        let error_display: AnyElement = if let Some(error) = &transfer_state.error_message {
+        let error_display: AnyElement = if let Some(error) = &transfer_state.runtime.error_message {
             div()
                 .px(spacing::md())
                 .py(spacing::sm())
@@ -621,7 +628,7 @@ impl TransferView {
                 let state = state.clone();
                 MenuButton::new(("compression", key))
                     .compact()
-                    .label(transfer_state.compression.label())
+                    .label(transfer_state.options.compression.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(Size::XSmall)
@@ -633,7 +640,7 @@ impl TransferView {
                                 if let Some(id) = state.active_transfer_tab_id()
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
-                                    tab.compression = CompressionMode::None;
+                                    tab.options.compression = CompressionMode::None;
                                     cx.notify();
                                 }
                             });
@@ -644,7 +651,7 @@ impl TransferView {
                                     if let Some(id) = state.active_transfer_tab_id()
                                         && let Some(tab) = state.transfer_tab_mut(id)
                                     {
-                                        tab.compression = CompressionMode::Gzip;
+                                        tab.options.compression = CompressionMode::Gzip;
                                         cx.notify();
                                     }
                                 });
@@ -657,13 +664,13 @@ impl TransferView {
                 option_section(
                     "General",
                     vec![
-                        option_field_static("Scope", transfer_state.scope.label()),
+                        option_field_static("Scope", transfer_state.config.scope.label()),
                         option_field_static(
                             "Format",
-                            if matches!(transfer_state.mode, TransferMode::Copy) {
+                            if matches!(transfer_state.config.mode, TransferMode::Copy) {
                                 "Live copy"
                             } else {
-                                transfer_state.format.label()
+                                transfer_state.config.format.label()
                             },
                         ),
                         option_field("Compression", compression_dropdown.into_any_element()),
@@ -672,7 +679,7 @@ impl TransferView {
                 .into_any_element(),
             );
 
-            match transfer_state.mode {
+            match transfer_state.config.mode {
                 TransferMode::Export => {
                     options::render_export_options(
                         &mut sections,

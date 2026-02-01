@@ -77,18 +77,23 @@ impl AppState {
                 }
                 WorkspaceTabKind::Transfer => {
                     let mut transfer_state = tab.transfer.clone().unwrap_or_default();
-                    if transfer_state.source_connection_id.is_none() {
-                        transfer_state.source_connection_id = Some(connection_id);
+                    if transfer_state.config.source_connection_id.is_none() {
+                        transfer_state.config.source_connection_id = Some(connection_id);
                     }
-                    if transfer_state.source_database.is_empty() && !tab.database.is_empty() {
-                        transfer_state.source_database = tab.database.clone();
+                    if transfer_state.config.source_database.is_empty() && !tab.database.is_empty()
+                    {
+                        transfer_state.config.source_database = tab.database.clone();
                     }
-                    if transfer_state.source_collection.is_empty() && !tab.collection.is_empty() {
-                        transfer_state.source_collection = tab.collection.clone();
+                    if transfer_state.config.source_collection.is_empty()
+                        && !tab.collection.is_empty()
+                    {
+                        transfer_state.config.source_collection = tab.collection.clone();
                     }
                     let id = Uuid::new_v4();
-                    let key =
-                        TransferTabKey { id, connection_id: transfer_state.source_connection_id };
+                    let key = TransferTabKey {
+                        id,
+                        connection_id: transfer_state.config.source_connection_id,
+                    };
                     self.transfer_tabs.insert(id, transfer_state);
                     restored_tabs.push(TabKey::Transfer(key));
                 }
@@ -112,7 +117,7 @@ impl AppState {
                         let Some(state) = self.transfer_tabs.get(&transfer.id) else {
                             return false;
                         };
-                        state.source_database == tab.database
+                        state.config.source_database == tab.database
                     }
                     _ => false,
                 })
@@ -219,8 +224,8 @@ impl AppState {
             TabKey::Transfer(key) => {
                 let transfer = self.transfer_tabs.get(&key.id).cloned().unwrap_or_default();
                 WorkspaceTab {
-                    database: transfer.source_database.clone(),
-                    collection: transfer.source_collection.clone(),
+                    database: transfer.config.source_database.clone(),
+                    collection: transfer.config.source_collection.clone(),
                     kind: WorkspaceTabKind::Transfer,
                     transfer: Some(transfer),
                     filter_raw: String::new(),
@@ -264,13 +269,13 @@ impl AppState {
                 }
                 TabKey::Transfer(key) => {
                     if let Some(transfer) = self.transfer_tabs.get(&key.id) {
-                        if !transfer.source_database.is_empty() {
+                        if !transfer.config.source_database.is_empty() {
                             self.workspace.selected_database =
-                                Some(transfer.source_database.clone());
+                                Some(transfer.config.source_database.clone());
                         }
-                        if !transfer.source_collection.is_empty() {
+                        if !transfer.config.source_collection.is_empty() {
                             self.workspace.selected_collection =
-                                Some(transfer.source_collection.clone());
+                                Some(transfer.config.source_collection.clone());
                         }
                     }
                 }
@@ -294,6 +299,9 @@ fn restore_doc_option(raw: &str, mut apply: impl FnMut(String, Option<mongodb::b
 
     match parse_document_from_json(trimmed) {
         Ok(doc) => apply(raw.to_string(), Some(doc)),
-        Err(_) => apply(String::new(), None),
+        Err(e) => {
+            log::warn!("Invalid filter JSON, resetting to empty: {e}");
+            apply(String::new(), None);
+        }
     }
 }

@@ -252,19 +252,21 @@ impl AppState {
     pub(crate) fn open_transfer_tab(&mut self, cx: &mut Context<Self>) {
         let connection_id = self.conn.selected_connection;
         let mut transfer_state = TransferTabState::from_settings(&self.settings);
-        transfer_state.source_connection_id = connection_id;
-        transfer_state.source_database = self.conn.selected_database.clone().unwrap_or_default();
-        transfer_state.source_collection =
+        transfer_state.config.source_connection_id = connection_id;
+        transfer_state.config.source_database =
+            self.conn.selected_database.clone().unwrap_or_default();
+        transfer_state.config.source_collection =
             self.conn.selected_collection.clone().unwrap_or_default();
-        transfer_state.destination_connection_id = connection_id;
-        transfer_state.destination_database = transfer_state.source_database.clone();
-        transfer_state.destination_collection = transfer_state.source_collection.clone();
-        if transfer_state.source_database.is_empty() {
-            transfer_state.scope = TransferScope::Collection;
-        } else if transfer_state.source_collection.is_empty() {
-            transfer_state.scope = TransferScope::Database;
+        transfer_state.config.destination_connection_id = connection_id;
+        transfer_state.config.destination_database = transfer_state.config.source_database.clone();
+        transfer_state.config.destination_collection =
+            transfer_state.config.source_collection.clone();
+        if transfer_state.config.source_database.is_empty() {
+            transfer_state.config.scope = TransferScope::Collection;
+        } else if transfer_state.config.source_collection.is_empty() {
+            transfer_state.config.scope = TransferScope::Database;
         } else {
-            transfer_state.scope = TransferScope::Collection;
+            transfer_state.config.scope = TransferScope::Collection;
         }
         self.push_transfer_tab(transfer_state, connection_id, cx);
     }
@@ -279,17 +281,18 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         let mut transfer_state = TransferTabState::from_settings(&self.settings);
-        transfer_state.mode = mode;
-        transfer_state.scope = scope;
-        transfer_state.source_connection_id = Some(connection_id);
-        transfer_state.source_database = database;
-        transfer_state.source_collection = collection.unwrap_or_default();
-        transfer_state.destination_connection_id = Some(connection_id);
-        transfer_state.destination_database = transfer_state.source_database.clone();
-        transfer_state.destination_collection = transfer_state.source_collection.clone();
+        transfer_state.config.mode = mode;
+        transfer_state.config.scope = scope;
+        transfer_state.config.source_connection_id = Some(connection_id);
+        transfer_state.config.source_database = database;
+        transfer_state.config.source_collection = collection.unwrap_or_default();
+        transfer_state.config.destination_connection_id = Some(connection_id);
+        transfer_state.config.destination_database = transfer_state.config.source_database.clone();
+        transfer_state.config.destination_collection =
+            transfer_state.config.source_collection.clone();
         if scope == TransferScope::Database {
-            transfer_state.source_collection.clear();
-            transfer_state.destination_collection.clear();
+            transfer_state.config.source_collection.clear();
+            transfer_state.config.destination_collection.clear();
         }
 
         self.push_transfer_tab(transfer_state, Some(connection_id), cx);
@@ -309,20 +312,20 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         let mut transfer_state = TransferTabState::from_settings(&self.settings);
-        transfer_state.mode = TransferMode::Copy;
-        transfer_state.scope = scope;
-        transfer_state.source_connection_id = Some(source_connection_id);
-        transfer_state.source_database = source_database.clone();
-        transfer_state.source_collection = source_collection.clone().unwrap_or_default();
+        transfer_state.config.mode = TransferMode::Copy;
+        transfer_state.config.scope = scope;
+        transfer_state.config.source_connection_id = Some(source_connection_id);
+        transfer_state.config.source_database = source_database.clone();
+        transfer_state.config.source_collection = source_collection.clone().unwrap_or_default();
 
         // Set destination based on provided values, falling back to source
-        transfer_state.destination_connection_id =
+        transfer_state.config.destination_connection_id =
             dest_connection_id.or(Some(source_connection_id));
-        transfer_state.destination_database =
+        transfer_state.config.destination_database =
             dest_database.unwrap_or_else(|| source_database.clone());
         // For collection scope, keep destination collection empty so user can fill it
         // For database scope, collection is not relevant
-        transfer_state.destination_collection = if scope == TransferScope::Collection {
+        transfer_state.config.destination_collection = if scope == TransferScope::Collection {
             // If copying a collection, suggest the same collection name at destination
             source_collection.unwrap_or_default()
         } else {
@@ -330,8 +333,8 @@ impl AppState {
         };
 
         if scope == TransferScope::Database {
-            transfer_state.source_collection.clear();
-            transfer_state.destination_collection.clear();
+            transfer_state.config.source_collection.clear();
+            transfer_state.config.destination_collection.clear();
         }
 
         self.push_transfer_tab(transfer_state, Some(source_connection_id), cx);
@@ -343,15 +346,15 @@ impl AppState {
         connection_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        let selected_database = if transfer_state.source_database.is_empty() {
+        let selected_database = if transfer_state.config.source_database.is_empty() {
             None
         } else {
-            Some(transfer_state.source_database.clone())
+            Some(transfer_state.config.source_database.clone())
         };
-        let selected_collection = if transfer_state.source_collection.is_empty() {
+        let selected_collection = if transfer_state.config.source_collection.is_empty() {
             None
         } else {
-            Some(transfer_state.source_collection.clone())
+            Some(transfer_state.config.source_collection.clone())
         };
 
         let id = Uuid::new_v4();
@@ -455,11 +458,12 @@ impl AppState {
                     self.set_selected_connection_internal(conn_id);
                 }
                 if let Some(state) = self.transfer_tabs.get(&tab.id) {
-                    if !state.source_database.is_empty() {
-                        self.conn.selected_database = Some(state.source_database.clone());
+                    if !state.config.source_database.is_empty() {
+                        self.conn.selected_database = Some(state.config.source_database.clone());
                     }
-                    if !state.source_collection.is_empty() {
-                        self.conn.selected_collection = Some(state.source_collection.clone());
+                    if !state.config.source_collection.is_empty() {
+                        self.conn.selected_collection =
+                            Some(state.config.source_collection.clone());
                     }
                 }
                 self.current_view = View::Transfer;
@@ -590,12 +594,13 @@ impl AppState {
                             self.set_selected_connection_internal(conn_id);
                         }
                         if let Some(state) = self.transfer_tabs.get(&tab.id) {
-                            if !state.source_database.is_empty() {
-                                self.conn.selected_database = Some(state.source_database.clone());
+                            if !state.config.source_database.is_empty() {
+                                self.conn.selected_database =
+                                    Some(state.config.source_database.clone());
                             }
-                            if !state.source_collection.is_empty() {
+                            if !state.config.source_collection.is_empty() {
                                 self.conn.selected_collection =
-                                    Some(state.source_collection.clone());
+                                    Some(state.config.source_collection.clone());
                             }
                         }
                         self.current_view = View::Transfer;
@@ -646,13 +651,13 @@ impl AppState {
                                 self.set_selected_connection_internal(conn_id);
                             }
                             if let Some(state) = self.transfer_tabs.get(&tab.id) {
-                                if !state.source_database.is_empty() {
+                                if !state.config.source_database.is_empty() {
                                     self.conn.selected_database =
-                                        Some(state.source_database.clone());
+                                        Some(state.config.source_database.clone());
                                 }
-                                if !state.source_collection.is_empty() {
+                                if !state.config.source_collection.is_empty() {
                                     self.conn.selected_collection =
-                                        Some(state.source_collection.clone());
+                                        Some(state.config.source_collection.clone());
                                 }
                             }
                             self.current_view = View::Transfer;
@@ -686,12 +691,13 @@ impl AppState {
                             self.set_selected_connection_internal(conn_id);
                         }
                         if let Some(state) = self.transfer_tabs.get(&tab.id) {
-                            if !state.source_database.is_empty() {
-                                self.conn.selected_database = Some(state.source_database.clone());
+                            if !state.config.source_database.is_empty() {
+                                self.conn.selected_database =
+                                    Some(state.config.source_database.clone());
                             }
-                            if !state.source_collection.is_empty() {
+                            if !state.config.source_collection.is_empty() {
                                 self.conn.selected_collection =
-                                    Some(state.source_collection.clone());
+                                    Some(state.config.source_collection.clone());
                             }
                         }
                         self.current_view = View::Transfer;

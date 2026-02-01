@@ -1,6 +1,5 @@
 use gpui::{App, AppContext as _, Entity};
 
-use crate::connection::get_connection_manager;
 use crate::state::{
     AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, StatusMessage, View,
 };
@@ -34,13 +33,11 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.drop_database(&client, &database)
-            }
+            async move { manager.drop_database(&client, &database) }
         });
 
         cx.spawn({
@@ -126,6 +123,8 @@ impl AppCommands {
             return;
         }
 
+        let manager = state.read(cx).connection_manager();
+
         state.update(cx, |state, cx| {
             let session = state.ensure_database_session(database_key.clone());
             session.data.stats_loading = true;
@@ -138,7 +137,6 @@ impl AppCommands {
         let task = cx.background_spawn({
             let database = database.clone();
             async move {
-                let manager = get_connection_manager();
                 let stats_result = manager
                     .database_stats(&client, &database)
                     .map(|doc| DatabaseStats::from_document(&doc));

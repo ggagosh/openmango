@@ -14,7 +14,7 @@ pub mod tools;
 pub mod types;
 
 // Re-export commonly used items at the crate level
-pub use manager::{ConnectionManager, get_connection_manager};
+pub use manager::ConnectionManager;
 pub use ops::export::generate_export_preview;
 pub use tools::tools_available;
 pub use types::{

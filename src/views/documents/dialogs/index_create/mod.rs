@@ -13,7 +13,6 @@ use mongodb::IndexModel;
 use mongodb::bson::{Bson, Document, to_bson};
 
 use crate::bson::{document_to_relaxed_extjson_string, parse_document_from_json};
-use crate::connection::get_connection_manager;
 use crate::state::{AppEvent, AppState, SessionKey};
 
 use key_rows::IndexKeyRow;
@@ -278,7 +277,7 @@ impl IndexCreateDialog {
     }
 
     fn load_sample_fields(&mut self, cx: &mut Context<Self>) {
-        let (client, database, collection) = {
+        let (client, database, collection, manager) = {
             let state_ref = self.state.read(cx);
             let conn_id = self.session_key.connection_id;
             let Some(conn) = state_ref.active_connection_by_id(conn_id) else {
@@ -289,6 +288,7 @@ impl IndexCreateDialog {
                 conn.client.clone(),
                 self.session_key.database.clone(),
                 self.session_key.collection.clone(),
+                state_ref.connection_manager(),
             )
         };
 
@@ -296,10 +296,7 @@ impl IndexCreateDialog {
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.sample_documents(&client, &database, &collection, SAMPLE_SIZE)
-            }
+            async move { manager.sample_documents(&client, &database, &collection, SAMPLE_SIZE) }
         });
 
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {

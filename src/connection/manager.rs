@@ -1,6 +1,5 @@
 //! Core ConnectionManager struct and basic connection methods.
 
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use mongodb::Client;
@@ -10,14 +9,6 @@ use tokio::runtime::Runtime;
 
 use crate::error::{Error, Result};
 use crate::models::SavedConnection;
-
-/// Global singleton connection manager
-static CONNECTION_MANAGER: LazyLock<ConnectionManager> = LazyLock::new(ConnectionManager::new);
-
-/// Get the global connection manager instance
-pub fn get_connection_manager() -> &'static ConnectionManager {
-    &CONNECTION_MANAGER
-}
 
 /// Manages MongoDB client connections with caching
 pub struct ConnectionManager {

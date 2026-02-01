@@ -2,7 +2,6 @@ use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
 use crate::bson::DocumentKey;
-use crate::connection::get_connection_manager;
 use crate::state::{AppEvent, AppState, SessionKey, StatusMessage};
 
 use crate::state::AppCommands;
@@ -36,13 +35,13 @@ impl AppCommands {
 
             (session_key.database.clone(), session_key.collection.clone(), id.clone(), index)
         };
+        let manager = state.read(cx).connection_manager();
 
         let updated_for_task = updated.clone();
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             async move {
-                let manager = get_connection_manager();
                 manager.replace_document(
                     &client,
                     &database,
@@ -129,13 +128,13 @@ impl AppCommands {
             });
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             let update = update.clone();
             async move {
-                let manager = get_connection_manager();
                 manager.update_one(&client, &database, &collection, doc! { "_id": id }, update)
             }
         });

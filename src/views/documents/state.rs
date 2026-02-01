@@ -336,7 +336,7 @@ impl CollectionView {
                     })
                     .unwrap_or(false);
                 if this.view_model.set_current_session(next_session.clone(), &state, cx) {
-                    if let Some(session) = next_session {
+                    if let Some(session) = next_session.clone() {
                         if should_load {
                             AppCommands::load_documents_for_session(state.clone(), session, cx);
                         } else {
@@ -345,6 +345,10 @@ impl CollectionView {
                     }
                     this.update_search_results(cx);
                     cx.notify();
+                }
+                // Ensure subview-specific data is loaded (indexes/stats)
+                if let Some(session_key) = next_session {
+                    this.ensure_subview_data_loaded(&session_key, &state, cx);
                 }
             }
             AppEvent::DocumentsLoaded { session, .. } => {
@@ -427,6 +431,44 @@ impl CollectionView {
             aggregation_stage_body_subscription: None,
             aggregation_limit_subscription: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Ensure subview-specific data is loaded (indexes/stats) based on current subview.
+    /// This replaces the logic that was previously in render().
+    fn ensure_subview_data_loaded(
+        &self,
+        session_key: &SessionKey,
+        state: &Entity<AppState>,
+        cx: &mut App,
+    ) {
+        let state_ref = state.read(cx);
+        let Some(snapshot) = state_ref.session_snapshot(session_key) else {
+            return;
+        };
+
+        let subview = snapshot.subview;
+        let indexes = snapshot.indexes;
+        let indexes_loading = snapshot.indexes_loading;
+        let indexes_error = snapshot.indexes_error;
+        let stats = snapshot.stats;
+        let stats_loading = snapshot.stats_loading;
+        let stats_error = snapshot.stats_error;
+
+        if subview == CollectionSubview::Indexes
+            && indexes.is_none()
+            && !indexes_loading
+            && indexes_error.is_none()
+        {
+            AppCommands::load_collection_indexes(state.clone(), session_key.clone(), false, cx);
+        }
+
+        if subview == CollectionSubview::Stats
+            && stats.is_none()
+            && !stats_loading
+            && stats_error.is_none()
+        {
+            AppCommands::load_collection_stats(state.clone(), session_key.clone(), cx);
         }
     }
 

@@ -169,7 +169,7 @@ impl AppState {
             AppEvent::DatabaseTransferStarted { transfer_id, collections } => {
                 // Initialize database progress tracking
                 if let Some(tab) = self.transfer_tab_mut(*transfer_id) {
-                    tab.database_progress = Some(DatabaseTransferProgress {
+                    tab.runtime.database_progress = Some(DatabaseTransferProgress {
                         collections: collections
                             .iter()
                             .map(|name| CollectionProgress {
@@ -193,14 +193,14 @@ impl AppState {
                 // Update collection progress (or add if not exists for BSON exports)
                 if let Some(tab) = self.transfer_tab_mut(*transfer_id) {
                     // Initialize database_progress if not set (for BSON exports that start empty)
-                    if tab.database_progress.is_none() {
-                        tab.database_progress = Some(DatabaseTransferProgress {
+                    if tab.runtime.database_progress.is_none() {
+                        tab.runtime.database_progress = Some(DatabaseTransferProgress {
                             collections: vec![],
                             panel_expanded: true,
                         });
                     }
 
-                    if let Some(ref mut db_progress) = tab.database_progress {
+                    if let Some(ref mut db_progress) = tab.runtime.database_progress {
                         // Find existing collection or add new one
                         if let Some(coll) =
                             db_progress.collections.iter_mut().find(|c| c.name == *collection_name)

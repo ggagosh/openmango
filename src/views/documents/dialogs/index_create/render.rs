@@ -4,9 +4,9 @@ use gpui::*;
 use gpui_component::input::{Input, NumberInput};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::switch::Switch;
-use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_component::{Disableable as _, Icon, IconName, Sizable as _};
 
-use crate::components::Button;
+use crate::components::{Button, cancel_button};
 use crate::state::AppCommands;
 use crate::theme::{colors, spacing};
 use crate::views::documents::dialogs::shared::styled_dropdown_button;
@@ -370,11 +370,7 @@ impl Render for IndexCreateDialog {
                     .flex()
                     .items_center()
                     .gap(spacing::sm())
-                    .child(Button::new("cancel-index").label("Cancel").on_click(
-                        |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                            window.close_dialog(cx);
-                        },
-                    ))
+                    .child(cancel_button("cancel-index"))
                     .child({
                         let label = if is_edit { "Save & Replace" } else { "Create" };
                         Button::new("create-index")

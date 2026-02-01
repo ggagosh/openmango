@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::connection::{
     BsonToolProgress, CsvImportOptions, FileEncoding, InsertMode, JsonImportOptions,
-    JsonTransferFormat, get_connection_manager,
+    JsonTransferFormat,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
@@ -100,9 +100,9 @@ impl AppCommands {
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.is_running = true;
-                tab.progress_count = 0;
-                tab.error_message = None;
+                tab.runtime.is_running = true;
+                tab.runtime.progress_count = 0;
+                tab.runtime.error_message = None;
             }
             state.set_status_message(Some(StatusMessage::info("Importing...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -146,7 +146,7 @@ impl AppCommands {
                             "Connection URI not available",
                         )));
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                            tab.is_running = false;
+                            tab.runtime.is_running = false;
                         }
                         cx.notify();
                     });
@@ -168,8 +168,8 @@ impl AppCommands {
         // Fallback for unexpected cases
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.is_running = false;
-                tab.error_message = Some("Unexpected import configuration".to_string());
+                tab.runtime.is_running = false;
+                tab.runtime.error_message = Some("Unexpected import configuration".to_string());
             }
             cx.notify();
         });
@@ -187,11 +187,11 @@ impl AppCommands {
     ) {
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that runs mongorestore with progress parsing
         cx.background_spawn({
             async move {
-                let manager = get_connection_manager();
-
                 // Send a placeholder started message
                 let _ = tx.unbounded_send(TransferProgressMessage::Started {
                     collections: vec![], // Will be discovered during import
@@ -300,8 +300,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = total_count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = total_count;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -319,8 +319,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "BSON import failed: {error}"
@@ -363,11 +363,11 @@ impl AppCommands {
         // Create channel for progress updates from background thread
         let (tx, rx) = mpsc::unbounded::<CollectionProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             async move {
-                let manager = get_connection_manager();
-
                 // Drop or clear collection before import if requested
                 if drop_before {
                     let _ = manager.drop_collection(&client, &database, &collection);
@@ -468,13 +468,13 @@ impl AppCommands {
                             match msg {
                                 CollectionProgressMessage::Progress(processed) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.progress_count = processed;
+                                        tab.runtime.progress_count = processed;
                                     }
                                 }
                                 CollectionProgressMessage::Completed(count) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = count;
                                     }
                                     let message = format!(
                                         "Imported {} document{}",
@@ -486,8 +486,8 @@ impl AppCommands {
                                 }
                                 CollectionProgressMessage::Failed(error) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "Import failed: {error}"

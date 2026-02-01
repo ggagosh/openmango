@@ -35,7 +35,7 @@ pub(super) fn render_progress_panel(
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 state.update(cx, |state, cx| {
                     if let Some(tab) = state.transfer_tab_mut(transfer_id)
-                        && let Some(ref mut db_progress) = tab.database_progress
+                        && let Some(ref mut db_progress) = tab.runtime.database_progress
                     {
                         db_progress.panel_expanded = !db_progress.panel_expanded;
                     }
@@ -169,14 +169,14 @@ pub(super) fn render_warnings(transfer_state: &TransferTabState) -> impl IntoEle
     let mut warnings = Vec::new();
 
     // Only show format warnings for Export/Import modes (not Copy)
-    if matches!(transfer_state.mode, TransferMode::Export | TransferMode::Import) {
+    if matches!(transfer_state.config.mode, TransferMode::Export | TransferMode::Import) {
         // CSV warning
-        if matches!(transfer_state.format, TransferFormat::Csv) {
+        if matches!(transfer_state.config.format, TransferFormat::Csv) {
             warnings.push("CSV export will lose BSON type fidelity (dates, ObjectIds, etc.)");
         }
 
         // BSON warning - only show if tools are NOT available
-        if matches!(transfer_state.format, TransferFormat::Bson) && !tools_available() {
+        if matches!(transfer_state.config.format, TransferFormat::Bson) && !tools_available() {
             warnings.push("BSON format requires mongodump/mongorestore. Run: just download-tools");
         }
     }

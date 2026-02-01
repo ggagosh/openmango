@@ -2,7 +2,6 @@ use chrono::Utc;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::connection::get_connection_manager;
 use crate::models::ActiveConnection;
 use crate::state::{AppEvent, AppState, StatusMessage, View};
 
@@ -11,10 +10,11 @@ use super::AppCommands;
 impl AppCommands {
     /// Connect to a saved connection by ID.
     pub fn connect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
-        // Find the connection config
-        let saved = {
+        // Find the connection config and get the manager
+        let (saved, manager) = {
             let state = state.read(cx);
-            state.connections.iter().find(|c| c.id == connection_id).cloned()
+            let saved = state.connections.iter().find(|c| c.id == connection_id).cloned();
+            (saved, state.connection_manager())
         };
 
         let Some(saved) = saved else {
@@ -35,8 +35,6 @@ impl AppCommands {
         let task = cx.background_spawn({
             let saved = saved.clone();
             async move {
-                let manager = get_connection_manager();
-
                 // Connect (blocking, runs in Tokio runtime internally)
                 let client = manager.connect(&saved)?;
 
@@ -121,11 +119,9 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, connection_id, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
-        let task = cx.background_spawn(async move {
-            let manager = get_connection_manager();
-            manager.list_databases(&client)
-        });
+        let task = cx.background_spawn(async move { manager.list_databases(&client) });
 
         cx.spawn({
             let state = state.clone();

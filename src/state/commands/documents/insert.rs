@@ -1,7 +1,6 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
-use crate::connection::get_connection_manager;
 use crate::state::{AppEvent, AppState, SessionKey};
 
 use crate::state::AppCommands;
@@ -22,15 +21,13 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             let document = document.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.insert_document(&client, &database, &collection, document)
-            }
+            async move { manager.insert_document(&client, &database, &collection, document) }
         });
 
         cx.spawn({

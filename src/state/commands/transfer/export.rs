@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::bson::parse_document_from_json;
 use crate::connection::{
     BsonOutputFormat as MongoBsonOutputFormat, BsonToolProgress, ExportQueryOptions,
-    ExtendedJsonMode, JsonExportOptions, get_connection_manager,
+    ExtendedJsonMode, JsonExportOptions,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
@@ -93,10 +93,10 @@ impl AppCommands {
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.is_running = true;
-                tab.progress_count = 0;
-                tab.error_message = None;
-                tab.database_progress = None; // Reset on new export
+                tab.runtime.is_running = true;
+                tab.runtime.progress_count = 0;
+                tab.runtime.error_message = None;
+                tab.runtime.database_progress = None; // Reset on new export
             }
             state.set_status_message(Some(StatusMessage::info("Exporting...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -183,8 +183,8 @@ impl AppCommands {
         // Fallback for unexpected cases
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                tab.is_running = false;
-                tab.error_message = Some("Unexpected export configuration".to_string());
+                tab.runtime.is_running = false;
+                tab.runtime.error_message = Some("Unexpected export configuration".to_string());
             }
             cx.notify();
         });
@@ -209,11 +209,12 @@ impl AppCommands {
         // Create channel for progress updates from background thread
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             let exclude_set: HashSet<String> = exclude_collections.iter().cloned().collect();
             async move {
-                let manager = get_connection_manager();
 
                 // Get collection list
                 let collections = match manager.list_collection_names(&client, &database) {
@@ -253,6 +254,7 @@ impl AppCommands {
                             let database = database.clone();
                             let path = path.clone();
                             let handle = runtime_handle.clone();
+                            let manager = manager.clone();
 
                             async move {
                                 // Send InProgress status
@@ -284,7 +286,6 @@ impl AppCommands {
                                 let coll_name_for_task = collection_name.clone();
                                 let result = handle
                                     .spawn_blocking(move || {
-                                        let manager = get_connection_manager();
                                         match format {
                                             TransferFormat::JsonLines
                                             | TransferFormat::JsonArray => {
@@ -356,10 +357,13 @@ impl AppCommands {
                 // Calculate totals
                 let mut total_count = 0u64;
                 let mut had_error = false;
-                for (_, result) in &results {
+                for (collection, result) in &results {
                     match result {
                         Ok(count) => total_count += count,
-                        Err(_) => had_error = true,
+                        Err(e) => {
+                            log::error!("Export failed for collection {collection}: {e}");
+                            had_error = true;
+                        }
                     }
                 }
 
@@ -420,8 +424,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = total_count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = total_count;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -439,8 +443,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "Export failed: {error}"
@@ -474,11 +478,11 @@ impl AppCommands {
     ) {
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that runs mongodump with progress parsing
         cx.background_spawn({
             async move {
-                let manager = get_connection_manager();
-
                 // We don't know collection list upfront for BSON, but we'll discover them
                 // Send a placeholder started message
                 let _ = tx.unbounded_send(TransferProgressMessage::Started {
@@ -589,8 +593,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = total_count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = total_count;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -608,8 +612,8 @@ impl AppCommands {
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "BSON export failed: {error}"
@@ -674,16 +678,15 @@ impl AppCommands {
             None
         };
 
+        let manager = state.read(cx).connection_manager();
+
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             async move {
-                let manager = get_connection_manager();
                 let runtime_handle = manager.runtime_handle();
 
                 let result = runtime_handle
                     .spawn_blocking(move || {
-                        let manager = get_connection_manager();
-
                         match format {
                             TransferFormat::JsonLines | TransferFormat::JsonArray => {
                                 let json_options = JsonExportOptions {
@@ -781,13 +784,13 @@ impl AppCommands {
                             match msg {
                                 CollectionProgressMessage::Progress(count) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.progress_count = count;
+                                        tab.runtime.progress_count = count;
                                     }
                                 }
                                 CollectionProgressMessage::Completed(count) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.progress_count = count;
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.progress_count = count;
                                     }
                                     state.set_status_message(Some(StatusMessage::info(format!(
                                         "Exported {count} documents"
@@ -796,8 +799,8 @@ impl AppCommands {
                                 }
                                 CollectionProgressMessage::Failed(error) => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                        tab.is_running = false;
-                                        tab.error_message = Some(error.clone());
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
                                         "Export failed: {error}"

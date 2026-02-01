@@ -31,6 +31,7 @@ use std::sync::{Arc, atomic::AtomicU64};
 
 use gpui::EventEmitter;
 
+use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::StatusMessage;
 use crate::state::events::AppEvent;
@@ -44,6 +45,9 @@ pub struct AppState {
     // Persisted state
     pub connections: Vec<SavedConnection>,
     pub settings: AppSettings,
+
+    // Connection manager (injected for testability)
+    connection_manager: Arc<ConnectionManager>,
 
     // Organized sub-states
     conn: ConnectionState,
@@ -71,6 +75,11 @@ pub struct AppState {
 impl AppState {
     /// Create new AppState, loading persisted data from disk
     pub fn new() -> Self {
+        Self::with_connection_manager(Arc::new(ConnectionManager::new()))
+    }
+
+    /// Create new AppState with a custom ConnectionManager (for testing)
+    pub fn with_connection_manager(connection_manager: Arc<ConnectionManager>) -> Self {
         let config = ConfigManager::default();
 
         // Load saved connections
@@ -92,6 +101,7 @@ impl AppState {
         Self {
             connections,
             settings,
+            connection_manager,
             conn: ConnectionState::default(),
             tabs: TabState::default(),
             sessions: SessionStore::new(),
@@ -105,6 +115,11 @@ impl AppState {
             workspace_restore_pending,
             aggregation_workspace_save_gen,
         }
+    }
+
+    /// Get the connection manager
+    pub fn connection_manager(&self) -> Arc<ConnectionManager> {
+        self.connection_manager.clone()
     }
 
     pub fn status_message(&self) -> Option<StatusMessage> {

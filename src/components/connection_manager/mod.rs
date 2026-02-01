@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::state::AppState;
 
 mod actions;
+mod connection_list;
 mod state;
+mod tabs;
 mod uri;
 mod view;
 

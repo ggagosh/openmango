@@ -208,9 +208,9 @@ pub(super) fn render_query_field_row(
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
                             match field {
-                                QueryEditField::Filter => tab.export_filter.clear(),
-                                QueryEditField::Projection => tab.export_projection.clear(),
-                                QueryEditField::Sort => tab.export_sort.clear(),
+                                QueryEditField::Filter => tab.options.export_filter.clear(),
+                                QueryEditField::Projection => tab.options.export_projection.clear(),
+                                QueryEditField::Sort => tab.options.export_sort.clear(),
                             }
                             cx.notify();
                         }

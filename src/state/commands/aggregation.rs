@@ -9,7 +9,7 @@ use std::time::Instant;
 use gpui::{App, AppContext as _, Entity};
 
 use crate::bson::parse_bson_from_relaxed_json;
-use crate::connection::{AggregatePipelineError, ConnectionManager, get_connection_manager};
+use crate::connection::{AggregatePipelineError, ConnectionManager};
 use crate::state::app_state::{PipelineStage, StageDocCounts, StageStatsMode};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey, StatusMessage};
 use mongodb::bson::{Bson, Document, doc};
@@ -153,6 +153,8 @@ impl AppCommands {
         let skip = if has_write_stage { 0 } else { results_page.saturating_mul(per_page as u64) };
         let skip_i64 = skip.min(i64::MAX as u64) as i64;
 
+        let manager = state.read(cx).connection_manager();
+
         let task = cx.background_spawn({
             let database_for_task = database.clone();
             let collection_for_task = collection.clone();
@@ -161,7 +163,6 @@ impl AppCommands {
             let stage_stats_mode_for_task = stage_stats_mode;
             let abort_handle_for_task = abort_handle.clone();
             async move {
-                let manager = get_connection_manager();
                 let ctx = AggregationRunContext {
                     manager,
                     client: &client,
@@ -339,7 +340,7 @@ impl From<crate::error::Error> for AggregationRunError {
 }
 
 struct AggregationRunContext<'a> {
-    manager: &'a ConnectionManager,
+    manager: std::sync::Arc<ConnectionManager>,
     client: &'a mongodb::Client,
     database: &'a str,
     collection: &'a str,

@@ -1,7 +1,6 @@
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::connection::get_connection_manager;
 use crate::state::{AppEvent, AppState, StatusMessage};
 
 use super::AppCommands;
@@ -24,14 +23,12 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.create_collection(&client, &database, &collection)
-            }
+            async move { manager.create_collection(&client, &database, &collection) }
         });
 
         cx.spawn({
@@ -110,15 +107,13 @@ impl AppCommands {
             return;
         };
         let connection_id = conn_id;
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let from = from.clone();
             let to = to.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.rename_collection(&client, &database, &from, &to)
-            }
+            async move { manager.rename_collection(&client, &database, &from, &to) }
         });
 
         cx.spawn({
@@ -205,14 +200,12 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.drop_collection(&client, &database, &collection)
-            }
+            async move { manager.drop_collection(&client, &database, &collection) }
         });
 
         cx.spawn({
@@ -273,14 +266,12 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, connection_id, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
 
         // Run blocking MongoDB operation in background thread
         let task = cx.background_spawn({
             let database = database.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.list_collections(&client, &database)
-            }
+            async move { manager.list_collections(&client, &database) }
         });
 
         // Handle result on main thread

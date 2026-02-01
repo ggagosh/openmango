@@ -8,7 +8,7 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
-use crate::components::{Button, open_confirm_dialog};
+use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::{colors, spacing};
 
@@ -442,11 +442,7 @@ impl Render for BulkUpdateDialog {
                             .flex()
                             .items_center()
                             .gap(spacing::sm())
-                            .child(Button::new("cancel-bulk-update").label("Cancel").on_click(
-                                |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    window.close_dialog(cx);
-                                },
-                            ))
+                            .child(cancel_button("cancel-bulk-update"))
                             .child(
                                 Button::new("apply-bulk-update")
                                     .primary()

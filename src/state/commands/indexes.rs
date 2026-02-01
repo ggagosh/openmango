@@ -1,7 +1,6 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::{IndexModel, bson::Document};
 
-use crate::connection::get_connection_manager;
 use crate::state::{AppEvent, AppState, SessionKey};
 
 use super::AppCommands;
@@ -19,6 +18,7 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let should_load = state.update(cx, |state, cx| {
             let session = state.ensure_session(session_key.clone());
@@ -41,10 +41,7 @@ impl AppCommands {
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.list_indexes(&client, &database, &collection)
-            }
+            async move { manager.list_indexes(&client, &database, &collection) }
         });
 
         cx.spawn({
@@ -100,15 +97,13 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             let index_name = index_name.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.drop_index(&client, &database, &collection, &index_name)
-            }
+            async move { manager.drop_index(&client, &database, &collection, &index_name) }
         });
 
         cx.spawn({
@@ -162,16 +157,14 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let index_name = index_doc.get_str("name").ok().map(|value| value.to_string());
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             let index_doc = index_doc.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.create_index(&client, &database, &collection, index_doc)
-            }
+            async move { manager.create_index(&client, &database, &collection, index_doc) }
         });
 
         cx.spawn({
@@ -232,6 +225,7 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let new_name = index_doc.get_str("name").ok().map(|value| value.to_string());
         let task = cx.background_spawn({
@@ -241,7 +235,6 @@ impl AppCommands {
             let new_name = new_name.clone();
             let index_doc = index_doc.clone();
             async move {
-                let manager = get_connection_manager();
                 if new_name.as_deref() == Some(old_name.as_str()) {
                     manager.drop_index(&client, &database, &collection, &old_name)?;
                     manager.create_index(&client, &database, &collection, index_doc)?;

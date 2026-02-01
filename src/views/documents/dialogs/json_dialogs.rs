@@ -4,7 +4,7 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
-use crate::components::Button;
+use crate::components::{Button, cancel_button};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::spacing;
 
@@ -117,12 +117,7 @@ impl CollectionView {
                                     }
                                 })
                                 .into_any_element(),
-                            Button::new("cancel-json")
-                                .label("Cancel")
-                                .on_click(|_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    window.close_dialog(cx);
-                                })
-                                .into_any_element(),
+                            cancel_button("cancel-json"),
                         ]
                     }
                 })
@@ -183,12 +178,7 @@ impl CollectionView {
                                     }
                                 })
                                 .into_any_element(),
-                            Button::new("cancel-insert")
-                                .label("Cancel")
-                                .on_click(|_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    window.close_dialog(cx);
-                                })
-                                .into_any_element(),
+                            cancel_button("cancel-insert"),
                             Button::new("confirm-insert")
                                 .primary()
                                 .label("Insert")

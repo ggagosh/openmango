@@ -104,7 +104,9 @@ impl ConnectionManager {
                                     }
                                 }
                                 Err(e) if options.stop_on_error => return Err(e),
-                                Err(_) => {}
+                                Err(e) => {
+                                    log::warn!("Import batch error (continuing): {e}");
+                                }
                             }
                             batch.clear();
                         }
@@ -128,7 +130,9 @@ impl ConnectionManager {
                                 }
                             }
                             Err(e) if options.stop_on_error => return Err(e),
-                            Err(_) => {}
+                            Err(e) => {
+                                log::warn!("Import batch error (continuing): {e}");
+                            }
                         }
                     }
                 }
@@ -177,7 +181,9 @@ impl ConnectionManager {
                                 }
                             }
                             Err(e) if options.stop_on_error => return Err(e),
-                            Err(_) => {}
+                            Err(e) => {
+                                log::warn!("Import batch error (continuing): {e}");
+                            }
                         }
                     }
                 }
@@ -260,7 +266,9 @@ impl ConnectionManager {
                             }
                         }
                         Err(e) if options.stop_on_error => return Err(e),
-                        Err(_) => {}
+                        Err(e) => {
+                            log::warn!("Import batch error (continuing): {e}");
+                        }
                     }
                     batch.clear();
                 }
@@ -280,7 +288,9 @@ impl ConnectionManager {
                         }
                     }
                     Err(e) if options.stop_on_error => return Err(e),
-                    Err(_) => {}
+                    Err(e) => {
+                        log::warn!("Import batch error (continuing): {e}");
+                    }
                 }
             }
 

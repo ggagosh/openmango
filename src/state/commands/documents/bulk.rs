@@ -1,7 +1,6 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
-use crate::connection::get_connection_manager;
 use crate::state::AppCommands;
 use crate::state::{AppEvent, AppState, SessionKey};
 
@@ -22,14 +21,12 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.insert_documents(&client, &database, &collection, documents)
-            }
+            async move { manager.insert_documents(&client, &database, &collection, documents) }
         });
 
         cx.spawn({
@@ -83,15 +80,13 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
             let update = update.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.update_many(&client, &database, &collection, filter, update)
-            }
+            async move { manager.update_many(&client, &database, &collection, filter, update) }
         });
 
         cx.spawn({
@@ -152,14 +147,12 @@ impl AppCommands {
         };
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
+        let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move {
-                let manager = get_connection_manager();
-                manager.delete_documents(&client, &database, &collection, filter)
-            }
+            async move { manager.delete_documents(&client, &database, &collection, filter) }
         });
 
         cx.spawn({
