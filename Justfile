@@ -27,9 +27,6 @@ check:
 build:
     cargo build
 
-forge-editor:
-    ./scripts/build_forge_editor.sh
-
 release:
     cargo build --release --features mimalloc
 
