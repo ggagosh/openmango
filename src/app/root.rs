@@ -7,7 +7,7 @@ use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, EditConnection, NewConnection, NextTab,
-    OpenActionBar, OpenSettings, PrevTab, QuitApp, RefreshView,
+    OpenActionBar, OpenForge, OpenSettings, PrevTab, QuitApp, RefreshView,
 };
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, colors, spacing};
@@ -99,6 +99,7 @@ impl Render for AppRoot {
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => key_context.push_str(" Transfer"),
+            View::Forge => key_context.push_str(" Forge"),
             View::Welcome => key_context.push_str(" Welcome"),
             View::Settings => key_context.push_str(" Settings"),
         }
@@ -234,12 +235,19 @@ impl Render for AppRoot {
                     state.open_settings_tab(cx);
                 });
             }))
+            .on_action(cx.listener(|this, _: &OpenForge, _window, cx| {
+                this.state.update(cx, |state, cx| {
+                    let Some(key) = state.current_database_key() else {
+                        return;
+                    };
+                    state.open_forge_tab(key.connection_id, key.database, cx);
+                });
+            }))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
-                    .overflow_hidden()
                     .child(self.sidebar.clone())
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )

@@ -11,8 +11,9 @@ mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 gpui = "0.2.2"
-gpui-component = "0.5"
+gpui-component = { version = "0.5", features = ["webview", "tree-sitter-languages"] }
 gpui-component-assets = "0.5"
+lsp-types = "0.97"
 mongodb = "3.5"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -29,6 +30,8 @@ log = "0.4"
 env_logger = "0.11"
 mimalloc = { version = "0.1", optional = true }
 rust-embed = "8.11"
+raw-window-handle = "0.6"
+ropey = "2.0.0-beta.1"
 
 futures = "0.3"
 dashmap = "6.1"
@@ -38,6 +41,7 @@ csv = "1.4"
 which = "8.0"
 flate2 = "1.1"
 encoding_rs = "0.8"
+unicode-segmentation = "1.11"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = [
@@ -53,3 +57,6 @@ opt-level = 1
 [profile.release]
 opt-level = 3
 lto = true
+
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }

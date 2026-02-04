@@ -98,7 +98,7 @@ impl AppRoot {
                                 cx.stop_propagation();
                             }
                         }
-                        View::Transfer | View::Settings => {}
+                        View::Transfer | View::Forge | View::Settings => {}
                         View::Welcome | View::Databases | View::Collections => {
                             ConnectionDialog::open(this.state.clone(), window, cx);
                             cx.stop_propagation();
@@ -388,7 +388,7 @@ impl AppRoot {
                 };
                 AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
             }
-            View::Transfer | View::Settings => {}
+            View::Transfer | View::Forge | View::Settings => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

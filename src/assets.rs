@@ -10,6 +10,9 @@ use rust_embed::RustEmbed;
 #[include = "logo/**/*.png"]
 #[include = "fonts/**/*.ttf"]
 #[include = "fonts/**/*.otf"]
+#[include = "forge/**/*.html"]
+#[include = "forge/**/*.css"]
+#[include = "forge/**/*.js"]
 pub struct EmbeddedAssets;
 
 pub struct Assets;

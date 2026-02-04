@@ -236,6 +236,21 @@ impl AppState {
                     subview: CollectionSubview::Documents,
                 }
             }
+            TabKey::Forge(key) => {
+                // Forge tabs are not persisted in workspace yet
+                WorkspaceTab {
+                    database: key.database.clone(),
+                    collection: String::new(),
+                    kind: WorkspaceTabKind::Database, // Placeholder, won't be saved
+                    transfer: None,
+                    filter_raw: String::new(),
+                    sort_raw: String::new(),
+                    projection_raw: String::new(),
+                    aggregation_pipeline: Vec::new(),
+                    stats_open: false,
+                    subview: CollectionSubview::Documents,
+                }
+            }
             TabKey::Settings => {
                 // Settings tab is not persisted in workspace
                 WorkspaceTab {
@@ -278,6 +293,10 @@ impl AppState {
                                 Some(transfer.config.source_collection.clone());
                         }
                     }
+                }
+                TabKey::Forge(key) => {
+                    self.workspace.selected_database = Some(key.database.clone());
+                    self.workspace.selected_collection = None;
                 }
                 TabKey::Settings => {
                     // Settings tab doesn't affect selection

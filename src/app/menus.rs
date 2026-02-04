@@ -6,16 +6,39 @@ use uuid::Uuid;
 use crate::components::{ConnectionManager, TreeNodeId, open_confirm_dialog};
 use crate::keyboard::{
     CopyConnectionUri, CopySelectionName, CopyTreeItem, CreateCollection, DeleteSelection,
-    DisconnectConnection, EditConnection, OpenSelection, PasteTreeItem, RefreshView,
+    DisconnectConnection, EditConnection, OpenForge, OpenSelection, PasteTreeItem, RefreshView,
     RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::state::{
-    AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
+    AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope, View,
 };
 use crate::theme::{colors, spacing};
 
 use super::dialogs::{open_create_collection_dialog, open_rename_collection_dialog};
 use super::sidebar::Sidebar;
+
+fn maybe_occlude_webview(
+    state: &Entity<AppState>,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) {
+    if !matches!(state.read(cx).current_view, View::Forge) {
+        return;
+    }
+
+    let menu_entity = cx.entity();
+    let state_for_dismiss = state.clone();
+    let subscription =
+        window.subscribe(&menu_entity, cx, move |_, _: &DismissEvent, _window, cx| {
+            state_for_dismiss.update(cx, |state, cx| {
+                state.set_webview_occluded(false, None, cx);
+            });
+        });
+
+    state.update(cx, |state, cx| {
+        state.set_webview_occluded(true, Some(subscription), cx);
+    });
+}
 
 pub(crate) fn build_connection_menu(
     mut menu: PopupMenu,
@@ -23,8 +46,10 @@ pub(crate) fn build_connection_menu(
     sidebar: Entity<Sidebar>,
     connection_id: Uuid,
     connecting_id: Option<Uuid>,
+    window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    maybe_occlude_webview(&state, window, cx);
     let is_connected = state.read(cx).is_connected(connection_id);
     let is_connecting = connecting_id == Some(connection_id);
 
@@ -125,6 +150,7 @@ fn menu_item_with_shortcut(label: &'static str, shortcut: &'static str) -> Popup
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_database_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
@@ -132,8 +158,10 @@ pub(crate) fn build_database_menu(
     node_id: TreeNodeId,
     database: String,
     is_loading: bool,
+    window: &mut Window,
     _cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    maybe_occlude_webview(&state, window, _cx);
     let database_for_select = database.clone();
     let database_for_create = database.clone();
     let database_for_refresh = database.clone();
@@ -141,6 +169,7 @@ pub(crate) fn build_database_menu(
     let database_for_export = database.clone();
     let database_for_import = database.clone();
     let database_for_transfer_copy = database.clone();
+    let database_for_forge = database.clone();
     let database_for_copy = database;
 
     menu = menu
@@ -154,6 +183,20 @@ pub(crate) fn build_database_menu(
                 });
             }
         }))
+        .item(
+            menu_item_with_shortcut("Open Forge", "Cmd+Alt+F")
+                .on_click({
+                    let state = state.clone();
+                    let connection_id = node_id.connection_id();
+                    let database = database_for_forge.clone();
+                    move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_forge_tab(connection_id, database.clone(), cx);
+                        });
+                    }
+                })
+                .action(Box::new(OpenForge)),
+        )
         .item(
             PopupMenuItem::new("Create Collection...").action(Box::new(CreateCollection)).on_click(
                 {
@@ -352,6 +395,7 @@ pub(crate) fn build_database_menu(
     menu
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_collection_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
@@ -359,8 +403,10 @@ pub(crate) fn build_collection_menu(
     database: String,
     collection: String,
     label: String,
+    window: &mut Window,
     _cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    maybe_occlude_webview(&state, window, _cx);
     let label_for_copy = label.clone();
     let database_for_copy = database.clone();
     let collection_for_copy = collection.clone();
@@ -378,6 +424,19 @@ pub(crate) fn build_collection_menu(
                 });
             }
         }))
+        .item(
+            menu_item_with_shortcut("Open Forge", "Cmd+Alt+F")
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_forge_tab(connection_id, database.clone(), cx);
+                        });
+                    }
+                })
+                .action(Box::new(OpenForge)),
+        )
         .item(
             PopupMenuItem::new("Rename Collection...").action(Box::new(RenameCollection)).on_click(
                 {

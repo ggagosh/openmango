@@ -605,7 +605,7 @@ impl Render for Sidebar {
                                             let menu_node_id = node_id.clone();
                                             let state = state_clone.clone();
                                             let sidebar_entity = sidebar_entity.clone();
-                                            move |menu, _window, cx| {
+                                            move |menu, window, cx| {
                                                 let menu = menu.action_context(menu_focus.clone());
                                                 match menu_node_id.clone() {
                                                     TreeNodeId::Connection(connection_id) => {
@@ -615,6 +615,7 @@ impl Render for Sidebar {
                                                             sidebar_entity.clone(),
                                                             connection_id,
                                                             connecting_id,
+                                                            window,
                                                             cx,
                                                         )
                                                     }
@@ -633,6 +634,7 @@ impl Render for Sidebar {
                                                             node_id,
                                                             database.clone(),
                                                             is_loading_db,
+                                                            window,
                                                             cx,
                                                         )
                                                     }
@@ -647,6 +649,7 @@ impl Render for Sidebar {
                                                         database.clone(),
                                                         collection.clone(),
                                                         label_for_menu.clone(),
+                                                        window,
                                                         cx,
                                                     ),
                                                 }

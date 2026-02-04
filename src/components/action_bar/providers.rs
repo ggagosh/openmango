@@ -80,6 +80,12 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.transfer_tab_label(key.id), conn_name)
             }
+            TabKey::Forge(key) => {
+                let conn_name = state
+                    .connection_name(key.connection_id)
+                    .unwrap_or_else(|| "Connection".to_string());
+                (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
+            }
             TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
         };
 

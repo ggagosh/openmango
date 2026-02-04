@@ -106,6 +106,12 @@ impl AppState {
                         }
                         self.current_view = View::Transfer;
                     }
+                    TabKey::Forge(key) => {
+                        self.conn.selected_connection = Some(connection_id);
+                        self.conn.selected_database = Some(key.database.clone());
+                        self.conn.selected_collection = None;
+                        self.current_view = View::Forge;
+                    }
                     TabKey::Settings => {
                         self.current_view = View::Settings;
                     }

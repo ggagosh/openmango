@@ -37,21 +37,26 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources/bin"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-# Bundle MongoDB tools if available
-TOOLS_DIR="$ROOT_DIR/resources/bin/$ARCH_SUFFIX"
-if [[ -d "$TOOLS_DIR" ]]; then
-    if [[ -f "$TOOLS_DIR/mongodump" ]]; then
-        cp "$TOOLS_DIR/mongodump" "$APP_DIR/Contents/Resources/bin/"
+# Bundle external tools/runtime if available
+BIN_DIR="$ROOT_DIR/resources/bin/$ARCH_SUFFIX"
+if [[ -d "$BIN_DIR" ]]; then
+    if [[ -f "$BIN_DIR/mongodump" ]]; then
+        cp "$BIN_DIR/mongodump" "$APP_DIR/Contents/Resources/bin/"
         chmod +x "$APP_DIR/Contents/Resources/bin/mongodump"
     fi
-    if [[ -f "$TOOLS_DIR/mongorestore" ]]; then
-        cp "$TOOLS_DIR/mongorestore" "$APP_DIR/Contents/Resources/bin/"
+    if [[ -f "$BIN_DIR/mongorestore" ]]; then
+        cp "$BIN_DIR/mongorestore" "$APP_DIR/Contents/Resources/bin/"
         chmod +x "$APP_DIR/Contents/Resources/bin/mongorestore"
     fi
-    echo "Bundled MongoDB tools from $TOOLS_DIR"
+    if [[ -f "$BIN_DIR/node" ]]; then
+        cp "$BIN_DIR/node" "$APP_DIR/Contents/Resources/bin/"
+        chmod +x "$APP_DIR/Contents/Resources/bin/node"
+    fi
+    echo "Bundled tools from $BIN_DIR"
 else
-    echo "Warning: MongoDB tools not found at $TOOLS_DIR"
+    echo "Warning: bundled tools not found at $BIN_DIR"
     echo "BSON export/import will require system-installed tools"
+    echo "Forge shell will require a system Node runtime"
 fi
 
 # Copy third-party notices (required for bundled tools attribution)
@@ -111,6 +116,9 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     fi
     if [[ -f "$APP_DIR/Contents/Resources/bin/mongorestore" ]]; then
         codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongorestore"
+    fi
+    if [[ -f "$APP_DIR/Contents/Resources/bin/node" ]]; then
+        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/node"
     fi
     # Sign the main app bundle
     codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"

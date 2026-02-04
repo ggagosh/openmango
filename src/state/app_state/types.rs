@@ -24,6 +24,7 @@ pub enum View {
     Documents,
     Database,
     Transfer,
+    Forge,
     Settings,
 }
 
@@ -90,6 +91,7 @@ pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
     Transfer(TransferTabKey),
+    Forge(ForgeTabKey),
     Settings,
 }
 
@@ -273,6 +275,35 @@ impl Encoding {
 pub struct TransferTabKey {
     pub id: Uuid,
     pub connection_id: Option<Uuid>,
+}
+
+// ============================================================================
+// Forge Tab Types - Query Shell
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ForgeTabKey {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub database: String,
+}
+
+/// Default content for a Forge query shell tab.
+pub const DEFAULT_FORGE_CONTENT: &str = "// MongoDB Shell\ndb.";
+
+/// State for a Forge query shell tab
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ForgeTabState {
+    pub content: String,
+    pub is_running: bool,
+    pub error: Option<String>,
+}
+
+impl Default for ForgeTabState {
+    fn default() -> Self {
+        Self { content: DEFAULT_FORGE_CONTENT.to_string(), is_running: false, error: None }
+    }
 }
 
 // ============================================================================

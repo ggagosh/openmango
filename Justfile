@@ -27,6 +27,9 @@ check:
 build:
     cargo build
 
+forge-editor:
+    ./scripts/build_forge_editor.sh
+
 release:
     cargo build --release --features mimalloc
 
@@ -59,3 +62,7 @@ precommit: ci test
 # Download MongoDB tools for BSON export/import support
 download-tools:
     ./scripts/download_tools.sh
+
+# Download Node.js runtime for Forge (mongosh sidecar)
+download-node:
+    ./scripts/download_node.sh

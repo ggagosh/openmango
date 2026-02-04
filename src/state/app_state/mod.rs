@@ -3,6 +3,7 @@
 mod aggregation;
 mod connection;
 mod database_sessions;
+mod forge;
 mod selection;
 mod sessions;
 mod status;
@@ -21,15 +22,15 @@ pub use types::{
     ActiveTab, BsonOutputFormat, CollectionOverview, CollectionProgress, CollectionStats,
     CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem, DatabaseKey,
     DatabaseSessionData, DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, Encoding,
-    ExtendedJsonMode, InsertMode, SessionData, SessionDocument, SessionKey, SessionState,
-    SessionViewState, TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey,
-    TransferTabState, View,
+    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicU64};
 
-use gpui::EventEmitter;
+use gpui::{Context, EventEmitter, Subscription};
 
 use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
@@ -55,10 +56,13 @@ pub struct AppState {
     sessions: SessionStore,
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
+    forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
 
     // View state
     pub current_view: View,
     status_message: Option<StatusMessage>,
+    webview_occluded: bool,
+    webview_occlusion_sub: Option<Subscription>,
 
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
@@ -107,8 +111,11 @@ impl AppState {
             sessions: SessionStore::new(),
             db_sessions: DatabaseSessionStore::new(),
             transfer_tabs: HashMap::new(),
+            forge_tabs: HashMap::new(),
             current_view: View::Welcome,
             status_message: None,
+            webview_occluded: false,
+            webview_occlusion_sub: None,
             copied_tree_item: None,
             config,
             workspace,
@@ -139,6 +146,23 @@ impl AppState {
         if let Err(e) = self.config.save_settings(&self.settings) {
             log::error!("Failed to save settings: {}", e);
         }
+    }
+
+    pub fn set_webview_occluded(
+        &mut self,
+        occluded: bool,
+        subscription: Option<Subscription>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.webview_occluded == occluded {
+            if subscription.is_some() {
+                self.webview_occlusion_sub = subscription;
+            }
+            return;
+        }
+        self.webview_occluded = occluded;
+        self.webview_occlusion_sub = subscription;
+        cx.emit(AppEvent::ViewChanged);
     }
 }
 

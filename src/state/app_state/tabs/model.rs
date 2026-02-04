@@ -9,8 +9,8 @@ use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
 use crate::state::app_state::types::{
-    ActiveTab, DatabaseKey, SessionKey, TabKey, TransferMode, TransferScope, TransferTabKey,
-    TransferTabState, View,
+    ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey, TabKey, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -398,6 +398,54 @@ impl AppState {
         cx.notify();
     }
 
+    /// Open a Forge query shell tab for a database
+    pub fn open_forge_tab(
+        &mut self,
+        connection_id: Uuid,
+        database: String,
+        cx: &mut Context<Self>,
+    ) {
+        // Check if a Forge tab for this database already exists
+        let existing_index = self.tabs.open.iter().position(|tab| {
+            matches!(
+                tab,
+                TabKey::Forge(key)
+                    if key.connection_id == connection_id && key.database == database
+            )
+        });
+
+        if let Some(index) = existing_index {
+            // Forge tab for this database already exists, select it
+            if self.active_index() != Some(index) {
+                self.set_active_index(index);
+                self.set_selected_connection_internal(connection_id);
+                self.conn.selected_database = Some(database);
+                self.current_view = View::Forge;
+                self.clear_error_status();
+                cx.emit(AppEvent::ViewChanged);
+                cx.notify();
+            }
+            return;
+        }
+
+        // Create new Forge tab
+        let id = Uuid::new_v4();
+        let key = ForgeTabKey { id, connection_id, database: database.clone() };
+        let state = ForgeTabState::default();
+
+        self.forge_tabs.insert(id, state);
+        self.tabs.open.push(TabKey::Forge(key));
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.set_selected_connection_internal(connection_id);
+        self.conn.selected_database = Some(database);
+        self.conn.selected_collection = None;
+        self.current_view = View::Forge;
+        self.update_workspace_from_state();
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
     pub(in crate::state::app_state) fn close_database_tabs(&mut self, cx: &mut Context<Self>) {
         let Some(conn_id) = self.conn.selected_connection else {
             return;
@@ -471,6 +519,12 @@ impl AppState {
             TabKey::Settings => {
                 self.current_view = View::Settings;
             }
+            TabKey::Forge(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
+                self.conn.selected_database = Some(tab.database.clone());
+                self.conn.selected_collection = None;
+                self.current_view = View::Forge;
+            }
         }
         self.update_workspace_from_state();
         self.clear_error_status();
@@ -534,6 +588,9 @@ impl AppState {
             }
             TabKey::Transfer(key) => {
                 self.transfer_tabs.remove(&key.id);
+            }
+            TabKey::Forge(key) => {
+                self.forge_tabs.remove(&key.id);
             }
             TabKey::Settings => {
                 // No cleanup needed for settings tab
@@ -605,6 +662,12 @@ impl AppState {
                         }
                         self.current_view = View::Transfer;
                     }
+                    TabKey::Forge(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
+                        self.conn.selected_database = Some(tab.database.clone());
+                        self.conn.selected_collection = None;
+                        self.current_view = View::Forge;
+                    }
                     TabKey::Settings => {
                         self.current_view = View::Settings;
                     }
@@ -662,6 +725,12 @@ impl AppState {
                             }
                             self.current_view = View::Transfer;
                         }
+                        TabKey::Forge(tab) => {
+                            self.set_selected_connection_internal(tab.connection_id);
+                            self.conn.selected_database = Some(tab.database.clone());
+                            self.conn.selected_collection = None;
+                            self.current_view = View::Forge;
+                        }
                         TabKey::Settings => {
                             self.current_view = View::Settings;
                         }
@@ -701,6 +770,12 @@ impl AppState {
                             }
                         }
                         self.current_view = View::Transfer;
+                    }
+                    TabKey::Forge(tab) => {
+                        self.set_selected_connection_internal(tab.connection_id);
+                        self.conn.selected_database = Some(tab.database.clone());
+                        self.conn.selected_collection = None;
+                        self.current_view = View::Forge;
                     }
                     TabKey::Settings => {
                         self.current_view = View::Settings;
@@ -775,6 +850,9 @@ impl AppState {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Database(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
+                TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Transfer(_) => false,

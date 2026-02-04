@@ -1,7 +1,7 @@
 use gpui::*;
 
 use crate::state::{AppEvent, AppState, StatusLevel, View};
-use crate::views::{CollectionView, DatabaseView, SettingsView, TransferView};
+use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
 
 mod empty;
 mod shell;
@@ -17,6 +17,7 @@ pub struct ContentArea {
     collection_view: Option<Entity<CollectionView>>,
     database_view: Option<Entity<DatabaseView>>,
     transfer_view: Option<Entity<TransferView>>,
+    forge_view: Option<Entity<ForgeView>>,
     settings_view: Option<Entity<SettingsView>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -34,6 +35,7 @@ impl ContentArea {
                     should_create_collection,
                     should_create_database,
                     should_create_transfer,
+                    should_create_forge,
                     should_create_settings,
                 ) = {
                     let state_ref = state.read(cx);
@@ -42,6 +44,7 @@ impl ContentArea {
                         matches!(state_ref.current_view, View::Database)
                             && state_ref.selected_database().is_some(),
                         matches!(state_ref.current_view, View::Transfer),
+                        matches!(state_ref.current_view, View::Forge),
                         matches!(state_ref.current_view, View::Settings),
                     )
                 };
@@ -55,6 +58,9 @@ impl ContentArea {
                 }
                 if should_create_transfer && this.transfer_view.is_none() {
                     this.transfer_view = Some(cx.new(|cx| TransferView::new(state.clone(), cx)));
+                }
+                if should_create_forge && this.forge_view.is_none() {
+                    this.forge_view = Some(cx.new(|cx| ForgeView::new(state.clone(), cx)));
                 }
                 if should_create_settings && this.settings_view.is_none() {
                     this.settings_view = Some(cx.new(|cx| SettingsView::new(state.clone(), cx)));
@@ -83,6 +89,11 @@ impl ContentArea {
         } else {
             None
         };
+        let forge_view = if matches!(state.read(cx).current_view, View::Forge) {
+            Some(cx.new(|cx| ForgeView::new(state.clone(), cx)))
+        } else {
+            None
+        };
         let settings_view = if matches!(state.read(cx).current_view, View::Settings) {
             Some(cx.new(|cx| SettingsView::new(state.clone(), cx)))
         } else {
@@ -94,6 +105,7 @@ impl ContentArea {
             collection_view,
             database_view,
             transfer_view,
+            forge_view,
             settings_view,
             _subscriptions: subscriptions,
         }
@@ -104,6 +116,7 @@ impl ContentArea {
         should_collection: bool,
         should_database: bool,
         should_transfer: bool,
+        should_forge: bool,
         should_settings: bool,
         cx: &mut Context<Self>,
     ) {
@@ -115,6 +128,9 @@ impl ContentArea {
         }
         if should_transfer && self.transfer_view.is_none() {
             self.transfer_view = Some(cx.new(|cx| TransferView::new(self.state.clone(), cx)));
+        }
+        if should_forge && self.forge_view.is_none() {
+            self.forge_view = Some(cx.new(|cx| ForgeView::new(self.state.clone(), cx)));
         }
         if should_settings && self.settings_view.is_none() {
             self.settings_view = Some(cx.new(|cx| SettingsView::new(self.state.clone(), cx)));
@@ -158,6 +174,7 @@ impl Render for ContentArea {
         let should_collection_view = matches!(current_view, View::Documents);
         let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
         let should_transfer_view = matches!(current_view, View::Transfer);
+        let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
         let has_tabs = !tabs.is_empty() || preview_tab.is_some();
         if has_tabs {
@@ -165,6 +182,7 @@ impl Render for ContentArea {
                 should_collection_view,
                 should_database_view,
                 should_transfer_view,
+                should_forge_view,
                 should_settings_view,
                 cx,
             );
@@ -179,6 +197,7 @@ impl Render for ContentArea {
                 collection_view: self.collection_view.as_ref(),
                 database_view: self.database_view.as_ref(),
                 transfer_view: self.transfer_view.as_ref(),
+                forge_view: self.forge_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
             };
             let content = render_tabs_host(host, cx);
@@ -186,28 +205,35 @@ impl Render for ContentArea {
         }
 
         if matches!(current_view, View::Settings) {
-            self.ensure_views(false, false, false, should_settings_view, cx);
+            self.ensure_views(false, false, false, false, should_settings_view, cx);
             if let Some(view) = &self.settings_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false);
             }
         }
 
         if matches!(current_view, View::Database) {
-            self.ensure_views(false, should_database_view, false, false, cx);
+            self.ensure_views(false, should_database_view, false, false, false, cx);
             if let Some(view) = &self.database_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false);
             }
         }
 
         if matches!(current_view, View::Transfer) {
-            self.ensure_views(false, false, should_transfer_view, false, cx);
+            self.ensure_views(false, false, should_transfer_view, false, false, cx);
             if let Some(view) = &self.transfer_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false);
             }
         }
 
+        if matches!(current_view, View::Forge) {
+            self.ensure_views(false, false, false, should_forge_view, false, cx);
+            if let Some(view) = &self.forge_view {
+                return render_shell(error_text, self.state.clone(), view.clone(), false);
+            }
+        }
+
         if has_collection {
-            self.ensure_views(should_collection_view, false, false, false, cx);
+            self.ensure_views(should_collection_view, false, false, false, false, cx);
             if let Some(view) = &self.collection_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false);
             }

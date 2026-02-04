@@ -1,4 +1,4 @@
-//! MongoDB tools (mongodump/mongorestore) path detection and execution.
+//! External tool/runtime path detection and execution.
 
 use std::path::PathBuf;
 
@@ -9,15 +9,20 @@ pub fn tools_available() -> bool {
 
 /// Find the path to mongodump executable.
 pub fn mongodump_path() -> Option<PathBuf> {
-    find_mongo_tool("mongodump")
+    find_bundled_tool("mongodump")
 }
 
 /// Find the path to mongorestore executable.
 pub fn mongorestore_path() -> Option<PathBuf> {
-    find_mongo_tool("mongorestore")
+    find_bundled_tool("mongorestore")
 }
 
-fn find_mongo_tool(name: &str) -> Option<PathBuf> {
+/// Find the path to a bundled tool or runtime.
+pub fn node_path() -> Option<PathBuf> {
+    find_bundled_tool("node")
+}
+
+fn find_bundled_tool(name: &str) -> Option<PathBuf> {
     // 1. Check app bundle (macOS)
     #[cfg(target_os = "macos")]
     {
