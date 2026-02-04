@@ -240,7 +240,7 @@ impl Render for AppRoot {
                     let Some(key) = state.current_database_key() else {
                         return;
                     };
-                    state.open_forge_tab(key.connection_id, key.database, cx);
+                    state.open_forge_tab(key.connection_id, key.database, None, cx);
                 });
             }))
             .child(

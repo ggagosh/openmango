@@ -166,7 +166,7 @@ pub(crate) fn build_database_menu(
                     let database = database_for_forge.clone();
                     move |_, _window, cx| {
                         state.update(cx, |state, cx| {
-                            state.open_forge_tab(connection_id, database.clone(), cx);
+                            state.open_forge_tab(connection_id, database.clone(), None, cx);
                         });
                     }
                 })
@@ -403,9 +403,15 @@ pub(crate) fn build_collection_menu(
                 .on_click({
                     let state = state.clone();
                     let database = database.clone();
+                    let collection = collection.clone();
                     move |_, _window, cx| {
                         state.update(cx, |state, cx| {
-                            state.open_forge_tab(connection_id, database.clone(), cx);
+                            state.open_forge_tab(
+                                connection_id,
+                                database.clone(),
+                                Some(collection.clone()),
+                                cx,
+                            );
                         });
                     }
                 })

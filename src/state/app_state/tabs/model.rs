@@ -398,11 +398,12 @@ impl AppState {
         cx.notify();
     }
 
-    /// Open a Forge query shell tab for a database
+    /// Open a Forge query shell tab for a database (optionally prefilled for a collection).
     pub fn open_forge_tab(
         &mut self,
         connection_id: Uuid,
         database: String,
+        collection: Option<String>,
         cx: &mut Context<Self>,
     ) {
         // Check if a Forge tab for this database already exists
@@ -431,7 +432,13 @@ impl AppState {
         // Create new Forge tab
         let id = Uuid::new_v4();
         let key = ForgeTabKey { id, connection_id, database: database.clone() };
-        let state = ForgeTabState::default();
+        let mut state = ForgeTabState::default();
+        if let Some(collection) = collection {
+            let escaped = collection.replace('"', "\\\"");
+            let content = format!("db.getCollection(\"{}\").find({{}})", escaped);
+            state.pending_cursor = content.rfind('{').map(|idx| idx + 1);
+            state.content = content;
+        }
 
         self.forge_tabs.insert(id, state);
         self.tabs.open.push(TabKey::Forge(key));

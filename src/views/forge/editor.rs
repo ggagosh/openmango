@@ -23,7 +23,7 @@ impl ForgeView {
                 .code_editor("javascript")
                 .line_number(true)
                 .tab_size(TabSize { tab_size: 2, hard_tabs: false })
-                .placeholder("// MongoDB Shell\ndb.");
+                .placeholder("// MongoDB Shell (db.)");
 
             editor.lsp.completion_provider = Some(provider.clone());
             editor
@@ -131,6 +131,15 @@ impl ForgeView {
             editor_state.update(cx, |editor, cx| {
                 editor.set_value(content.clone(), window, cx);
             });
+            let pending_cursor =
+                self.state.update(cx, |state, _cx| state.take_forge_tab_pending_cursor(active_id));
+            if let Some(offset) = pending_cursor {
+                editor_state.update(cx, |editor, cx| {
+                    let safe_offset = offset.min(editor.text().len());
+                    let position = editor.text().offset_to_position(safe_offset);
+                    editor.set_cursor_position(position, window, cx);
+                });
+            }
         }
     }
 

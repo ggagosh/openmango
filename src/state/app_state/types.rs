@@ -289,7 +289,7 @@ pub struct ForgeTabKey {
 }
 
 /// Default content for a Forge query shell tab.
-pub const DEFAULT_FORGE_CONTENT: &str = "// MongoDB Shell\ndb.";
+pub const DEFAULT_FORGE_CONTENT: &str = "";
 
 /// State for a Forge query shell tab
 #[derive(Debug, Clone)]
@@ -298,11 +298,17 @@ pub struct ForgeTabState {
     pub content: String,
     pub is_running: bool,
     pub error: Option<String>,
+    pub pending_cursor: Option<usize>,
 }
 
 impl Default for ForgeTabState {
     fn default() -> Self {
-        Self { content: DEFAULT_FORGE_CONTENT.to_string(), is_running: false, error: None }
+        Self {
+            content: DEFAULT_FORGE_CONTENT.to_string(),
+            is_running: false,
+            error: None,
+            pending_cursor: None,
+        }
     }
 }
 

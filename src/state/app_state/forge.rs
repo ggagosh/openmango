@@ -55,4 +55,9 @@ impl AppState {
             state.content = content;
         }
     }
+
+    /// Take the pending cursor offset for a Forge tab (clears it after read).
+    pub fn take_forge_tab_pending_cursor(&mut self, id: Uuid) -> Option<usize> {
+        self.forge_tabs.get_mut(&id).and_then(|state| state.pending_cursor.take())
+    }
 }
