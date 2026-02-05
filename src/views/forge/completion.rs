@@ -8,12 +8,11 @@ use lsp_types::{
     InsertReplaceEdit, Range,
 };
 
-use super::ForgeRuntime;
-use super::ForgeView;
 use super::logic::{
     ContextKind, METHODS, OPERATORS, collection_method_template, completion_token, detect_context,
     merge_suggestions, should_skip_completion,
 };
+use super::runtime::ForgeRuntime;
 use super::runtime::active_forge_session_info;
 use super::types::{Suggestion, SuggestionKind};
 use crate::state::AppState;
@@ -54,11 +53,9 @@ impl CompletionProvider for ForgeCompletionProvider {
         }
 
         let local = match context {
-            Some(ContextKind::Collections) => {
-                ForgeView::build_collection_suggestions(self.state.read(cx))
-            }
-            Some(ContextKind::Methods) => ForgeView::build_method_suggestions(),
-            Some(ContextKind::Operators) => ForgeView::build_operator_suggestions(),
+            Some(ContextKind::Collections) => build_collection_suggestions(self.state.read(cx)),
+            Some(ContextKind::Methods) => build_method_suggestions(),
+            Some(ContextKind::Operators) => build_operator_suggestions(),
             None => Vec::new(),
         };
 
@@ -172,64 +169,62 @@ fn suggestions_to_completion_items(
         .collect()
 }
 
-impl ForgeView {
-    pub fn make_suggestion(label: &str, kind: SuggestionKind, insert_text: &str) -> Suggestion {
-        Suggestion { label: label.to_string(), kind, insert_text: insert_text.to_string() }
+fn make_suggestion(label: &str, kind: SuggestionKind, insert_text: &str) -> Suggestion {
+    Suggestion { label: label.to_string(), kind, insert_text: insert_text.to_string() }
+}
+
+fn build_collection_suggestions(state: &AppState) -> Vec<Suggestion> {
+    let mut suggestions = Vec::new();
+
+    for (label, template) in [
+        ("stats()", "stats()"),
+        ("getCollection(\"\")", "getCollection(\"\")"),
+        ("getSiblingDB(\"\")", "getSiblingDB(\"\")"),
+        ("runCommand({})", "runCommand({})"),
+        ("listCollections({})", "listCollections({})"),
+        ("createCollection(\"\")", "createCollection(\"\")"),
+    ] {
+        suggestions.push(make_suggestion(label, SuggestionKind::Method, template));
     }
 
-    pub fn build_collection_suggestions(state: &AppState) -> Vec<Suggestion> {
-        let mut suggestions = Vec::new();
-
-        for (label, template) in [
-            ("stats()", "stats()"),
-            ("getCollection(\"\")", "getCollection(\"\")"),
-            ("getSiblingDB(\"\")", "getSiblingDB(\"\")"),
-            ("runCommand({})", "runCommand({})"),
-            ("listCollections({})", "listCollections({})"),
-            ("createCollection(\"\")", "createCollection(\"\")"),
-        ] {
-            suggestions.push(Self::make_suggestion(label, SuggestionKind::Method, template));
+    if let Some(key) = state.active_forge_tab_key()
+        && let Some(conn) = state.active_connection_by_id(key.connection_id)
+        && let Some(collections) = conn.collections.get(&key.database)
+    {
+        for coll in collections {
+            suggestions.push(Suggestion {
+                label: coll.clone(),
+                kind: SuggestionKind::Collection,
+                insert_text: coll.clone(),
+            });
         }
+    }
 
-        if let Some(key) = state.active_forge_tab_key()
-            && let Some(conn) = state.active_connection_by_id(key.connection_id)
-            && let Some(collections) = conn.collections.get(&key.database)
-        {
-            for coll in collections {
-                suggestions.push(Suggestion {
-                    label: coll.clone(),
-                    kind: SuggestionKind::Collection,
-                    insert_text: coll.clone(),
-                });
-            }
+    suggestions
+}
+
+fn build_method_suggestions() -> Vec<Suggestion> {
+    let mut suggestions = Vec::new();
+
+    for method in METHODS {
+        if let Some(template) = collection_method_template(method) {
+            suggestions.push(make_suggestion(template, SuggestionKind::Method, template));
+        } else {
+            let insert = format!("{}()", method);
+            suggestions.push(make_suggestion(&insert, SuggestionKind::Method, &insert));
         }
-
-        suggestions
     }
 
-    pub fn build_method_suggestions() -> Vec<Suggestion> {
-        let mut suggestions = Vec::new();
+    suggestions
+}
 
-        for method in METHODS {
-            if let Some(template) = collection_method_template(method) {
-                suggestions.push(Self::make_suggestion(template, SuggestionKind::Method, template));
-            } else {
-                let insert = format!("{}()", method);
-                suggestions.push(Self::make_suggestion(&insert, SuggestionKind::Method, &insert));
-            }
-        }
-
-        suggestions
-    }
-
-    pub fn build_operator_suggestions() -> Vec<Suggestion> {
-        OPERATORS
-            .iter()
-            .map(|op| Suggestion {
-                label: op.to_string(),
-                kind: SuggestionKind::Operator,
-                insert_text: format!("{}: ", op),
-            })
-            .collect()
-    }
+fn build_operator_suggestions() -> Vec<Suggestion> {
+    OPERATORS
+        .iter()
+        .map(|op| Suggestion {
+            label: op.to_string(),
+            kind: SuggestionKind::Operator,
+            insert_text: format!("{}: ", op),
+        })
+        .collect()
 }

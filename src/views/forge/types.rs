@@ -27,14 +27,3 @@ pub struct ResultPage {
     pub docs: Vec<Document>,
     pub pinned: bool,
 }
-
-pub fn format_result_tab_label(label: &str, idx: usize) -> String {
-    let trimmed = label.trim();
-    let base = if trimmed.is_empty() { format!("Result {}", idx + 1) } else { trimmed.to_string() };
-    const MAX_LEN: usize = 32;
-    if base.chars().count() <= MAX_LEN {
-        return base;
-    }
-    let shortened: String = base.chars().take(MAX_LEN.saturating_sub(3)).collect();
-    format!("{shortened}...")
-}

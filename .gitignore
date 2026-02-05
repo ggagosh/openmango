@@ -25,6 +25,9 @@ debug/
 # Generated
 *.bak
 
+# Node
+node_modules/
+
 # MongoDB tools (downloaded during CI or via just download-tools)
 resources/bin/
 

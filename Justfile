@@ -51,7 +51,7 @@ clean:
     cargo clean
 
 # CI checks (matches GitHub Actions)
-ci: fmt-check lint check
+ci: fmt-check lint check check-sidecar
 
 # All checks before commit
 precommit: ci test
@@ -63,3 +63,11 @@ download-tools:
 # Download Node.js runtime for Forge (mongosh sidecar)
 download-node:
     ./scripts/download_node.sh
+
+# Build Forge mongosh sidecar bundle
+build-sidecar:
+    ./scripts/build_mongosh_sidecar.sh
+
+# Verify Forge mongosh sidecar bundle is up to date
+check-sidecar:
+    ./scripts/check_mongosh_sidecar.sh

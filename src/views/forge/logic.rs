@@ -378,7 +378,7 @@ pub const OPERATORS: &[&str] = &[
 
 pub fn format_printable_lines(printable: &serde_json::Value) -> Vec<String> {
     if printable.is_null() {
-        return Vec::new();
+        return vec!["null".to_string()];
     }
     if let Some(text) = printable.as_str() {
         if text.is_empty() {
@@ -424,32 +424,28 @@ pub fn result_documents(printable: &serde_json::Value) -> Option<Vec<Document>> 
         return Some(docs);
     }
 
-    if !matches!(printable, serde_json::Value::Object(_) | serde_json::Value::Array(_)) {
-        return None;
-    }
-
-    let bson = Bson::try_from(printable.clone()).unwrap_or_else(|_| value_to_bson(printable));
-
-    match bson {
-        Bson::Document(doc) => Some(vec![doc]),
-        Bson::Array(items) => {
+    match printable {
+        serde_json::Value::Object(_) => {
+            let bson =
+                Bson::try_from(printable.clone()).unwrap_or_else(|_| value_to_bson(printable));
+            if let Bson::Document(doc) = bson {
+                return Some(vec![doc]);
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
             let mut docs = Vec::with_capacity(items.len());
-            for item in items.iter() {
-                if let Bson::Document(doc) = item {
-                    docs.push(doc.clone());
+            for item in items {
+                let bson = value_to_bson(item);
+                if let Bson::Document(doc) = bson {
+                    docs.push(doc);
                 } else {
-                    let mut doc = Document::new();
-                    doc.insert("value", Bson::Array(items));
-                    return Some(vec![doc]);
+                    return None;
                 }
             }
-            Some(docs)
+            if docs.is_empty() { None } else { Some(docs) }
         }
-        other => {
-            let mut doc = Document::new();
-            doc.insert("value", other);
-            Some(vec![doc])
-        }
+        _ => None,
     }
 }
 
@@ -505,5 +501,31 @@ fn value_to_bson(value: &serde_json::Value) -> Bson {
             }
             Bson::Document(doc)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statement_bounds_respects_semicolons() {
+        let text = "db.stats();\n\ndb.getCollection(\"x\")";
+        let (start, end) = statement_bounds(text, 5);
+        assert_eq!(&text[start..end], "db.stats();");
+    }
+
+    #[test]
+    fn statement_bounds_falls_back_to_paragraph() {
+        let text = "db.stats()\n\n// comment\n";
+        let (start, end) = statement_bounds(text, 2);
+        assert_eq!(&text[start..end], "db.stats()\n");
+    }
+
+    #[test]
+    fn completion_token_handles_db_context() {
+        let (token, start) = completion_token("db.getC", Some(ContextKind::Collections));
+        assert_eq!(token, "getC");
+        assert_eq!(start, 3);
     }
 }

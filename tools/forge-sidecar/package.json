@@ -1,0 +1,17 @@
+{
+  "name": "openmango-forge-sidecar",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild ./src/sidecar.ts --bundle --platform=node --format=cjs --target=node18 --external:*.node --external:electron --external:kerberos --external:mongodb-client-encryption --external:ssh2 --external:cpu-features --external:pac-proxy-agent --external:@babel/preset-typescript/package.json --outfile=../../assets/forge/mongosh-sidecar.js"
+  },
+  "dependencies": {
+    "@mongosh/browser-runtime-electron": "3.29.1",
+    "@mongosh/service-provider-node-driver": "3.18.1",
+    "bson": "7.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.20.2"
+  }
+}

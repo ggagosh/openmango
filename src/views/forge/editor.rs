@@ -11,12 +11,14 @@ use super::completion::ForgeCompletionProvider;
 
 impl ForgeView {
     pub fn ensure_editor_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor_state.is_some() {
+        if self.state.editor.editor_state.is_some() {
             return;
         }
 
-        let provider =
-            Rc::new(ForgeCompletionProvider::new(self.state.clone(), self.runtime.clone()));
+        let provider = Rc::new(ForgeCompletionProvider::new(
+            self.app_state.clone(),
+            self.controller.runtime.clone(),
+        ));
 
         let editor_state = cx.new(|cx| {
             let mut editor = InputState::new(window, cx)
@@ -50,21 +52,21 @@ impl ForgeView {
             },
         );
 
-        self.editor_state = Some(editor_state);
-        self.editor_subscription = Some(subscription);
-        self.completion_provider = Some(provider);
+        self.state.editor.editor_state = Some(editor_state);
+        self.state.editor.editor_subscription = Some(subscription);
+        self.state.editor.completion_provider = Some(provider);
     }
 
     pub fn save_current_content(&mut self, cx: &mut Context<Self>) {
-        let Some(tab_id) = self.active_tab_id else {
+        let Some(tab_id) = self.state.editor.active_tab_id else {
             return;
         };
-        let Some(editor_state) = &self.editor_state else {
+        let Some(editor_state) = &self.state.editor.editor_state else {
             return;
         };
         let text = editor_state.read(cx).value().to_string();
-        self.current_text = text.clone();
-        self.state.update(cx, |state, _cx| {
+        self.state.editor.current_text = text.clone();
+        self.app_state.update(cx, |state, _cx| {
             state.set_forge_tab_content(tab_id, text);
         });
     }
@@ -85,7 +87,7 @@ impl ForgeView {
     }
 
     fn editor_selection_text(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
-        let editor_state = self.editor_state.as_ref()?;
+        let editor_state = self.state.editor.editor_state.as_ref()?;
         editor_state.update(cx, |state, cx| {
             let selection = state.selected_text_range(true, window, cx)?;
             if selection.range.start == selection.range.end {
@@ -99,7 +101,7 @@ impl ForgeView {
     }
 
     fn editor_statement_at_cursor(&self, cx: &mut Context<Self>) -> Option<String> {
-        let editor_state = self.editor_state.as_ref()?;
+        let editor_state = self.state.editor.editor_state.as_ref()?;
         let text = editor_state.read(cx).text().to_string();
         let cursor = editor_state.read(cx).cursor().min(text.len());
         let (start, end) = statement_bounds(&text, cursor);
@@ -113,26 +115,28 @@ impl ForgeView {
         cx: &mut Context<Self>,
         force: bool,
     ) {
-        let active_id = self.state.read(cx).active_forge_tab_id();
-        if !force && active_id == self.active_tab_id {
+        let active_id = self.app_state.read(cx).active_forge_tab_id();
+        if !force && active_id == self.state.editor.active_tab_id {
             return;
         }
         self.save_current_content(cx);
 
-        self.active_tab_id = active_id;
+        self.state.editor.active_tab_id = active_id;
         let Some(active_id) = active_id else {
             return;
         };
 
-        let content = self.state.read(cx).forge_tab_content(active_id).unwrap_or("").to_string();
+        let content =
+            self.app_state.read(cx).forge_tab_content(active_id).unwrap_or("").to_string();
 
-        self.current_text = content.clone();
-        if let Some(editor_state) = &self.editor_state {
+        self.state.editor.current_text = content.clone();
+        if let Some(editor_state) = &self.state.editor.editor_state {
             editor_state.update(cx, |editor, cx| {
                 editor.set_value(content.clone(), window, cx);
             });
-            let pending_cursor =
-                self.state.update(cx, |state, _cx| state.take_forge_tab_pending_cursor(active_id));
+            let pending_cursor = self
+                .app_state
+                .update(cx, |state, _cx| state.take_forge_tab_pending_cursor(active_id));
             if let Some(offset) = pending_cursor {
                 editor_state.update(cx, |editor, cx| {
                     let safe_offset = offset.min(editor.text().len());
@@ -144,10 +148,10 @@ impl ForgeView {
     }
 
     pub fn handle_editor_change(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.current_text = text.to_string();
-        if let Some(tab_id) = self.active_tab_id {
-            let content = self.current_text.clone();
-            self.state.update(cx, |state, _cx| {
+        self.state.editor.current_text = text.to_string();
+        if let Some(tab_id) = self.state.editor.active_tab_id {
+            let content = self.state.editor.current_text.clone();
+            self.app_state.update(cx, |state, _cx| {
                 state.set_forge_tab_content(tab_id, content);
             });
         }
