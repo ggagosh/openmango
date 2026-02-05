@@ -6,11 +6,76 @@ use gpui::{
     Point, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, Window, canvas,
     deferred, div, prelude::FluentBuilder, px, relative,
 };
-use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat};
 
 const MAX_MENU_WIDTH: Pixels = px(520.);
 const MAX_MENU_HEIGHT: Pixels = px(360.);
 const POPOVER_GAP: Pixels = px(4.);
+
+fn expand_snippet(snippet: &str) -> (String, Option<usize>) {
+    let mut out = String::new();
+    let mut cursor_offset = None;
+    let chars: Vec<char> = snippet.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '$' {
+            if i + 1 < chars.len() && chars[i + 1] == '$' {
+                out.push('$');
+                i += 2;
+                continue;
+            }
+
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                let mut j = i + 2;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j < chars.len() && chars[j] == ':' {
+                    j += 1;
+                    let default_start = j;
+                    while j < chars.len() && chars[j] != '}' {
+                        j += 1;
+                    }
+                    let default_text: String = chars[default_start..j].iter().collect();
+                    if cursor_offset.is_none() {
+                        cursor_offset = Some(out.len());
+                    }
+                    out.push_str(&default_text);
+                    if j < chars.len() && chars[j] == '}' {
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+                if j < chars.len() && chars[j] == '}' {
+                    if cursor_offset.is_none() {
+                        cursor_offset = Some(out.len());
+                    }
+                    i = j + 1;
+                    continue;
+                }
+            }
+
+            if i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if cursor_offset.is_none() {
+                    cursor_offset = Some(out.len());
+                }
+                i = j;
+                continue;
+            }
+        }
+
+        out.push(ch);
+        i += 1;
+    }
+
+    (out, cursor_offset)
+}
 
 use crate::{
     ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable as _, actions, h_flex,
@@ -324,12 +389,25 @@ impl CompletionMenu {
                     range = offset..offset;
                 }
 
+                let mut cursor_offset = None;
+                if item.insert_text_format == Some(InsertTextFormat::SNIPPET) {
+                    let (expanded, offset) = expand_snippet(&new_text);
+                    new_text = expanded;
+                    cursor_offset = offset;
+                }
+
                 editor.replace_text_in_range_silent(
                     Some(editor.range_to_utf16(&range)),
                     &new_text,
                     window,
                     cx,
                 );
+
+                if let Some(offset) = cursor_offset {
+                    let pos = range.start.saturating_add(offset).min(editor.text.len());
+                    let position = editor.text.offset_to_position(pos);
+                    editor.set_cursor_position(position, window, cx);
+                }
                 editor.completion_inserting = false;
                 // FIXME: Input not get the focus
                 editor.focus(window, cx);

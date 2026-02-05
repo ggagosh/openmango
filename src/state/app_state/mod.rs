@@ -27,8 +27,9 @@ pub use types::{
     TransferScope, TransferTabKey, TransferTabState, View,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicU64};
+use std::time::Instant;
 
 use gpui::{Context, EventEmitter};
 
@@ -40,6 +41,14 @@ use crate::state::settings::AppSettings;
 use crate::state::{ConfigManager, WorkspaceState};
 
 use types::*;
+
+/// Cached schema fields with TTL.
+pub(crate) struct ForgeSchemaCache {
+    pub fields: Vec<String>,
+    pub cached_at: Instant,
+}
+
+const FORGE_SCHEMA_TTL_SECS: u64 = 300; // 5 minutes
 
 /// Global application state
 pub struct AppState {
@@ -57,6 +66,8 @@ pub struct AppState {
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
+    forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
+    forge_schema_inflight: HashSet<SessionKey>,
 
     // View state
     pub current_view: View,
@@ -110,6 +121,8 @@ impl AppState {
             db_sessions: DatabaseSessionStore::new(),
             transfer_tabs: HashMap::new(),
             forge_tabs: HashMap::new(),
+            forge_schema: HashMap::new(),
+            forge_schema_inflight: std::collections::HashSet::new(),
             current_view: View::Welcome,
             status_message: None,
             copied_tree_item: None,

@@ -31,6 +31,8 @@ pub(crate) enum InputMode {
         rows: usize,
         /// Show line number
         line_number: bool,
+        /// Auto indent when pressing Enter
+        auto_indent: bool,
         language: SharedString,
         indent_guides: bool,
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
@@ -64,6 +66,7 @@ impl InputMode {
             language: language.into(),
             highlighter: Rc::new(RefCell::new(None)),
             line_number: true,
+            auto_indent: true,
             indent_guides: true,
             diagnostics: DiagnosticSet::new(&Rope::new()),
         }
@@ -188,6 +191,19 @@ impl InputMode {
         }
     }
 
+    pub(super) fn auto_indent(&self) -> bool {
+        match self {
+            InputMode::CodeEditor { auto_indent, .. } => *auto_indent,
+            _ => false,
+        }
+    }
+
+    pub(super) fn set_auto_indent(&mut self, value: bool) {
+        if let InputMode::CodeEditor { auto_indent, .. } = self {
+            *auto_indent = value;
+        }
+    }
+
     pub(super) fn update_highlighter(
         &mut self,
         selected_range: &Range<usize>,
@@ -285,6 +301,7 @@ mod tests {
         let mode = InputMode::CodeEditor {
             multi_line: false,
             line_number: true,
+            auto_indent: true,
             indent_guides: true,
             rows: 0,
             tab: Default::default(),

@@ -127,6 +127,9 @@ impl InputState {
         let new_offset = self.cursor();
 
         if !provider.is_completion_trigger(start, new_text, cx) {
+            // Dismiss stale completion menu so it doesn't linger
+            self.context_menu = None;
+            cx.notify();
             return;
         }
 

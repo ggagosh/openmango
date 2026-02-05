@@ -487,6 +487,34 @@ impl InputState {
         cx.notify();
     }
 
+    /// Get the current tab size configuration.
+    pub fn current_tab_size(&self) -> crate::input::TabSize {
+        self.mode.tab_size()
+    }
+
+    /// Enable or disable auto indent in code editor mode.
+    ///
+    /// Only for [`InputMode::CodeEditor`] mode.
+    pub fn auto_indent(mut self, auto_indent: bool) -> Self {
+        debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
+        self.mode.set_auto_indent(auto_indent);
+        self
+    }
+
+    /// Set auto indent in code editor mode.
+    ///
+    /// Only for [`InputMode::CodeEditor`] mode.
+    pub fn set_auto_indent(
+        &mut self,
+        auto_indent: bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
+        self.mode.set_auto_indent(auto_indent);
+        cx.notify();
+    }
+
     /// Set the number of rows for the multi-line Textarea.
     ///
     /// This is only used when `multi_line` is set to true.
@@ -1156,7 +1184,7 @@ impl InputState {
 
         if self.mode.is_multi_line() {
             // Get current line indent
-            let indent = if self.mode.is_code_editor() {
+            let indent = if self.mode.is_code_editor() && self.mode.auto_indent() {
                 self.indent_of_next_line()
             } else {
                 "".to_string()

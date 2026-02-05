@@ -12,6 +12,8 @@ mimalloc = ["dep:mimalloc"]
 [dependencies]
 gpui = "0.2.2"
 gpui-component = { version = "0.5", features = ["tree-sitter-languages"] }
+tree-sitter = "0.25"
+tree-sitter-javascript = "0.25"
 gpui-component-assets = "0.5"
 lsp-types = "0.97"
 mongodb = "3.5"

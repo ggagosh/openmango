@@ -10,6 +10,7 @@ pub struct ForgeEditorState {
     pub current_text: String,
     pub editor_focus_requested: bool,
     pub active_tab_id: Option<uuid::Uuid>,
+    pub auto_pair_guard: bool,
 }
 
 pub struct ForgeRuntimeState {
@@ -57,6 +58,7 @@ impl ForgeState {
                 current_text: String::new(),
                 editor_focus_requested: false,
                 active_tab_id: None,
+                auto_pair_guard: false,
             },
             output: ForgeOutputState {
                 raw_output_state: None,

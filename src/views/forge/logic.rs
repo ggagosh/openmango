@@ -7,6 +7,7 @@ pub struct Suggestion {
     pub label: String,
     pub kind: SuggestionKind,
     pub insert_text: String,
+    pub is_snippet: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +15,7 @@ pub enum SuggestionKind {
     Collection,
     Method,
     Operator,
+    Field,
 }
 
 impl SuggestionKind {
@@ -22,6 +24,7 @@ impl SuggestionKind {
             SuggestionKind::Collection => "Collection",
             SuggestionKind::Method => "Method",
             SuggestionKind::Operator => "Operator",
+            SuggestionKind::Field => "Field",
         }
     }
 }
@@ -150,30 +153,35 @@ pub fn merge_suggestions(
         let suggestion = match context {
             Some(ContextKind::Collections) => db_method_template(&normalized)
                 .map(|template| Suggestion {
-                    label: template.to_string(),
+                    label: label_from_template(template),
                     kind: SuggestionKind::Method,
                     insert_text: template.to_string(),
+                    is_snippet: template.contains('$'),
                 })
                 .unwrap_or_else(|| Suggestion {
                     label: normalized.clone(),
                     kind: SuggestionKind::Collection,
                     insert_text: normalized,
+                    is_snippet: false,
                 }),
             Some(ContextKind::Methods) => collection_method_template(&normalized)
                 .map(|template| Suggestion {
-                    label: template.to_string(),
+                    label: label_from_template(template),
                     kind: SuggestionKind::Method,
                     insert_text: template.to_string(),
+                    is_snippet: template.contains('$'),
                 })
                 .unwrap_or_else(|| Suggestion {
                     label: normalized.clone(),
                     kind: SuggestionKind::Method,
                     insert_text: normalized,
+                    is_snippet: false,
                 }),
             Some(ContextKind::Operators) => Suggestion {
                 label: normalized.clone(),
                 kind: SuggestionKind::Operator,
                 insert_text: format!("{}: ", normalized),
+                is_snippet: false,
             },
             None => Suggestion {
                 label: normalized.clone(),
@@ -187,6 +195,7 @@ pub fn merge_suggestions(
                 } else {
                     normalized
                 },
+                is_snippet: false,
             },
         };
 
@@ -304,33 +313,78 @@ pub fn should_skip_completion(line_prefix: &str) -> bool {
 pub fn db_method_template(name: &str) -> Option<&'static str> {
     match name {
         "stats" => Some("stats()"),
-        "getCollection" => Some("getCollection(\"\")"),
-        "getSiblingDB" => Some("getSiblingDB(\"\")"),
-        "runCommand" => Some("runCommand({})"),
-        "listCollections" => Some("listCollections({})"),
-        "createCollection" => Some("createCollection(\"\")"),
+        "getCollection" => Some("getCollection(\"$1\")$0"),
+        "getSiblingDB" => Some("getSiblingDB(\"$1\")$0"),
+        "runCommand" => Some("runCommand({$1})$0"),
+        "listCollections" => Some("listCollections({$1})$0"),
+        "createCollection" => Some("createCollection(\"$1\")$0"),
         _ => None,
     }
 }
 
 pub fn collection_method_template(name: &str) -> Option<&'static str> {
     match name {
-        "find" => Some("find({})"),
-        "findOne" => Some("findOne({})"),
-        "aggregate" => Some("aggregate([{}])"),
-        "insertOne" => Some("insertOne({})"),
-        "insertMany" => Some("insertMany([{}])"),
-        "updateOne" => Some("updateOne({}, {})"),
-        "updateMany" => Some("updateMany({}, {})"),
-        "deleteOne" => Some("deleteOne({})"),
-        "deleteMany" => Some("deleteMany({})"),
-        "countDocuments" => Some("countDocuments({})"),
-        "distinct" => Some("distinct(\"\")"),
-        "createIndex" => Some("createIndex({})"),
-        "dropIndex" => Some("dropIndex(\"\")"),
+        "find" => Some("find({$1})$0"),
+        "findOne" => Some("findOne({$1})$0"),
+        "aggregate" => Some("aggregate([{$1}])$0"),
+        "insertOne" => Some("insertOne({$1})$0"),
+        "insertMany" => Some("insertMany([{$1}])$0"),
+        "updateOne" => Some("updateOne({$1}, {$2})$0"),
+        "updateMany" => Some("updateMany({$1}, {$2})$0"),
+        "deleteOne" => Some("deleteOne({$1})$0"),
+        "deleteMany" => Some("deleteMany({$1})$0"),
+        "countDocuments" => Some("countDocuments({$1})$0"),
+        "distinct" => Some("distinct(\"$1\")$0"),
+        "createIndex" => Some("createIndex({$1})$0"),
+        "dropIndex" => Some("dropIndex(\"$1\")$0"),
         "getIndexes" => Some("getIndexes()"),
         _ => None,
     }
+}
+
+pub fn label_from_template(template: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '$' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                let mut j = i + 2;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j < chars.len() && chars[j] == ':' {
+                    j += 1;
+                    let default_start = j;
+                    while j < chars.len() && chars[j] != '}' {
+                        j += 1;
+                    }
+                    out.extend(chars[default_start..j].iter());
+                    if j < chars.len() && chars[j] == '}' {
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+                if j < chars.len() && chars[j] == '}' {
+                    i = j + 1;
+                    continue;
+                }
+            }
+            if i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
 }
 
 pub const METHODS: &[&str] = &[
@@ -350,7 +404,7 @@ pub const METHODS: &[&str] = &[
     "getIndexes",
 ];
 
-pub const OPERATORS: &[&str] = &[
+pub const PIPELINE_OPERATORS: &[&str] = &[
     "$match",
     "$project",
     "$group",
@@ -374,6 +428,42 @@ pub const OPERATORS: &[&str] = &[
     "$unionWith",
     "$redact",
     "$graphLookup",
+];
+
+pub const QUERY_OPERATORS: &[&str] = &[
+    "$eq",
+    "$ne",
+    "$gt",
+    "$gte",
+    "$lt",
+    "$lte",
+    "$in",
+    "$nin",
+    "$exists",
+    "$regex",
+    "$and",
+    "$or",
+    "$nor",
+    "$not",
+    "$elemMatch",
+    "$size",
+    "$all",
+    "$type",
+];
+
+pub const UPDATE_OPERATORS: &[&str] = &[
+    "$set",
+    "$unset",
+    "$inc",
+    "$push",
+    "$addToSet",
+    "$pull",
+    "$pop",
+    "$rename",
+    "$mul",
+    "$min",
+    "$max",
+    "$currentDate",
 ];
 
 pub fn format_printable_lines(printable: &serde_json::Value) -> Vec<String> {
