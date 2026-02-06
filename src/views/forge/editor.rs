@@ -22,6 +22,7 @@ impl ForgeView {
         let provider = Rc::new(ForgeCompletionProvider::new(
             self.app_state.clone(),
             self.controller.runtime.clone(),
+            self.state.editor.completion_request_id.clone(),
         ));
 
         let editor_state = cx.new(|cx| {
@@ -242,7 +243,7 @@ impl ForgeView {
 
         // Check if we're inside a string or comment — skip auto-pair if so
         let in_string_or_comment = parse_context(&current, cursor.saturating_sub(1)).in_comment;
-        let char_after_cursor = current.as_bytes().get(cursor).map(|&b| b as char);
+        let char_after_cursor = current.get(cursor..).and_then(|s| s.chars().next());
         let has_selection = !prev_range.is_empty() && current_range.len() == 1;
 
         let action =
@@ -367,7 +368,12 @@ fn apply_custom_indent(
     match result {
         IndentResult::None => false,
         IndentResult::Simple(indent) => {
-            let range = cursor..cursor;
+            // Replace any auto-inserted horizontal whitespace after the newline.
+            let mut ws_end = cursor;
+            while ws_end < bytes.len() && matches!(bytes[ws_end], b' ' | b'\t') {
+                ws_end += 1;
+            }
+            let range = cursor..ws_end;
             state.replace_text_in_range(Some(range), &indent, window, cx);
             let position = state.text().offset_to_position(cursor + indent.len());
             state.set_cursor_position(position, window, cx);
@@ -375,10 +381,13 @@ fn apply_custom_indent(
         }
         IndentResult::BetweenBraces { inner, outer } => {
             let next_idx = next_non_ws.map(|(idx, _)| idx).unwrap_or(cursor);
-            let insertion = format!("{inner}\n{outer}");
-            let range = cursor..next_idx;
+            // Normalize the between-braces region to exactly one inner line.
+            debug_assert!(cursor >= 1, "between-braces indent requires newline at cursor - 1");
+            let start = cursor - 1; // include the newline inserted by Enter
+            let insertion = format!("\n{inner}\n{outer}");
+            let range = start..next_idx;
             state.replace_text_in_range(Some(range), &insertion, window, cx);
-            let position = state.text().offset_to_position(cursor + inner.len());
+            let position = state.text().offset_to_position(start + 1 + inner.len());
             state.set_cursor_position(position, window, cx);
             true
         }

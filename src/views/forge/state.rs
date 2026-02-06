@@ -1,5 +1,7 @@
 use gpui::{FocusHandle, UniformListScrollHandle};
 use gpui_component::input::InputState;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use super::types::{ForgeOutputTab, ForgeRunOutput, ResultPage};
 
@@ -7,6 +9,7 @@ pub struct ForgeEditorState {
     pub editor_state: Option<gpui::Entity<InputState>>,
     pub editor_subscription: Option<gpui::Subscription>,
     pub completion_provider: Option<std::rc::Rc<super::completion::ForgeCompletionProvider>>,
+    pub completion_request_id: Arc<AtomicU64>,
     pub current_text: String,
     pub editor_focus_requested: bool,
     pub active_tab_id: Option<uuid::Uuid>,
@@ -55,6 +58,7 @@ impl ForgeState {
                 editor_state: None,
                 editor_subscription: None,
                 completion_provider: None,
+                completion_request_id: Arc::new(AtomicU64::new(0)),
                 current_text: String::new(),
                 editor_focus_requested: false,
                 active_tab_id: None,

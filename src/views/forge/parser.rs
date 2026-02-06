@@ -10,6 +10,8 @@ pub enum PositionKind {
     OperatorKey,
     /// `[ val| ]` — inside array literal
     ArrayElement,
+    /// `db.us|` — typing a property name in a member expression
+    MemberAccess,
     /// tree-sitter can't determine position
     #[default]
     Unknown,
@@ -35,7 +37,11 @@ pub enum ScopeKind {
     InsertDoc,
     /// `{ $gt: val }` — inside query operator value
     OperatorValue,
-    /// Not inside any method call — line-level heuristics
+    /// After `db.` — show collections + db methods
+    DbMember,
+    /// After `db.collection.` — show collection methods
+    CollectionMember,
+    /// Not inside any method call — nothing useful to complete
     #[default]
     TopLevel,
     /// Inside call but can't determine scope
@@ -49,6 +55,8 @@ pub struct ParsedContext {
     pub position_kind: PositionKind,
     pub scope_kind: ScopeKind,
     pub in_comment: bool,
+    /// Partial text being typed after the dot in member access (e.g. `"us"` in `db.us|`)
+    pub member_token: Option<String>,
 }
 
 // ── Main entry point ───────────────────────────────────────────────────────
@@ -56,21 +64,26 @@ pub struct ParsedContext {
 pub fn parse_context(text: &str, cursor: usize) -> ParsedContext {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).is_err() {
-        return ParsedContext::default();
+        return fallback_member_access(text, cursor).unwrap_or_default();
     }
 
     let tree = match parser.parse(text, None) {
         Some(tree) => tree,
-        None => return ParsedContext::default(),
+        None => return fallback_member_access(text, cursor).unwrap_or_default(),
     };
 
     let cursor = cursor.min(text.len());
     let Some(node) = tree.root_node().named_descendant_for_byte_range(cursor, cursor) else {
-        return ParsedContext::default();
+        return fallback_member_access(text, cursor).unwrap_or_default();
     };
 
     if is_in_comment_or_string(node) {
         return ParsedContext { in_comment: true, ..Default::default() };
+    }
+
+    // Check for member access (db. / db.collection.) before looking for enclosing call
+    if let Some(ctx) = detect_member_access(text, cursor, &tree.root_node()) {
+        return ctx;
     }
 
     let Some(call) = find_enclosing_call(node) else {
@@ -311,7 +324,7 @@ fn deep_scope_walk(text: &str, cursor: usize, call: &Node) -> Option<ScopeKind> 
 
             if is_in_value {
                 let key_text = node_text(text, &key_node);
-                if let Some(scope) = operator_key_to_scope(&key_text) {
+                if let Some(scope) = operator_key_to_scope(normalize_key_text(&key_text)) {
                     // Return the innermost matching scope immediately
                     return Some(scope);
                 }
@@ -330,7 +343,7 @@ fn deep_scope_walk(text: &str, cursor: usize, call: &Node) -> Option<ScopeKind> 
             };
             if is_in_value {
                 let key_text = node_text(text, &key_node);
-                if let Some(scope) = operator_key_to_scope(&key_text) {
+                if let Some(scope) = operator_key_to_scope(normalize_key_text(&key_text)) {
                     return Some(scope);
                 }
             }
@@ -354,7 +367,9 @@ fn operator_key_to_scope(key: &str) -> Option<ScopeKind> {
         "$match" => Some(ScopeKind::MatchFilter),
         "$group" => Some(ScopeKind::GroupSpec),
         "$project" => Some(ScopeKind::ProjectSpec),
-        "$set" | "$addFields" | "$replaceRoot" | "$replaceWith" => Some(ScopeKind::SetDoc),
+        "$set" | "$addFields" | "$replaceRoot" | "$replaceWith" | "$unset" | "$inc" | "$mul"
+        | "$min" | "$max" | "$rename" | "$push" | "$pull" | "$addToSet" | "$currentDate"
+        | "$setOnInsert" => Some(ScopeKind::SetDoc),
         // Query operators → OperatorValue
         "$eq" | "$ne" | "$gt" | "$gte" | "$lt" | "$lte" | "$in" | "$nin" | "$exists" | "$regex"
         | "$not" | "$elemMatch" | "$size" | "$all" | "$type" => Some(ScopeKind::OperatorValue),
@@ -368,12 +383,54 @@ fn operator_key_to_scope(key: &str) -> Option<ScopeKind> {
 
 fn infer_arg_index(call: &Node, cursor: usize) -> Option<usize> {
     let args = call.child_by_field_name("arguments")?;
-    for i in 0..args.named_child_count() {
+    let named_count = args.named_child_count();
+
+    // Empty call site (e.g. `find(|)`) should resolve to first argument.
+    if named_count == 0 {
+        if cursor >= args.start_byte() && cursor <= args.end_byte() {
+            return Some(0);
+        }
+        return None;
+    }
+
+    let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(named_count);
+    for i in 0..named_count {
         let arg = args.named_child(i)?;
-        if cursor >= arg.start_byte() && cursor <= arg.end_byte() {
-            return Some(i);
+        ranges.push((arg.start_byte(), arg.end_byte()));
+    }
+
+    // Cursor inside an existing argument.
+    for (index, (start, end)) in ranges.iter().enumerate() {
+        if cursor >= *start && cursor <= *end {
+            return Some(index);
         }
     }
+
+    // Cursor before first arg but inside argument list punctuation.
+    if let Some((first_start, _)) = ranges.first().copied()
+        && cursor <= first_start
+        && cursor >= args.start_byte()
+    {
+        return Some(0);
+    }
+
+    // Cursor between args resolves to the next arg slot.
+    for index in 0..ranges.len().saturating_sub(1) {
+        let (_, left_end) = ranges[index];
+        let (right_start, _) = ranges[index + 1];
+        if cursor > left_end && cursor < right_start {
+            return Some(index + 1);
+        }
+    }
+
+    // Cursor after the last existing arg but before `)` -> next slot.
+    if let Some((_, last_end)) = ranges.last().copied()
+        && cursor > last_end
+        && cursor <= args.end_byte()
+    {
+        return Some(named_count);
+    }
+
     None
 }
 
@@ -449,6 +506,313 @@ fn extract_collection(text: &str, node: &Node) -> Option<String> {
 fn node_text(text: &str, node: &Node) -> String {
     let range = node.byte_range();
     text.get(range).unwrap_or("").to_string()
+}
+
+fn normalize_key_text(key: &str) -> &str {
+    key.trim().trim_matches(&['"', '\''][..])
+}
+
+// ── Member-access detection ────────────────────────────────────────────────
+
+/// Detect `db.`, `db.collection.`, `db.getCollection("x").`, `db["x"].`,
+/// and chained calls like `db.users.find().sort().`.
+fn detect_member_access(text: &str, cursor: usize, root: &Node) -> Option<ParsedContext> {
+    // Strategy: use cursor-1 to find the property_identifier or other node,
+    // then walk up to find the member_expression context.
+    // When cursor is at end of text (e.g. `db.us|`), named_descendant at cursor
+    // returns `program`, but cursor-1 returns the `property_identifier`.
+
+    // First try: find node at cursor-1 (covers partial typing like `db.us|`)
+    let node = if cursor > 0 {
+        root.named_descendant_for_byte_range(cursor.saturating_sub(1), cursor)
+    } else {
+        None
+    };
+
+    if let Some(n) = node {
+        // If we found a property_identifier, walk up to its parent member_expression
+        if n.kind() == "property_identifier"
+            && let Some(parent) = n.parent()
+            && parent.kind() == "member_expression"
+        {
+            let member_token = text.get(n.start_byte()..cursor).unwrap_or("").to_string();
+            if let Some(obj) = parent.child_by_field_name("object") {
+                return analyze_member_chain(text, &obj, member_token);
+            }
+        }
+
+        // Walk up from the node looking for member_expression or ERROR
+        let mut current = n;
+        loop {
+            match current.kind() {
+                "ERROR" => {
+                    return analyze_error_node(text, cursor, &current);
+                }
+                "call_expression" | "program" => break,
+                _ => {}
+            }
+            current = match current.parent() {
+                Some(p) => p,
+                None => break,
+            };
+        }
+    }
+
+    // Second try: check if cursor is right after a dot
+    if cursor > 0 && text.as_bytes().get(cursor - 1) == Some(&b'.') {
+        let dot_pos = cursor - 1;
+        // Find the expression before the dot
+        if let Some(obj_node) =
+            root.named_descendant_for_byte_range(dot_pos.saturating_sub(1), dot_pos)
+        {
+            // Walk up to find the complete expression ending at the dot
+            let mut expr = obj_node;
+            while let Some(parent) = expr.parent() {
+                if parent.end_byte() > dot_pos || parent.kind() == "program" {
+                    break;
+                }
+                expr = parent;
+            }
+            if expr.end_byte() == dot_pos {
+                return analyze_member_chain(text, &expr, String::new());
+            }
+        }
+
+        // Also check ERROR nodes at the root level for `db.` patterns
+        for i in 0..root.named_child_count() {
+            if let Some(child) = root.named_child(i)
+                && child.kind() == "ERROR"
+                && cursor >= child.start_byte()
+                && cursor <= child.end_byte()
+            {
+                return analyze_error_node(text, cursor, &child);
+            }
+        }
+    }
+
+    None
+}
+
+/// Analyze the object part of a member expression to classify the chain.
+fn analyze_member_chain(text: &str, object: &Node, member_token: String) -> Option<ParsedContext> {
+    match object.kind() {
+        "identifier" => {
+            let name = node_text(text, object);
+            if name == "db" {
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::DbMember,
+                    position_kind: PositionKind::MemberAccess,
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+            None
+        }
+        "member_expression" => {
+            let base = object.child_by_field_name("object")?;
+            let prop = object.child_by_field_name("property")?;
+            let base_name = node_text(text, &base);
+            if base_name == "db" {
+                let collection = node_text(text, &prop);
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::CollectionMember,
+                    position_kind: PositionKind::MemberAccess,
+                    collection: Some(collection),
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+            // Could be deeper: check if base itself resolves to db.xxx
+            if base.kind() == "call_expression" {
+                return analyze_call_chain(text, &base, member_token);
+            }
+            None
+        }
+        "call_expression" => analyze_call_chain(text, object, member_token),
+        "subscript_expression" => {
+            let base = object.child_by_field_name("object")?;
+            let index = object.child_by_field_name("index")?;
+            let base_name = node_text(text, &base);
+            if base_name == "db" && index.kind() == "string" {
+                let raw = node_text(text, &index);
+                let collection = raw.trim_matches(&['"', '\''][..]).to_string();
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::CollectionMember,
+                    position_kind: PositionKind::MemberAccess,
+                    collection: Some(collection),
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Walk through chained call expressions to find the db.xxx root.
+fn analyze_call_chain(text: &str, call: &Node, member_token: String) -> Option<ParsedContext> {
+    let callee = call.child_by_field_name("function")?;
+
+    if callee.kind() == "member_expression" {
+        let callee_obj = callee.child_by_field_name("object")?;
+        let callee_prop = callee.child_by_field_name("property")?;
+        let callee_obj_text = node_text(text, &callee_obj);
+        let callee_prop_text = node_text(text, &callee_prop);
+
+        // `db.getCollection("x")` — direct db method
+        if callee_obj_text == "db" && callee_prop_text == "getCollection" {
+            let args = call.child_by_field_name("arguments")?;
+            let first = args.named_child(0)?;
+            if first.kind() == "string" {
+                let raw = node_text(text, &first);
+                let collection = raw.trim_matches(&['"', '\''][..]).to_string();
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::CollectionMember,
+                    position_kind: PositionKind::MemberAccess,
+                    collection: Some(collection),
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+            return None;
+        }
+
+        // `db.xxx.method()` — callee_obj is `db.xxx` member_expression
+        if callee_obj.kind() == "member_expression" {
+            let base = callee_obj.child_by_field_name("object")?;
+            let prop = callee_obj.child_by_field_name("property")?;
+            if node_text(text, &base) == "db" {
+                let collection = node_text(text, &prop);
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::CollectionMember,
+                    position_kind: PositionKind::MemberAccess,
+                    collection: Some(collection),
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Recurse through call chains: `db.users.find().sort().`
+        if callee_obj.kind() == "call_expression" {
+            return analyze_call_chain(text, &callee_obj, member_token);
+        }
+    }
+
+    None
+}
+
+/// Handle ERROR nodes produced by tree-sitter for incomplete expressions like `db.`
+fn analyze_error_node(text: &str, cursor: usize, error_node: &Node) -> Option<ParsedContext> {
+    let child_count = error_node.child_count();
+    for i in 0..child_count {
+        let child = error_node.child(i)?;
+        if child.kind() == "." && child.end_byte() <= cursor && i > 0 {
+            let before = error_node.child(i - 1)?;
+            let member_token = if child.end_byte() < cursor {
+                text.get(child.end_byte()..cursor).unwrap_or("").to_string()
+            } else {
+                String::new()
+            };
+
+            if before.kind() == "identifier" && node_text(text, &before) == "db" {
+                return Some(ParsedContext {
+                    scope_kind: ScopeKind::DbMember,
+                    position_kind: PositionKind::MemberAccess,
+                    member_token: Some(member_token),
+                    ..Default::default()
+                });
+            }
+
+            if matches!(
+                before.kind(),
+                "member_expression" | "call_expression" | "subscript_expression"
+            ) {
+                return analyze_member_chain(text, &before, member_token);
+            }
+        }
+    }
+
+    // Check named children for member/call expressions inside the ERROR
+    let named_count = error_node.named_child_count();
+    for i in 0..named_count {
+        if let Some(child) = error_node.named_child(i) {
+            if child.kind() == "member_expression" && cursor > child.end_byte() {
+                let between = text.get(child.end_byte()..cursor).unwrap_or("");
+                if let Some(dot_pos) = between.find('.') {
+                    let after_dot = &between[dot_pos + 1..];
+                    return analyze_member_chain(text, &child, after_dot.to_string());
+                }
+            }
+            if child.kind() == "call_expression" && cursor > child.end_byte() {
+                let between = text.get(child.end_byte()..cursor).unwrap_or("");
+                if let Some(dot_pos) = between.find('.') {
+                    let after_dot = &between[dot_pos + 1..];
+                    return analyze_member_chain(text, &child, after_dot.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Minimal parser-failure fallback for explicit `db.` and `db.<collection>.` chains.
+fn fallback_member_access(text: &str, cursor: usize) -> Option<ParsedContext> {
+    let cursor = cursor.min(text.len());
+    let prefix = text.get(..cursor)?;
+
+    // Use the trailing expression chunk only.
+    let expr_start = prefix
+        .rfind(|c: char| c.is_whitespace() || matches!(c, ';' | ',' | '(' | ')' | '{' | '}'))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let expr = prefix.get(expr_start..)?.trim();
+    if !expr.starts_with("db.") {
+        return None;
+    }
+
+    let rest = &expr[3..];
+    if rest.is_empty() {
+        return Some(ParsedContext {
+            scope_kind: ScopeKind::DbMember,
+            position_kind: PositionKind::MemberAccess,
+            member_token: Some(String::new()),
+            ..Default::default()
+        });
+    }
+
+    // db.<partial>
+    if !rest.contains('.') {
+        if is_member_token(rest) {
+            return Some(ParsedContext {
+                scope_kind: ScopeKind::DbMember,
+                position_kind: PositionKind::MemberAccess,
+                member_token: Some(rest.to_string()),
+                ..Default::default()
+            });
+        }
+        return None;
+    }
+
+    // db.<collection>.<partial>
+    let (collection, token) = rest.split_once('.')?;
+    if collection.is_empty() || !is_member_token(collection) || !is_member_token(token) {
+        return None;
+    }
+
+    Some(ParsedContext {
+        scope_kind: ScopeKind::CollectionMember,
+        position_kind: PositionKind::MemberAccess,
+        collection: Some(collection.to_string()),
+        member_token: Some(token.to_string()),
+        ..Default::default()
+    })
+}
+
+fn is_member_token(input: &str) -> bool {
+    input.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -569,7 +933,8 @@ mod tests {
 
     #[test]
     fn top_level_context() {
-        let ctx = ctx_at("db.| ");
+        // bare text with no db. prefix → TopLevel
+        let ctx = ctx_at("x = 5|");
         assert_eq!(ctx.position_kind, PositionKind::Unknown);
         assert_eq!(ctx.scope_kind, ScopeKind::TopLevel);
     }
@@ -609,5 +974,121 @@ mod tests {
         let ctx = ctx_at("db.c.aggregate([{ $project: { n| } }])");
         assert_eq!(ctx.position_kind, PositionKind::Key);
         assert_eq!(ctx.scope_kind, ScopeKind::ProjectSpec);
+    }
+
+    // ── Member-access detection ────────────────────────────────────
+
+    #[test]
+    fn db_dot_cursor() {
+        let ctx = ctx_at("db.|");
+        assert_eq!(ctx.scope_kind, ScopeKind::DbMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection, None);
+        assert_eq!(ctx.member_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn db_dot_partial() {
+        let ctx = ctx_at("db.us|");
+        assert_eq!(ctx.scope_kind, ScopeKind::DbMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection, None);
+        assert_eq!(ctx.member_token.as_deref(), Some("us"));
+    }
+
+    #[test]
+    fn collection_dot_cursor() {
+        let ctx = ctx_at("db.users.|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn collection_dot_partial() {
+        let ctx = ctx_at("db.users.fi|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some("fi"));
+    }
+
+    #[test]
+    fn get_collection_dot_cursor() {
+        let ctx = ctx_at("db.getCollection(\"users\").|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn chained_call_partial() {
+        let ctx = ctx_at("db.users.find().so|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some("so"));
+    }
+
+    #[test]
+    fn bracket_access_dot_cursor() {
+        let ctx = ctx_at("db[\"users\"].|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn bracket_access_partial() {
+        let ctx = ctx_at("db[\"users\"].fi|");
+        assert_eq!(ctx.scope_kind, ScopeKind::CollectionMember);
+        assert_eq!(ctx.position_kind, PositionKind::MemberAccess);
+        assert_eq!(ctx.collection.as_deref(), Some("users"));
+        assert_eq!(ctx.member_token.as_deref(), Some("fi"));
+    }
+
+    #[test]
+    fn bare_text_is_top_level() {
+        let ctx = ctx_at("x = 5|");
+        assert_eq!(ctx.scope_kind, ScopeKind::TopLevel);
+        assert_eq!(ctx.position_kind, PositionKind::Unknown);
+        assert_eq!(ctx.collection, None);
+        assert!(ctx.member_token.is_none());
+    }
+
+    #[test]
+    fn find_empty_first_argument_slot() {
+        let ctx = ctx_at("db.c.find(|)");
+        assert_eq!(ctx.scope_kind, ScopeKind::FindFilter);
+    }
+
+    #[test]
+    fn update_second_argument_slot() {
+        let ctx = ctx_at("db.c.updateOne({}, |)");
+        assert_eq!(ctx.scope_kind, ScopeKind::UpdateDoc);
+    }
+
+    #[test]
+    fn quoted_match_operator_scope() {
+        let ctx = ctx_at("db.c.aggregate([{ \"$match\": { n| } }])");
+        assert_eq!(ctx.scope_kind, ScopeKind::MatchFilter);
+        assert_eq!(ctx.position_kind, PositionKind::Key);
+    }
+
+    #[test]
+    fn quoted_query_operator_value_scope() {
+        let ctx = ctx_at("db.c.find({ name: { \"$gt\": 5| } })");
+        assert_eq!(ctx.scope_kind, ScopeKind::OperatorValue);
+        assert_eq!(ctx.position_kind, PositionKind::Value);
+    }
+
+    #[test]
+    fn update_operator_maps_to_set_doc_scope() {
+        let ctx = ctx_at("db.c.updateOne({}, { $inc: { co|: 1 } })");
+        assert_eq!(ctx.scope_kind, ScopeKind::SetDoc);
+        assert_eq!(ctx.position_kind, PositionKind::Key);
     }
 }

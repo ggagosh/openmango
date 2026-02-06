@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui::*;
@@ -9,9 +10,8 @@ use lsp_types::{
 };
 
 use super::logic::{
-    ContextKind, METHODS, PIPELINE_OPERATORS, QUERY_OPERATORS, UPDATE_OPERATORS,
-    collection_method_template, completion_token, detect_context, label_from_template,
-    merge_suggestions, should_skip_completion,
+    METHODS, PIPELINE_OPERATORS, QUERY_OPERATORS, UPDATE_OPERATORS, collection_method_template,
+    db_method_template, label_from_template,
 };
 use super::parser::{PositionKind, ScopeKind, parse_context};
 use super::runtime::ForgeRuntime;
@@ -53,8 +53,6 @@ struct CompletionIntent {
     collection: Option<String>,
     token: String,
     replace_range: Range,
-    /// For top-level fallback to line heuristics
-    line_context: Option<ContextKind>,
     line_prefix: String,
 }
 
@@ -63,11 +61,16 @@ struct CompletionIntent {
 pub struct ForgeCompletionProvider {
     state: Entity<AppState>,
     runtime: Arc<ForgeRuntime>,
+    request_id: Arc<AtomicU64>,
 }
 
 impl ForgeCompletionProvider {
-    pub fn new(state: Entity<AppState>, runtime: Arc<ForgeRuntime>) -> Self {
-        Self { state, runtime }
+    pub fn new(
+        state: Entity<AppState>,
+        runtime: Arc<ForgeRuntime>,
+        request_id: Arc<AtomicU64>,
+    ) -> Self {
+        Self { state, runtime, request_id }
     }
 
     pub fn schedule_schema_sample(&self, collection: &str, cx: &mut Context<InputState>) {
@@ -138,9 +141,6 @@ impl ForgeCompletionProvider {
 
 fn context_stage(rope: &Rope, offset: usize) -> Option<CompletionIntent> {
     let (line_prefix, line_start) = line_prefix_for_offset(rope, offset);
-    if should_skip_completion(&line_prefix) {
-        return None;
-    }
 
     let full_text = rope.to_string();
     let parse_ctx = parse_context(&full_text, offset);
@@ -148,17 +148,20 @@ fn context_stage(rope: &Rope, offset: usize) -> Option<CompletionIntent> {
         return None;
     }
 
-    let (token, token_start_in_line) = object_token_from_line(&line_prefix);
+    // For member access scopes, use the member_token from the parser
+    let (token, token_start_in_line) =
+        if matches!(parse_ctx.scope_kind, ScopeKind::DbMember | ScopeKind::CollectionMember) {
+            let mt = parse_ctx.member_token.as_deref().unwrap_or("");
+            // Token start = offset - member_token.len(), relative to line_start
+            let abs_start = offset.saturating_sub(mt.len());
+            let rel_start = abs_start.saturating_sub(line_start);
+            (mt.to_string(), rel_start)
+        } else {
+            object_token_from_line(&line_prefix)
+        };
+
     let replace_start = line_start.saturating_add(token_start_in_line);
     let replace_range = completion_range(rope, replace_start, offset);
-
-    // For top-level scope, compute line context for fallback
-    let line_context = if parse_ctx.scope_kind == ScopeKind::TopLevel {
-        let trimmed = line_prefix.trim_end();
-        detect_context(trimmed)
-    } else {
-        None
-    };
 
     Some(CompletionIntent {
         position: parse_ctx.position_kind,
@@ -166,7 +169,6 @@ fn context_stage(rope: &Rope, offset: usize) -> Option<CompletionIntent> {
         collection: parse_ctx.collection,
         token,
         replace_range,
-        line_context,
         line_prefix,
     })
 }
@@ -178,6 +180,13 @@ fn candidate_stage(
     state: &AppState,
     schedule_schema: &mut bool,
 ) -> Vec<Suggestion> {
+    // ── DbMember / CollectionMember → specialized candidates ─────
+    match intent.scope {
+        ScopeKind::DbMember => return build_collection_suggestions(state),
+        ScopeKind::CollectionMember => return build_method_suggestions(),
+        _ => {}
+    }
+
     // ── Policy: Value and ArrayElement positions → empty ─────────
     if matches!(intent.position, PositionKind::Value | PositionKind::ArrayElement) {
         return Vec::new();
@@ -188,9 +197,9 @@ fn candidate_stage(
         return Vec::new();
     }
 
-    // ── TopLevel scope → defer to line heuristics ───────────────
+    // ── TopLevel scope → nothing to complete ─────────────────────
     if intent.scope == ScopeKind::TopLevel {
-        return top_level_candidates(intent, state);
+        return Vec::new();
     }
 
     let mut suggestions = Vec::new();
@@ -200,14 +209,10 @@ fn candidate_stage(
         && let Some(collection) = intent.collection.as_deref()
     {
         let fields = build_field_suggestions(state, collection, &intent.token);
-        if wants_schema_for_scope(intent.scope) {
-            if fields.is_empty() {
-                // No cached fields — trigger initial sample
-                *schedule_schema = true;
-            } else if schema_cache_stale(state, collection) {
-                // Have fields but stale — trigger background refresh
-                *schedule_schema = true;
-            }
+        if wants_schema_for_scope(intent.scope)
+            && (fields.is_empty() || schema_cache_stale(state, collection))
+        {
+            *schedule_schema = true;
         }
         suggestions.extend(fields);
     }
@@ -225,7 +230,6 @@ fn candidate_stage(
         && intent.scope == ScopeKind::AggregateStage
         && intent.token.is_empty()
     {
-        // Show pipeline operators even without $ prefix for empty token
         suggestions.extend(build_pipeline_operator_suggestions());
     }
 
@@ -262,17 +266,7 @@ fn operators_for_scope(scope: ScopeKind) -> Vec<Suggestion> {
             build_query_operator_suggestions()
         }
         ScopeKind::GroupSpec => build_accumulator_operator_suggestions(),
-        // No operators for insert/set/project/toplevel
         _ => Vec::new(),
-    }
-}
-
-fn top_level_candidates(intent: &CompletionIntent, state: &AppState) -> Vec<Suggestion> {
-    match intent.line_context {
-        Some(ContextKind::Collections) => build_collection_suggestions(state),
-        Some(ContextKind::Methods) => build_method_suggestions(),
-        Some(ContextKind::Operators) => build_query_operator_suggestions(),
-        None => Vec::new(), // Don't guess — no bridge junk
     }
 }
 
@@ -312,6 +306,93 @@ fn render_stage(suggestions: Vec<Suggestion>, replace_range: &Range) -> Vec<Comp
     suggestions_to_completion_items(suggestions, replace_range)
 }
 
+// ── Bridge merge ───────────────────────────────────────────────────────────
+
+fn merge_bridge_suggestions(
+    local: Vec<Suggestion>,
+    bridge: Vec<String>,
+    scope: ScopeKind,
+    token: &str,
+) -> Vec<Suggestion> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    // Add local suggestions first
+    for s in local {
+        let label = s.label.clone();
+        if seen.insert(label.clone()) {
+            out.push(s);
+        }
+        // Also mark base name as seen (e.g. "find" for "find({})")
+        if let Some((base, _)) = label.split_once('(')
+            && !base.is_empty()
+        {
+            seen.insert(base.to_string());
+        }
+    }
+
+    // Process bridge completions
+    for completion in bridge {
+        let normalized = match scope {
+            ScopeKind::DbMember => {
+                // Strip "db." prefix if present
+                completion.trim().strip_prefix("db.").unwrap_or(completion.trim()).to_string()
+            }
+            ScopeKind::CollectionMember => {
+                // Take last dot-segment
+                completion.trim().rsplit('.').next().unwrap_or(completion.trim()).to_string()
+            }
+            _ => continue,
+        };
+
+        if normalized.is_empty() {
+            continue;
+        }
+        if !token.is_empty() && !normalized.starts_with(token) {
+            continue;
+        }
+
+        let suggestion = match scope {
+            ScopeKind::DbMember => db_method_template(&normalized)
+                .map(|template| Suggestion {
+                    label: label_from_template(template),
+                    kind: SuggestionKind::Method,
+                    insert_text: template.to_string(),
+                    is_snippet: template.contains('$'),
+                })
+                .unwrap_or_else(|| Suggestion {
+                    label: normalized.clone(),
+                    kind: SuggestionKind::Collection,
+                    insert_text: normalized,
+                    is_snippet: false,
+                }),
+            ScopeKind::CollectionMember => {
+                let base = normalized.split_once('(').map(|(b, _)| b).unwrap_or(&normalized);
+                collection_method_template(base)
+                    .map(|template| Suggestion {
+                        label: label_from_template(template),
+                        kind: SuggestionKind::Method,
+                        insert_text: template.to_string(),
+                        is_snippet: template.contains('$'),
+                    })
+                    .unwrap_or_else(|| Suggestion {
+                        label: normalized.clone(),
+                        kind: SuggestionKind::Method,
+                        insert_text: normalized,
+                        is_snippet: false,
+                    })
+            }
+            _ => continue,
+        };
+
+        if seen.insert(suggestion.label.clone()) {
+            out.push(suggestion);
+        }
+    }
+
+    out
+}
+
 // ── CompletionProvider impl ────────────────────────────────────────────────
 
 impl CompletionProvider for ForgeCompletionProvider {
@@ -323,51 +404,34 @@ impl CompletionProvider for ForgeCompletionProvider {
         _window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<anyhow::Result<CompletionResponse>> {
+        let request_id = self.request_id.fetch_add(1, Ordering::AcqRel) + 1;
+
         // Stage 1: Context
         let Some(intent) = context_stage(rope, offset) else {
             return Task::ready(Ok(CompletionResponse::Array(vec![])));
         };
 
-        // For non-TopLevel scopes: local-only pipeline
-        if intent.scope != ScopeKind::TopLevel {
-            let mut schedule_schema = false;
-            let candidates = candidate_stage(&intent, self.state.read(cx), &mut schedule_schema);
+        // Stage 2: Candidates
+        let mut schedule_schema = false;
+        let candidates = candidate_stage(&intent, self.state.read(cx), &mut schedule_schema);
 
-            if schedule_schema && let Some(collection) = intent.collection.as_deref() {
-                self.schedule_schema_sample(collection, cx);
-            }
-
-            let ranked = ranking_stage(candidates, &intent.token);
-            let items = render_stage(ranked, &intent.replace_range);
-            return Task::ready(Ok(CompletionResponse::Array(items)));
+        if schedule_schema && let Some(collection) = intent.collection.as_deref() {
+            self.schedule_schema_sample(collection, cx);
         }
 
-        // TopLevel: compute local candidates, then optionally bridge
-        let trimmed = intent.line_prefix.trim_end().to_string();
-        let line_context = intent.line_context;
-        let (token, token_start_in_line) = completion_token(&intent.line_prefix, line_context);
-        let line_start = offset.saturating_sub(intent.line_prefix.len());
-        let replace_start = line_start.saturating_add(token_start_in_line);
-        let replace_range = completion_range(rope, replace_start, offset);
+        // Stage 3 + 4: Rank + Render
+        let ranked = ranking_stage(candidates.clone(), &intent.token);
+        let local_items = render_stage(ranked, &intent.replace_range);
 
-        if line_context.is_none()
-            && token.is_empty()
-            && (trimmed.is_empty() || trimmed.ends_with('.'))
-        {
-            return Task::ready(Ok(CompletionResponse::Array(vec![])));
-        }
-
-        let local = top_level_candidates(&intent, self.state.read(cx));
-        let completion_prefix = trimmed.to_string();
-        let merged_local =
-            merge_suggestions(local.clone(), Vec::new(), line_context, &completion_prefix, &token);
-        let local_items = suggestions_to_completion_items(merged_local, &replace_range);
-
-        // Gate bridge: only for Collections/Methods contexts
-        let use_bridge =
-            matches!(line_context, Some(ContextKind::Collections) | Some(ContextKind::Methods));
+        // For DbMember/CollectionMember: optionally enhance with bridge (debounced)
+        let use_bridge = matches!(intent.scope, ScopeKind::DbMember | ScopeKind::CollectionMember);
 
         if !use_bridge {
+            return Task::ready(Ok(CompletionResponse::Array(local_items)));
+        }
+
+        // Prefer local deterministic suggestions while typing; bridge only when local is empty.
+        if !local_items.is_empty() {
             return Task::ready(Ok(CompletionResponse::Array(local_items)));
         }
 
@@ -376,11 +440,20 @@ impl CompletionProvider for ForgeCompletionProvider {
             return Task::ready(Ok(CompletionResponse::Array(local_items)));
         };
 
+        // Build the bridge request text
+        let request_text = intent.line_prefix.trim_end().to_string();
+        if request_text.is_empty() {
+            return Task::ready(Ok(CompletionResponse::Array(local_items)));
+        }
+
         let runtime = self.runtime.clone();
+        let latest_request_id = self.request_id.clone();
         let runtime_handle = self.state.read(cx).connection_manager().runtime_handle();
-        let token = token.clone();
-        let context_for_merge = line_context;
-        let request_text = completion_prefix.clone();
+        let token = intent.token.clone();
+        let scope = intent.scope;
+        let replace_range = intent.replace_range;
+        let local_items = local_items.clone();
+
         cx.background_spawn(async move {
             let result = runtime_handle
                 .spawn_blocking(move || {
@@ -402,14 +475,14 @@ impl CompletionProvider for ForgeCompletionProvider {
                 }
             };
 
-            let merged = merge_suggestions(
-                local,
-                completions,
-                context_for_merge,
-                &completion_prefix,
-                &token,
-            );
-            let items = suggestions_to_completion_items(merged, &replace_range);
+            // Drop stale async completion results to avoid menu flicker/context jumps.
+            if latest_request_id.load(Ordering::Acquire) != request_id {
+                return Ok(CompletionResponse::Array(local_items));
+            }
+
+            let merged = merge_bridge_suggestions(candidates, completions, scope, &token);
+            let ranked = ranking_stage(merged, &token);
+            let items = render_stage(ranked, &replace_range);
             Ok(CompletionResponse::Array(items))
         })
     }
@@ -669,9 +742,11 @@ fn extract_fields_from_printable(printable: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_accumulator_operator_suggestions, build_query_operator_suggestions, make_suggestion,
-        operators_for_scope, ranking_stage, wants_schema_for_scope,
+        CompletionIntent, build_accumulator_operator_suggestions, build_query_operator_suggestions,
+        candidate_stage, make_suggestion, operators_for_scope, ranking_stage,
+        wants_schema_for_scope,
     };
+    use crate::state::AppState;
     use crate::views::forge::parser::{PositionKind, ScopeKind};
     use crate::views::forge::types::SuggestionKind;
 
@@ -747,6 +822,18 @@ mod tests {
     fn operator_value_returns_query_ops() {
         let ops = operators_for_scope(ScopeKind::OperatorValue);
         assert!(ops.iter().any(|s| s.label == "$eq"));
+    }
+
+    #[test]
+    fn db_member_returns_no_ops() {
+        let ops = operators_for_scope(ScopeKind::DbMember);
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn collection_member_returns_no_ops() {
+        let ops = operators_for_scope(ScopeKind::CollectionMember);
+        assert!(ops.is_empty());
     }
 
     // ── Ranking ─────────────────────────────────────────────────────
@@ -826,5 +913,62 @@ mod tests {
         assert!(!wants_schema_for_scope(ScopeKind::OperatorValue));
         assert!(!wants_schema_for_scope(ScopeKind::AggregateStage));
         assert!(!wants_schema_for_scope(ScopeKind::TopLevel));
+        assert!(!wants_schema_for_scope(ScopeKind::DbMember));
+        assert!(!wants_schema_for_scope(ScopeKind::CollectionMember));
+    }
+
+    // ── Candidate policy checks ────────────────────────────────────
+
+    fn intent(scope: ScopeKind, position: PositionKind, token: &str) -> CompletionIntent {
+        CompletionIntent {
+            position,
+            scope,
+            collection: None,
+            token: token.to_string(),
+            replace_range: lsp_types::Range::new(
+                lsp_types::Position::new(0, 0),
+                lsp_types::Position::new(0, 0),
+            ),
+            line_prefix: String::new(),
+        }
+    }
+
+    #[test]
+    fn candidate_stage_top_level_is_empty() {
+        let state = AppState::default();
+        let mut schedule_schema = false;
+        let out = candidate_stage(
+            &intent(ScopeKind::TopLevel, PositionKind::Unknown, ""),
+            &state,
+            &mut schedule_schema,
+        );
+        assert!(out.is_empty());
+        assert!(!schedule_schema);
+    }
+
+    #[test]
+    fn candidate_stage_value_position_is_empty() {
+        let state = AppState::default();
+        let mut schedule_schema = false;
+        let out = candidate_stage(
+            &intent(ScopeKind::FindFilter, PositionKind::Value, ""),
+            &state,
+            &mut schedule_schema,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn candidate_stage_db_member_has_core_methods() {
+        let state = AppState::default();
+        let mut schedule_schema = false;
+        let out = candidate_stage(
+            &intent(ScopeKind::DbMember, PositionKind::MemberAccess, ""),
+            &state,
+            &mut schedule_schema,
+        );
+        assert!(out.iter().any(|s| s.label == "stats()"));
+        assert!(out.iter().any(|s| s.label == "getCollection(\"\")"));
+        assert!(!schedule_schema);
     }
 }
