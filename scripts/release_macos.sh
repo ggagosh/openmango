@@ -124,7 +124,9 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
         codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongorestore"
     fi
     if [[ -f "$APP_DIR/Contents/Resources/bin/node" ]]; then
-        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/node"
+        codesign --force --options runtime --timestamp \
+            --entitlements "$ROOT_DIR/scripts/node.entitlements" \
+            --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/node"
     fi
     # Sign the main app bundle
     codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"
