@@ -72,6 +72,8 @@ actions!(
         FocusForgeEditor,
         FocusForgeOutput,
         FindInForgeOutput,
+        DownloadUpdate,
+        InstallUpdate,
     ]
 );
 

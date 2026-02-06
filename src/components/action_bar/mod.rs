@@ -151,10 +151,11 @@ impl ActionBar {
                 .map(|item| FilteredAction { item: item.clone(), score: 0 })
                 .collect();
             filtered.sort_by(|a, b| {
-                a.item
-                    .category
-                    .sort_order()
-                    .cmp(&b.item.category.sort_order())
+                // Highlighted items always first
+                b.item
+                    .highlighted
+                    .cmp(&a.item.highlighted)
+                    .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
                     .then_with(|| a.item.priority.cmp(&b.item.priority))
             });
             self.filtered = filtered;
@@ -176,8 +177,11 @@ impl ActionBar {
             .collect();
 
         filtered.sort_by(|a, b| {
-            a.score
-                .cmp(&b.score)
+            // Highlighted items first, then by score
+            b.item
+                .highlighted
+                .cmp(&a.item.highlighted)
+                .then_with(|| a.score.cmp(&b.score))
                 .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
                 .then_with(|| a.item.priority.cmp(&b.item.priority))
         });
@@ -379,19 +383,15 @@ fn render_action_row(bar: &ActionBar, index: usize, entity: &Entity<ActionBar>) 
     }
 
     // Left side: label + detail
+    let label_color = if item.highlighted { colors::accent() } else { colors::text_primary() };
     let mut left = div().flex().flex_1().items_center().gap(spacing::sm()).overflow_hidden();
-    left = left.child(
-        div()
-            .text_sm()
-            .text_color(colors::text_primary())
-            .flex_shrink_0()
-            .child(item.label.clone()),
-    );
+    left = left
+        .child(div().text_sm().text_color(label_color).flex_shrink_0().child(item.label.clone()));
     if let Some(detail) = &item.detail {
         left = left.child(
             div()
                 .text_xs()
-                .text_color(colors::text_muted())
+                .text_color(if item.highlighted { colors::accent() } else { colors::text_muted() })
                 .overflow_hidden()
                 .child(detail.clone()),
         );

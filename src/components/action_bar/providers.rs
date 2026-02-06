@@ -1,6 +1,8 @@
 use gpui::SharedString;
 
-use crate::state::{AppState, TabKey};
+use crate::state::AppState;
+use crate::state::TabKey;
+use crate::state::app_state::updater::UpdateStatus;
 
 use super::types::{ActionCategory, ActionItem};
 
@@ -18,9 +20,8 @@ pub fn navigation_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from(conn_name.clone()),
             detail: Some(SharedString::from("Connection")),
             category: ActionCategory::Navigation,
-            shortcut: None,
             available: true,
-            priority: 0,
+            ..Default::default()
         });
 
         // Databases
@@ -30,9 +31,9 @@ pub fn navigation_actions(state: &AppState) -> Vec<ActionItem> {
                 label: SharedString::from(db.clone()),
                 detail: Some(SharedString::from(conn_name.clone())),
                 category: ActionCategory::Navigation,
-                shortcut: None,
                 available: true,
                 priority: 10,
+                ..Default::default()
             });
 
             // Collections within this database
@@ -43,9 +44,9 @@ pub fn navigation_actions(state: &AppState) -> Vec<ActionItem> {
                         label: SharedString::from(col.clone()),
                         detail: Some(SharedString::from(format!("{} / {}", conn_name, db))),
                         category: ActionCategory::Navigation,
-                        shortcut: None,
                         available: true,
                         priority: 20,
+                        ..Default::default()
                     });
                 }
             }
@@ -94,9 +95,9 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from(label),
             detail: Some(SharedString::from(detail)),
             category: ActionCategory::Tab,
-            shortcut: None,
             available: true,
             priority: index as i32,
+            ..Default::default()
         });
     }
 
@@ -110,9 +111,9 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from(format!("{} (preview)", preview.collection)),
             detail: Some(SharedString::from(format!("{} / {}", conn_name, preview.database))),
             category: ActionCategory::Tab,
-            shortcut: None,
             available: true,
             priority: actions.len() as i32,
+            ..Default::default()
         });
     }
 
@@ -130,47 +131,45 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:new-connection"),
             label: SharedString::from("New Connection"),
-            detail: None,
             category: ActionCategory::Command,
-            shortcut: None,
             available: true,
-            priority: 0,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:create-database"),
             label: SharedString::from("Create Database"),
-            detail: None,
             category: ActionCategory::Command,
             shortcut: Some(SharedString::from("Cmd+Shift+N")),
             available: is_connected,
             priority: 10,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:create-collection"),
             label: SharedString::from("Create Collection"),
-            detail: None,
             category: ActionCategory::Command,
             shortcut: Some(SharedString::from("Cmd+N")),
             available: is_connected && state.selected_database().is_some(),
             priority: 11,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:refresh"),
             label: SharedString::from("Refresh"),
-            detail: None,
             category: ActionCategory::Command,
             shortcut: Some(SharedString::from("Cmd+R")),
             available: has_connection,
             priority: 20,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:disconnect"),
             label: SharedString::from("Disconnect"),
-            detail: None,
             category: ActionCategory::Command,
             shortcut: Some(SharedString::from("Cmd+Shift+D")),
             available: is_connected,
             priority: 30,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:settings"),
@@ -180,6 +179,45 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             shortcut: Some(SharedString::from("Cmd+,")),
             available: true,
             priority: 100,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:check-updates"),
+            label: SharedString::from("Check for Updates"),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 110,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:download-update"),
+            label: SharedString::from("Download Update"),
+            detail: match &state.update_status {
+                UpdateStatus::Available { version, .. } => {
+                    Some(SharedString::from(format!("v{version}")))
+                }
+                _ => None,
+            },
+            category: ActionCategory::Command,
+            available: matches!(state.update_status, UpdateStatus::Available { .. }),
+            priority: -10,
+            highlighted: matches!(state.update_status, UpdateStatus::Available { .. }),
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:install-update"),
+            label: SharedString::from("Restart to Update"),
+            detail: match &state.update_status {
+                UpdateStatus::ReadyToInstall { version, .. } => {
+                    Some(SharedString::from(format!("v{version}")))
+                }
+                _ => None,
+            },
+            category: ActionCategory::Command,
+            available: matches!(state.update_status, UpdateStatus::ReadyToInstall { .. }),
+            priority: -20,
+            highlighted: matches!(state.update_status, UpdateStatus::ReadyToInstall { .. }),
+            ..Default::default()
         },
     ]
 }
@@ -192,38 +230,37 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("view:documents"),
             label: SharedString::from("Show Documents"),
-            detail: None,
             category: ActionCategory::View,
             shortcut: Some(SharedString::from("Cmd+Alt+1")),
             available: has_collection,
-            priority: 0,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("view:indexes"),
             label: SharedString::from("Show Indexes"),
-            detail: None,
             category: ActionCategory::View,
             shortcut: Some(SharedString::from("Cmd+Alt+2")),
             available: has_collection,
             priority: 1,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("view:stats"),
             label: SharedString::from("Show Stats"),
-            detail: None,
             category: ActionCategory::View,
             shortcut: Some(SharedString::from("Cmd+Alt+3")),
             available: has_collection,
             priority: 2,
+            ..Default::default()
         },
         ActionItem {
             id: SharedString::from("view:aggregation"),
             label: SharedString::from("Show Aggregation"),
-            detail: None,
             category: ActionCategory::View,
             shortcut: Some(SharedString::from("Cmd+Alt+4")),
             available: has_collection,
             priority: 3,
+            ..Default::default()
         },
     ]
 }

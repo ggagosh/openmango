@@ -1,6 +1,7 @@
 use gpui::*;
 
-use crate::state::StatusMessage;
+use crate::state::app_state::updater::UpdateStatus;
+use crate::state::{AppState, StatusMessage};
 use crate::theme::{colors, sizing, spacing};
 
 mod left;
@@ -15,6 +16,8 @@ pub struct StatusBar {
     connection_name: Option<String>,
     status_message: Option<StatusMessage>,
     read_only: bool,
+    update_status: UpdateStatus,
+    state: Entity<AppState>,
 }
 
 impl StatusBar {
@@ -23,8 +26,10 @@ impl StatusBar {
         connection_name: Option<String>,
         status_message: Option<StatusMessage>,
         read_only: bool,
+        update_status: UpdateStatus,
+        state: Entity<AppState>,
     ) -> Self {
-        Self { is_connected, connection_name, status_message, read_only }
+        Self { is_connected, connection_name, status_message, read_only, update_status, state }
     }
 }
 
@@ -41,6 +46,6 @@ impl RenderOnce for StatusBar {
             .border_t_1()
             .border_color(colors::border())
             .child(render_status_left(self.is_connected, self.connection_name, self.read_only))
-            .child(render_status_right(self.status_message))
+            .child(render_status_right(self.status_message, self.update_status, self.state))
     }
 }

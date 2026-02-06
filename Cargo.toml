@@ -44,6 +44,8 @@ which = "8.0"
 flate2 = "1.1"
 encoding_rs = "0.8"
 unicode-segmentation = "1.12.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+semver = "1.0"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = [

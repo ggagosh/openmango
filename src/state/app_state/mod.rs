@@ -10,6 +10,7 @@ mod status;
 mod tabs;
 mod transfer;
 mod types;
+pub mod updater;
 mod workspace;
 
 pub(crate) use aggregation::{
@@ -39,6 +40,8 @@ use crate::state::StatusMessage;
 use crate::state::events::AppEvent;
 use crate::state::settings::AppSettings;
 use crate::state::{ConfigManager, WorkspaceState};
+
+use updater::UpdateStatus;
 
 use types::*;
 
@@ -83,6 +86,9 @@ pub struct AppState {
     pub workspace: WorkspaceState,
     pub(crate) workspace_restore_pending: bool,
     aggregation_workspace_save_gen: Arc<AtomicU64>,
+
+    // Auto-update
+    pub update_status: UpdateStatus,
 }
 
 impl AppState {
@@ -130,6 +136,7 @@ impl AppState {
             workspace,
             workspace_restore_pending,
             aggregation_workspace_save_gen,
+            update_status: UpdateStatus::Idle,
         }
     }
 

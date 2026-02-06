@@ -220,6 +220,11 @@ impl AppState {
                     }
                 }
             }
+            AppEvent::UpdateAvailable { version } => {
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Update available: v{version}"
+                ))));
+            }
             _ => {}
         }
     }

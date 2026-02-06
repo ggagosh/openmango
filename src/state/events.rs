@@ -140,4 +140,9 @@ pub enum AppEvent {
 
     // View navigation
     ViewChanged,
+
+    // Auto-update
+    UpdateAvailable {
+        version: String,
+    },
 }

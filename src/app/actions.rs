@@ -338,6 +338,15 @@ impl AppRoot {
                     });
                 }
             }
+            "cmd:check-updates" => {
+                AppCommands::check_for_updates(state.clone(), cx);
+            }
+            "cmd:download-update" => {
+                AppCommands::download_update(state.clone(), cx);
+            }
+            "cmd:install-update" => {
+                AppCommands::install_update(state.clone(), cx);
+            }
             _ => {} // Unknown action — no-op
         }
     }

@@ -52,3 +52,4 @@ mod documents;
 mod indexes;
 mod stats;
 mod transfer;
+mod updater;

@@ -1,7 +1,7 @@
 use gpui::SharedString;
 
 /// A single action in the palette.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ActionItem {
     pub id: SharedString,
     pub label: SharedString,
@@ -10,12 +10,15 @@ pub struct ActionItem {
     pub shortcut: Option<SharedString>,
     pub available: bool,
     pub priority: i32,
+    /// Highlighted items render with accent color and sort to the top.
+    pub highlighted: bool,
 }
 
 /// Categories for grouping and ordering actions.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ActionCategory {
     Navigation,
+    #[default]
     Command,
     Tab,
     View,

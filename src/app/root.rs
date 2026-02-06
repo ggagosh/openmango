@@ -6,8 +6,9 @@ use crate::components::action_bar::ActionBar;
 use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_dialog};
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
-    DeleteConnection, DeleteDatabase, DisconnectConnection, EditConnection, NewConnection, NextTab,
-    OpenActionBar, OpenForge, OpenSettings, PrevTab, QuitApp, RefreshView,
+    DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
+    InstallUpdate, NewConnection, NextTab, OpenActionBar, OpenForge, OpenSettings, PrevTab,
+    QuitApp, RefreshView,
 };
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, colors, spacing};
@@ -49,6 +50,9 @@ impl AppRoot {
 
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
 
+        // Check for updates in background on startup
+        AppCommands::check_for_updates(state.clone(), cx);
+
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
         let mut subscriptions = Vec::new();
 
@@ -77,6 +81,7 @@ impl Render for AppRoot {
         let status_message = state.status_message();
         let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
         let show_status_bar = state.settings.appearance.show_status_bar;
+        let update_status = state.update_status.clone();
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
             state.current_session_key().and_then(|key| state.session_subview(&key))
@@ -243,6 +248,12 @@ impl Render for AppRoot {
                     state.open_forge_tab(key.connection_id, key.database, None, cx);
                 });
             }))
+            .on_action(cx.listener(|this, _: &DownloadUpdate, _window, cx| {
+                AppCommands::download_update(this.state.clone(), cx);
+            }))
+            .on_action(cx.listener(|this, _: &InstallUpdate, _window, cx| {
+                AppCommands::install_update(this.state.clone(), cx);
+            }))
             .child(
                 div()
                     .flex()
@@ -251,11 +262,16 @@ impl Render for AppRoot {
                     .child(self.sidebar.clone())
                     .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
             )
-            .children(
-                show_status_bar.then(|| {
-                    StatusBar::new(is_connected, connection_name, status_message, read_only)
-                }),
-            )
+            .children(show_status_bar.then(|| {
+                StatusBar::new(
+                    is_connected,
+                    connection_name,
+                    status_message,
+                    read_only,
+                    update_status,
+                    self.state.clone(),
+                )
+            }))
             .children(dialog_layer)
             .child(self.action_bar.clone());
 

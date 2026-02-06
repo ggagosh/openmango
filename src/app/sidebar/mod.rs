@@ -121,7 +121,8 @@ impl Sidebar {
             | AppEvent::TransferFailed { .. }
             | AppEvent::TransferCancelled { .. }
             | AppEvent::DatabaseTransferStarted { .. }
-            | AppEvent::CollectionProgressUpdate { .. } => {}
+            | AppEvent::CollectionProgressUpdate { .. }
+            | AppEvent::UpdateAvailable { .. } => {}
             AppEvent::ViewChanged => {
                 this.sync_selection_from_state(cx);
             }
