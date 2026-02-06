@@ -33,6 +33,13 @@ fn main() {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
+        // Set font families on the gpui-component theme so all widgets use our fonts
+        {
+            let theme = gpui_component::theme::Theme::global_mut(cx);
+            theme.font_family = theme::fonts::ui().into();
+            theme.mono_font_family = theme::fonts::mono().into();
+        }
+
         let workspace = ConfigManager::default().load_workspace().unwrap_or_default();
         let default_bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let window_bounds = workspace

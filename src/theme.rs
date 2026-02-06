@@ -251,13 +251,13 @@ pub mod typography {
 
 pub mod fonts {
     pub fn ui() -> &'static str {
-        "Monaspace Xenon Var"
+        ".SystemUIFont"
     }
     pub fn heading() -> &'static str {
-        "Monaspace Xenon Var"
+        ".SystemUIFont"
     }
     pub fn mono() -> &'static str {
-        "Monaspace Neon Var"
+        "Victor Mono"
     }
 }
 
