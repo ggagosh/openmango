@@ -16,8 +16,42 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
-  check:
+  quality:
     runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Disable lld linker flags for CI
+        run: rm -f .cargo/config.toml
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Check
+        run: cargo check --release --features mimalloc
+
+      - name: Clippy
+        run: cargo clippy --release --features mimalloc -- -D warnings
+
+      - name: Verify Forge sidecar bundle
+        run: ./scripts/check_mongosh_sidecar.sh
+
+      - name: Run unit tests
+        run: cargo test --bin openmango -- --test-threads=1
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -29,11 +63,13 @@ jobs:
       - name: Disable lld linker flags for CI
         run: rm -f .cargo/config.toml
 
-      - name: Check
-        run: cargo check --release --features mimalloc
+      - name: Verify Docker availability
+        run: docker version
 
-      - name: Clippy
-        run: cargo clippy --release --features mimalloc -- -D warnings
-
-      - name: Format check
-        run: cargo fmt --check
+      - name: Run integration tests
+        run: |
+          for test_file in tests/*_tests.rs; do
+            test_name="$(basename "${test_file}" .rs)"
+            echo "Running ${test_name}"
+            cargo test --test "${test_name}" -- --test-threads=1
+          done

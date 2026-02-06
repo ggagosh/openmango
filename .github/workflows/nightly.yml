@@ -33,16 +33,43 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "release-${{ matrix.target }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Ensure scripts executable
-        run: chmod +x scripts/release_macos.sh
+        run: chmod +x scripts/release_macos.sh scripts/download_node.sh scripts/check_mongosh_sidecar.sh
 
       - name: Disable lld linker flags for CI
         run: rm -f .cargo/config.toml
+
+      - name: Verify Forge sidecar bundle
+        run: ./scripts/check_mongosh_sidecar.sh
+
+      - name: Download MongoDB Database Tools
+        run: |
+          TOOLS_VERSION="100.14.1"
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-arm64-${TOOLS_VERSION}.zip"
+            TOOLS_ARCH="macos-arm64"
+          else
+            TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-x86_64-${TOOLS_VERSION}.zip"
+            TOOLS_ARCH="macos-x86_64"
+          fi
+          mkdir -p resources/bin/${TOOLS_ARCH}
+          curl -sL "$TOOLS_URL" -o /tmp/tools.zip
+          unzip -q -j /tmp/tools.zip "*/bin/mongodump" "*/bin/mongorestore" -d resources/bin/${TOOLS_ARCH}/
+          chmod +x resources/bin/${TOOLS_ARCH}/*
+          echo "Downloaded MongoDB tools for ${TOOLS_ARCH}"
+
+      - name: Download Node.js runtime
+        run: ./scripts/download_node.sh --arch ${{ matrix.suffix }}
 
       - name: Import signing certificate
         env:
@@ -76,6 +103,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
           CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
+          REQUIRE_BUNDLED_TOOLS: "1"
         run: scripts/release_macos.sh ${{ matrix.target }}
 
       - name: Upload artifact

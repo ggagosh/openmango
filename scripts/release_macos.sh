@@ -39,24 +39,30 @@ chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
 # Bundle external tools/runtime if available
 BIN_DIR="$ROOT_DIR/resources/bin/$ARCH_SUFFIX"
-if [[ -d "$BIN_DIR" ]]; then
-    if [[ -f "$BIN_DIR/mongodump" ]]; then
-        cp "$BIN_DIR/mongodump" "$APP_DIR/Contents/Resources/bin/"
-        chmod +x "$APP_DIR/Contents/Resources/bin/mongodump"
+REQUIRE_BUNDLED_TOOLS="${REQUIRE_BUNDLED_TOOLS:-0}"
+missing_tools=()
+
+for tool in mongodump mongorestore node; do
+    if [[ -f "$BIN_DIR/$tool" ]]; then
+        cp "$BIN_DIR/$tool" "$APP_DIR/Contents/Resources/bin/$tool"
+        chmod +x "$APP_DIR/Contents/Resources/bin/$tool"
+    else
+        missing_tools+=("$tool")
     fi
-    if [[ -f "$BIN_DIR/mongorestore" ]]; then
-        cp "$BIN_DIR/mongorestore" "$APP_DIR/Contents/Resources/bin/"
-        chmod +x "$APP_DIR/Contents/Resources/bin/mongorestore"
-    fi
-    if [[ -f "$BIN_DIR/node" ]]; then
-        cp "$BIN_DIR/node" "$APP_DIR/Contents/Resources/bin/"
-        chmod +x "$APP_DIR/Contents/Resources/bin/node"
-    fi
+done
+
+if [[ ${#missing_tools[@]} -eq 0 ]]; then
     echo "Bundled tools from $BIN_DIR"
 else
-    echo "Warning: bundled tools not found at $BIN_DIR"
-    echo "BSON export/import will require system-installed tools"
-    echo "Forge shell will require a system Node runtime"
+    if [[ "$REQUIRE_BUNDLED_TOOLS" == "1" ]]; then
+        echo "Error: missing bundled binaries for $ARCH_SUFFIX: ${missing_tools[*]}" >&2
+        echo "Expected location: $BIN_DIR" >&2
+        exit 1
+    fi
+    echo "Warning: missing bundled binaries for $ARCH_SUFFIX: ${missing_tools[*]}"
+    echo "Expected location: $BIN_DIR"
+    echo "BSON export/import may require system-installed tools"
+    echo "Forge shell may require a system Node runtime"
 fi
 
 # Copy third-party notices (required for bundled tools attribution)
