@@ -20,16 +20,20 @@ impl ForgeRuntime {
     }
 
     pub fn ensure_bridge(&self) -> Result<Arc<MongoshBridge>, crate::error::Error> {
-        if let Ok(guard) = self.bridge.lock()
-            && let Some(bridge) = guard.as_ref()
-        {
-            return Ok(bridge.clone());
+        if let Ok(mut guard) = self.bridge.lock() {
+            if let Some(bridge) = guard.as_ref() {
+                if bridge.is_alive() {
+                    return Ok(bridge.clone());
+                }
+                *guard = None;
+            }
+
+            let bridge = MongoshBridge::new()?;
+            *guard = Some(bridge.clone());
+            return Ok(bridge);
         }
 
         let bridge = MongoshBridge::new()?;
-        if let Ok(mut guard) = self.bridge.lock() {
-            *guard = Some(bridge.clone());
-        }
         Ok(bridge)
     }
 }

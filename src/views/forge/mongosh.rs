@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +13,8 @@ use uuid::Uuid;
 use crate::assets::EmbeddedAssets;
 use crate::connection::tools::node_path;
 use crate::error::{Error, Result};
+
+const CREATE_SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone)]
 struct SessionInfo {
@@ -63,6 +65,7 @@ pub struct MongoshBridge {
     stdin: Mutex<ChildStdin>,
     pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<BridgeResponse>>>>,
     next_id: AtomicU64,
+    alive: Arc<AtomicBool>,
     sessions: Mutex<HashMap<Uuid, SessionInfo>>,
     events: broadcast::Sender<MongoshEvent>,
 }
@@ -93,10 +96,12 @@ impl MongoshBridge {
 
         let pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<BridgeResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let alive = Arc::new(AtomicBool::new(true));
         let (event_tx, _) = broadcast::channel(1024);
 
         let pending_for_reader = pending.clone();
         let event_tx_reader = event_tx.clone();
+        let alive_for_reader = alive.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(std::result::Result::ok) {
@@ -136,6 +141,7 @@ impl MongoshBridge {
                     let _ = tx.send(response);
                 }
             }
+            alive_for_reader.store(false, Ordering::Release);
         });
 
         if let Some(stderr) = stderr {
@@ -152,9 +158,28 @@ impl MongoshBridge {
             stdin: Mutex::new(stdin),
             pending,
             next_id: AtomicU64::new(1),
+            alive,
             sessions: Mutex::new(HashMap::new()),
             events: event_tx,
         }))
+    }
+
+    pub fn is_alive(&self) -> bool {
+        if !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+
+        match self.child.lock() {
+            Ok(mut child) => match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(_)) => {
+                    self.alive.store(false, Ordering::Release);
+                    false
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
     }
 
     pub fn ensure_session(&self, session_id: Uuid, uri: &str, database: &str) -> Result<()> {
@@ -175,8 +200,16 @@ impl MongoshBridge {
                 "uri": uri,
                 "database": database,
             }),
-            Duration::from_secs(12),
-        )?;
+            CREATE_SESSION_TIMEOUT,
+        )
+        .map_err(|err| match err {
+            Error::Timeout(_) => Error::Timeout(format!(
+                "Timed out waiting for sidecar response (create_session, {}s). \
+                 Check connection reachability/auth and sidecar logs.",
+                CREATE_SESSION_TIMEOUT.as_secs()
+            )),
+            other => other,
+        })?;
 
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.insert(
