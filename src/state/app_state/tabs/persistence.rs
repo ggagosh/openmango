@@ -6,7 +6,7 @@ use crate::state::{
 use uuid::Uuid;
 
 use super::super::AppState;
-use super::super::types::{ActiveTab, DatabaseKey, SessionKey, TabKey};
+use super::super::types::{ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey, TabKey};
 
 impl AppState {
     pub(in crate::state::app_state) fn update_workspace_tabs(&mut self) {
@@ -22,6 +22,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
+                (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
                 (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
                 _ => false,
             })
@@ -36,6 +37,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
+                (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
                 (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
                 _ => false,
             })
@@ -97,6 +99,20 @@ impl AppState {
                     self.transfer_tabs.insert(id, transfer_state);
                     restored_tabs.push(TabKey::Transfer(key));
                 }
+                WorkspaceTabKind::Forge => {
+                    if databases.contains(&tab.database) {
+                        let id = Uuid::new_v4();
+                        let key = ForgeTabKey { id, connection_id, database: tab.database.clone() };
+                        let state = ForgeTabState {
+                            content: tab.forge_content.clone(),
+                            is_running: false,
+                            error: None,
+                            pending_cursor: None,
+                        };
+                        self.forge_tabs.insert(id, state);
+                        restored_tabs.push(TabKey::Forge(key));
+                    }
+                }
             }
         }
 
@@ -106,7 +122,7 @@ impl AppState {
 
         let active_tab =
             self.workspace.active_tab.and_then(|idx| workspace_tabs.get(idx)).and_then(|tab| {
-                restored_tabs.iter().position(|key| match (tab.kind.clone(), key) {
+                restored_tabs.iter().position(|key| match (tab.kind, key) {
                     (WorkspaceTabKind::Collection, TabKey::Collection(session)) => {
                         session.database == tab.database && session.collection == tab.collection
                     }
@@ -118,6 +134,9 @@ impl AppState {
                             return false;
                         };
                         state.config.source_database == tab.database
+                    }
+                    (WorkspaceTabKind::Forge, TabKey::Forge(forge)) => {
+                        forge.database == tab.database
                     }
                     _ => false,
                 })
@@ -207,6 +226,7 @@ impl AppState {
                     aggregation_pipeline,
                     stats_open,
                     subview,
+                    forge_content: String::new(),
                 }
             }
             TabKey::Database(key) => WorkspaceTab {
@@ -220,6 +240,7 @@ impl AppState {
                 aggregation_pipeline: Vec::new(),
                 stats_open: false,
                 subview: CollectionSubview::Documents,
+                forge_content: String::new(),
             },
             TabKey::Transfer(key) => {
                 let transfer = self.transfer_tabs.get(&key.id).cloned().unwrap_or_default();
@@ -234,14 +255,19 @@ impl AppState {
                     aggregation_pipeline: Vec::new(),
                     stats_open: false,
                     subview: CollectionSubview::Documents,
+                    forge_content: String::new(),
                 }
             }
             TabKey::Forge(key) => {
-                // Forge tabs are not persisted in workspace yet
+                let content = self
+                    .forge_tabs
+                    .get(&key.id)
+                    .map(|state| state.content.clone())
+                    .unwrap_or_default();
                 WorkspaceTab {
                     database: key.database.clone(),
                     collection: String::new(),
-                    kind: WorkspaceTabKind::Database, // Placeholder, won't be saved
+                    kind: WorkspaceTabKind::Forge,
                     transfer: None,
                     filter_raw: String::new(),
                     sort_raw: String::new(),
@@ -249,6 +275,7 @@ impl AppState {
                     aggregation_pipeline: Vec::new(),
                     stats_open: false,
                     subview: CollectionSubview::Documents,
+                    forge_content: content,
                 }
             }
             TabKey::Settings => {
@@ -264,6 +291,7 @@ impl AppState {
                     aggregation_pipeline: Vec::new(),
                     stats_open: false,
                     subview: CollectionSubview::Documents,
+                    forge_content: String::new(),
                 }
             }
         }

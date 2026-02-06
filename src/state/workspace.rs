@@ -5,12 +5,13 @@ use uuid::Uuid;
 use crate::state::CollectionSubview;
 use crate::state::app_state::{PipelineStage, TransferTabState};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum WorkspaceTabKind {
     #[default]
     Collection,
     Database,
     Transfer,
+    Forge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -44,6 +45,8 @@ pub struct WorkspaceTab {
     pub stats_open: bool,
     #[serde(default)]
     pub subview: CollectionSubview,
+    #[serde(default)]
+    pub forge_content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,5 +89,53 @@ impl WindowState {
             WindowMode::Maximized => WindowBounds::Maximized(bounds),
             WindowMode::Fullscreen => WindowBounds::Fullscreen(bounds),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_tab_defaults_forge_content_when_missing() {
+        let raw = r#"{
+            "database":"admin",
+            "collection":"",
+            "kind":"Database",
+            "transfer":null,
+            "filter_raw":"",
+            "sort_raw":"",
+            "projection_raw":"",
+            "aggregation_pipeline":[],
+            "stats_open":false,
+            "subview":"Documents"
+        }"#;
+
+        let tab: WorkspaceTab =
+            serde_json::from_str(raw).expect("workspace tab should deserialize");
+        assert!(tab.forge_content.is_empty());
+    }
+
+    #[test]
+    fn workspace_tab_roundtrip_with_forge_kind() {
+        let tab = WorkspaceTab {
+            database: "admin".to_string(),
+            collection: String::new(),
+            kind: WorkspaceTabKind::Forge,
+            transfer: None,
+            filter_raw: String::new(),
+            sort_raw: String::new(),
+            projection_raw: String::new(),
+            aggregation_pipeline: Vec::new(),
+            stats_open: false,
+            subview: CollectionSubview::Documents,
+            forge_content: "db.getCollection(\"users\").find({})".to_string(),
+        };
+
+        let encoded = serde_json::to_string(&tab).expect("workspace tab should serialize");
+        let decoded: WorkspaceTab =
+            serde_json::from_str(&encoded).expect("workspace tab should deserialize");
+        assert_eq!(decoded.kind, WorkspaceTabKind::Forge);
+        assert_eq!(decoded.forge_content, tab.forge_content);
     }
 }
