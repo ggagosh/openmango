@@ -259,7 +259,7 @@ pub mod fonts {
         "JetBrainsMono Nerd Font"
     }
     pub fn mono() -> &'static str {
-        "Victor Mono"
+        "JetBrainsMono Nerd Font Mono"
     }
     pub fn ui_line_height() -> gpui::DefiniteLength {
         relative(1.45)
