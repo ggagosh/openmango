@@ -122,6 +122,7 @@ impl Render for AppRoot {
             .bg(colors::bg_app())
             .text_color(colors::text_primary())
             .font_family(crate::theme::fonts::ui())
+            .line_height(crate::theme::fonts::ui_line_height())
             .on_action(cx.listener(|this, _: &CloseTab, _window, cx| {
                 this.handle_close_tab(cx);
             }))

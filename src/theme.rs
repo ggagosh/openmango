@@ -250,14 +250,19 @@ pub mod typography {
 // =============================================================================
 
 pub mod fonts {
+    use gpui::relative;
+
     pub fn ui() -> &'static str {
-        ".SystemUIFont"
+        "JetBrainsMono Nerd Font"
     }
     pub fn heading() -> &'static str {
-        ".SystemUIFont"
+        "JetBrainsMono Nerd Font"
     }
     pub fn mono() -> &'static str {
         "Victor Mono"
+    }
+    pub fn ui_line_height() -> gpui::DefiniteLength {
+        relative(1.45)
     }
 }
 
