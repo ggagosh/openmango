@@ -10,6 +10,8 @@ mod right;
 use left::render_status_left;
 use right::render_status_right;
 
+type ToggleSidebarHandler = Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>;
+
 #[derive(IntoElement)]
 pub struct StatusBar {
     is_connected: bool,
@@ -18,6 +20,8 @@ pub struct StatusBar {
     read_only: bool,
     update_status: UpdateStatus,
     state: Entity<AppState>,
+    sidebar_collapsed: bool,
+    on_toggle_sidebar: ToggleSidebarHandler,
 }
 
 impl StatusBar {
@@ -29,7 +33,26 @@ impl StatusBar {
         update_status: UpdateStatus,
         state: Entity<AppState>,
     ) -> Self {
-        Self { is_connected, connection_name, status_message, read_only, update_status, state }
+        Self {
+            is_connected,
+            connection_name,
+            status_message,
+            read_only,
+            update_status,
+            state,
+            sidebar_collapsed: false,
+            on_toggle_sidebar: None,
+        }
+    }
+
+    pub fn sidebar_collapsed(mut self, collapsed: bool) -> Self {
+        self.sidebar_collapsed = collapsed;
+        self
+    }
+
+    pub fn on_toggle_sidebar(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_toggle_sidebar = Some(Box::new(handler));
+        self
     }
 }
 
@@ -45,7 +68,13 @@ impl RenderOnce for StatusBar {
             .bg(colors::bg_header())
             .border_t_1()
             .border_color(colors::border())
-            .child(render_status_left(self.is_connected, self.connection_name, self.read_only))
+            .child(render_status_left(
+                self.is_connected,
+                self.connection_name,
+                self.read_only,
+                self.sidebar_collapsed,
+                self.on_toggle_sidebar,
+            ))
             .child(render_status_right(self.status_message, self.update_status, self.state))
     }
 }

@@ -39,14 +39,17 @@ impl Render for Sidebar {
         };
         self.model.update_search_selection(&search_query, search_results.len());
 
+        let sidebar_w = self.width();
+
         div()
             .key_context("Sidebar")
             .flex()
             .flex_col()
-            .w(sizing::sidebar_width())
-            .min_w(sizing::sidebar_width())
+            .w(sidebar_w)
+            .min_w(sidebar_w)
             .flex_shrink_0()
             .h_full()
+            .overflow_hidden()
             .bg(colors::bg_sidebar())
             .border_r_1()
             .border_color(colors::border())
@@ -369,6 +372,7 @@ impl Render for Sidebar {
                                             .flex()
                                             .items_center()
                                             .w_full()
+                                            .overflow_hidden()
                                             .gap(px(4.0))
                                             .pl(px(8.0 + 12.0 * depth as f32))
                                             .py(px(2.0))
@@ -591,8 +595,7 @@ impl Render for Sidebar {
                                                     } else {
                                                         colors::text_secondary()
                                                     })
-                                                    .overflow_hidden()
-                                                    .text_ellipsis()
+                                                    .truncate()
                                                     .child(label.clone()),
                                             )
                                             .when(is_connecting || is_loading_db, |this| {

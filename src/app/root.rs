@@ -1,4 +1,4 @@
-use gpui::prelude::InteractiveElement as _;
+use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
 use gpui::*;
 
 use super::sidebar::Sidebar;
@@ -24,6 +24,9 @@ pub struct AppRoot {
     pub(super) action_bar: Entity<ActionBar>,
     pub(super) key_debug: bool,
     pub(super) last_keystroke: Option<String>,
+    sidebar_dragging: bool,
+    sidebar_drag_start_x: Pixels,
+    sidebar_drag_start_width: Pixels,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -66,6 +69,9 @@ impl AppRoot {
             action_bar,
             key_debug,
             last_keystroke: None,
+            sidebar_dragging: false,
+            sidebar_drag_start_x: px(0.0),
+            sidebar_drag_start_width: px(0.0),
             _subscriptions: subscriptions,
         }
     }
@@ -255,15 +261,70 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &InstallUpdate, _window, cx| {
                 AppCommands::install_update(this.state.clone(), cx);
             }))
-            .child(
-                div()
+            .child({
+                let is_dragging = self.sidebar_dragging;
+
+                let resize_handle = div()
+                    .id("sidebar-resize-handle")
+                    .flex_shrink_0()
+                    .w(px(4.0))
+                    .h_full()
+                    .cursor_col_resize()
+                    .bg(gpui::transparent_black())
+                    .hover(|s| s.bg(colors::border_focus()))
+                    .when(is_dragging, |s: Stateful<Div>| s.bg(colors::border_focus()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            this.sidebar_dragging = true;
+                            this.sidebar_drag_start_x = event.position.x;
+                            this.sidebar_drag_start_width = this.sidebar.read(cx).width();
+                            cx.notify();
+                        }),
+                    )
+                    .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                        if event.click_count() >= 2 {
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar.toggle_collapsed();
+                                cx.notify();
+                            });
+                            cx.notify();
+                        }
+                    }));
+
+                let mut row = div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .child(self.sidebar.clone())
-                    .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone())),
-            )
+                    .child(resize_handle)
+                    .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone()));
+
+                if is_dragging {
+                    row = row
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                            let delta = event.position.x - this.sidebar_drag_start_x;
+                            let new_width = this.sidebar_drag_start_width + delta;
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar.set_width(new_width);
+                                cx.notify();
+                            });
+                            cx.notify();
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                this.sidebar_dragging = false;
+                                cx.notify();
+                            }),
+                        );
+                }
+
+                row
+            })
             .children(show_status_bar.then(|| {
+                let sidebar_collapsed = self.sidebar.read(cx).width() == px(0.0);
+                let sidebar = self.sidebar.clone();
                 StatusBar::new(
                     is_connected,
                     connection_name,
@@ -272,6 +333,13 @@ impl Render for AppRoot {
                     update_status,
                     self.state.clone(),
                 )
+                .sidebar_collapsed(sidebar_collapsed)
+                .on_toggle_sidebar(move |_window: &mut Window, cx: &mut App| {
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.toggle_collapsed();
+                        cx.notify();
+                    });
+                })
             }))
             .children(dialog_layer)
             .child(self.action_bar.clone());

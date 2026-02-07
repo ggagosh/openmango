@@ -20,12 +20,18 @@ mod view;
 // Sidebar Component
 // =============================================================================
 
+const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
+const SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
+const SIDEBAR_MAX_WIDTH: Pixels = px(500.0);
+
 pub(crate) struct Sidebar {
     state: Entity<AppState>,
     model: SidebarModel,
     search_state: Entity<InputState>,
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
+    width: Pixels,
+    collapsed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -163,6 +169,8 @@ impl Sidebar {
             search_state,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
+            width: SIDEBAR_DEFAULT_WIDTH,
+            collapsed: false,
             _subscriptions: subscriptions,
         };
 
@@ -171,6 +179,18 @@ impl Sidebar {
         }
 
         sidebar
+    }
+
+    pub(crate) fn width(&self) -> Pixels {
+        if self.collapsed { px(0.0) } else { self.width }
+    }
+
+    pub(crate) fn set_width(&mut self, w: Pixels) {
+        self.width = w.max(SIDEBAR_MIN_WIDTH).min(SIDEBAR_MAX_WIDTH);
+    }
+
+    pub(crate) fn toggle_collapsed(&mut self) {
+        self.collapsed = !self.collapsed;
     }
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {

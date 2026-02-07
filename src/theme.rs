@@ -200,9 +200,6 @@ pub mod sizing {
     use gpui::{Pixels, px};
 
     // Layout
-    pub fn sidebar_width() -> Pixels {
-        px(260.0)
-    } // Slightly wider
     pub fn status_bar_height() -> Pixels {
         px(22.0)
     } // VS Code style thin status bar
