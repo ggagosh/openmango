@@ -13,7 +13,7 @@ pub(crate) fn render_shell(
     content: impl IntoElement,
     with_background: bool,
 ) -> AnyElement {
-    let mut root = div().flex().flex_col().flex_1().h_full();
+    let mut root = div().flex().flex_col().flex_1().h_full().min_h(px(0.0));
     if with_background {
         root = root.bg(colors::bg_app());
     }

@@ -401,17 +401,22 @@ impl Render for Sidebar {
                                                             sidebar.model.selected_tree_id =
                                                                 Some(node_id.clone());
                                                             cx.notify();
-                                                            event.click_count() >= 2
+                                                            event.click_count() == 2
                                                         });
 
                                                     if is_double_click {
                                                         // Double-click on connection to connect (expand only)
                                                         if is_connection {
+                                                            // Read live state instead of stale closure capture
+                                                            let currently_expanded = sidebar_entity
+                                                                .update(cx, |sidebar, _cx| {
+                                                                    sidebar.model.expanded_nodes.contains(&node_id)
+                                                                });
                                                             let should_expand = if is_connecting
                                                             {
                                                                 true
                                                             } else if is_connected {
-                                                                !is_expanded
+                                                                !currently_expanded
                                                             } else {
                                                                 true
                                                             };
@@ -444,7 +449,12 @@ impl Render for Sidebar {
                                                         else if is_database
                                                             && let Some(ref db) = db_name
                                                         {
-                                                            let should_expand = !is_expanded;
+                                                            // Read live state instead of stale closure capture
+                                                            let currently_expanded = sidebar_entity
+                                                                .update(cx, |sidebar, _cx| {
+                                                                    sidebar.model.expanded_nodes.contains(&node_id)
+                                                                });
+                                                            let should_expand = !currently_expanded;
                                                             sidebar_entity.update(cx, |sidebar, cx| {
                                                                 if should_expand {
                                                                     sidebar

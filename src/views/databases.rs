@@ -37,6 +37,9 @@ impl DatabaseView {
                         }
                         this.last_database_key = key;
                     }
+                } else {
+                    // Clear so re-entering the same database triggers a reload
+                    this.last_database_key = None;
                 }
                 cx.notify();
             }
@@ -148,6 +151,7 @@ impl Render for DatabaseView {
             .flex_col()
             .flex_1()
             .min_w(px(0.0))
+            .min_h(px(0.0))
             .overflow_y_scrollbar()
             .child(Self::render_stats_section(
                 stats,
@@ -171,6 +175,7 @@ impl Render for DatabaseView {
             .flex_col()
             .flex_1()
             .min_w(px(0.0))
+            .min_h(px(0.0))
             .bg(colors::bg_app())
             .child(header)
             .child(content)

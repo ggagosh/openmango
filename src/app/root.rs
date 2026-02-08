@@ -296,9 +296,17 @@ impl Render for AppRoot {
                     .flex()
                     .flex_row()
                     .flex_1()
+                    .min_h(px(0.0))
                     .child(self.sidebar.clone())
                     .child(resize_handle)
-                    .child(div().flex().flex_1().min_w(px(0.0)).child(self.content_area.clone()));
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(0.0))
+                            .child(self.content_area.clone()),
+                    );
 
                 if is_dragging {
                     row = row

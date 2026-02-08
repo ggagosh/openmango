@@ -167,6 +167,7 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         .flex_col()
         .flex_1()
         .h_full()
+        .min_h(px(0.0))
         .child(div().pl(spacing::sm()).child(tab_bar))
         .child(content)
         .into_any_element()
