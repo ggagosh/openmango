@@ -1,6 +1,7 @@
 //! Action buttons rendering for collection header.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
@@ -10,7 +11,7 @@ use crate::bson::DocumentKey;
 use crate::components::{Button, open_confirm_dialog};
 use crate::keyboard::RunAggregation;
 use crate::state::{AppCommands, AppState, SessionKey, TransferMode, TransferScope};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 use crate::views::documents::dialogs::bulk_update::BulkUpdateDialog;
 
@@ -34,11 +35,11 @@ pub fn render_documents_actions(
     let state_for_transfer = state.clone();
 
     let delete_variant = ButtonCustomVariant::new(cx)
-        .color(colors::bg_button_danger().into())
-        .foreground(colors::text_button_danger().into())
-        .border(colors::bg_button_danger().into())
-        .hover(colors::bg_button_danger_hover().into())
-        .active(colors::bg_button_danger_hover().into())
+        .color(cx.theme().danger)
+        .foreground(cx.theme().danger_foreground)
+        .border(cx.theme().danger)
+        .hover(cx.theme().danger_hover)
+        .active(cx.theme().danger_hover)
         .shadow(false);
 
     div()

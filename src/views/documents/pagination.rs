@@ -1,11 +1,12 @@
 //! Pagination controls for collection view.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::Button;
 use crate::state::{AppCommands, AppState, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::CollectionView;
 
@@ -22,6 +23,7 @@ impl CollectionView {
         session_key: Option<SessionKey>,
         state_for_prev: Entity<AppState>,
         state_for_next: Entity<AppState>,
+        cx: &App,
     ) -> impl IntoElement {
         let session_key_prev = session_key.clone();
         let session_key_next = session_key.clone();
@@ -33,11 +35,11 @@ impl CollectionView {
             .px(spacing::lg())
             .py(spacing::sm())
             .border_t_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .text_sm()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!("Showing {}-{} of {}", range_start, range_end, total)),
             )
             .child(
@@ -65,7 +67,7 @@ impl CollectionView {
                                 );
                             }),
                     )
-                    .child(div().text_sm().text_color(colors::text_primary()).child(format!(
+                    .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
                         "Page {} of {}",
                         page + 1,
                         total_pages

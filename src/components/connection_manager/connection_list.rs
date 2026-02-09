@@ -4,6 +4,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName, Sizable as _};
 use uuid::Uuid;
@@ -11,7 +12,7 @@ use uuid::Uuid;
 use crate::components::Button;
 use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, sizing, spacing};
 
 use super::{ConnectionManager, ManagerTab};
 
@@ -34,7 +35,7 @@ impl ConnectionManager {
             .min_w(px(320.0))
             .h_full()
             .border_r_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(header)
             .child(
                 div()
@@ -42,7 +43,7 @@ impl ConnectionManager {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scrollbar()
-                    .child(Self::render_list_content(view, connections, selected_id)),
+                    .child(Self::render_list_content(view, connections, selected_id, cx)),
             )
             .into_any_element()
     }
@@ -59,8 +60,8 @@ impl ConnectionManager {
             .px(spacing::md())
             .h(sizing::header_height())
             .border_b_1()
-            .border_color(colors::border())
-            .child(div().text_xs().text_color(colors::text_secondary()).child("Connections"))
+            .border_color(cx.theme().border)
+            .child(div().text_xs().text_color(cx.theme().secondary_foreground).child("Connections"))
             .child(
                 div()
                     .flex()
@@ -104,12 +105,13 @@ impl ConnectionManager {
         view: Entity<Self>,
         connections: Vec<SavedConnection>,
         selected_id: Option<Uuid>,
+        cx: &App,
     ) -> AnyElement {
         if connections.is_empty() {
             div()
                 .p(spacing::md())
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .child("No connections")
                 .into_any_element()
         } else {
@@ -119,7 +121,7 @@ impl ConnectionManager {
                 .gap(spacing::xs())
                 .p(spacing::xs())
                 .child(div().flex().flex_col().children(connections.into_iter().map(move |conn| {
-                    Self::render_connection_item(view.clone(), conn, selected_id)
+                    Self::render_connection_item(view.clone(), conn, selected_id, cx)
                 })))
                 .into_any_element()
         }
@@ -130,6 +132,7 @@ impl ConnectionManager {
         view: Entity<Self>,
         conn: SavedConnection,
         selected_id: Option<Uuid>,
+        cx: &App,
     ) -> AnyElement {
         let is_selected = Some(conn.id) == selected_id;
         let host = extract_host_from_uri(&conn.uri).unwrap_or_else(|| "Unknown host".to_string());
@@ -148,16 +151,16 @@ impl ConnectionManager {
             .cursor_pointer()
             .rounded(borders::radius_sm())
             .when(is_selected, |s| {
-                s.bg(colors::bg_hover()).border_1().border_color(colors::border())
+                s.bg(cx.theme().list_hover).border_1().border_color(cx.theme().border)
             })
-            .hover(|s| s.bg(colors::bg_hover()))
+            .hover(|s| s.bg(cx.theme().list_hover))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .child(
-                        div().text_sm().text_color(colors::text_primary()).child(conn.name.clone()),
+                        div().text_sm().text_color(cx.theme().foreground).child(conn.name.clone()),
                     )
                     .when(read_only, |s| {
                         s.child(
@@ -165,18 +168,18 @@ impl ConnectionManager {
                                 .px(spacing::xs())
                                 .py(px(1.0))
                                 .rounded(borders::radius_sm())
-                                .bg(colors::status_warning())
+                                .bg(cx.theme().warning)
                                 .text_xs()
-                                .text_color(colors::bg_header())
+                                .text_color(cx.theme().tab_bar)
                                 .child("RO"),
                         )
                     }),
             )
-            .child(div().text_xs().text_color(colors::text_secondary()).child(host))
+            .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(host))
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!("Last: {last_connected}")),
             )
             .on_mouse_down(MouseButton::Left, {

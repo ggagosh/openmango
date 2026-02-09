@@ -5,7 +5,7 @@
 //! metadata for all 20,000+ nodes.
 
 use gpui::*;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use mongodb::bson::Bson;
 
 use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};
@@ -19,12 +19,12 @@ use super::lazy_tree::VisibleRow;
 pub struct LazyRowMeta {
     pub key_label: String,
     pub value_label: String,
-    pub value_color: Rgba,
+    pub value_color: Hsla,
     pub type_label: String,
 }
 
 /// Compute metadata for a row on-demand.
-pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument]) -> LazyRowMeta {
+pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &App) -> LazyRowMeta {
     let doc = &documents[row.doc_index].doc;
 
     if row.is_document_root {
@@ -33,7 +33,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument]) -> Lazy
         LazyRowMeta {
             key_label: row.key_label.clone(),
             value_label,
-            value_color: colors::text_muted(),
+            value_color: cx.theme().muted_foreground,
             type_label: "Document".to_string(),
         }
     } else {
@@ -44,7 +44,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument]) -> Lazy
             Some(value) => {
                 let value_label = bson_value_preview(value, 120);
                 let type_label = bson_type_label(value).to_string();
-                let value_color = bson_value_color(value);
+                let value_color = bson_value_color(value, cx);
 
                 LazyRowMeta {
                     key_label: row.key_label.clone(),
@@ -58,7 +58,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument]) -> Lazy
                 LazyRowMeta {
                     key_label: row.key_label.clone(),
                     value_label: "—".to_string(),
-                    value_color: colors::text_muted(),
+                    value_color: cx.theme().muted_foreground,
                     type_label: "Unknown".to_string(),
                 }
             }
@@ -67,21 +67,21 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument]) -> Lazy
 }
 
 /// Get the display color for a BSON value.
-fn bson_value_color(value: &Bson) -> Rgba {
+fn bson_value_color(value: &Bson, cx: &App) -> Hsla {
     match value {
-        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(),
+        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(cx),
         Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Decimal128(_) => {
-            colors::syntax_number()
+            colors::syntax_number(cx)
         }
-        Bson::Boolean(_) => colors::syntax_boolean(),
-        Bson::Null | Bson::Undefined => colors::syntax_null(),
-        Bson::ObjectId(_) => colors::syntax_object_id(),
-        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(),
+        Bson::Boolean(_) => colors::syntax_boolean(cx),
+        Bson::Null | Bson::Undefined => colors::syntax_null(cx),
+        Bson::ObjectId(_) => colors::syntax_object_id(cx),
+        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(cx),
         Bson::RegularExpression(_) | Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => {
-            colors::syntax_comment()
+            colors::syntax_comment(cx)
         }
-        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => colors::text_muted(),
-        _ => colors::text_primary(),
+        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => cx.theme().muted_foreground,
+        _ => cx.theme().foreground,
     }
 }
 
@@ -95,6 +95,7 @@ pub fn render_lazy_readonly_row(
     meta: &LazyRowMeta,
     _selected: bool,
     view_entity: Entity<CollectionView>,
+    cx: &App,
 ) -> AnyElement {
     let node_id = row.node_id.clone();
     let depth = row.depth;
@@ -131,7 +132,7 @@ pub fn render_lazy_readonly_row(
             .child(
                 Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .into_any_element()
     } else {
@@ -145,7 +146,7 @@ pub fn render_lazy_readonly_row(
         .w_full()
         .px(spacing::lg())
         .py(spacing::xs())
-        .hover(|s| s.bg(colors::list_hover()))
+        .hover(|s| s.bg(cx.theme().list_hover))
         .on_mouse_down(MouseButton::Left, {
             let node_id = node_id.clone();
             let row_view = view_entity.clone();
@@ -162,13 +163,13 @@ pub fn render_lazy_readonly_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label))
+        .child(render_key_column(depth, leading, &key_label, cx))
         .child(render_value_column(&value_label, value_color))
         .child(
             div()
                 .w(px(120.0))
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(type_label),
@@ -176,7 +177,13 @@ pub fn render_lazy_readonly_row(
         .into_any_element()
 }
 
-fn render_key_column(depth: usize, leading: AnyElement, key_label: &str) -> impl IntoElement {
+fn render_key_column(
+    depth: usize,
+    leading: AnyElement,
+    key_label: &str,
+    cx: &App,
+) -> impl IntoElement {
+    let key_color = colors::syntax_key(cx);
     let key_label = key_label.to_string();
 
     div()
@@ -191,14 +198,14 @@ fn render_key_column(depth: usize, leading: AnyElement, key_label: &str) -> impl
         .child(
             div()
                 .text_sm()
-                .text_color(colors::syntax_key())
+                .text_color(key_color)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(key_label),
         )
 }
 
-fn render_value_column(value_label: &str, value_color: Rgba) -> impl IntoElement {
+fn render_value_column(value_label: &str, value_color: Hsla) -> impl IntoElement {
     div().flex_1().min_w(px(0.0)).overflow_hidden().child(
         div()
             .text_sm()

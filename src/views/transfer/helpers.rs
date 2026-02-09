@@ -1,37 +1,37 @@
 //! UI helper functions for transfer view components.
 
 use gpui::*;
-use gpui_component::IconName;
 use gpui_component::checkbox::Checkbox;
+use gpui_component::{ActiveTheme as _, IconName};
 
 use crate::components::Button;
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 use super::QueryEditField;
 
 /// Panel wrapper with title and content.
-pub(super) fn panel(title: &str, content: impl IntoElement) -> Div {
+pub(super) fn panel(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(spacing::sm())
         .p(spacing::md())
-        .bg(colors::bg_header())
+        .bg(cx.theme().tab_bar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .child(
             div()
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(colors::text_secondary())
+                .text_color(cx.theme().secondary_foreground)
                 .child(title.to_string()),
         )
         .child(content)
 }
 
 /// Form row with horizontal label + control for cleaner alignment.
-pub(super) fn form_row(label: &str, control: impl IntoElement) -> impl IntoElement {
+pub(super) fn form_row(label: &str, control: impl IntoElement, cx: &App) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -40,56 +40,56 @@ pub(super) fn form_row(label: &str, control: impl IntoElement) -> impl IntoEleme
             div()
                 .w(px(100.0)) // Fixed label width for alignment
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .child(label.to_string()),
         )
         .child(div().flex_1().max_w(px(400.0)).child(control))
 }
 
 /// Static form row with horizontal label + value.
-pub(super) fn form_row_static(label: &str, value: impl Into<String>) -> impl IntoElement {
-    form_row(label, value_box(value, false))
+pub(super) fn form_row_static(label: &str, value: impl Into<String>, cx: &App) -> impl IntoElement {
+    form_row(label, value_box(value, false, cx), cx)
 }
 
 /// Value display box.
-pub(super) fn value_box(value: impl Into<String>, muted: bool) -> Div {
+pub(super) fn value_box(value: impl Into<String>, muted: bool, cx: &App) -> Div {
     div()
         .px(spacing::sm())
         .py(px(6.0))
-        .bg(colors::bg_sidebar())
+        .bg(cx.theme().sidebar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .text_sm()
-        .text_color(if muted { colors::text_muted() } else { colors::text_primary() })
+        .text_color(if muted { cx.theme().muted_foreground } else { cx.theme().foreground })
         .child(value.into())
 }
 
 /// Option value pill display.
-pub(super) fn option_value_pill(value: impl Into<String>) -> AnyElement {
+pub(super) fn option_value_pill(value: impl Into<String>, cx: &App) -> AnyElement {
     div()
         .px(spacing::sm())
         .py(px(4.0))
-        .bg(colors::bg_sidebar())
+        .bg(cx.theme().sidebar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .text_xs()
-        .text_color(colors::text_secondary())
+        .text_color(cx.theme().secondary_foreground)
         .child(value.into())
         .into_any_element()
 }
 
 /// Option section with title and rows.
-pub(super) fn option_section(title: &str, rows: Vec<AnyElement>) -> Div {
+pub(super) fn option_section(title: &str, rows: Vec<AnyElement>, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(spacing::sm())
         .p(spacing::sm())
-        .bg(colors::bg_header())
+        .bg(cx.theme().tab_bar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .min_w(px(220.0))
         .flex_1()
@@ -97,31 +97,36 @@ pub(super) fn option_section(title: &str, rows: Vec<AnyElement>) -> Div {
             div()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .child(title.to_string()),
         )
         .child(div().flex().flex_wrap().gap(spacing::md()).children(rows))
 }
 
 /// Option field with label and control.
-pub(super) fn option_field(label: &str, control: AnyElement) -> AnyElement {
+pub(super) fn option_field(label: &str, control: AnyElement, cx: &App) -> AnyElement {
     div()
         .flex()
         .flex_col()
         .gap(spacing::xs())
         .min_w(px(160.0))
-        .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
         .child(control)
         .into_any_element()
 }
 
 /// Static option field with label and value pill.
-pub(super) fn option_field_static(label: &str, value: impl Into<String>) -> AnyElement {
-    option_field(label, option_value_pill(value))
+pub(super) fn option_field_static(label: &str, value: impl Into<String>, cx: &App) -> AnyElement {
+    option_field(label, option_value_pill(value, cx), cx)
 }
 
 /// Creates a checkbox field with "Enabled" label.
-pub(super) fn checkbox_field<F>(id: impl Into<ElementId>, checked: bool, on_click: F) -> Div
+pub(super) fn checkbox_field<F>(
+    id: impl Into<ElementId>,
+    checked: bool,
+    on_click: F,
+    cx: &App,
+) -> Div
 where
     F: Fn(&mut App) + 'static,
 {
@@ -130,20 +135,20 @@ where
         .items_center()
         .gap(spacing::sm())
         .child(Checkbox::new(id).checked(checked).on_click(move |_, _, cx| on_click(cx)))
-        .child(div().text_sm().text_color(colors::text_secondary()).child("Enabled"))
+        .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Enabled"))
 }
 
 /// Compact summary item for horizontal summary bar.
-pub(super) fn summary_item(label: &str, value: impl Into<String>) -> impl IntoElement {
+pub(super) fn summary_item(label: &str, value: impl Into<String>, cx: &App) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .gap(spacing::xs())
-        .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
         .child(
             div()
                 .text_sm()
-                .text_color(colors::text_secondary())
+                .text_color(cx.theme().secondary_foreground)
                 .overflow_x_hidden()
                 .text_ellipsis()
                 .child(value.into()),
@@ -162,6 +167,7 @@ pub(super) fn render_query_field_row(
     value: &str,
     view: Entity<super::TransferView>,
     state: Entity<crate::state::AppState>,
+    cx: &App,
 ) -> impl IntoElement {
     // Display text: truncated JSON or "(none)"
     let display_text = if value.is_empty() {
@@ -178,11 +184,11 @@ pub(super) fn render_query_field_row(
         .px(spacing::sm())
         .py_1()
         .rounded(borders::radius_sm())
-        .bg(colors::bg_app())
+        .bg(cx.theme().background)
         .border_1()
-        .border_color(colors::border())
+        .border_color(cx.theme().border)
         .text_sm()
-        .text_color(if is_empty { colors::text_muted() } else { colors::text_primary() })
+        .text_color(if is_empty { cx.theme().muted_foreground } else { cx.theme().foreground })
         .overflow_hidden()
         .text_ellipsis()
         .child(display_text);
@@ -230,5 +236,6 @@ pub(super) fn render_query_field_row(
             .child(value_box)
             .child(edit_button)
             .children(clear_button),
+        cx,
     )
 }

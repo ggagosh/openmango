@@ -1,173 +1,132 @@
 // Design token system for OpenMango
-// Inspired by VS Code Dark + MongoDB Green
+// Theme colors are loaded from themes/*.json via gpui-component's theme system.
+// Access them with `cx.theme().background`, `cx.theme().primary`, etc.
+// This file only contains colors with no gpui-component equivalent, plus theme switching.
+
+use std::rc::Rc;
+
+use gpui_component::theme::{ThemeConfig, ThemeSet};
+
+use crate::state::AppTheme;
+
 // =============================================================================
-// Colors
+// Theme Loading & Switching
+// =============================================================================
+
+const THEME_SOURCES: &[(&str, &str)] = &[
+    ("vercel-dark", include_str!("../themes/openmango-dark.json")),
+    ("darcula-dark", include_str!("../themes/darcula-dark.json")),
+    ("tokyo-night", include_str!("../themes/tokyo-night.json")),
+    ("nord", include_str!("../themes/nord.json")),
+    ("one-dark", include_str!("../themes/one-dark.json")),
+    ("catppuccin-mocha", include_str!("../themes/catppuccin-mocha.json")),
+    ("catppuccin-latte", include_str!("../themes/catppuccin-latte.json")),
+    ("solarized-light", include_str!("../themes/solarized-light.json")),
+    ("solarized-dark", include_str!("../themes/solarized-dark.json")),
+    ("rose-pine-dawn", include_str!("../themes/rose-pine-dawn.json")),
+    ("rose-pine", include_str!("../themes/rose-pine.json")),
+    ("gruvbox-light", include_str!("../themes/gruvbox-light.json")),
+    ("gruvbox-dark", include_str!("../themes/gruvbox-dark.json")),
+];
+
+pub fn load_theme_config(theme_id: &str) -> Option<Rc<ThemeConfig>> {
+    let json = THEME_SOURCES.iter().find(|(id, _)| *id == theme_id)?.1;
+    let theme_set: ThemeSet = serde_json::from_str(json).ok()?;
+    theme_set.themes.into_iter().next().map(Rc::new)
+}
+
+pub fn apply_theme(app_theme: AppTheme, window: &mut gpui::Window, cx: &mut gpui::App) {
+    if let Some(config) = load_theme_config(app_theme.theme_id()) {
+        gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
+
+        // Re-apply font family overrides
+        let theme = gpui_component::theme::Theme::global_mut(cx);
+        theme.font_family = fonts::ui().into();
+        theme.mono_font_family = fonts::mono().into();
+
+        window.refresh();
+    }
+}
+
+// =============================================================================
+// Custom Colors (theme-aware)
 // =============================================================================
 
 pub mod colors {
-    use gpui::{Rgba, rgb, rgba};
+    use gpui::{App, Hsla};
+    use gpui_component::ActiveTheme as _;
 
-    // -------------------------------------------------------------------------
-    // Primitive Palette
-    // -------------------------------------------------------------------------
-
-    // Grays
-    const GRAY_900: u32 = 0x1e1e1e; // Main Editor BG
-    const GRAY_850: u32 = 0x252526; // Sidebar BG
-    const GRAY_800: u32 = 0x2d2d2d; // Activity Bar / Headers
-    const GRAY_600: u32 = 0x3e3e42; // Input BG
-    const GRAY_500: u32 = 0x454545; // Borders
-    const GRAY_400: u32 = 0x858585; // Muted Text
-    const GRAY_300: u32 = 0xcccccc; // Secondary Text
-    const GRAY_100: u32 = 0xffffff; // Primary Text
-
-    // Accents
-    const MONGO_GREEN: u32 = 0x00ED64;
-    const MONGO_GREEN_DIM: u32 = 0x00C050;
-
-    // Status
-    const YELLOW_WARN: u32 = 0xCCA700;
-    const GREEN_SUCCESS: u32 = 0x00ED64; // Same as brand
-    const RED_DANGER: u32 = 0xDA3633;
-    const RED_DANGER_HOVER: u32 = 0xF85149;
-    const RED_ERROR_TEXT: u32 = 0xFCA5A5;
-
-    // -------------------------------------------------------------------------
-    // Semantic Tokens
-    // -------------------------------------------------------------------------
-
-    // Backgrounds
-    pub fn bg_app() -> Rgba {
-        rgb(GRAY_900)
-    } // Main content area
-    pub fn bg_sidebar() -> Rgba {
-        rgb(GRAY_850)
-    } // Sidebar / Panels
-    pub fn bg_header() -> Rgba {
-        rgb(GRAY_800)
-    } // Section headers, status bar
-    pub fn bg_hover() -> Rgba {
-        rgb(0x2a2d2e)
-    } // Subtle hover
-
-    // Text
-    pub fn text_primary() -> Rgba {
-        rgb(GRAY_100)
+    // BSON Syntax Highlighting — reads from active theme's base colors
+    pub fn syntax_key(cx: &App) -> Hsla {
+        cx.theme().blue
     }
-    pub fn text_secondary() -> Rgba {
-        rgb(GRAY_300)
+    pub fn syntax_string(cx: &App) -> Hsla {
+        cx.theme().green
     }
-    pub fn text_muted() -> Rgba {
-        rgb(GRAY_400)
+    pub fn syntax_number(cx: &App) -> Hsla {
+        cx.theme().blue
+    }
+    pub fn syntax_boolean(cx: &App) -> Hsla {
+        cx.theme().blue
+    }
+    pub fn syntax_null(cx: &App) -> Hsla {
+        cx.theme().muted_foreground
+    }
+    pub fn syntax_object_id(cx: &App) -> Hsla {
+        cx.theme().cyan
+    }
+    pub fn syntax_date(cx: &App) -> Hsla {
+        cx.theme().magenta
+    }
+    pub fn syntax_comment(cx: &App) -> Hsla {
+        cx.theme().muted_foreground
     }
 
-    // Accents
-    pub fn accent() -> Rgba {
-        rgb(MONGO_GREEN)
-    }
-    pub fn accent_hover() -> Rgba {
-        rgb(MONGO_GREEN_DIM)
-    }
-
-    // Borders
-    pub fn border() -> Rgba {
-        rgb(GRAY_500)
-    }
-    pub fn border_subtle() -> Rgba {
-        rgb(0x333333)
-    }
-    pub fn border_focus() -> Rgba {
-        accent()
+    // Dirty document highlight (warning color with alpha)
+    pub fn bg_dirty(cx: &App) -> Hsla {
+        let mut c = cx.theme().warning;
+        c.a = 0.1;
+        c
     }
 
-    // Status
-    pub fn status_success() -> Rgba {
-        rgb(GREEN_SUCCESS)
-    }
-    pub fn status_warning() -> Rgba {
-        rgb(YELLOW_WARN)
-    }
-    pub fn status_error() -> Rgba {
-        rgb(RED_DANGER)
-    }
-    pub fn text_error() -> Rgba {
-        rgb(RED_ERROR_TEXT)
-    }
-    pub fn bg_error() -> Rgba {
-        rgba(0xDA36331A)
-    }
-    pub fn border_error() -> Rgba {
-        rgb(RED_DANGER)
+    // Error background with alpha
+    pub fn bg_error(cx: &App) -> Hsla {
+        let mut c = cx.theme().danger;
+        c.a = 0.1;
+        c
     }
 
-    // Components specific
-    pub fn list_hover() -> Rgba {
-        rgb(0x2a2d2e)
-    }
-    pub fn list_selected() -> Rgba {
-        rgb(0x37373d)
-    }
-    pub fn bg_dirty() -> Rgba {
-        rgba(0xF9C5131A)
+    // Fully transparent (for invisible default borders/backgrounds)
+    pub fn transparent() -> Hsla {
+        gpui::hsla(0.0, 0.0, 0.0, 0.0)
     }
 
-    // Buttons
-    pub fn bg_button_primary() -> Rgba {
-        accent()
-    }
-    pub fn bg_button_primary_hover() -> Rgba {
-        accent_hover()
-    }
-    pub fn bg_button_secondary() -> Rgba {
-        rgb(GRAY_600)
-    }
-    pub fn bg_button_secondary_hover() -> Rgba {
-        rgb(0x4a4a4e)
-    }
-    pub fn text_button_primary() -> Rgba {
-        rgb(0x000000)
-    }
-    pub fn bg_button_danger() -> Rgba {
-        rgb(RED_DANGER)
-    }
-    pub fn bg_button_danger_hover() -> Rgba {
-        rgb(RED_DANGER_HOVER)
-    }
-    pub fn text_button_danger() -> Rgba {
-        rgb(0xFFFFFF)
+    // Modal backdrop — theme background darkened with alpha
+    pub fn backdrop(cx: &App) -> Hsla {
+        let mut c = cx.theme().background;
+        c.a = 0.5;
+        c
     }
 
-    // Syntax Highlighting (GitHub Dark)
-    pub fn syntax_key() -> Rgba {
-        rgb(0xC8E1FF)
-    } // .pl-c1 meta.property-name
-    pub fn syntax_string() -> Rgba {
-        rgb(0x79B8FF)
-    } // .pl-s string
-    pub fn syntax_number() -> Rgba {
-        rgb(0xFB8532)
-    } // .pl-v variable
-    pub fn syntax_boolean() -> Rgba {
-        rgb(0x7BCC72)
-    } // .pl-ent entity.name.tag
-    pub fn syntax_null() -> Rgba {
-        rgb(0x959DA5)
-    } // .pl-c comment
-    pub fn syntax_object_id() -> Rgba {
-        rgb(0x56D4DD)
-    } // cyan accent
-    pub fn syntax_date() -> Rgba {
-        rgb(0xB392F0)
-    } // purple accent
-    pub fn syntax_comment() -> Rgba {
-        rgb(0x959DA5)
+    // Warning background with alpha
+    pub fn bg_warning(cx: &App) -> Hsla {
+        let mut c = cx.theme().warning;
+        c.a = 0.1;
+        c
     }
 
-    // -------------------------------------------------------------------------
-    // Legacy mapping (for gradual migration if needed, but we will replace all)
-    // -------------------------------------------------------------------------
-    pub fn accent_green() -> Rgba {
-        accent()
+    // Warning border with alpha
+    pub fn border_warning(cx: &App) -> Hsla {
+        let mut c = cx.theme().warning;
+        c.a = 0.3;
+        c
+    }
+
+    // Error/danger border with alpha
+    pub fn border_error(cx: &App) -> Hsla {
+        let mut c = cx.theme().danger;
+        c.a = 0.3;
+        c
     }
 }
 
@@ -274,7 +233,3 @@ pub mod borders {
         px(3.0)
     } // Subtler rounded corners
 }
-
-// Re-exports for easier access
-#[allow(unused_imports)]
-pub use colors::*;

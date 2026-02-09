@@ -1,6 +1,7 @@
 use crate::state::{CollectionStats, CollectionSubview, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
@@ -280,7 +281,7 @@ impl Render for CollectionView {
 
         let mut root = div().key_context(key_context.as_str());
         root = self.bind_root_actions(root, cx);
-        root = root.flex().flex_col().flex_1().h_full().bg(colors::bg_app()).child(
+        root = root.flex().flex_col().flex_1().h_full().bg(cx.theme().background).child(
             self.render_header(
                 &collection_name,
                 &db_name,
@@ -326,6 +327,7 @@ impl Render for CollectionView {
                     indexes_loading,
                     indexes_error,
                     session_key,
+                    cx,
                 ));
             }
             CollectionSubview::Stats => {
@@ -334,6 +336,7 @@ impl Render for CollectionView {
                     stats_loading,
                     stats_error,
                     session_key,
+                    cx,
                 ));
             }
             CollectionSubview::Aggregation => {
@@ -353,6 +356,7 @@ impl CollectionView {
         stats_loading: bool,
         stats_error: Option<String>,
         session_key: Option<SessionKey>,
+        cx: &App,
     ) -> AnyElement {
         div()
             .flex()
@@ -367,6 +371,7 @@ impl CollectionView {
                 stats_error,
                 session_key,
                 self.state.clone(),
+                cx,
             ))
             .into_any_element()
     }

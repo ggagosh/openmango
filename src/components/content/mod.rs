@@ -201,41 +201,41 @@ impl Render for ContentArea {
                 settings_view: self.settings_view.as_ref(),
             };
             let content = render_tabs_host(host, cx);
-            return render_shell(error_text, self.state.clone(), content, false);
+            return render_shell(error_text, self.state.clone(), content, false, cx);
         }
 
         if matches!(current_view, View::Settings) {
             self.ensure_views(false, false, false, false, should_settings_view, cx);
             if let Some(view) = &self.settings_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false);
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Database) {
             self.ensure_views(false, should_database_view, false, false, false, cx);
             if let Some(view) = &self.database_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false);
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Transfer) {
             self.ensure_views(false, false, should_transfer_view, false, false, cx);
             if let Some(view) = &self.transfer_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false);
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Forge) {
             self.ensure_views(false, false, false, should_forge_view, false, cx);
             if let Some(view) = &self.forge_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false);
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if has_collection {
             self.ensure_views(should_collection_view, false, false, false, false, cx);
             if let Some(view) = &self.collection_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false);
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -247,7 +247,7 @@ impl Render for ContentArea {
             "Select a collection to view documents".to_string()
         };
 
-        let empty = render_empty_state(hint);
-        render_shell(error_text, self.state.clone(), empty, true)
+        let empty = render_empty_state(hint, cx);
+        render_shell(error_text, self.state.clone(), empty, true, cx)
     }
 }

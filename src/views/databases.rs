@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
@@ -8,7 +9,7 @@ use crate::helpers::{format_bytes, format_number};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, View,
 };
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, sizing, spacing};
 
 /// Database overview view (stats + collections list)
 pub struct DatabaseView {
@@ -65,7 +66,7 @@ impl Render for DatabaseView {
                 .items_center()
                 .justify_center()
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .child("Select a database to view overview details")
                 .into_any_element();
         }
@@ -127,14 +128,14 @@ impl Render for DatabaseView {
             .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors::text_primary())
+                    .text_color(cx.theme().foreground)
                     .child(database_name.clone()),
             )
             .child(
@@ -159,6 +160,7 @@ impl Render for DatabaseView {
                 stats_error,
                 database_key.clone(),
                 state.clone(),
+                cx,
             ))
             .child(Self::render_collections_section(
                 collections,
@@ -167,6 +169,7 @@ impl Render for DatabaseView {
                 database_name,
                 database_key.clone(),
                 state.clone(),
+                cx,
             ));
 
         div()
@@ -176,7 +179,7 @@ impl Render for DatabaseView {
             .flex_1()
             .min_w(px(0.0))
             .min_h(px(0.0))
-            .bg(colors::bg_app())
+            .bg(cx.theme().background)
             .child(header)
             .child(content)
             .into_any_element()
@@ -190,12 +193,13 @@ impl DatabaseView {
         stats_error: Option<String>,
         database_key: Option<crate::state::DatabaseKey>,
         state: Entity<AppState>,
+        cx: &App,
     ) -> AnyElement {
         let mut section =
             div().flex().flex_col().gap(spacing::sm()).px(spacing::lg()).pt(spacing::lg());
 
-        section =
-            section.child(div().text_xs().text_color(colors::text_muted()).child("Database stats"));
+        section = section
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Database stats"));
 
         let mut row = div()
             .flex()
@@ -203,15 +207,15 @@ impl DatabaseView {
             .gap(spacing::lg())
             .px(spacing::lg())
             .py(spacing::sm())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .rounded(borders::radius_sm());
 
         if stats_loading {
-            row = row
-                .child(Spinner::new().small())
-                .child(div().text_sm().text_color(colors::text_muted()).child("Loading stats..."));
+            row = row.child(Spinner::new().small()).child(
+                div().text_sm().text_color(cx.theme().muted_foreground).child("Loading stats..."),
+            );
             return section.child(row).into_any_element();
         }
 
@@ -220,7 +224,7 @@ impl DatabaseView {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(colors::text_error())
+                        .text_color(cx.theme().danger_foreground)
                         .child("Database stats failed. See banner for details."),
                 )
                 .child(
@@ -245,19 +249,19 @@ impl DatabaseView {
 
         let Some(stats) = stats else {
             row = row.child(
-                div().text_sm().text_color(colors::text_muted()).child("No stats available"),
+                div().text_sm().text_color(cx.theme().muted_foreground).child("No stats available"),
             );
             return section.child(row).into_any_element();
         };
 
         row = row
-            .child(stat_cell("Collections", format_number(stats.collections)))
-            .child(stat_cell("Objects", format_number(stats.objects)))
-            .child(stat_cell("Avg size", format_bytes(stats.avg_obj_size)))
-            .child(stat_cell("Data size", format_bytes(stats.data_size)))
-            .child(stat_cell("Storage", format_bytes(stats.storage_size)))
-            .child(stat_cell("Indexes", format_number(stats.indexes)))
-            .child(stat_cell("Index size", format_bytes(stats.index_size)));
+            .child(stat_cell("Collections", format_number(stats.collections), cx))
+            .child(stat_cell("Objects", format_number(stats.objects), cx))
+            .child(stat_cell("Avg size", format_bytes(stats.avg_obj_size), cx))
+            .child(stat_cell("Data size", format_bytes(stats.data_size), cx))
+            .child(stat_cell("Storage", format_bytes(stats.storage_size), cx))
+            .child(stat_cell("Indexes", format_number(stats.indexes), cx))
+            .child(stat_cell("Index size", format_bytes(stats.index_size), cx));
 
         section.child(row).into_any_element()
     }
@@ -269,6 +273,7 @@ impl DatabaseView {
         database_name: String,
         database_key: Option<crate::state::DatabaseKey>,
         state: Entity<AppState>,
+        cx: &App,
     ) -> AnyElement {
         let mut section = div()
             .flex()
@@ -278,8 +283,8 @@ impl DatabaseView {
             .pt(spacing::lg())
             .pb(spacing::lg());
 
-        section =
-            section.child(div().text_xs().text_color(colors::text_muted()).child("Collections"));
+        section = section
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Collections"));
 
         if collections_loading {
             return section
@@ -292,7 +297,7 @@ impl DatabaseView {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(colors::text_muted())
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Loading collections..."),
                         ),
                 )
@@ -309,7 +314,7 @@ impl DatabaseView {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(colors::text_error())
+                                .text_color(cx.theme().danger_foreground)
                                 .child("Collections failed. See banner for details."),
                         )
                         .child(
@@ -342,7 +347,7 @@ impl DatabaseView {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("No collections yet. Use the sidebar menu to create one."),
                 )
                 .into_any_element();
@@ -353,23 +358,40 @@ impl DatabaseView {
             .items_center()
             .px(spacing::lg())
             .py(spacing::xs())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_w(px(0.0))
                     .text_xs()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Collection"),
             )
-            .child(div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Type"))
-            .child(div().w(px(100.0)).text_xs().text_color(colors::text_muted()).child("Capped"))
             .child(
-                div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Read only"),
+                div().w(px(120.0)).text_xs().text_color(cx.theme().muted_foreground).child("Type"),
+            )
+            .child(
+                div()
+                    .w(px(100.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Capped"),
+            )
+            .child(
+                div()
+                    .w(px(120.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Read only"),
             );
+
+        let theme_border_subtle = cx.theme().sidebar_border;
+        let theme_list_hover = cx.theme().list_hover;
+        let theme_text_primary = cx.theme().foreground;
+        let theme_text_secondary = cx.theme().secondary_foreground;
 
         let rows = collections
             .into_iter()
@@ -385,8 +407,8 @@ impl DatabaseView {
                     .px(spacing::lg())
                     .py(spacing::xs())
                     .border_b_1()
-                    .border_color(colors::border_subtle())
-                    .hover(|s| s.bg(colors::list_hover()))
+                    .border_color(theme_border_subtle)
+                    .hover(move |s| s.bg(theme_list_hover))
                     .cursor_pointer()
                     .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                         state.update(cx, |state, cx| {
@@ -399,28 +421,28 @@ impl DatabaseView {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(theme_text_primary)
                             .child(overview.name.clone()),
                     )
                     .child(
                         div()
                             .w(px(120.0))
                             .text_sm()
-                            .text_color(colors::text_secondary())
+                            .text_color(theme_text_secondary)
                             .child(overview.collection_type.clone()),
                     )
                     .child(
                         div()
                             .w(px(100.0))
                             .text_sm()
-                            .text_color(colors::text_secondary())
+                            .text_color(theme_text_secondary)
                             .child(if overview.capped { "Yes" } else { "No" }),
                     )
                     .child(
                         div()
                             .w(px(120.0))
                             .text_sm()
-                            .text_color(colors::text_secondary())
+                            .text_color(theme_text_secondary)
                             .child(if overview.read_only { "Yes" } else { "No" }),
                     )
             })
@@ -433,12 +455,12 @@ impl DatabaseView {
     }
 }
 
-fn stat_cell(label: &str, value: String) -> AnyElement {
+fn stat_cell(label: &str, value: String, cx: &App) -> AnyElement {
     div()
         .flex()
         .flex_col()
         .gap(px(2.0))
-        .child(div().text_xs().text_color(colors::text_muted()).child(label.to_string()))
-        .child(div().text_sm().text_color(colors::text_primary()).child(value))
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
+        .child(div().text_sm().text_color(cx.theme().foreground).child(value))
         .into_any_element()
 }

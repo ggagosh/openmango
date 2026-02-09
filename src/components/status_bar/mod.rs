@@ -1,8 +1,9 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::{AppState, StatusMessage};
-use crate::theme::{colors, sizing, spacing};
+use crate::theme::{sizing, spacing};
 
 mod left;
 mod right;
@@ -57,7 +58,7 @@ impl StatusBar {
 }
 
 impl RenderOnce for StatusBar {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
             .flex()
             .items_center()
@@ -65,16 +66,17 @@ impl RenderOnce for StatusBar {
             .w_full()
             .h(sizing::status_bar_height())
             .px(spacing::md())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_t_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(render_status_left(
                 self.is_connected,
                 self.connection_name,
                 self.read_only,
                 self.sidebar_collapsed,
                 self.on_toggle_sidebar,
+                cx,
             ))
-            .child(render_status_right(self.status_message, self.update_status, self.state))
+            .child(render_status_right(self.status_message, self.update_status, self.state, cx))
     }
 }

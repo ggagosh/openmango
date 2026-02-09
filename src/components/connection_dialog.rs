@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
@@ -9,7 +10,7 @@ use crate::components::{Button, cancel_button};
 use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
 use crate::models::SavedConnection;
 use crate::state::AppState;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 #[derive(Clone, Debug)]
 enum TestStatus {
@@ -213,11 +214,13 @@ impl Render for ConnectionDialog {
 
         let (status_text, status_color) = match &self.status {
             TestStatus::Idle => {
-                ("Test connection to enable Save".to_string(), colors::text_muted())
+                ("Test connection to enable Save".to_string(), cx.theme().muted_foreground)
             }
-            TestStatus::Testing => ("Testing connection...".to_string(), colors::text_muted()),
-            TestStatus::Success => ("Connection OK".to_string(), colors::accent()),
-            TestStatus::Error(msg) => (format!("Connection failed: {msg}"), colors::status_error()),
+            TestStatus::Testing => {
+                ("Testing connection...".to_string(), cx.theme().muted_foreground)
+            }
+            TestStatus::Success => ("Connection OK".to_string(), cx.theme().primary),
+            TestStatus::Error(msg) => (format!("Connection failed: {msg}"), cx.theme().danger),
         };
 
         div()
@@ -230,7 +233,7 @@ impl Render for ConnectionDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("Name"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Name"))
                     .child(Input::new(&self.name_state)),
             )
             .child(
@@ -238,7 +241,7 @@ impl Render for ConnectionDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("URI"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("URI"))
                     .child(Input::new(&self.uri_state))
                     .child(div().text_xs().text_color(status_color).child(status_text)),
             )
@@ -269,13 +272,13 @@ impl Render for ConnectionDialog {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Read-only (safe mode)"),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_secondary())
+                                    .text_color(cx.theme().secondary_foreground)
                                     .child("Disable all writes, deletes, drops, and index changes"),
                             ),
                     ),

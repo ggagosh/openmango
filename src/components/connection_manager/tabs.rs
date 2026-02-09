@@ -3,12 +3,13 @@
 //! Each tab (General, Auth, Options, TLS, Pool, Advanced) is rendered here.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::input::Input;
 use gpui_component::switch::Switch;
 
 use crate::components::Button;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::ConnectionManager;
 
@@ -29,7 +30,7 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("Name"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Name"))
                     .child(Input::new(&self.draft.name_state)),
             )
             .child(
@@ -37,7 +38,7 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("URI"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("URI"))
                     .child(
                         Input::new(&self.draft.uri_state)
                             .font_family(crate::theme::fonts::mono())
@@ -77,13 +78,13 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(colors::text_muted())
+                            .text_color(cx.theme().muted_foreground)
                             .child("Keep URI as the source of truth; fields below sync on update."),
                     )
                     .child(if let Some(err) = parse_error {
                         div()
                             .text_xs()
-                            .text_color(colors::text_error())
+                            .text_color(cx.theme().danger_foreground)
                             .child(err)
                             .into_any_element()
                     } else {
@@ -117,12 +118,14 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Read-only (safe mode)"),
                             )
-                            .child(div().text_xs().text_color(colors::text_secondary()).child(
-                                "Block inserts, updates, deletes, drops, and index changes",
-                            )),
+                            .child(
+                                div().text_xs().text_color(cx.theme().secondary_foreground).child(
+                                    "Block inserts, updates, deletes, drops, and index changes",
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -136,10 +139,7 @@ impl ConnectionManager {
                             .flex_col()
                             .gap(spacing::xs())
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(colors::text_primary())
-                                    .child("Username"),
+                                div().text_sm().text_color(cx.theme().foreground).child("Username"),
                             )
                             .child(Input::new(&self.draft.username_state)),
                     )
@@ -149,10 +149,7 @@ impl ConnectionManager {
                             .flex_col()
                             .gap(spacing::xs())
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(colors::text_primary())
-                                    .child("Password"),
+                                div().text_sm().text_color(cx.theme().foreground).child("Password"),
                             )
                             .child(Input::new(&self.draft.password_state).mask_toggle()),
                     ),
@@ -162,7 +159,7 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("App name"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("App name"))
                     .child(Input::new(&self.draft.app_name_state)),
             )
             .into_any_element()
@@ -171,7 +168,7 @@ impl ConnectionManager {
     pub(super) fn render_auth_tab(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
@@ -182,7 +179,7 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("Auth source"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Auth source"))
                     .child(Input::new(&self.draft.auth_source_state)),
             )
             .child(
@@ -191,7 +188,7 @@ impl ConnectionManager {
                     .flex_col()
                     .gap(spacing::xs())
                     .child(
-                        div().text_sm().text_color(colors::text_primary()).child("Auth mechanism"),
+                        div().text_sm().text_color(cx.theme().foreground).child("Auth mechanism"),
                     )
                     .child(Input::new(&self.draft.auth_mechanism_state)),
             )
@@ -203,7 +200,7 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("Auth mechanism properties"),
                     )
                     .child(Input::new(&self.draft.auth_mechanism_props_state)),
@@ -214,7 +211,7 @@ impl ConnectionManager {
     pub(super) fn render_options_tab(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
@@ -230,7 +227,7 @@ impl ConnectionManager {
                             .checked(self.draft.direct_connection)
                             .small()
                             .on_click({
-                                let view = _cx.entity();
+                                let view = cx.entity();
                                 move |checked, _window, cx| {
                                     view.update(cx, |this, cx| {
                                         this.draft.direct_connection = *checked;
@@ -242,7 +239,7 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("Direct connection"),
                     ),
             )
@@ -259,7 +256,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Read preference"),
                             )
                             .child(Input::new(&self.draft.read_preference_state)),
@@ -272,7 +269,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Read concern level"),
                             )
                             .child(Input::new(&self.draft.read_concern_state)),
@@ -285,7 +282,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Write concern (w)"),
                             )
                             .child(Input::new(&self.draft.write_concern_state)),
@@ -298,7 +295,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("wTimeoutMS"),
                             )
                             .child(Input::new(&self.draft.w_timeout_state)),
@@ -310,7 +307,7 @@ impl ConnectionManager {
     pub(super) fn render_tls_tab(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
@@ -322,7 +319,7 @@ impl ConnectionManager {
                     .items_center()
                     .gap(spacing::sm())
                     .child(Switch::new("tls-enabled").checked(self.draft.tls).small().on_click({
-                        let view = _cx.entity();
+                        let view = cx.entity();
                         move |checked, _window, cx| {
                             view.update(cx, |this, cx| {
                                 this.draft.tls = *checked;
@@ -330,7 +327,7 @@ impl ConnectionManager {
                             });
                         }
                     }))
-                    .child(div().text_sm().text_color(colors::text_primary()).child("TLS enabled")),
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("TLS enabled")),
             )
             .child(
                 div()
@@ -342,7 +339,7 @@ impl ConnectionManager {
                             .checked(self.draft.tls_insecure)
                             .small()
                             .on_click({
-                                let view = _cx.entity();
+                                let view = cx.entity();
                                 move |checked, _window, cx| {
                                     view.update(cx, |this, cx| {
                                         this.draft.tls_insecure = *checked;
@@ -351,16 +348,14 @@ impl ConnectionManager {
                                 }
                             }),
                     )
-                    .child(
-                        div().text_sm().text_color(colors::text_primary()).child("TLS insecure"),
-                    ),
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("TLS insecure")),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("TLS CA file"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("TLS CA file"))
                     .child(Input::new(&self.draft.tls_ca_file_state)),
             )
             .child(
@@ -371,7 +366,7 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("TLS certificate key file"),
                     )
                     .child(Input::new(&self.draft.tls_cert_key_file_state)),
@@ -384,7 +379,7 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("TLS certificate key password"),
                     )
                     .child(Input::new(&self.draft.tls_cert_key_password_state).mask_toggle()),
@@ -395,7 +390,7 @@ impl ConnectionManager {
     pub(super) fn render_pool_tab(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
@@ -414,7 +409,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Connect timeout (ms)"),
                             )
                             .child(Input::new(&self.draft.connect_timeout_state)),
@@ -427,7 +422,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Server selection timeout (ms)"),
                             )
                             .child(Input::new(&self.draft.server_selection_timeout_state)),
@@ -440,7 +435,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Max pool size"),
                             )
                             .child(Input::new(&self.draft.max_pool_state)),
@@ -453,7 +448,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Min pool size"),
                             )
                             .child(Input::new(&self.draft.min_pool_state)),
@@ -466,7 +461,7 @@ impl ConnectionManager {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child("Heartbeat frequency (ms)"),
                             )
                             .child(Input::new(&self.draft.heartbeat_frequency_state)),
@@ -478,7 +473,7 @@ impl ConnectionManager {
     pub(super) fn render_advanced_tab(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
@@ -489,7 +484,7 @@ impl ConnectionManager {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child("Compressors"))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Compressors"))
                     .child(Input::new(&self.draft.compressors_state)),
             )
             .child(
@@ -500,7 +495,7 @@ impl ConnectionManager {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("Zlib compression level"),
                     )
                     .child(Input::new(&self.draft.zlib_level_state)),

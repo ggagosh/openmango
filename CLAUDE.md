@@ -30,7 +30,7 @@ just precommit # Run all checks before commit
 ```
 src/
 ├── main.rs           # Entry point, window setup
-├── theme.rs          # Colors and styling constants
+├── theme.rs          # Custom colors, spacing, sizing, typography, fonts, borders
 ├── components/       # Reusable UI components
 ├── views/            # Screen/page components
 │   └── documents/    # Document tree + editor view (view-model driven)
@@ -109,9 +109,42 @@ refs/
 - gpui-router: https://github.com/justjavac/gpui-router
 - gpui-form (future): https://github.com/stayhydated/gpui-form
 
+## Theme System
+
+Colors use gpui-component's theme system. Themes are defined in `themes/*.json` (Vercel Dark, Darcula Dark) and embedded at compile time. Runtime switching via `theme::apply_theme()` in Settings.
+
+### Accessing theme colors
+```rust
+use gpui_component::ActiveTheme as _;
+
+// In any render method or function with cx: &App
+cx.theme().background      // Main background
+cx.theme().foreground      // Primary text
+cx.theme().primary         // Accent color (desaturated green)
+cx.theme().sidebar         // Sidebar/panel background
+cx.theme().border          // Standard borders
+cx.theme().muted_foreground // Muted text
+// See gpui-component docs for all available tokens
+```
+
+### Custom colors (theme-aware)
+These read from the active theme's base colors (take `cx: &App`, return `Hsla`):
+- `colors::syntax_*(cx)` — BSON syntax highlighting (key, string, number, boolean, null, object_id, date, comment)
+- `colors::bg_dirty(cx)` — Dirty document highlight (warning with alpha)
+- `colors::bg_error(cx)` — Error background (danger with alpha)
+
+### Theme switching
+- `theme::load_theme_config(theme_id)` — load a `ThemeConfig` by ID
+- `theme::apply_theme(app_theme, window, cx)` — switch theme at runtime
+- Theme JSONs are embedded via `include_str!` in `THEME_SOURCES`
+
+### Rules
+- **Never** use hardcoded hex colors in render methods — use `cx.theme()` tokens
+- For BSON syntax highlighting, use `crate::theme::colors::syntax_*(cx)` (returns `Hsla`)
+- Non-color design tokens (spacing, sizing, typography, fonts, borders) remain in `theme.rs`
+
 ## Development Notes
 
-- Use `theme.rs` for all colors - avoid hardcoded hex values
 - Components go in `components/`, full-page views go in `views/`
 - Async MongoDB ops must go through `state/commands.rs` (AppCommands)
 - State management lives in `state/app_state/` with a session-per-tab model

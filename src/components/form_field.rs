@@ -1,9 +1,10 @@
 //! Reusable form field component for label + input patterns.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputState};
 
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 /// A reusable form field component that renders a label above an input.
 ///
@@ -12,7 +13,7 @@ use crate::theme::{colors, spacing};
 /// let input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter name"));
 /// FormField::new("Name", &input)
 ///     .required(true)
-///     .into_any_element()
+///     .render(cx)
 /// ```
 pub struct FormField {
     label: SharedString,
@@ -53,12 +54,9 @@ impl FormField {
         self.disabled = disabled;
         self
     }
-}
 
-impl IntoElement for FormField {
-    type Element = Div;
-
-    fn into_element(self) -> Self::Element {
+    /// Render the form field into an element.
+    pub fn render(self, cx: &App) -> impl IntoElement {
         let mut label_text = self.label.to_string();
         if self.required {
             label_text.push_str(" *");
@@ -68,11 +66,14 @@ impl IntoElement for FormField {
             .flex()
             .flex_col()
             .gap(spacing::xs())
-            .child(div().text_sm().text_color(colors::text_primary()).child(label_text));
+            .child(div().text_sm().text_color(cx.theme().foreground).child(label_text));
 
         if let Some(description) = self.description {
             field = field.child(
-                div().text_xs().text_color(colors::text_muted()).child(description.to_string()),
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(description.to_string()),
             );
         }
 

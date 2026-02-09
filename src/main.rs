@@ -33,7 +33,18 @@ fn main() {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
-        // Set font families on the gpui-component theme so all widgets use our fonts
+        // Load the saved theme (or default)
+        {
+            let saved_theme = ConfigManager::default()
+                .load_settings()
+                .map(|s| s.appearance.theme)
+                .unwrap_or_default();
+            if let Some(config) = theme::load_theme_config(saved_theme.theme_id()) {
+                gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
+            }
+        }
+
+        // Override font families (after apply_config so they take precedence)
         {
             let theme = gpui_component::theme::Theme::global_mut(cx);
             theme.font_family = theme::fonts::ui().into();

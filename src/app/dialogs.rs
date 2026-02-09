@@ -20,7 +20,7 @@ pub(crate) fn open_create_database_dialog(
 
     let db_state_save = db_state.clone();
     let col_state_save = col_state.clone();
-    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
         dialog
             .title("Create Database")
             .min_w(px(420.0))
@@ -30,8 +30,8 @@ pub(crate) fn open_create_database_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
-                    .child(FormField::new("Database name", &db_state))
-                    .child(FormField::new("Initial collection", &col_state)),
+                    .child(FormField::new("Database name", &db_state).render(cx))
+                    .child(FormField::new("Initial collection", &col_state).render(cx)),
             )
             .footer({
                 let state = state.clone();
@@ -72,7 +72,7 @@ pub(crate) fn open_create_collection_dialog(
     let col_state =
         cx.new(|cx| InputState::new(window, cx).placeholder("collection_name").default_value(""));
     let col_state_save = col_state.clone();
-    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
         dialog
             .title(format!("Create Collection in {database}"))
             .min_w(px(420.0))
@@ -82,7 +82,7 @@ pub(crate) fn open_create_collection_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
-                    .child(FormField::new("Collection name", &col_state)),
+                    .child(FormField::new("Collection name", &col_state).render(cx)),
             )
             .footer({
                 let state = state.clone();
@@ -124,7 +124,7 @@ pub(crate) fn open_rename_collection_dialog(
         InputState::new(window, cx).placeholder("collection_name").default_value(collection.clone())
     });
     let name_state_save = name_state.clone();
-    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
         dialog
             .title(format!("Rename Collection {database}.{collection}"))
             .min_w(px(420.0))
@@ -134,7 +134,7 @@ pub(crate) fn open_rename_collection_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
-                    .child(FormField::new("New collection name", &name_state)),
+                    .child(FormField::new("New collection name", &name_state).render(cx)),
             )
             .footer({
                 let state = state.clone();

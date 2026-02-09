@@ -3,6 +3,7 @@
 use gpui::Styled as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Disableable as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::switch::Switch;
@@ -14,7 +15,7 @@ use crate::helpers::format_number;
 use crate::keyboard::DeleteAggregationStage;
 use crate::state::app_state::PipelineState;
 use crate::state::{AppState, SessionKey, StatusMessage};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 use crate::views::CollectionView;
 
 use super::dialogs::open_stage_operator_picker_dialog;
@@ -29,13 +30,13 @@ pub(super) struct DragStage {
 pub(super) struct DragStagePreview;
 
 impl Render for DragStagePreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .px(spacing::sm())
             .py(spacing::xs())
             .rounded(borders::radius_sm())
-            .bg(colors::accent())
-            .text_color(colors::bg_app())
+            .bg(cx.theme().primary)
+            .text_color(cx.theme().background)
             .text_sm()
             .child("Moving stage...")
     }
@@ -104,7 +105,7 @@ pub(super) fn render_stage_list(
                     let session_key = session_key.clone();
                     let focus_handle = focus_handle.clone();
                     let view_entity = view_entity.clone();
-                    move |view, range: std::ops::Range<usize>, _window, _cx| {
+                    move |view, range: std::ops::Range<usize>, _window, cx| {
                         let drag_source = view.aggregation_drag_source;
                         range
                             .map(|idx| {
@@ -119,6 +120,7 @@ pub(super) fn render_stage_list(
                                     session_key.clone(),
                                     focus_handle.clone(),
                                     view_entity.clone(),
+                                    cx,
                                 )
                             })
                             .collect()
@@ -152,6 +154,7 @@ fn render_stage_row(
     session_key: Option<SessionKey>,
     focus_handle: FocusHandle,
     view_entity: Entity<CollectionView>,
+    cx: &App,
 ) -> AnyElement {
     let is_selected = selected == Some(idx);
     let is_dimmed = selected.is_some_and(|selected| idx > selected);
@@ -191,7 +194,7 @@ fn render_stage_row(
         .flex()
         .items_center()
         .gap(spacing::xs())
-        .child(drag_handle(idx, drag_value.clone(), handle_view_entity))
+        .child(drag_handle(idx, drag_value.clone(), handle_view_entity, cx))
         .child(
             Switch::new(("agg-stage-enabled", idx))
                 .checked(stage_enabled)
@@ -210,7 +213,7 @@ fn render_stage_row(
                     }
                 }),
         )
-        .child(div().text_sm().text_color(colors::text_primary()).child(format!(
+        .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
             "{}. {}",
             idx + 1,
             operator_label
@@ -266,9 +269,9 @@ fn render_stage_row(
         .py(spacing::xs())
         .rounded(borders::radius_sm())
         .border_1()
-        .border_color(rgba(0x00000000))
-        .when(is_selected, |s| s.bg(colors::list_selected()).border_color(colors::border()))
-        .when(!is_selected, |s| s.hover(|s| s.bg(colors::list_hover())))
+        .border_color(crate::theme::colors::transparent())
+        .when(is_selected, |s| s.bg(cx.theme().list_active).border_color(cx.theme().border))
+        .when(!is_selected, |s| s.hover(|s| s.bg(cx.theme().list_hover)))
         .when(is_dimmed, |s| s.opacity(0.55))
         .when(is_drag_source, |s| s.opacity(0.4).border_0())
         .on_mouse_down(MouseButton::Left, {
@@ -283,7 +286,7 @@ fn render_stage_row(
             }
         })
         .child(header_row)
-        .child(div().text_xs().text_color(colors::text_muted()).child(count_label));
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(count_label));
 
     if let Some(drag_value) = drag_value.clone() {
         let session_key = drag_value.session_key.clone();
@@ -311,7 +314,7 @@ fn render_stage_row(
                         .and_then(|(target, after)| (target == idx).then_some(after))
                         .unwrap_or(false);
                     // Use only the insert line, no other borders
-                    let accent = colors::accent();
+                    let accent = cx.theme().primary;
                     if insert_after {
                         style.border_0().border_b_3().border_color(accent)
                     } else {
@@ -413,6 +416,7 @@ fn render_stage_row(
                 idx,
                 insert_state.clone(),
                 insert_session.clone(),
+                cx,
             ))
             .opacity(0.0)
             .hover(|s| s.opacity(1.0));
@@ -435,6 +439,7 @@ fn render_stage_row(
                 idx + 1,
                 insert_state,
                 insert_session,
+                cx,
             ))
             .opacity(0.0)
             .hover(|s| s.opacity(1.0));
@@ -583,6 +588,7 @@ fn insert_chip(
     insert_index: usize,
     insert_state: Entity<AppState>,
     insert_session: Option<SessionKey>,
+    cx: &App,
 ) -> AnyElement {
     let insert_enabled = insert_session.is_some();
     let mut chip = div()
@@ -594,9 +600,9 @@ fn insert_chip(
         .h(px(16.0))
         .rounded(borders::radius_sm())
         .border_1()
-        .border_color(colors::border_subtle())
-        .bg(colors::bg_sidebar())
-        .text_color(colors::text_muted())
+        .border_color(cx.theme().sidebar_border)
+        .bg(cx.theme().sidebar)
+        .text_color(cx.theme().muted_foreground)
         .child(Icon::new(IconName::Plus).xsmall());
 
     if insert_session.is_none() {
@@ -604,7 +610,7 @@ fn insert_chip(
     } else {
         chip = chip
             .cursor_pointer()
-            .hover(|s| s.bg(colors::list_hover()).text_color(colors::text_primary()))
+            .hover(|s| s.bg(cx.theme().list_hover).text_color(cx.theme().foreground))
             .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 let Some(session_key) = insert_session.clone() else {
                     return;
@@ -629,6 +635,7 @@ fn drag_handle(
     idx: usize,
     drag_value: Option<DragStage>,
     view_entity: Entity<CollectionView>,
+    cx: &App,
 ) -> AnyElement {
     let can_drag = drag_value.is_some();
     let mut handle = div()
@@ -639,13 +646,13 @@ fn drag_handle(
         .w(px(18.0))
         .h(px(18.0))
         .rounded(borders::radius_sm())
-        .text_color(colors::text_muted())
+        .text_color(cx.theme().muted_foreground)
         .child(Icon::new(IconName::ChevronsUpDown).xsmall());
 
     if let Some(drag_value) = drag_value {
         handle = handle
             .cursor_move()
-            .hover(|s| s.bg(colors::list_hover()).text_color(colors::text_primary()))
+            .hover(|s| s.bg(cx.theme().list_hover).text_color(cx.theme().foreground))
             .on_drag(drag_value, move |_drag: &DragStage, _position, _window, cx| {
                 cx.stop_propagation();
                 let entity_id = view_entity.entity_id();
@@ -676,13 +683,14 @@ pub(super) fn compute_drop_target(from: usize, insertion_index: usize, count: us
 }
 
 fn menu_item(label: &'static str, shortcut: Option<&'static str>) -> PopupMenuItem {
-    PopupMenuItem::element(move |_window, _cx| {
+    PopupMenuItem::element(move |_window, cx| {
         let mut row = div().flex().items_center().justify_between().w_full().gap(spacing::lg());
 
         row = row.child(div().text_sm().child(label));
 
         if let Some(shortcut) = shortcut {
-            row = row.child(div().text_xs().text_color(colors::text_muted()).child(shortcut));
+            row =
+                row.child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut));
         }
 
         row

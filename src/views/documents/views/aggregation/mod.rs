@@ -1,11 +1,12 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{InputEvent, InputState, Position, RopeExt, TabSize};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::tree::TreeState;
 
 use crate::state::app_state::PipelineState;
 use crate::state::{AppCommands, SessionKey, StatusMessage};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use crate::views::CollectionView;
 
@@ -89,7 +90,7 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(colors::bg_app())
+            .bg(cx.theme().background)
             .child(
                 div()
                     .flex()

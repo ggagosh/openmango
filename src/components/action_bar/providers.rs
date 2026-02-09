@@ -3,6 +3,7 @@ use gpui::SharedString;
 use crate::state::AppState;
 use crate::state::TabKey;
 use crate::state::app_state::updater::UpdateStatus;
+use crate::state::settings::AppTheme;
 
 use super::types::{ActionCategory, ActionItem};
 
@@ -219,7 +220,35 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             highlighted: matches!(state.update_status, UpdateStatus::ReadyToInstall { .. }),
             ..Default::default()
         },
+        ActionItem {
+            id: SharedString::from("cmd:change-theme"),
+            label: SharedString::from("Theme Selector: Toggle"),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 90,
+            ..Default::default()
+        },
     ]
+}
+
+/// Theme picker: flat list of all themes, current theme highlighted.
+pub fn theme_actions(state: &AppState) -> Vec<ActionItem> {
+    let current = state.settings.appearance.theme;
+    let mut actions = Vec::new();
+
+    for (i, theme) in AppTheme::dark_themes().iter().chain(AppTheme::light_themes()).enumerate() {
+        actions.push(ActionItem {
+            id: SharedString::from(format!("theme:{}", theme.theme_id())),
+            label: SharedString::from(theme.label()),
+            category: ActionCategory::Command,
+            available: true,
+            highlighted: *theme == current,
+            priority: i as i32,
+            ..Default::default()
+        });
+    }
+
+    actions
 }
 
 /// View: subview toggles (documents/indexes/stats).

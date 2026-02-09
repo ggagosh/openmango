@@ -5,10 +5,12 @@ use gpui_component::spinner::Spinner;
 use mongodb::IndexModel;
 use mongodb::bson::Document;
 
+use gpui_component::ActiveTheme as _;
+
 use crate::bson::bson_value_preview;
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::super::CollectionView;
 use super::super::dialogs::index_create::IndexCreateDialog;
@@ -20,9 +22,15 @@ impl CollectionView {
         indexes_loading: bool,
         indexes_error: Option<String>,
         session_key: Option<SessionKey>,
+        cx: &App,
     ) -> AnyElement {
-        let mut content =
-            div().flex().flex_col().flex_1().min_w(px(0.0)).overflow_hidden().bg(colors::bg_app());
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .bg(cx.theme().background);
 
         if indexes_loading {
             return content
@@ -37,7 +45,7 @@ impl CollectionView {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(colors::text_muted())
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Loading indexes..."),
                         ),
                 )
@@ -53,7 +61,9 @@ impl CollectionView {
                         .items_center()
                         .justify_center()
                         .gap(spacing::sm())
-                        .child(div().text_sm().text_color(colors::text_error()).child(error))
+                        .child(
+                            div().text_sm().text_color(cx.theme().danger_foreground).child(error),
+                        )
                         .child(
                             Button::new("retry-indexes")
                                 .ghost()
@@ -89,7 +99,7 @@ impl CollectionView {
                         .items_center()
                         .justify_center()
                         .text_sm()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("No indexes found"),
                 )
                 .into_any_element();
@@ -100,16 +110,16 @@ impl CollectionView {
             .items_center()
             .px(spacing::lg())
             .py(spacing::xs())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_w(px(0.0))
                     .text_xs()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Name"),
             )
             .child(
@@ -118,11 +128,19 @@ impl CollectionView {
                     .flex_1()
                     .min_w(px(0.0))
                     .text_xs()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Keys"),
             )
-            .child(div().w(px(200.0)).text_xs().text_color(colors::text_muted()).child("Flags"))
-            .child(div().w(px(140.0)).text_xs().text_color(colors::text_muted()).child("Actions"));
+            .child(
+                div().w(px(200.0)).text_xs().text_color(cx.theme().muted_foreground).child("Flags"),
+            )
+            .child(
+                div()
+                    .w(px(140.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Actions"),
+            );
 
         let rows = indexes
             .into_iter()
@@ -146,14 +164,14 @@ impl CollectionView {
                     .px(spacing::lg())
                     .py(spacing::xs())
                     .border_b_1()
-                    .border_color(colors::border_subtle())
+                    .border_color(cx.theme().sidebar_border)
                     .child(
                         div()
                             .flex()
                             .flex_1()
                             .min_w(px(0.0))
                             .text_sm()
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child(name_label),
                     )
                     .child(
@@ -162,14 +180,14 @@ impl CollectionView {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_sm()
-                            .text_color(colors::text_secondary())
+                            .text_color(cx.theme().secondary_foreground)
                             .child(keys_label),
                     )
                     .child(
                         div()
                             .w(px(200.0))
                             .text_sm()
-                            .text_color(colors::text_muted())
+                            .text_color(cx.theme().muted_foreground)
                             .child(flags_label),
                     )
                     .child(

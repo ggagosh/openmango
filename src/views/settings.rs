@@ -1,16 +1,17 @@
 //! Settings view for application configuration.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{Sizable as _, Size};
 
 use crate::state::{
-    AppSettings, AppState, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, InsertMode, Theme,
+    AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, InsertMode,
     TransferFormat,
 };
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, sizing, spacing};
 
 pub struct SettingsView {
     state: Entity<AppState>,
@@ -112,19 +113,19 @@ impl Render for SettingsView {
             .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors::text_primary())
+                    .text_color(cx.theme().foreground)
                     .child("Settings"),
             );
 
         // Appearance section
-        let appearance_section = render_appearance_section(state.clone(), &settings);
+        let appearance_section = render_appearance_section(state.clone(), &settings, cx);
 
         // Transfer section
         let transfer_section = render_transfer_section(
@@ -132,6 +133,7 @@ impl Render for SettingsView {
             &settings,
             self.template_input_state.clone().unwrap(),
             self.batch_size_input_state.clone().unwrap(),
+            cx,
         );
 
         div().flex().flex_col().flex_1().min_w(px(0.0)).child(header).child(
@@ -148,7 +150,11 @@ impl Render for SettingsView {
     }
 }
 
-fn render_appearance_section(state: Entity<AppState>, settings: &AppSettings) -> impl IntoElement {
+fn render_appearance_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
     let current_theme = settings.appearance.theme;
     let show_status_bar = settings.appearance.show_status_bar;
 
@@ -163,16 +169,38 @@ fn render_appearance_section(state: Entity<AppState>, settings: &AppSettings) ->
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
                 let mut m = menu;
-                for theme in Theme::all() {
+                // Dark themes section
+                m = m.label("Dark");
+                for theme in AppTheme::dark_themes() {
                     let s = state.clone();
                     let t = *theme;
-                    m = m.item(PopupMenuItem::new(theme.label()).on_click(move |_, _, cx| {
+                    m = m.item(PopupMenuItem::new(theme.label()).on_click(move |_, window, cx| {
                         s.update(cx, |state, cx| {
                             state.settings.appearance.theme = t;
                             state.save_settings();
                             cx.notify();
                         });
+                        crate::theme::apply_theme(t, window, cx);
                     }));
+                }
+                // Light themes section (when available)
+                let light = AppTheme::light_themes();
+                if !light.is_empty() {
+                    m = m.separator().label("Light");
+                    for theme in light {
+                        let s = state.clone();
+                        let t = *theme;
+                        m = m.item(PopupMenuItem::new(theme.label()).on_click(
+                            move |_, window, cx| {
+                                s.update(cx, |state, cx| {
+                                    state.settings.appearance.theme = t;
+                                    state.save_settings();
+                                    cx.notify();
+                                });
+                                crate::theme::apply_theme(t, window, cx);
+                            },
+                        ));
+                    }
                 }
                 m
             })
@@ -199,12 +227,14 @@ fn render_appearance_section(state: Entity<AppState>, settings: &AppSettings) ->
             .flex()
             .flex_col()
             .gap(spacing::md())
-            .child(setting_row("Theme", theme_dropdown))
+            .child(setting_row("Theme", theme_dropdown, cx))
             .child(setting_row_with_description(
                 "Show status bar",
                 "Display the status bar at the bottom of the window",
                 status_bar_checkbox,
+                cx,
             )),
+        cx,
     )
 }
 
@@ -213,6 +243,7 @@ fn render_transfer_section(
     settings: &AppSettings,
     template_input_state: Entity<InputState>,
     batch_size_input_state: Entity<InputState>,
+    cx: &App,
 ) -> impl IntoElement {
     let current_format = settings.transfer.default_export_format;
     let current_import_mode = settings.transfer.default_import_mode;
@@ -344,15 +375,15 @@ fn render_transfer_section(
                 div()
                     .px(spacing::sm())
                     .py(px(6.0))
-                    .bg(colors::bg_sidebar())
+                    .bg(cx.theme().sidebar)
                     .border_1()
-                    .border_color(colors::border_subtle())
+                    .border_color(cx.theme().sidebar_border)
                     .rounded(borders::radius_sm())
                     .text_sm()
                     .text_color(if is_empty {
-                        colors::text_muted()
+                        cx.theme().muted_foreground
                     } else {
-                        colors::text_primary()
+                        cx.theme().foreground
                     })
                     .min_w(px(150.0))
                     .child(folder_display),
@@ -430,17 +461,20 @@ fn render_transfer_section(
                     .flex()
                     .flex_col()
                     .gap(spacing::md())
-                    .child(setting_row("Default format", format_dropdown))
+                    .child(setting_row("Default format", format_dropdown, cx))
                     .child(setting_row_with_description(
                         "Target folder",
                         "Default folder for exported files",
                         folder_control,
+                        cx,
                     ))
                     .child(setting_row_with_description(
                         "Filename template",
                         "Template for generated filenames",
                         template_control,
+                        cx,
                     )),
+                cx,
             ))
             .child(group(
                 "Import",
@@ -448,15 +482,17 @@ fn render_transfer_section(
                     .flex()
                     .flex_col()
                     .gap(spacing::md())
-                    .child(setting_row("Default import mode", import_mode_dropdown))
-                    .child(setting_row("Batch size", batch_size_input)),
+                    .child(setting_row("Default import mode", import_mode_dropdown, cx))
+                    .child(setting_row("Batch size", batch_size_input, cx)),
+                cx,
             )),
+        cx,
     )
 }
 
 // Helper functions for building UI
 
-fn section(title: &str, content: impl IntoElement) -> Div {
+fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
@@ -465,43 +501,48 @@ fn section(title: &str, content: impl IntoElement) -> Div {
             div()
                 .text_base()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors::text_primary())
+                .text_color(cx.theme().foreground)
                 .child(title.to_string()),
         )
         .child(content)
 }
 
-fn group(title: &str, content: impl IntoElement) -> Div {
+fn group(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(spacing::sm())
         .p(spacing::md())
-        .bg(colors::bg_header())
+        .bg(cx.theme().tab_bar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .child(
             div()
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(colors::text_secondary())
+                .text_color(cx.theme().secondary_foreground)
                 .child(title.to_string()),
         )
         .child(content)
 }
 
-fn setting_row(label: &str, control: impl IntoElement) -> Div {
+fn setting_row(label: &str, control: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap(spacing::md())
-        .child(div().text_sm().text_color(colors::text_secondary()).child(label.to_string()))
+        .child(div().text_sm().text_color(cx.theme().secondary_foreground).child(label.to_string()))
         .child(control)
 }
 
-fn setting_row_with_description(label: &str, description: &str, control: impl IntoElement) -> Div {
+fn setting_row_with_description(
+    label: &str,
+    description: &str,
+    control: impl IntoElement,
+    cx: &App,
+) -> Div {
     div()
         .flex()
         .items_start()
@@ -513,10 +554,16 @@ fn setting_row_with_description(label: &str, description: &str, control: impl In
                 .flex_col()
                 .gap(px(2.0))
                 .child(
-                    div().text_sm().text_color(colors::text_secondary()).child(label.to_string()),
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().secondary_foreground)
+                        .child(label.to_string()),
                 )
                 .child(
-                    div().text_xs().text_color(colors::text_muted()).child(description.to_string()),
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(description.to_string()),
                 ),
         )
         .child(control)

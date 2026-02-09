@@ -2,11 +2,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 
 use crate::components::Button;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 #[derive(Default)]
 struct ConfirmDialogState {
@@ -104,7 +105,12 @@ pub fn open_confirm_dialog(
                 .gap(spacing::md())
                 .p(spacing::md())
                 .on_key_down(key_handler)
-                .child(div().text_sm().text_color(colors::text_secondary()).child(message.clone()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().secondary_foreground)
+                        .child(message.clone()),
+                )
                 .child(
                     div()
                         .flex()

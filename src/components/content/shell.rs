@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
-use gpui_component::{Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
 
 use crate::components::Button;
 use crate::state::AppState;
@@ -12,13 +12,14 @@ pub(crate) fn render_shell(
     state: Entity<AppState>,
     content: impl IntoElement,
     with_background: bool,
+    cx: &App,
 ) -> AnyElement {
     let mut root = div().flex().flex_col().flex_1().h_full().min_h(px(0.0));
     if with_background {
-        root = root.bg(colors::bg_app());
+        root = root.bg(cx.theme().background);
     }
     if let Some(text) = error_text {
-        root = root.child(render_error_banner(text, state.clone()));
+        root = root.child(render_error_banner(text, state.clone(), cx));
     }
     root.child(content).into_any_element()
 }
@@ -38,7 +39,7 @@ fn format_error_banner_preview(message: &str) -> String {
     out
 }
 
-fn render_error_banner(message: String, state: Entity<AppState>) -> AnyElement {
+fn render_error_banner(message: String, state: Entity<AppState>, cx: &App) -> AnyElement {
     let preview = format_error_banner_preview(&message);
     div()
         .flex()
@@ -48,9 +49,9 @@ fn render_error_banner(message: String, state: Entity<AppState>) -> AnyElement {
         .w_full()
         .px(spacing::md())
         .py(spacing::sm())
-        .bg(colors::bg_error())
+        .bg(colors::bg_error(cx))
         .border_b_1()
-        .border_color(colors::border_error())
+        .border_color(cx.theme().danger)
         .child(
             div()
                 .flex()
@@ -58,15 +59,13 @@ fn render_error_banner(message: String, state: Entity<AppState>) -> AnyElement {
                 .gap(spacing::sm())
                 .flex_1()
                 .min_w(px(0.0))
-                .child(
-                    Icon::new(IconName::TriangleAlert).xsmall().text_color(colors::status_error()),
-                )
+                .child(Icon::new(IconName::TriangleAlert).xsmall().text_color(cx.theme().danger))
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
                         .text_sm()
-                        .text_color(colors::text_error())
+                        .text_color(cx.theme().danger_foreground)
                         .truncate()
                         .child(preview),
                 ),

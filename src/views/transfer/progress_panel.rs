@@ -3,7 +3,7 @@
 use gpui::*;
 use gpui_component::progress::Progress;
 use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use uuid::Uuid;
 
 use crate::connection::tools_available;
@@ -18,6 +18,7 @@ pub(super) fn render_progress_panel(
     db_progress: &DatabaseTransferProgress,
     state: Entity<AppState>,
     transfer_id: Uuid,
+    cx: &App,
 ) -> impl IntoElement {
     let completed = db_progress.completed_count();
     let total = db_progress.collections.len();
@@ -45,19 +46,19 @@ pub(super) fn render_progress_panel(
             .child(
                 Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors::text_secondary())
+                    .text_color(cx.theme().secondary_foreground)
                     .child("Progress Details"),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!("({}/{})", completed, total)),
             )
     };
@@ -71,7 +72,9 @@ pub(super) fn render_progress_panel(
             .mt(spacing::sm())
             .max_h(px(300.0)) // Limit height for scrolling
             .overflow_y_scrollbar()
-            .children(db_progress.collections.iter().map(render_collection_progress_row))
+            .children(
+                db_progress.collections.iter().map(|coll| render_collection_progress_row(coll, cx)),
+            )
             .into_any_element()
     } else {
         div().into_any_element()
@@ -81,23 +84,25 @@ pub(super) fn render_progress_panel(
         .flex()
         .flex_col()
         .p(spacing::md())
-        .bg(colors::bg_sidebar())
+        .bg(cx.theme().sidebar)
         .border_1()
-        .border_color(colors::border_subtle())
+        .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
         .child(header)
         .child(content)
 }
 
 /// Render a single collection progress row.
-fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement {
+fn render_collection_progress_row(coll: &CollectionProgress, cx: &App) -> impl IntoElement {
     // Status indicator (icon + color)
     let (status_icon, status_color) = match &coll.status {
-        CollectionTransferStatus::Pending => (IconName::ChevronRight, colors::text_muted()),
-        CollectionTransferStatus::InProgress => (IconName::ArrowRight, colors::syntax_string()),
-        CollectionTransferStatus::Completed => (IconName::Check, colors::status_success()),
-        CollectionTransferStatus::Failed(_) => (IconName::Close, colors::status_error()),
-        CollectionTransferStatus::Cancelled => (IconName::Close, colors::status_warning()),
+        CollectionTransferStatus::Pending => (IconName::ChevronRight, cx.theme().muted_foreground),
+        CollectionTransferStatus::InProgress => {
+            (IconName::ArrowRight, crate::theme::colors::syntax_string(cx))
+        }
+        CollectionTransferStatus::Completed => (IconName::Check, cx.theme().success),
+        CollectionTransferStatus::Failed(_) => (IconName::Close, cx.theme().danger),
+        CollectionTransferStatus::Cancelled => (IconName::Close, cx.theme().warning),
     };
 
     // Progress percentage
@@ -114,7 +119,7 @@ fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement
         div()
             .ml(px(20.0)) // Align with collection name
             .text_xs()
-            .text_color(colors::status_error())
+            .text_color(cx.theme().danger)
             .overflow_hidden()
             .text_ellipsis()
             .child(err.clone())
@@ -142,7 +147,7 @@ fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement
                         .max_w(px(240.0))
                         .flex_shrink_0()
                         .text_sm()
-                        .text_color(colors::text_primary())
+                        .text_color(cx.theme().foreground)
                         .overflow_hidden()
                         .text_ellipsis()
                         .child(coll.name.clone()),
@@ -156,7 +161,7 @@ fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement
                         .flex_shrink_0()
                         .text_xs()
                         .text_right()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child(progress_text),
                 ),
         )
@@ -165,7 +170,7 @@ fn render_collection_progress_row(coll: &CollectionProgress) -> impl IntoElement
 }
 
 /// Render format warnings (CSV type loss, BSON tool requirements).
-pub(super) fn render_warnings(transfer_state: &TransferTabState) -> impl IntoElement {
+pub(super) fn render_warnings(transfer_state: &TransferTabState, cx: &App) -> AnyElement {
     let mut warnings = Vec::new();
 
     // Only show format warnings for Export/Import modes (not Copy)
@@ -197,12 +202,12 @@ pub(super) fn render_warnings(transfer_state: &TransferTabState) -> impl IntoEle
                 .gap(spacing::sm())
                 .px(spacing::md())
                 .py(spacing::sm())
-                .bg(hsla(0.12, 0.9, 0.5, 0.1))
+                .bg(colors::bg_warning(cx))
                 .border_1()
-                .border_color(hsla(0.12, 0.9, 0.5, 0.3))
+                .border_color(colors::border_warning(cx))
                 .rounded(borders::radius_sm())
-                .child(Icon::new(IconName::Info).xsmall().text_color(hsla(0.12, 0.9, 0.5, 1.0)))
-                .child(div().text_sm().text_color(hsla(0.12, 0.9, 0.5, 1.0)).child(warning))
+                .child(Icon::new(IconName::Info).xsmall().text_color(cx.theme().warning))
+                .child(div().text_sm().text_color(cx.theme().warning).child(warning))
         }))
         .into_any_element()
 }

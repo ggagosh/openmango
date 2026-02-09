@@ -1,6 +1,6 @@
-use crate::theme::{borders, colors, sizing, spacing, typography};
+use crate::theme::{borders, sizing, spacing, typography};
 use gpui::*;
-use gpui_component::tooltip::Tooltip;
+use gpui_component::{ActiveTheme as _, tooltip::Tooltip};
 use std::rc::Rc;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -125,31 +125,31 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (bg, hover_bg, text_color, border_color) = match self.variant {
             ButtonVariant::Primary => (
-                colors::bg_button_primary(),
-                colors::bg_button_primary_hover(),
-                colors::text_button_primary(),
-                colors::bg_button_primary(), // No distinct border
+                cx.theme().primary,
+                cx.theme().primary_hover,
+                cx.theme().primary_foreground,
+                cx.theme().primary, // No distinct border
             ),
             ButtonVariant::Danger => (
-                colors::bg_button_danger(),
-                colors::bg_button_danger_hover(),
-                colors::text_button_danger(),
-                colors::bg_button_danger(),
+                cx.theme().danger,
+                cx.theme().danger_hover,
+                cx.theme().danger_foreground,
+                cx.theme().danger,
             ),
             ButtonVariant::Secondary => (
-                colors::bg_button_secondary(),
-                colors::bg_button_secondary_hover(),
-                colors::text_primary(),
-                colors::border_subtle(),
+                cx.theme().secondary,
+                cx.theme().secondary_hover,
+                cx.theme().foreground,
+                cx.theme().sidebar_border,
             ),
             ButtonVariant::Ghost => (
-                gpui::rgba(0x00000000),
-                colors::list_hover(),
-                colors::text_primary(),
-                gpui::rgba(0x00000000),
+                crate::theme::colors::transparent(),
+                cx.theme().list_hover,
+                cx.theme().foreground,
+                crate::theme::colors::transparent(),
             ),
         };
 
@@ -196,7 +196,7 @@ impl RenderOnce for Button {
         }
 
         if is_focused && !self.disabled {
-            el = el.border_color(colors::border_focus()).shadow_xs();
+            el = el.border_color(cx.theme().ring).shadow_xs();
         }
 
         if self.disabled {

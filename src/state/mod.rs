@@ -20,8 +20,8 @@ pub use commands::AppCommands;
 pub use config::ConfigManager;
 pub use events::AppEvent;
 pub use settings::{
-    AppSettings, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE, DEFAULT_FILENAME_TEMPLATE,
-    FILENAME_PLACEHOLDERS, Theme, TransferSettings, expand_filename_template,
+    AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,
+    DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, TransferSettings, expand_filename_template,
 };
 pub use status::{StatusLevel, StatusMessage};
 pub use workspace::{WindowMode, WindowState, WorkspaceState, WorkspaceTab, WorkspaceTabKind};

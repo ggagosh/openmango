@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::components::ConnectionDialog;
 use crate::components::action_bar::ActionExecution;
+use crate::state::settings::AppTheme;
 use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, View};
 use crate::views::CollectionView;
 
@@ -246,6 +247,19 @@ impl AppRoot {
                         state.select_collection(database.to_string(), collection.to_string(), cx);
                     });
                 }
+            }
+            return;
+        }
+
+        // Theme actions
+        if let Some(theme_id) = id.strip_prefix("theme:") {
+            if let Some(theme) = AppTheme::from_theme_id(theme_id) {
+                state.update(cx, |state, cx| {
+                    state.settings.appearance.theme = theme;
+                    state.save_settings();
+                    cx.notify();
+                });
+                crate::theme::apply_theme(theme, window, cx);
             }
             return;
         }

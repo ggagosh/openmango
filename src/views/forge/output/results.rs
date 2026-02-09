@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use mongodb::bson::Document;
 
-use crate::theme::{colors, fonts, spacing};
+use crate::theme::{fonts, spacing};
 use crate::views::results::{
     ResultEmptyState, ResultViewMode, ResultViewProps, render_results_view,
 };
@@ -87,7 +88,7 @@ impl ForgeView {
                     .px(spacing::sm())
                     .py(spacing::xs())
                     .text_sm()
-                    .text_color(colors::text_error())
+                    .text_color(cx.theme().danger_foreground)
                     .child(format!("Forge runtime error: {err}")),
             );
         } else if let Some(err) = &self.state.output.last_error {
@@ -96,7 +97,7 @@ impl ForgeView {
                     .px(spacing::sm())
                     .py(spacing::xs())
                     .text_sm()
-                    .text_color(colors::text_error())
+                    .text_color(cx.theme().danger_foreground)
                     .child(err.clone()),
             );
         }
@@ -146,11 +147,11 @@ impl ForgeView {
             body = body.child(render_results_view(props, on_toggle, cx));
         } else {
             let (text, color) = if let Some(result) = &self.state.output.last_result {
-                (result.clone(), colors::text_secondary())
+                (result.clone(), cx.theme().secondary_foreground)
             } else if self.state.runtime.is_running {
-                ("Running...".to_string(), colors::text_secondary())
+                ("Running...".to_string(), cx.theme().secondary_foreground)
             } else {
-                ("No output yet.".to_string(), colors::text_muted())
+                ("No output yet.".to_string(), cx.theme().muted_foreground)
             };
 
             body = body.child(

@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -10,7 +11,7 @@ use crate::components::Button;
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
 use crate::state::app_state::{PipelineState, default_stage_body};
 use crate::state::{SessionKey, StatusMessage};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 use crate::views::CollectionView;
 
@@ -34,9 +35,9 @@ impl CollectionView {
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(div().flex().items_center().gap(spacing::xs()).child(
                 if let Some(stage) = stage {
                     let operator_label = if stage.operator.trim().is_empty() {
@@ -48,11 +49,11 @@ impl CollectionView {
                     let state_for_menu = self.state.clone();
                     let body_state_for_menu = self.aggregation_stage_body_state.clone();
                     let operator_variant = ButtonCustomVariant::new(cx)
-                        .color(colors::bg_button_secondary().into())
-                        .foreground(colors::text_primary().into())
-                        .border(colors::border_subtle().into())
-                        .hover(colors::bg_button_secondary_hover().into())
-                        .active(colors::bg_button_secondary_hover().into())
+                        .color(cx.theme().secondary)
+                        .foreground(cx.theme().foreground)
+                        .border(cx.theme().sidebar_border)
+                        .hover(cx.theme().secondary_hover)
+                        .active(cx.theme().secondary_hover)
                         .shadow(false);
                     MenuButton::new("agg-operator")
                         .compact()
@@ -121,7 +122,7 @@ impl CollectionView {
                 } else {
                     div()
                         .text_sm()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("Select a stage")
                         .into_any_element()
                 },
@@ -228,7 +229,7 @@ impl CollectionView {
                 .items_center()
                 .justify_center()
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .child("Select a stage to edit")
                 .into_any_element()
         };
@@ -240,9 +241,9 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(colors::bg_app())
+            .bg(cx.theme().background)
             .border_1()
-            .border_color(colors::border_subtle())
+            .border_color(cx.theme().sidebar_border)
             .rounded(borders::radius_sm())
             .child(header)
             .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(body))

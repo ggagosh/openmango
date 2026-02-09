@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::input::Input;
@@ -10,7 +11,7 @@ use crate::components::Button;
 use crate::helpers::format_number;
 use crate::state::app_state::{PipelineState, StageStatsMode};
 use crate::state::{AppCommands, SessionDocument, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 use crate::views::documents::tree::lazy_row::{compute_row_meta, render_lazy_readonly_row};
 use crate::views::documents::tree::lazy_tree::build_visible_rows;
 
@@ -67,16 +68,18 @@ impl CollectionView {
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(spacing::xs())
-                    .child(div().text_sm().text_color(colors::text_primary()).child(stage_label))
-                    .child(div().text_xs().text_color(colors::text_muted()).child(meta_label))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child(stage_label))
+                    .child(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(meta_label),
+                    )
                     .child(if pipeline.loading {
                         Spinner::new().xsmall().into_any_element()
                     } else {
@@ -139,7 +142,12 @@ impl CollectionView {
                                         }
                                     }),
                             )
-                            .child(div().text_xs().text_color(colors::text_muted()).child("Stats")),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Stats"),
+                            ),
                     )
                     .child(
                         div()
@@ -196,10 +204,13 @@ impl CollectionView {
                                     }),
                             )
                             .child(
-                                div().text_xs().text_color(colors::text_muted()).child("Timing"),
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Timing"),
                             ),
                     )
-                    .child(div().text_xs().text_color(colors::text_muted()).child("Limit"))
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Limit"))
                     .child(if let Some(limit_state) = self.aggregation_limit_state.clone() {
                         Input::new(&limit_state)
                             .w(px(72.0))
@@ -218,7 +229,7 @@ impl CollectionView {
                     .px(spacing::sm())
                     .py(spacing::xs())
                     .text_sm()
-                    .text_color(colors::text_error())
+                    .text_color(cx.theme().danger_foreground)
                     .child(error),
             );
         }
@@ -231,7 +242,7 @@ impl CollectionView {
             shown_start,
             shown_end,
         };
-        body = body.child(render_results_footer(self.state.clone(), session_key, footer_data));
+        body = body.child(render_results_footer(self.state.clone(), session_key, footer_data, cx));
 
         div()
             .flex()
@@ -240,9 +251,9 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(colors::bg_app())
+            .bg(cx.theme().background)
             .border_t_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(header)
             .child(body)
             .into_any_element()
@@ -262,6 +273,7 @@ fn render_results_footer(
     state: Entity<crate::state::AppState>,
     session_key: Option<SessionKey>,
     data: ResultsFooterData,
+    cx: &App,
 ) -> AnyElement {
     let ResultsFooterData {
         total_count,
@@ -303,16 +315,16 @@ fn render_results_footer(
         .justify_between()
         .px(spacing::sm())
         .py(spacing::xs())
-        .bg(colors::bg_header())
+        .bg(cx.theme().tab_bar)
         .border_t_1()
-        .border_color(colors::border())
-        .child(div().text_xs().text_color(colors::text_muted()).child(range_label))
+        .border_color(cx.theme().border)
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(range_label))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_muted()).child(page_label))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(page_label))
                 .child(
                     Button::new("agg-prev-page")
                         .compact()
@@ -396,7 +408,12 @@ fn render_results_tree(
             .justify_center()
             .gap(spacing::sm())
             .child(Spinner::new().small())
-            .child(div().text_sm().text_color(colors::text_muted()).child("Running pipeline..."))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Running pipeline..."),
+            )
             .into_any_element();
     }
 
@@ -409,7 +426,7 @@ fn render_results_tree(
             .child(
                 div()
                     .text_sm()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Run the pipeline to see results"),
             )
             .into_any_element();
@@ -421,7 +438,12 @@ fn render_results_tree(
             .flex_1()
             .items_center()
             .justify_center()
-            .child(div().text_sm().text_color(colors::text_muted()).child("No documents returned"))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No documents returned"),
+            )
             .into_any_element();
     }
 
@@ -462,16 +484,16 @@ fn render_results_tree(
                 .items_center()
                 .px(spacing::lg())
                 .py(spacing::xs())
-                .bg(colors::bg_header())
+                .bg(cx.theme().tab_bar)
                 .border_b_1()
-                .border_color(colors::border())
+                .border_color(cx.theme().border)
                 .child(
                     div()
                         .flex()
                         .flex_1()
                         .min_w(px(0.0))
                         .text_xs()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("Key"),
                 )
                 .child(
@@ -480,10 +502,16 @@ fn render_results_tree(
                         .flex_1()
                         .min_w(px(0.0))
                         .text_xs()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("Value"),
                 )
-                .child(div().w(px(120.0)).text_xs().text_color(colors::text_muted()).child("Type")),
+                .child(
+                    div()
+                        .w(px(120.0))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Type"),
+                ),
         )
         .child(
             div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
@@ -494,17 +522,18 @@ fn render_results_tree(
                         let documents = documents.clone();
                         let visible_rows = visible_rows.clone();
                         let view_entity = view_entity.clone();
-                        move |_view, range: std::ops::Range<usize>, _window, _cx| {
+                        move |_view, range: std::ops::Range<usize>, _window, cx| {
                             range
                                 .map(|ix| {
                                     let row = &visible_rows[ix];
-                                    let meta = compute_row_meta(row, &documents);
+                                    let meta = compute_row_meta(row, &documents, cx);
                                     render_lazy_readonly_row(
                                         ix,
                                         row,
                                         &meta,
                                         false,
                                         view_entity.clone(),
+                                        cx,
                                     )
                                 })
                                 .collect()

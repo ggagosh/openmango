@@ -56,6 +56,7 @@ pub struct FilteredAction {
 pub enum PaletteMode {
     #[default]
     All,
+    Theme,
 }
 
 /// Payload returned when user executes an action.

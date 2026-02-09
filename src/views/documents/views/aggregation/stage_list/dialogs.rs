@@ -2,6 +2,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
@@ -10,7 +11,7 @@ use gpui_component::scroll::ScrollableElement;
 use crate::components::{Button, cancel_button};
 use crate::state::StatusMessage;
 use crate::state::app_state::{PipelineStage, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::super::operators::OPERATOR_GROUPS;
 use serde_json::Value as JsonValue;
@@ -144,7 +145,12 @@ pub(super) fn open_stage_operator_picker_dialog(
                         .flex()
                         .flex_col()
                         .gap(spacing::xs())
-                        .child(div().text_xs().text_color(colors::text_muted()).child(group.label))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(group.label),
+                        )
                         .child(div().flex().flex_wrap().gap(spacing::xs()).children(buttons))
                         .into_any_element(),
                 )
@@ -224,14 +230,14 @@ pub(super) fn open_stage_operator_picker_dialog(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(colors::text_secondary())
+                        .text_color(cx.theme().secondary_foreground)
                         .child("Choose an operator"),
                 )
                 .child(Input::new(&search_state).w_full().tab_index(0))
                 .child(if empty_results {
                     div()
                         .text_sm()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child("No operators match your search")
                         .into_any_element()
                 } else {
@@ -324,7 +330,7 @@ pub(super) fn open_import_pipeline_dialog(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(colors::text_secondary())
+                        .text_color(cx.theme().secondary_foreground)
                         .child("Paste a MongoDB aggregation pipeline JSON array"),
                 )
                 .child(
@@ -368,7 +374,7 @@ pub(super) fn open_import_pipeline_dialog(
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(colors::text_muted())
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Expected format: [{ \"$match\": { ... } }, ...]"),
                         ),
                 )
@@ -379,7 +385,9 @@ pub(super) fn open_import_pipeline_dialog(
                         .h(px(320.0)),
                 )
                 .when_some(error_text.clone(), |this, error| {
-                    this.child(div().text_sm().text_color(colors::text_error()).child(error))
+                    this.child(
+                        div().text_sm().text_color(cx.theme().danger_foreground).child(error),
+                    )
                 })
                 .child(
                     div()

@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::{Icon, IconName, Sizable};
 
 use crate::theme::{colors, spacing};
@@ -10,6 +11,7 @@ pub fn render_result_row(
     row: &VisibleRow,
     meta: &crate::views::documents::tree::lazy_row::LazyRowMeta,
     on_toggle_node: ToggleNodeCallback,
+    cx: &App,
 ) -> AnyElement {
     let node_id = row.node_id.clone();
     let depth = row.depth;
@@ -39,7 +41,7 @@ pub fn render_result_row(
             .child(
                 Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .into_any_element()
     } else {
@@ -53,7 +55,7 @@ pub fn render_result_row(
         .w_full()
         .px(spacing::lg())
         .py(spacing::xs())
-        .hover(|s| s.bg(colors::list_hover()))
+        .hover(|s| s.bg(cx.theme().list_hover))
         .on_mouse_down(MouseButton::Left, {
             let node_id = node_id.clone();
             let on_toggle = on_toggle_node.clone();
@@ -63,13 +65,13 @@ pub fn render_result_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label))
+        .child(render_key_column(depth, leading, &key_label, cx))
         .child(render_value_column(&value_label, value_color))
         .child(
             div()
                 .w(px(120.0))
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(type_label),
@@ -77,7 +79,13 @@ pub fn render_result_row(
         .into_any_element()
 }
 
-fn render_key_column(depth: usize, leading: AnyElement, key_label: &str) -> impl IntoElement {
+fn render_key_column(
+    depth: usize,
+    leading: AnyElement,
+    key_label: &str,
+    cx: &App,
+) -> impl IntoElement {
+    let key_color = colors::syntax_key(cx);
     let key_label = key_label.to_string();
 
     div()
@@ -92,14 +100,14 @@ fn render_key_column(depth: usize, leading: AnyElement, key_label: &str) -> impl
         .child(
             div()
                 .text_sm()
-                .text_color(colors::syntax_key())
+                .text_color(key_color)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(key_label),
         )
 }
 
-fn render_value_column(value_label: &str, value_color: Rgba) -> impl IntoElement {
+fn render_value_column(value_label: &str, value_color: Hsla) -> impl IntoElement {
     div().flex_1().min_w(px(0.0)).overflow_hidden().child(
         div()
             .text_sm()

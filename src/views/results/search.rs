@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use gpui::App;
+
 use crate::state::SessionDocument;
 use crate::views::documents::tree::lazy_row::compute_row_meta;
 use crate::views::documents::tree::lazy_tree::VisibleRow;
@@ -8,6 +10,7 @@ pub fn filter_visible_rows(
     documents: &[SessionDocument],
     rows: Vec<VisibleRow>,
     query: &str,
+    cx: &App,
 ) -> Vec<VisibleRow> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
@@ -16,7 +19,7 @@ pub fn filter_visible_rows(
 
     let mut keep_ids = HashSet::new();
     for row in rows.iter() {
-        let meta = compute_row_meta(row, documents);
+        let meta = compute_row_meta(row, documents, cx);
         let haystack =
             format!("{} {} {}", meta.key_label, meta.value_label, meta.type_label).to_lowercase();
         if !haystack.contains(&needle) {

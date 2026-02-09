@@ -1,12 +1,12 @@
 //! Query edit modal for filter, projection, and sort fields.
 
 use gpui::*;
-use gpui_component::IconName;
 use gpui_component::input::{Input, InputState};
+use gpui_component::{ActiveTheme as _, IconName};
 
 use crate::bson::{format_relaxed_json_compact, parse_value_from_relaxed_json};
 use crate::components::Button;
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 use super::TransferView;
 
@@ -155,7 +155,7 @@ impl TransferView {
         div()
             .absolute()
             .inset_0()
-            .bg(hsla(0.0, 0.0, 0.0, 0.5)) // Semi-transparent backdrop
+            .bg(crate::theme::colors::backdrop(cx))
             .flex()
             .items_center()
             .justify_center()
@@ -163,10 +163,10 @@ impl TransferView {
                 div()
                     .w(px(500.0))
                     .max_h(px(400.0))
-                    .bg(colors::bg_sidebar())
+                    .bg(cx.theme().sidebar)
                     .rounded(borders::radius_sm())
                     .border_1()
-                    .border_color(colors::border())
+                    .border_color(cx.theme().border)
                     .flex()
                     .flex_col()
                     .overflow_hidden()
@@ -179,12 +179,12 @@ impl TransferView {
                             .px(spacing::md())
                             .py(spacing::sm())
                             .border_b_1()
-                            .border_color(colors::border_subtle())
+                            .border_color(cx.theme().sidebar_border)
                             .child(
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(colors::text_primary())
+                                    .text_color(cx.theme().foreground)
                                     .child(title),
                             )
                             .child(
@@ -214,9 +214,9 @@ impl TransferView {
                             .pb(spacing::sm())
                             .text_sm()
                             .text_color(if is_valid {
-                                hsla(0.33, 0.7, 0.5, 1.0) // Green
+                                cx.theme().success
                             } else {
-                                hsla(0.0, 0.7, 0.5, 1.0) // Red
+                                cx.theme().danger
                             })
                             .child(if is_valid { "✓ Valid JSON" } else { "✗ Invalid JSON" }),
                     )
@@ -230,7 +230,7 @@ impl TransferView {
                             .px(spacing::md())
                             .py(spacing::sm())
                             .border_t_1()
-                            .border_color(colors::border_subtle())
+                            .border_color(cx.theme().sidebar_border)
                             .child(
                                 Button::new("modal-format")
                                     .ghost()

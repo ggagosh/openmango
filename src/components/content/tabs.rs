@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use gpui::*;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
 
 pub(crate) struct TabsHost<'a> {
@@ -74,8 +74,12 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         .h(px(16.0))
                         .rounded(borders::radius_sm())
                         .cursor_pointer()
-                        .hover(|s| s.bg(colors::bg_hover()))
-                        .child(Icon::new(IconName::Close).xsmall().text_color(colors::text_muted()))
+                        .hover(|s| s.bg(cx.theme().list_hover))
+                        .child(
+                            Icon::new(IconName::Close)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
                         .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                             cx.stop_propagation();
                             state.update(cx, |state, cx| {
@@ -83,7 +87,8 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                             });
                         });
 
-                    let dirty_dot = div().w(px(6.0)).h(px(6.0)).rounded_full().bg(colors::accent());
+                    let dirty_dot =
+                        div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
 
                     let mut tab_view = Tab::new().label(label);
                     if is_dirty {
@@ -105,8 +110,12 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         .h(px(16.0))
                         .rounded(borders::radius_sm())
                         .cursor_pointer()
-                        .hover(|s| s.bg(colors::bg_hover()))
-                        .child(Icon::new(IconName::Close).xsmall().text_color(colors::text_muted()))
+                        .hover(|s| s.bg(cx.theme().list_hover))
+                        .child(
+                            Icon::new(IconName::Close)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
                         .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                             cx.stop_propagation();
                             state.update(cx, |state, cx| {
@@ -114,10 +123,11 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                             });
                         });
 
-                    let dirty_dot = div().w(px(6.0)).h(px(6.0)).rounded_full().bg(colors::accent());
+                    let dirty_dot =
+                        div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
 
                     let mut tab_view = Tab::new()
-                        .child(div().italic().text_color(colors::text_muted()).child(label));
+                        .child(div().italic().text_color(cx.theme().muted_foreground).child(label));
                     if is_dirty {
                         tab_view = tab_view.prefix(dirty_dot);
                     }
@@ -155,7 +165,7 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                     .items_center()
                     .justify_center()
                     .text_sm()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Select a tab or open a collection")
                     .into_any_element()
             }

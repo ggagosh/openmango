@@ -1,13 +1,13 @@
 //! Summary panel showing transfer configuration at a glance.
 
 use gpui::*;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::state::{
     BsonOutputFormat, CompressionMode, TransferFormat, TransferMode, TransferScope,
     TransferTabState,
 };
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 use super::helpers::{fallback_text, summary_item};
 
@@ -47,7 +47,8 @@ pub(super) fn render_summary_panel(
     transfer_state: &TransferTabState,
     _source_conn_name: &str,
     dest_conn_name: &str,
-) -> impl IntoElement {
+    cx: &App,
+) -> AnyElement {
     let source_db = fallback_text(&transfer_state.config.source_database, "...");
     let source_coll = if matches!(transfer_state.config.scope, TransferScope::Collection) {
         format!(".{}", fallback_text(&transfer_state.config.source_collection, "..."))
@@ -126,18 +127,23 @@ pub(super) fn render_summary_panel(
         .items_center()
         .justify_between()
         .p(spacing::md())
-        .bg(colors::bg_sidebar())
+        .bg(cx.theme().sidebar)
         .border_1()
-        .border_color(colors::border())
+        .border_color(cx.theme().border)
         .rounded(borders::radius_sm())
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(spacing::lg())
-                .child(summary_item("From", source_desc))
-                .child(Icon::new(IconName::ArrowRight).xsmall().text_color(colors::text_muted()))
-                .child(summary_item("To", dest_desc))
-                .child(summary_item("Format", format_label)),
+                .child(summary_item("From", source_desc, cx))
+                .child(
+                    Icon::new(IconName::ArrowRight)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(summary_item("To", dest_desc, cx))
+                .child(summary_item("Format", format_label, cx)),
         )
+        .into_any_element()
 }

@@ -2,6 +2,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, IntoElement as _, ParentElement as _, Styled as _,
     Window, div, px,
 };
+use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState, Position};
@@ -11,7 +12,7 @@ use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
 use crate::models::SavedConnection;
 use crate::state::AppState;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::uri::{bool_to_query, parse_bool, parse_uri, value_or_none};
 use super::{ConnectionManager, TestStatus};
@@ -454,7 +455,7 @@ impl ConnectionManager {
                                 ),
                         )
                         .child(
-                            div().text_xs().text_color(colors::text_muted()).child(
+                            div().text_xs().text_color(cx.theme().muted_foreground).child(
                                 "Paste a mongodb:// or mongodb+srv:// URI to import settings.",
                             ),
                         ),

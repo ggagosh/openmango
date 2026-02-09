@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::tree::TreeItem;
 use mongodb::bson::{Bson, Document};
 
@@ -24,6 +26,7 @@ pub fn build_documents_tree(
     documents: &[SessionDocument],
     drafts: &HashMap<DocumentKey, Document>,
     expanded_nodes: &HashSet<String>,
+    cx: &App,
 ) -> (Vec<TreeItem>, HashMap<String, NodeMeta>, Vec<String>) {
     let mut items = Vec::new();
     let mut meta = HashMap::new();
@@ -44,7 +47,7 @@ pub fn build_documents_tree(
         let root_meta = NodeMeta {
             key_label: key_label.clone(),
             value_label: value_label.clone(),
-            value_color: colors::text_muted(),
+            value_color: cx.theme().muted_foreground,
             type_label: "Document".to_string(),
             is_folder: !doc.is_empty(),
             is_editable: false,
@@ -69,6 +72,7 @@ pub fn build_documents_tree(
                     original,
                     expanded_nodes,
                     &mut meta,
+                    cx,
                 )
             })
             .collect();
@@ -85,6 +89,7 @@ pub fn build_documents_tree(
 }
 
 /// Build a tree item for a BSON value.
+#[allow(clippy::too_many_arguments)]
 pub fn build_bson_tree_item(
     doc_key: &DocumentKey,
     key_label: String,
@@ -93,6 +98,7 @@ pub fn build_bson_tree_item(
     original: &Document,
     expanded_nodes: &HashSet<String>,
     meta: &mut HashMap<String, NodeMeta>,
+    cx: &App,
 ) -> TreeItem {
     let node_id = path_to_id(doc_key, &path);
     let is_folder = matches!(value, Bson::Document(_) | Bson::Array(_));
@@ -104,19 +110,19 @@ pub fn build_bson_tree_item(
     let type_label = bson_type_label(value).to_string();
 
     let value_color = match value {
-        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(),
+        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(cx),
         Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Decimal128(_) => {
-            colors::syntax_number()
+            colors::syntax_number(cx)
         }
-        Bson::Boolean(_) => colors::syntax_boolean(),
-        Bson::Null | Bson::Undefined => colors::syntax_null(),
-        Bson::ObjectId(_) => colors::syntax_object_id(),
-        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(),
+        Bson::Boolean(_) => colors::syntax_boolean(cx),
+        Bson::Null | Bson::Undefined => colors::syntax_null(cx),
+        Bson::ObjectId(_) => colors::syntax_object_id(cx),
+        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(cx),
         Bson::RegularExpression(_) | Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => {
-            colors::syntax_comment()
+            colors::syntax_comment(cx)
         }
-        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => colors::text_muted(),
-        _ => colors::text_primary(),
+        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => cx.theme().muted_foreground,
+        _ => cx.theme().foreground,
     };
 
     meta.insert(
@@ -154,6 +160,7 @@ pub fn build_bson_tree_item(
                         original,
                         expanded_nodes,
                         meta,
+                        cx,
                     )
                 })
                 .collect();
@@ -174,6 +181,7 @@ pub fn build_bson_tree_item(
                         original,
                         expanded_nodes,
                         meta,
+                        cx,
                     )
                 })
                 .collect();

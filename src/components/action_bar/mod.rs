@@ -4,13 +4,15 @@ mod types;
 pub use types::ActionExecution;
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::app::search::fuzzy_match_score;
 use crate::state::AppState;
-use crate::theme::{borders, colors, fonts, spacing};
+use crate::state::settings::AppTheme;
+use crate::theme::{borders, fonts, spacing};
 
-use providers::{command_actions, navigation_actions, tab_actions, view_actions};
+use providers::{command_actions, navigation_actions, tab_actions, theme_actions, view_actions};
 use types::{FilteredAction, PaletteMode};
 
 type ExecuteHandler = Box<dyn Fn(ActionExecution, &mut Window, &mut App) + 'static>;
@@ -18,7 +20,8 @@ type ExecuteHandler = Box<dyn Fn(ActionExecution, &mut Window, &mut App) + 'stat
 pub struct ActionBar {
     state: Entity<AppState>,
     open: bool,
-    _mode: PaletteMode,
+    mode: PaletteMode,
+    original_theme: Option<AppTheme>,
     input_state: Option<Entity<InputState>>,
     all_actions: Vec<types::ActionItem>,
     filtered: Vec<FilteredAction>,
@@ -33,7 +36,8 @@ impl ActionBar {
         Self {
             state,
             open: false,
-            _mode: PaletteMode::default(),
+            mode: PaletteMode::default(),
+            original_theme: None,
             input_state: None,
             all_actions: Vec::new(),
             filtered: Vec::new(),
@@ -54,7 +58,7 @@ impl ActionBar {
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
-            self.close(cx);
+            self.close(window, cx);
         } else {
             self.open(window, cx);
         }
@@ -90,15 +94,15 @@ impl ActionBar {
             let key = event.keystroke.key.as_str();
             match key {
                 "escape" => {
-                    entity.update(cx, |bar, cx| bar.close(cx));
+                    entity.update(cx, |bar, cx| bar.close(window, cx));
                     cx.stop_propagation();
                 }
                 "up" => {
-                    entity.update(cx, |bar, cx| bar.move_selection(-1, cx));
+                    entity.update(cx, |bar, cx| bar.move_selection(-1, window, cx));
                     cx.stop_propagation();
                 }
                 "down" => {
-                    entity.update(cx, |bar, cx| bar.move_selection(1, cx));
+                    entity.update(cx, |bar, cx| bar.move_selection(1, window, cx));
                     cx.stop_propagation();
                 }
                 "enter" | "return" => {
@@ -121,8 +125,29 @@ impl ActionBar {
         });
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
+    fn switch_to_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = PaletteMode::Theme;
+        self.original_theme = Some(self.state.read(cx).settings.appearance.theme);
+        self.rebuild_actions(cx);
+        self.filter_actions("");
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        if let Some(input) = self.input_state.clone() {
+            input.update(cx, |state, cx| {
+                state.set_placeholder("Select Theme...", window, cx);
+                state.set_value("", window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Revert to original theme if we were previewing
+        if let Some(original) = self.original_theme.take() {
+            crate::theme::apply_theme(original, window, cx);
+        }
         self.open = false;
+        self.mode = PaletteMode::All;
         self.all_actions.clear();
         self.filtered.clear();
         self.input_state = None;
@@ -132,12 +157,17 @@ impl ActionBar {
 
     fn rebuild_actions(&mut self, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
-        let mut actions = Vec::new();
-        actions.extend(tab_actions(state));
-        actions.extend(command_actions(state));
-        actions.extend(navigation_actions(state));
-        actions.extend(view_actions(state));
-        self.all_actions = actions;
+        self.all_actions = match self.mode {
+            PaletteMode::All => {
+                let mut actions = Vec::new();
+                actions.extend(tab_actions(state));
+                actions.extend(command_actions(state));
+                actions.extend(navigation_actions(state));
+                actions.extend(view_actions(state));
+                actions
+            }
+            PaletteMode::Theme => theme_actions(state),
+        };
     }
 
     fn filter_actions(&mut self, query: &str) {
@@ -193,8 +223,20 @@ impl ActionBar {
         let Some(action) = self.filtered.get(index) else {
             return;
         };
+
+        // Intercept "Theme Selector: Toggle" — switch to theme mode instead of closing
+        if action.item.id.as_ref() == "cmd:change-theme" {
+            self.switch_to_themes(window, cx);
+            return;
+        }
+
+        // Theme confirm: clear original so close doesn't revert, then fire handler
+        if self.mode == PaletteMode::Theme {
+            self.original_theme = None;
+        }
+
         let execution = ActionExecution { action_id: action.item.id.clone() };
-        self.close(cx);
+        self.close(window, cx);
 
         if let Some(handler) = &self.on_execute {
             handler(execution, window, cx);
@@ -206,7 +248,7 @@ impl ActionBar {
         self.execute_at(index, window, cx);
     }
 
-    fn move_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
+    fn move_selection(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
         if self.filtered.is_empty() {
             return;
         }
@@ -227,6 +269,16 @@ impl ActionBar {
         } else if delta < 0 && new_index == self.filtered.len() - 1 {
             self.scroll_offset = self.filtered.len().saturating_sub(max_visible);
         }
+
+        // Live-preview theme on selection change
+        if self.mode == PaletteMode::Theme
+            && let Some(item) = self.filtered.get(new_index)
+            && let Some(theme_id) = item.item.id.as_ref().strip_prefix("theme:")
+            && let Some(theme) = AppTheme::from_theme_id(theme_id)
+        {
+            crate::theme::apply_theme(theme, window, cx);
+        }
+
         cx.notify();
     }
 }
@@ -252,9 +304,9 @@ impl Render for ActionBar {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
-                    .on_click(move |_, _window, cx| {
+                    .on_click(move |_, window, cx| {
                         dismiss_entity.update(cx, |bar, cx| {
-                            bar.close(cx);
+                            bar.close(window, cx);
                         });
                     }),
             )
@@ -269,20 +321,20 @@ impl Render for ActionBar {
                     .w(px(620.0))
                     .flex()
                     .flex_col()
-                    .bg(colors::bg_header())
+                    .bg(cx.theme().tab_bar)
                     .border_1()
-                    .border_color(colors::border())
+                    .border_color(cx.theme().border)
                     .rounded(borders::radius_sm())
                     .shadow_lg()
                     .overflow_hidden()
-                    .text_color(colors::text_primary())
+                    .text_color(cx.theme().foreground)
                     .font_family(fonts::ui())
                     // Input row
                     .child(
                         div()
                             .p(spacing::md())
                             .border_b_1()
-                            .border_color(colors::border_subtle())
+                            .border_color(cx.theme().sidebar_border)
                             .child(if let Some(input_state) = &self.input_state {
                                 Input::new(input_state)
                                     .appearance(false)
@@ -302,7 +354,7 @@ impl Render for ActionBar {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(colors::text_muted())
+                                        .text_color(cx.theme().muted_foreground)
                                         .child("No matching actions"),
                                 )
                                 .into_any_element()
@@ -332,11 +384,13 @@ impl Render for ActionBar {
                                     });
                                 });
 
+                            let show_categories = self.mode == PaletteMode::All;
                             let mut last_category = None;
                             for ix in visible_start..visible_end {
                                 let item = &self.filtered[ix].item;
-                                // Category group header
-                                if last_category.as_ref() != Some(&item.category) {
+                                // Category group header (only in All mode)
+                                if show_categories && last_category.as_ref() != Some(&item.category)
+                                {
                                     last_category = Some(item.category.clone());
                                     list = list.child(
                                         div()
@@ -344,11 +398,11 @@ impl Render for ActionBar {
                                             .pt(spacing::sm())
                                             .pb(spacing::xs())
                                             .text_xs()
-                                            .text_color(colors::text_muted())
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(item.category.label()),
                                     );
                                 }
-                                list = list.child(render_action_row(self, ix, &entity));
+                                list = list.child(render_action_row(self, ix, &entity, cx));
                             }
                             list.into_any_element()
                         }
@@ -358,7 +412,12 @@ impl Render for ActionBar {
     }
 }
 
-fn render_action_row(bar: &ActionBar, index: usize, entity: &Entity<ActionBar>) -> AnyElement {
+fn render_action_row(
+    bar: &ActionBar,
+    index: usize,
+    entity: &Entity<ActionBar>,
+    cx: &App,
+) -> AnyElement {
     let Some(filtered) = bar.filtered.get(index) else {
         return div().into_any_element();
     };
@@ -377,13 +436,13 @@ fn render_action_row(bar: &ActionBar, index: usize, entity: &Entity<ActionBar>) 
         .cursor_pointer();
 
     if is_selected {
-        row = row.bg(colors::list_selected());
+        row = row.bg(cx.theme().list_active);
     } else {
-        row = row.hover(|s| s.bg(colors::list_hover()));
+        row = row.hover(|s| s.bg(cx.theme().list_hover));
     }
 
     // Left side: label + detail
-    let label_color = if item.highlighted { colors::accent() } else { colors::text_primary() };
+    let label_color = if item.highlighted { cx.theme().primary } else { cx.theme().foreground };
     let mut left = div().flex().flex_1().items_center().gap(spacing::sm()).overflow_hidden();
     left = left
         .child(div().text_sm().text_color(label_color).flex_shrink_0().child(item.label.clone()));
@@ -391,7 +450,11 @@ fn render_action_row(bar: &ActionBar, index: usize, entity: &Entity<ActionBar>) 
         left = left.child(
             div()
                 .text_xs()
-                .text_color(if item.highlighted { colors::accent() } else { colors::text_muted() })
+                .text_color(if item.highlighted {
+                    cx.theme().primary
+                } else {
+                    cx.theme().muted_foreground
+                })
                 .overflow_hidden()
                 .child(detail.clone()),
         );
@@ -400,8 +463,8 @@ fn render_action_row(bar: &ActionBar, index: usize, entity: &Entity<ActionBar>) 
     // Right side: shortcut
     let mut right = div().flex().items_center().flex_shrink_0().ml(spacing::sm());
     if let Some(shortcut) = &item.shortcut {
-        right =
-            right.child(div().text_xs().text_color(colors::text_muted()).child(shortcut.clone()));
+        right = right
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut.clone()));
     }
 
     let click_entity = entity.clone();

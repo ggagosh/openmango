@@ -15,37 +15,98 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     #[serde(default)]
-    pub theme: Theme,
+    pub theme: AppTheme,
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        Self { theme: Theme::default(), show_status_bar: true }
+        Self { theme: AppTheme::default(), show_status_bar: true }
     }
 }
 
 /// Application theme
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub enum Theme {
+pub enum AppTheme {
     #[default]
-    Dark,
-    Light,
-    System,
+    VercelDark,
+    DarculaDark,
+    TokyoNight,
+    Nord,
+    OneDark,
+    CatppuccinMocha,
+    CatppuccinLatte,
+    SolarizedLight,
+    SolarizedDark,
+    RosePineDawn,
+    RosePine,
+    GruvboxLight,
+    GruvboxDark,
 }
 
-impl Theme {
+impl AppTheme {
     pub fn label(self) -> &'static str {
         match self {
-            Theme::Dark => "Dark",
-            Theme::Light => "Light",
-            Theme::System => "System",
+            AppTheme::VercelDark => "Vercel Dark",
+            AppTheme::DarculaDark => "Darcula Dark",
+            AppTheme::TokyoNight => "Tokyo Night",
+            AppTheme::Nord => "Nord",
+            AppTheme::OneDark => "One Dark",
+            AppTheme::CatppuccinMocha => "Catppuccin Mocha",
+            AppTheme::CatppuccinLatte => "Catppuccin Latte",
+            AppTheme::SolarizedLight => "Solarized Light",
+            AppTheme::SolarizedDark => "Solarized Dark",
+            AppTheme::RosePineDawn => "Rosé Pine Dawn",
+            AppTheme::RosePine => "Rosé Pine",
+            AppTheme::GruvboxLight => "Gruvbox Light",
+            AppTheme::GruvboxDark => "Gruvbox Dark",
         }
     }
 
-    pub fn all() -> &'static [Theme] {
-        &[Theme::Dark, Theme::Light, Theme::System]
+    pub fn theme_id(self) -> &'static str {
+        match self {
+            AppTheme::VercelDark => "vercel-dark",
+            AppTheme::DarculaDark => "darcula-dark",
+            AppTheme::TokyoNight => "tokyo-night",
+            AppTheme::Nord => "nord",
+            AppTheme::OneDark => "one-dark",
+            AppTheme::CatppuccinMocha => "catppuccin-mocha",
+            AppTheme::CatppuccinLatte => "catppuccin-latte",
+            AppTheme::SolarizedLight => "solarized-light",
+            AppTheme::SolarizedDark => "solarized-dark",
+            AppTheme::RosePineDawn => "rose-pine-dawn",
+            AppTheme::RosePine => "rose-pine",
+            AppTheme::GruvboxLight => "gruvbox-light",
+            AppTheme::GruvboxDark => "gruvbox-dark",
+        }
+    }
+
+    pub fn from_theme_id(id: &str) -> Option<AppTheme> {
+        Self::dark_themes().iter().chain(Self::light_themes()).find(|t| t.theme_id() == id).copied()
+    }
+
+    pub fn dark_themes() -> &'static [AppTheme] {
+        &[
+            AppTheme::VercelDark,
+            AppTheme::DarculaDark,
+            AppTheme::TokyoNight,
+            AppTheme::Nord,
+            AppTheme::OneDark,
+            AppTheme::CatppuccinMocha,
+            AppTheme::SolarizedDark,
+            AppTheme::RosePine,
+            AppTheme::GruvboxDark,
+        ]
+    }
+
+    pub fn light_themes() -> &'static [AppTheme] {
+        &[
+            AppTheme::CatppuccinLatte,
+            AppTheme::SolarizedLight,
+            AppTheme::RosePineDawn,
+            AppTheme::GruvboxLight,
+        ]
     }
 }
 
@@ -128,7 +189,7 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = AppSettings::default();
-        assert_eq!(settings.appearance.theme, Theme::Dark);
+        assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
         assert!(settings.appearance.show_status_bar);
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);

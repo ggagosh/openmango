@@ -2,18 +2,18 @@
 
 use gpui::*;
 use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants};
-use gpui_component::{Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_component::{ActiveTheme as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
 
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 /// Creates a standardized dropdown button variant used across dialogs.
 pub fn dropdown_variant(cx: &mut App) -> ButtonCustomVariant {
     ButtonCustomVariant::new(cx)
-        .color(colors::bg_button_secondary().into())
-        .foreground(colors::text_primary().into())
-        .border(colors::border_subtle().into())
-        .hover(colors::bg_button_secondary_hover().into())
-        .active(colors::bg_button_secondary_hover().into())
+        .color(cx.theme().secondary)
+        .foreground(cx.theme().foreground)
+        .border(cx.theme().sidebar_border)
+        .hover(cx.theme().secondary_hover)
+        .active(cx.theme().secondary_hover)
         .shadow(false)
 }
 
@@ -62,12 +62,13 @@ pub fn status_text(
     updating: bool,
     updating_label: &str,
     default_label: &str,
+    cx: &App,
 ) -> (String, Hsla) {
     if let Some(error) = error_message {
-        (error.clone(), colors::text_error().into())
+        (error.clone(), cx.theme().danger_foreground)
     } else if updating {
-        (updating_label.to_string(), colors::text_muted().into())
+        (updating_label.to_string(), cx.theme().muted_foreground)
     } else {
-        (default_label.to_string(), colors::text_muted().into())
+        (default_label.to_string(), cx.theme().muted_foreground)
     }
 }

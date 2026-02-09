@@ -5,13 +5,14 @@
 //! connection list rendering is in `connection_list.rs`.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::tab::{Tab, TabBar};
 
 use crate::components::Button;
 use crate::state::AppCommands;
-use crate::theme::{colors, sizing, spacing};
+use crate::theme::{sizing, spacing};
 
 use super::{ConnectionManager, ManagerTab, TestStatus};
 
@@ -63,7 +64,7 @@ impl ConnectionManager {
                     .px(spacing::md())
                     .h(sizing::header_height())
                     .border_b_1()
-                    .border_color(colors::border())
+                    .border_color(cx.theme().border)
                     .child(tab_bar),
             )
             .child(
@@ -122,7 +123,7 @@ impl ConnectionManager {
         let status = self.status.clone();
         let is_testing = matches!(status, TestStatus::Testing);
 
-        let (status_text, status_color) = Self::format_status(&status);
+        let (status_text, status_color) = Self::format_status(&status, cx);
         let actions = Self::render_action_buttons(view, state, is_testing, is_active_selection);
 
         div()
@@ -133,7 +134,7 @@ impl ConnectionManager {
             .px(spacing::md())
             .h(sizing::header_height())
             .border_t_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex_1()
@@ -148,7 +149,7 @@ impl ConnectionManager {
     }
 
     /// Formats the test status into a display string and color.
-    fn format_status(status: &TestStatus) -> (String, Hsla) {
+    fn format_status(status: &TestStatus, cx: &App) -> (String, Hsla) {
         let text = match status {
             TestStatus::Idle => "Test connection to verify settings".to_string(),
             TestStatus::Testing => "Testing connection...".to_string(),
@@ -156,11 +157,11 @@ impl ConnectionManager {
             TestStatus::Error(err) => format!("Connection failed: {err}"),
         };
         let color = match status {
-            TestStatus::Success => colors::accent(),
-            TestStatus::Error(_) => colors::status_error(),
-            _ => colors::text_muted(),
+            TestStatus::Success => cx.theme().primary,
+            TestStatus::Error(_) => cx.theme().danger,
+            _ => cx.theme().muted_foreground,
         };
-        (text, color.into())
+        (text, color)
     }
 
     /// Renders the action buttons (Test, Save, Close).

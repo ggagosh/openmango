@@ -1,5 +1,6 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use uuid::Uuid;
 
@@ -12,7 +13,7 @@ use crate::keyboard::{
 use crate::state::{
     AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
 };
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::dialogs::{open_create_collection_dialog, open_rename_collection_dialog};
 use super::sidebar::Sidebar;
@@ -114,7 +115,7 @@ pub(crate) fn build_connection_menu(
 }
 
 fn menu_item_with_shortcut(label: &'static str, shortcut: &'static str) -> PopupMenuItem {
-    PopupMenuItem::element(move |_window, _cx| {
+    PopupMenuItem::element(move |_window, cx| {
         div()
             .flex()
             .items_center()
@@ -122,7 +123,7 @@ fn menu_item_with_shortcut(label: &'static str, shortcut: &'static str) -> Popup
             .w_full()
             .gap(spacing::lg())
             .child(div().text_sm().child(label))
-            .child(div().text_xs().text_color(colors::text_muted()).child(shortcut))
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut))
     })
 }
 

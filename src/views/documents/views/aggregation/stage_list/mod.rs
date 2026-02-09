@@ -11,11 +11,12 @@ mod stage_row;
 
 use gpui::Styled as _;
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 
 use crate::components::Button;
 use crate::state::app_state::PipelineState;
 use crate::state::{SessionKey, StatusMessage};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 use crate::views::CollectionView;
 
 use super::operators::QUICK_START_OPERATORS;
@@ -36,10 +37,10 @@ impl CollectionView {
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
-            .child(div().text_sm().text_color(colors::text_primary()).child("Stages"))
+            .border_color(cx.theme().border)
+            .child(div().text_sm().text_color(cx.theme().foreground).child("Stages"))
             .child({
                 let state = self.state.clone();
                 div()
@@ -94,7 +95,7 @@ impl CollectionView {
             });
 
         let body = if pipeline.stages.is_empty() {
-            render_empty_state(session_key.clone(), self.state.clone())
+            render_empty_state(session_key.clone(), self.state.clone(), cx)
         } else {
             let view_ctx = StageListView {
                 scroll_handle: self.aggregation_stage_list_scroll.clone(),
@@ -120,9 +121,9 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(colors::bg_sidebar())
+            .bg(cx.theme().sidebar)
             .border_1()
-            .border_color(colors::border_subtle())
+            .border_color(cx.theme().sidebar_border)
             .rounded(borders::radius_sm())
             .track_focus(&self.aggregation_focus)
             .on_mouse_down(MouseButton::Left, {
@@ -240,6 +241,7 @@ fn handle_stage_list_key(
 fn render_empty_state(
     session_key: Option<SessionKey>,
     state: Entity<crate::state::AppState>,
+    cx: &App,
 ) -> AnyElement {
     let quick_buttons = QUICK_START_OPERATORS
         .iter()
@@ -276,7 +278,12 @@ fn render_empty_state(
         .gap(spacing::sm())
         .px(spacing::sm())
         .py(spacing::lg())
-        .child(div().text_sm().text_color(colors::text_muted()).child("No pipeline stages yet."))
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("No pipeline stages yet."),
+        )
         .child(
             Button::new("agg-add-first-stage")
                 .label("+ Add your first stage")
@@ -298,7 +305,9 @@ fn render_empty_state(
                     }
                 }),
         )
-        .child(div().text_xs().text_color(colors::text_muted()).child("Common starting points"))
+        .child(
+            div().text_xs().text_color(cx.theme().muted_foreground).child("Common starting points"),
+        )
         .child(div().flex().items_center().gap(spacing::xs()).children(quick_buttons))
         .into_any_element()
 }

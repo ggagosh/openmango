@@ -24,10 +24,10 @@ impl TransferView {
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
-            return panel("Source", div().child("Loading...")).into_any_element();
+            return panel("Source", div().child("Loading..."), cx).into_any_element();
         };
         let Some(ref source_db_state) = self.source_db_state else {
-            return panel("Source", div().child("Loading...")).into_any_element();
+            return panel("Source", div().child("Loading..."), cx).into_any_element();
         };
 
         let conn_select =
@@ -55,6 +55,7 @@ impl TransferView {
                     &transfer_state.options.export_filter,
                     view.clone(),
                     state.clone(),
+                    cx,
                 )
                 .into_any_element(),
                 render_query_field_row(
@@ -63,6 +64,7 @@ impl TransferView {
                     &transfer_state.options.export_projection,
                     view.clone(),
                     state.clone(),
+                    cx,
                 )
                 .into_any_element(),
                 render_query_field_row(
@@ -71,6 +73,7 @@ impl TransferView {
                     &transfer_state.options.export_sort,
                     view,
                     state,
+                    cx,
                 )
                 .into_any_element(),
             ]
@@ -84,10 +87,11 @@ impl TransferView {
                 .flex()
                 .flex_col()
                 .gap(spacing::md())
-                .child(form_row("Connection", conn_select))
-                .child(form_row("Database", db_select))
-                .children(coll_select.map(|s| form_row("Collection", s)))
+                .child(form_row("Connection", conn_select, cx))
+                .child(form_row("Database", db_select, cx))
+                .children(coll_select.map(|s| form_row("Collection", s, cx)))
                 .children(query_options),
+            cx,
         )
         .into_any_element()
     }

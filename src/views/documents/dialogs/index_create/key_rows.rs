@@ -1,10 +1,11 @@
 //! Index key row management for the index create dialog.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{InputEvent, InputState};
 
 use crate::components::Button;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::IndexCreateDialog;
 use super::support::{FieldSuggestion, IndexKeyKind, MAX_SUGGESTIONS};
@@ -72,11 +73,7 @@ impl IndexCreateDialog {
     }
 
     /// Get filtered suggestions for a row.
-    pub(super) fn suggestions_for_row(
-        &self,
-        row_id: u64,
-        cx: &mut Context<Self>,
-    ) -> Vec<FieldSuggestion> {
+    pub(super) fn suggestions_for_row(&self, row_id: u64, cx: &App) -> Vec<FieldSuggestion> {
         if self.active_row_id != Some(row_id) {
             return Vec::new();
         }
@@ -103,7 +100,7 @@ impl IndexCreateDialog {
         &self,
         view: Entity<Self>,
         row_id: u64,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let suggestions = self.suggestions_for_row(row_id, cx);
         if suggestions.is_empty() {
@@ -145,7 +142,7 @@ impl IndexCreateDialog {
                 .gap(spacing::xs())
                 .px(spacing::sm())
                 .py(px(2.0))
-                .child(div().text_xs().text_color(colors::text_muted()).child("Suggestions"))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Suggestions"))
                 .children(row_children)
                 .into_any_element(),
         )

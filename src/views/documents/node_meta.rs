@@ -1,6 +1,6 @@
 //! Node metadata for the document tree view.
 
-use gpui::Rgba;
+use gpui::Hsla;
 use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment};
@@ -10,7 +10,7 @@ use crate::bson::{DocumentKey, PathSegment};
 pub struct NodeMeta {
     pub key_label: String,
     pub value_label: String,
-    pub value_color: Rgba,
+    pub value_color: Hsla,
     pub type_label: String,
     pub is_folder: bool,
     pub is_editable: bool,

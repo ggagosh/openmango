@@ -1,6 +1,7 @@
 //! Property-level edit dialogs for document fields.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
@@ -10,7 +11,7 @@ use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
 use crate::components::{Button, cancel_button};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 use crate::views::documents::node_meta::NodeMeta;
 
 use super::property_dialog_support::{
@@ -601,6 +602,7 @@ impl Render for PropertyActionDialog {
             self.updating,
             "Applying update...",
             default_label,
+            cx,
         );
 
         let scope_row = if show_type {
@@ -613,7 +615,12 @@ impl Render for PropertyActionDialog {
                         .flex()
                         .flex_col()
                         .gap(spacing::xs())
-                        .child(div().text_xs().text_color(colors::text_secondary()).child("Type"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().secondary_foreground)
+                                .child("Type"),
+                        )
                         .child(self.type_button(view.clone(), cx)),
                 )
                 .child(
@@ -621,7 +628,12 @@ impl Render for PropertyActionDialog {
                         .flex()
                         .flex_col()
                         .gap(spacing::xs())
-                        .child(div().text_xs().text_color(colors::text_secondary()).child("Scope"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().secondary_foreground)
+                                .child("Scope"),
+                        )
                         .child(self.scope_button(view.clone(), cx)),
                 )
                 .into_any_element()
@@ -630,7 +642,7 @@ impl Render for PropertyActionDialog {
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_secondary()).child("Scope"))
+                .child(div().text_xs().text_color(cx.theme().secondary_foreground).child("Scope"))
                 .child(self.scope_button(view.clone(), cx))
                 .into_any_element()
         };
@@ -646,7 +658,7 @@ impl Render for PropertyActionDialog {
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_secondary()).child(label))
+                .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(label))
                 .child(Input::new(&self.field_display_state).disabled(true))
                 .into_any_element()
         } else {
@@ -663,7 +675,7 @@ impl Render for PropertyActionDialog {
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_secondary()).child(label))
+                .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(label))
                 .child(Input::new(&self.field_state).font_family(crate::theme::fonts::mono()))
                 .into_any_element()
         } else {
@@ -675,7 +687,7 @@ impl Render for PropertyActionDialog {
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_secondary()).child("Value"))
+                .child(div().text_xs().text_color(cx.theme().secondary_foreground).child("Value"))
                 .child(
                     Input::new(&self.value_state)
                         .font_family(crate::theme::fonts::mono())
@@ -697,7 +709,9 @@ impl Render for PropertyActionDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_xs().text_color(colors::text_secondary()).child("Parent"))
+                    .child(
+                        div().text_xs().text_color(cx.theme().secondary_foreground).child("Parent"),
+                    )
                     .child(Input::new(&self.parent_state).disabled(true)),
             )
             .child(field_row)

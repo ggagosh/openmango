@@ -130,7 +130,7 @@ impl DocumentViewModel {
         };
 
         let (items, meta, order) =
-            build_documents_tree(&data.items, &view.drafts, &view.expanded_nodes);
+            build_documents_tree(&data.items, &view.drafts, &view.expanded_nodes, cx);
         let mut full_order = Vec::new();
         for item in &items {
             flatten_tree_order_all(item, &mut full_order);

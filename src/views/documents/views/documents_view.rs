@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
@@ -7,7 +8,7 @@ use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::Button;
 use crate::state::{AppState, SessionDocument, SessionKey};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 use super::super::CollectionView;
 use super::super::tree::tree_content::render_tree_row;
@@ -77,16 +78,16 @@ impl CollectionView {
                             .items_center()
                             .px(spacing::lg())
                             .py(spacing::xs())
-                            .bg(colors::bg_header())
+                            .bg(cx.theme().tab_bar)
                             .border_b_1()
-                            .border_color(colors::border())
+                            .border_color(cx.theme().border)
                             .child(
                                 div()
                                     .flex()
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("Key"),
                             )
                             .child(
@@ -95,14 +96,14 @@ impl CollectionView {
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("Value"),
                             )
                             .child(
                                 div()
                                     .w(px(120.0))
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("Type"),
                             ),
                     )
@@ -118,7 +119,7 @@ impl CollectionView {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(colors::text_muted())
+                                        .text_color(cx.theme().muted_foreground)
                                         .child("Loading documents..."),
                                 )
                                 .into_any_element()
@@ -131,7 +132,7 @@ impl CollectionView {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(colors::text_muted())
+                                        .text_color(cx.theme().muted_foreground)
                                         .child("No documents found"),
                                 )
                                 .into_any_element()
@@ -148,7 +149,7 @@ impl CollectionView {
                                 let current_match_id = current_match_id.clone();
                                 let documents_focus = self.documents_focus.clone();
 
-                                move |ix, entry, selected, _window, _cx| {
+                                move |ix, entry, selected, _window, cx| {
                                     render_tree_row(
                                         ix,
                                         entry,
@@ -163,6 +164,7 @@ impl CollectionView {
                                         search_query.as_deref(),
                                         current_match_id.as_deref(),
                                         documents_focus.clone(),
+                                        cx,
                                     )
                                 }
                             })
@@ -182,9 +184,9 @@ impl CollectionView {
                             .px(spacing::sm())
                             .py(px(4.0))
                             .rounded(borders::radius_sm())
-                            .bg(colors::bg_header())
+                            .bg(cx.theme().tab_bar)
                             .border_1()
-                            .border_color(colors::border())
+                            .border_color(cx.theme().border)
                             .child(if let Some(search_state) = search_state {
                                 Input::new(&search_state).w(px(220.0)).into_any_element()
                             } else {
@@ -193,7 +195,7 @@ impl CollectionView {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(match_label.clone()),
                             )
                             .child(
@@ -265,6 +267,7 @@ impl CollectionView {
                 session_key,
                 state_for_prev,
                 state_for_next,
+                cx,
             ))
             .into_any_element()
     }

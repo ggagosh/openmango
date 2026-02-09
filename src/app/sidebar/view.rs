@@ -1,5 +1,6 @@
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _};
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
 use gpui_component::menu::ContextMenuExt;
 use gpui_component::scroll::ScrollableElement;
@@ -13,7 +14,7 @@ use crate::keyboard::{
     PasteTreeItem, RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::state::{AppCommands, TransferMode};
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
 use super::Sidebar;
@@ -50,9 +51,9 @@ impl Render for Sidebar {
             .flex_shrink_0()
             .h_full()
             .overflow_hidden()
-            .bg(colors::bg_sidebar())
+            .bg(cx.theme().sidebar)
             .border_r_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .track_focus(&self.focus_handle)
             .on_mouse_down(MouseButton::Left, {
                 let focus_handle = self.focus_handle.clone();
@@ -124,12 +125,12 @@ impl Render for Sidebar {
                     .px(spacing::md())
                     .h(sizing::header_height())
                     .border_b_1()
-                    .border_color(colors::border())
+                    .border_color(cx.theme().border)
                     .child(
                         div()
                             .text_xs()
                             .font_weight(FontWeight::NORMAL)
-                            .text_color(colors::text_secondary())
+                            .text_color(cx.theme().secondary_foreground)
                             .child("CONNECTIONS"),
                     )
                     .child(
@@ -148,8 +149,8 @@ impl Render for Sidebar {
                                     .h(sizing::icon_lg())
                                     .rounded(crate::theme::borders::radius_sm())
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(colors::bg_hover()))
-                                    .text_color(colors::text_primary())
+                                    .hover(|s| s.bg(cx.theme().list_hover))
+                                    .text_color(cx.theme().foreground)
                                     .child(Icon::new(IconName::Plus).xsmall())
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
@@ -166,8 +167,8 @@ impl Render for Sidebar {
                                     .h(sizing::icon_lg())
                                     .rounded(crate::theme::borders::radius_sm())
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(colors::bg_hover()))
-                                    .text_color(colors::text_primary())
+                                    .hover(|s| s.bg(cx.theme().list_hover))
+                                    .text_color(cx.theme().foreground)
                                     .child(Icon::new(IconName::Settings).xsmall())
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         ConnectionManager::open(state_for_manager.clone(), window, cx);
@@ -185,7 +186,7 @@ impl Render for Sidebar {
                         .px(spacing::md())
                         .py(spacing::xs())
                         .border_b_1()
-                        .border_color(colors::border())
+                        .border_color(cx.theme().border)
                         .child(
                             div()
                                 .capture_key_down({
@@ -238,13 +239,13 @@ impl Render for Sidebar {
                             if search_query.trim().is_empty() {
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("Type to search databases")
                                     .into_any_element()
                             } else if search_results.is_empty() {
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_muted())
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("No matches")
                                     .into_any_element()
                             } else {
@@ -265,10 +266,10 @@ impl Render for Sidebar {
                                             .px(spacing::sm())
                                             .py(px(4.0))
                                             .rounded(borders::radius_sm())
-                                            .hover(|s| s.bg(colors::list_hover()))
+                                            .hover(|s| s.bg(cx.theme().list_hover))
                                             .cursor_pointer()
                                             .id(("sidebar-search-row", result.index))
-                                            .when(is_selected, |s| s.bg(colors::list_selected()))
+                                            .when(is_selected, |s| s.bg(cx.theme().list_active))
                                             .child(
                                                 div()
                                                     .flex()
@@ -277,14 +278,14 @@ impl Render for Sidebar {
                                                     .child(
                                                         div()
                                                             .text_sm()
-                                                            .text_color(colors::text_primary())
+                                                            .text_color(cx.theme().foreground)
                                                             .truncate()
                                                             .child(database.clone()),
                                                     )
                                                     .child(
                                                         div()
                                                             .text_xs()
-                                                            .text_color(colors::text_muted())
+                                                            .text_color(cx.theme().muted_foreground)
                                                             .truncate()
                                                             .child(connection_name),
                                                     ),
@@ -317,10 +318,19 @@ impl Render for Sidebar {
                         div()
                             .p(spacing::md())
                             .text_sm()
-                            .text_color(colors::text_muted())
+                            .text_color(cx.theme().muted_foreground)
                             .child("No connections yet")
                             .into_any_element()
                     } else {
+                        // Extract theme colors before the processor closure to avoid
+                        // capturing `cx` inside the move closure.
+                        let theme_list_hover = cx.theme().list_hover;
+                        let theme_list_active = cx.theme().list_active;
+                        let theme_muted_foreground = cx.theme().muted_foreground;
+                        let theme_success = cx.theme().success;
+                        let theme_warning = cx.theme().warning;
+                        let theme_foreground = cx.theme().foreground;
+                        let theme_secondary_foreground = cx.theme().secondary_foreground;
                         uniform_list("sidebar-rows", self.model.entries.len(), {
                             let state_clone = state_for_tree.clone();
                             let sidebar_entity = sidebar_entity.clone();
@@ -534,8 +544,8 @@ impl Render for Sidebar {
                                                     }
                                                 }
                                             })
-                                            .hover(|s| s.bg(colors::list_hover()))
-                                            .when(selected, |s| s.bg(colors::list_selected()))
+                                            .hover(|s| s.bg(theme_list_hover))
+                                            .when(selected, |s| s.bg(theme_list_active))
                                             .cursor_pointer()
                                             // Chevron for expandable items
                                             .when(is_folder, |this| {
@@ -546,7 +556,7 @@ impl Render for Sidebar {
                                                         IconName::ChevronRight
                                                     })
                                                     .size(sizing::icon_sm())
-                                                    .text_color(colors::text_muted()),
+                                                    .text_color(theme_muted_foreground),
                                                 )
                                             })
                                             // Spacer for non-folders (align with chevron)
@@ -561,20 +571,20 @@ impl Render for Sidebar {
                                                         .h(sizing::status_dot())
                                                         .rounded_full()
                                                         .bg(if is_connected {
-                                                            colors::status_success()
+                                                            theme_success
                                                         } else if is_connecting {
-                                                            colors::status_warning()
+                                                            theme_warning
                                                         } else {
-                                                            colors::text_muted()
+                                                            theme_muted_foreground
                                                         }),
                                                 )
                                                 .child(
                                                     Icon::new(IconName::Globe)
                                                         .size(sizing::icon_md())
                                                         .text_color(if is_connected {
-                                                            colors::text_primary()
+                                                            theme_foreground
                                                         } else {
-                                                            colors::text_secondary()
+                                                            theme_secondary_foreground
                                                         }),
                                                 )
                                             })
@@ -583,7 +593,7 @@ impl Render for Sidebar {
                                                 this.child(
                                                     Icon::new(IconName::Folder)
                                                         .size(sizing::icon_md())
-                                                        .text_color(colors::text_secondary()),
+                                                        .text_color(theme_secondary_foreground),
                                                 )
                                             })
                                             // Collection: file icon
@@ -591,7 +601,7 @@ impl Render for Sidebar {
                                                 this.child(
                                                     Icon::new(IconName::File)
                                                         .size(sizing::icon_md())
-                                                        .text_color(colors::text_muted()),
+                                                        .text_color(theme_muted_foreground),
                                                 )
                                             })
                                             // Label
@@ -601,9 +611,9 @@ impl Render for Sidebar {
                                                     .min_w(px(0.0))
                                                     .text_sm()
                                                     .text_color(if selected {
-                                                        colors::text_primary()
+                                                        theme_foreground
                                                     } else {
-                                                        colors::text_secondary()
+                                                        theme_secondary_foreground
                                                     })
                                                     .truncate()
                                                     .child(label.clone()),

@@ -18,7 +18,7 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, SelectState};
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Icon, IconName, IndexPath, Sizable as _, Size};
+use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
 
 use crate::components::Button;
@@ -100,7 +100,7 @@ impl Render for TransferView {
                     .items_center()
                     .justify_center()
                     .text_sm()
-                    .text_color(colors::text_muted())
+                    .text_color(cx.theme().muted_foreground)
                     .child("Open a Transfer tab to configure import/export")
                     .into_any_element();
             };
@@ -450,9 +450,9 @@ impl Render for TransferView {
             .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex()
@@ -462,13 +462,13 @@ impl Render for TransferView {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors::text_primary())
+                            .text_color(cx.theme().foreground)
                             .child("Transfer"),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(colors::text_muted())
+                            .text_color(cx.theme().muted_foreground)
                             .child("Import, export, or copy data"),
                     ),
             )
@@ -506,34 +506,35 @@ impl Render for TransferView {
 
         // Summary panel (now inline)
         let summary_panel =
-            render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name);
+            render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name, cx);
 
         // Progress panel for database-scope operations (only shown when running)
-        let progress_panel: AnyElement =
-            if let Some(ref db_progress) = transfer_state.runtime.database_progress {
-                render_progress_panel(db_progress, state.clone(), transfer_id).into_any_element()
-            } else {
-                div().into_any_element()
-            };
+        let progress_panel: AnyElement = if let Some(ref db_progress) =
+            transfer_state.runtime.database_progress
+        {
+            render_progress_panel(db_progress, state.clone(), transfer_id, cx).into_any_element()
+        } else {
+            div().into_any_element()
+        };
 
         // Warning banners
-        let warnings = render_warnings(&transfer_state);
+        let warnings = render_warnings(&transfer_state, cx);
 
         // Options panel
         let options_panel =
-            self.render_options_panel(transfer_key, &transfer_state, options_expanded, view);
+            self.render_options_panel(transfer_key, &transfer_state, options_expanded, view, cx);
 
         // Error message
         let error_display: AnyElement = if let Some(error) = &transfer_state.runtime.error_message {
             div()
                 .px(spacing::md())
                 .py(spacing::sm())
-                .bg(hsla(0.0, 0.7, 0.5, 0.1))
+                .bg(colors::bg_error(cx))
                 .border_1()
-                .border_color(hsla(0.0, 0.7, 0.5, 0.3))
+                .border_color(colors::border_error(cx))
                 .rounded(borders::radius_sm())
                 .text_sm()
-                .text_color(hsla(0.0, 0.7, 0.5, 1.0))
+                .text_color(cx.theme().danger)
                 .overflow_hidden()
                 .max_h(px(120.0))
                 .overflow_y_scrollbar()
@@ -592,7 +593,8 @@ impl TransferView {
         transfer_state: &TransferTabState,
         expanded: bool,
         view: Entity<Self>,
-    ) -> impl IntoElement {
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let state = self.state.clone();
 
         let header = div()
@@ -610,13 +612,13 @@ impl TransferView {
             .child(
                 Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors::text_secondary())
+                    .text_color(cx.theme().secondary_foreground)
                     .child("Options"),
             );
 
@@ -664,7 +666,7 @@ impl TransferView {
                 option_section(
                     "General",
                     vec![
-                        option_field_static("Scope", transfer_state.config.scope.label()),
+                        option_field_static("Scope", transfer_state.config.scope.label(), cx),
                         option_field_static(
                             "Format",
                             if matches!(transfer_state.config.mode, TransferMode::Copy) {
@@ -672,9 +674,11 @@ impl TransferView {
                             } else {
                                 transfer_state.config.format.label()
                             },
+                            cx,
                         ),
-                        option_field("Compression", compression_dropdown.into_any_element()),
+                        option_field("Compression", compression_dropdown.into_any_element(), cx),
                     ],
+                    cx,
                 )
                 .into_any_element(),
             );
@@ -687,6 +691,7 @@ impl TransferView {
                         key,
                         transfer_state,
                         self.exclude_coll_state.as_ref(),
+                        cx,
                     );
                 }
                 TransferMode::Import => {
@@ -695,6 +700,7 @@ impl TransferView {
                         state.clone(),
                         key,
                         transfer_state,
+                        cx,
                     );
                 }
                 TransferMode::Copy => {
@@ -704,6 +710,7 @@ impl TransferView {
                         key,
                         transfer_state,
                         self.exclude_coll_state.as_ref(),
+                        cx,
                     );
                 }
             }
@@ -718,11 +725,12 @@ impl TransferView {
             .flex_col()
             .gap(spacing::sm())
             .p(spacing::md())
-            .bg(colors::bg_sidebar())
+            .bg(cx.theme().sidebar)
             .border_1()
-            .border_color(colors::border_subtle())
+            .border_color(cx.theme().sidebar_border)
             .rounded(borders::radius_sm())
             .child(header)
             .child(content)
+            .into_any_element()
     }
 }

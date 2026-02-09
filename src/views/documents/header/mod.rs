@@ -20,13 +20,14 @@ pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::InputState;
 use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::bson::DocumentKey;
 use crate::helpers::format_number;
 use crate::state::{CollectionSubview, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::CollectionView;
 
@@ -103,13 +104,13 @@ impl CollectionView {
             .px(spacing::lg())
             .py(spacing::md())
             .gap(spacing::sm())
-            .bg(colors::bg_header())
+            .bg(cx.theme().tab_bar)
             .border_b_1()
-            .border_color(colors::border())
+            .border_color(cx.theme().border)
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 window.blur();
             })
-            .child(render_title_row(collection_name, total, &breadcrumb, action_row))
+            .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
             .child(div().pl(spacing::xs()).child(subview_tabs));
 
         // Add filter bar for documents subview
@@ -133,6 +134,7 @@ impl CollectionView {
                     projection_state,
                     sort_active,
                     projection_active,
+                    cx,
                 ));
             }
         }
@@ -142,7 +144,13 @@ impl CollectionView {
 }
 
 /// Render the title row with collection name, doc count, breadcrumb, and actions.
-fn render_title_row(collection_name: &str, total: u64, breadcrumb: &str, action_row: Div) -> Div {
+fn render_title_row(
+    collection_name: &str,
+    total: u64,
+    breadcrumb: &str,
+    action_row: Div,
+    cx: &mut Context<CollectionView>,
+) -> Div {
     div()
         .flex()
         .items_center()
@@ -159,28 +167,26 @@ fn render_title_row(collection_name: &str, total: u64, breadcrumb: &str, action_
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
-                        .child(
-                            Icon::new(IconName::Folder).small().text_color(colors::accent_green()),
-                        )
+                        .child(Icon::new(IconName::Folder).small().text_color(cx.theme().primary))
                         .child(
                             div()
                                 .text_lg()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(colors::text_primary())
+                                .text_color(cx.theme().foreground)
                                 .font_family(crate::theme::fonts::heading())
                                 .child(collection_name.to_string()),
                         )
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(colors::text_muted())
+                                .text_color(cx.theme().muted_foreground)
                                 .child(format!("({} docs)", format_number(total))),
                         ),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .truncate()
                         .child(breadcrumb.to_string()),
                 ),

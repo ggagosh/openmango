@@ -1,6 +1,7 @@
 //! Render implementation for the index create dialog.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, NumberInput};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::switch::Switch;
@@ -8,7 +9,7 @@ use gpui_component::{Disableable as _, Icon, IconName, Sizable as _};
 
 use crate::components::{Button, cancel_button};
 use crate::state::AppCommands;
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 use crate::views::documents::dialogs::shared::styled_dropdown_button;
 
 use super::IndexCreateDialog;
@@ -140,7 +141,7 @@ impl Render for IndexCreateDialog {
             .flex()
             .flex_col()
             .gap(spacing::sm())
-            .child(div().text_sm().text_color(colors::text_secondary()).child("Index keys"))
+            .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Index keys"))
             .child(div().flex().flex_col().gap(spacing::xs()).children(rows))
             .child(
                 div()
@@ -163,10 +164,12 @@ impl Render for IndexCreateDialog {
                                 }
                             }),
                     )
-                    .child(div().text_xs().text_color(colors::text_muted()).child(sample_label)),
+                    .child(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(sample_label),
+                    ),
             )
-            .child(div().h(px(1.0)).bg(colors::border_subtle()))
-            .child(div().text_sm().text_color(colors::text_secondary()).child("Options"))
+            .child(div().h(px(1.0)).bg(cx.theme().sidebar_border))
+            .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Options"))
             .child(
                 div()
                     .flex()
@@ -215,7 +218,7 @@ impl Render for IndexCreateDialog {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_secondary())
+                                    .text_color(cx.theme().secondary_foreground)
                                     .child("Unique"),
                             ),
                     )
@@ -240,7 +243,7 @@ impl Render for IndexCreateDialog {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_secondary())
+                                    .text_color(cx.theme().secondary_foreground)
                                     .child("Sparse"),
                             ),
                     )
@@ -265,7 +268,7 @@ impl Render for IndexCreateDialog {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors::text_secondary())
+                                    .text_color(cx.theme().secondary_foreground)
                                     .child("Hidden"),
                             ),
                     ),
@@ -283,7 +286,7 @@ impl Render for IndexCreateDialog {
                 } else {
                     div()
                         .text_xs()
-                        .text_color(colors::text_muted())
+                        .text_color(cx.theme().muted_foreground)
                         .child(notes.join(" "))
                         .into_any_element()
                 }
@@ -343,7 +346,7 @@ impl Render for IndexCreateDialog {
 
         let is_edit = self.edit_target.is_some();
         let (status_text, status_color) = if let Some(error) = &self.error_message {
-            (error.clone(), colors::text_error())
+            (error.clone(), cx.theme().danger_foreground)
         } else if self.creating {
             (
                 if is_edit {
@@ -351,12 +354,12 @@ impl Render for IndexCreateDialog {
                 } else {
                     "Creating index...".to_string()
                 },
-                colors::text_muted(),
+                cx.theme().muted_foreground,
             )
         } else if is_edit {
-            ("Save will drop and recreate this index.".to_string(), colors::text_muted())
+            ("Save will drop and recreate this index.".to_string(), cx.theme().muted_foreground)
         } else {
-            ("".to_string(), colors::text_muted())
+            ("".to_string(), cx.theme().muted_foreground)
         };
 
         let action_row = div()

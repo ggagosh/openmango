@@ -1,8 +1,9 @@
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use super::super::ForgeView;
-use crate::theme::{colors, fonts};
+use crate::theme::fonts;
 
 impl ForgeView {
     pub fn ensure_raw_output_state(
@@ -96,6 +97,6 @@ impl ForgeView {
             .focus_bordered(false)
             .font_family(fonts::mono())
             .text_xs()
-            .text_color(colors::text_secondary())
+            .text_color(cx.theme().secondary_foreground)
     }
 }

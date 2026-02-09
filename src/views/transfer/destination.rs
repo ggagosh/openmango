@@ -53,7 +53,7 @@ fn render_export_destination(
 ) -> AnyElement {
     // All export formats use folder picker + editable input with placeholders
     let Some(ref export_path_input_state) = view.export_path_input_state else {
-        return panel("Destination", div().child("Loading...")).into_any_element();
+        return panel("Destination", div().child("Loading..."), cx).into_any_element();
     };
 
     // Sync input state with transfer state file_path (when changed externally)
@@ -253,7 +253,8 @@ fn render_export_destination(
 
     panel(
         "Destination",
-        div().flex().flex_col().gap(spacing::md()).child(form_row(dest_label, file_control)),
+        div().flex().flex_col().gap(spacing::md()).child(form_row(dest_label, file_control, cx)),
+        cx,
     )
     .into_any_element()
 }
@@ -263,7 +264,7 @@ fn render_import_destination(
     _view: &TransferView,
     transfer_state: &TransferTabState,
     state: &Entity<AppState>,
-    _cx: &mut App,
+    cx: &mut App,
 ) -> AnyElement {
     let file_path = if transfer_state.config.file_path.is_empty() {
         "No file selected".to_string()
@@ -331,7 +332,7 @@ fn render_import_destination(
         .items_center()
         .gap(spacing::sm())
         .child(
-            value_box(file_path, transfer_state.config.file_path.is_empty())
+            value_box(file_path, transfer_state.config.file_path.is_empty(), cx)
                 .flex_1()
                 .overflow_x_hidden()
                 .text_ellipsis(),
@@ -344,9 +345,10 @@ fn render_import_destination(
             .flex()
             .flex_col()
             .gap(spacing::md())
-            .child(form_row("File", file_control))
-            .child(form_row_static("Target database", target_db))
-            .children(show_coll.then(|| form_row_static("Target collection", target_coll))),
+            .child(form_row("File", file_control, cx))
+            .child(form_row_static("Target database", target_db, cx))
+            .children(show_coll.then(|| form_row_static("Target collection", target_coll, cx))),
+        cx,
     )
     .into_any_element()
 }
@@ -355,11 +357,11 @@ fn render_import_destination(
 fn render_copy_destination(
     view: &TransferView,
     transfer_state: &TransferTabState,
-    _cx: &mut App,
+    cx: &mut App,
 ) -> AnyElement {
     // Searchable select for destination connection
     let Some(ref dest_conn_state) = view.dest_conn_state else {
-        return panel("Destination", div().child("Loading...")).into_any_element();
+        return panel("Destination", div().child("Loading..."), cx).into_any_element();
     };
 
     let conn_select =
@@ -385,9 +387,10 @@ fn render_copy_destination(
             .flex()
             .flex_col()
             .gap(spacing::md())
-            .child(form_row("Connection", conn_select))
-            .child(form_row_static("Database", target_db))
-            .children(show_coll.then(|| form_row_static("Collection", target_coll))),
+            .child(form_row("Connection", conn_select, cx))
+            .child(form_row_static("Database", target_db, cx))
+            .children(show_coll.then(|| form_row_static("Collection", target_coll, cx))),
+        cx,
     )
     .into_any_element()
 }

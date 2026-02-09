@@ -1,6 +1,7 @@
 //! Bulk update/replace dialog for documents.
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
@@ -10,7 +11,7 @@ use mongodb::bson::{Bson, Document, doc};
 use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
 use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
-use crate::theme::{colors, spacing};
+use crate::theme::spacing;
 
 use super::bulk_update_support::{
     BulkUpdateMode, BulkUpdateScope, parse_update_doc, validate_update_doc,
@@ -362,7 +363,7 @@ impl Render for BulkUpdateDialog {
         let has_filter = !self.current_filter(cx).is_empty();
 
         let status =
-            status_text(self.error_message.as_ref(), self.updating, "Applying update...", "");
+            status_text(self.error_message.as_ref(), self.updating, "Applying update...", "", cx);
 
         let scope_row = div()
             .flex()
@@ -373,7 +374,9 @@ impl Render for BulkUpdateDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_xs().text_color(colors::text_secondary()).child("Scope"))
+                    .child(
+                        div().text_xs().text_color(cx.theme().secondary_foreground).child("Scope"),
+                    )
                     .child(self.scope_button(view.clone(), has_selected, has_filter, cx)),
             )
             .child(
@@ -381,7 +384,9 @@ impl Render for BulkUpdateDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_xs().text_color(colors::text_secondary()).child("Mode"))
+                    .child(
+                        div().text_xs().text_color(cx.theme().secondary_foreground).child("Mode"),
+                    )
                     .child(self.mode_button(view.clone(), cx)),
             );
 
@@ -390,7 +395,12 @@ impl Render for BulkUpdateDialog {
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .child(div().text_xs().text_color(colors::text_secondary()).child("Custom filter"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().secondary_foreground)
+                        .child("Custom filter"),
+                )
                 .child(
                     Input::new(&self.filter_state)
                         .font_family(crate::theme::fonts::mono())
@@ -421,7 +431,12 @@ impl Render for BulkUpdateDialog {
                     .flex()
                     .flex_col()
                     .gap(spacing::xs())
-                    .child(div().text_xs().text_color(colors::text_secondary()).child(update_label))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().secondary_foreground)
+                            .child(update_label),
+                    )
                     .child(
                         Input::new(&self.update_state)
                             .font_family(crate::theme::fonts::mono())

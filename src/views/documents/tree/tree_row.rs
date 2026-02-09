@@ -10,7 +10,7 @@ use gpui_component::list::ListItem;
 use gpui_component::menu::ContextMenuExt;
 use gpui_component::switch::Switch;
 use gpui_component::tree::{TreeEntry, TreeState};
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::components::Button;
 use crate::state::{AppState, SessionKey};
@@ -37,6 +37,7 @@ pub fn render_tree_row(
     search_query: Option<&str>,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
+    cx: &App,
 ) -> ListItem {
     let item_id = entry.item().id.to_string();
     let meta = node_meta.get(&item_id);
@@ -45,7 +46,7 @@ pub fn render_tree_row(
     let key_label =
         meta.map(|meta| meta.key_label.clone()).unwrap_or_else(|| entry.item().label.to_string());
     let value_label = meta.map(|meta| meta.value_label.clone()).unwrap_or_default();
-    let value_color = meta.map(|meta| meta.value_color).unwrap_or(colors::text_primary());
+    let value_color = meta.map(|meta| meta.value_color).unwrap_or_else(|| cx.theme().foreground);
     let type_label = meta.map(|meta| meta.type_label.clone()).unwrap_or_default();
     let is_dirty = meta.map(|meta| meta.is_dirty).unwrap_or(false);
     let is_root = meta.map(|meta| meta.path.is_empty()).unwrap_or(false);
@@ -91,7 +92,7 @@ pub fn render_tree_row(
             .child(
                 Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .into_any_element()
     } else {
@@ -105,9 +106,9 @@ pub fn render_tree_row(
         .gap(spacing::xs())
         .rounded(borders::radius_sm())
         .border_1()
-        .border_color(rgba(0x00000000))
-        .when(_selected, |s: Div| s.bg(colors::list_selected()).border_color(colors::border()))
-        .when(!_selected, |s: Div| s.hover(|s| s.bg(colors::list_hover())))
+        .border_color(colors::transparent())
+        .when(_selected, |s: Div| s.bg(cx.theme().list_active).border_color(cx.theme().border))
+        .when(!_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
         .on_mouse_down(MouseButton::Left, {
@@ -142,7 +143,7 @@ pub fn render_tree_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label, is_root, is_dirty))
+        .child(render_key_column(depth, leading, &key_label, is_root, is_dirty, cx))
         .child(render_value_column(
             ix,
             &item_id,
@@ -160,12 +161,13 @@ pub fn render_tree_row(
             search_query,
             current_match_id,
             documents_focus.clone(),
+            cx,
         ))
         .child(
             div()
                 .w(px(120.0))
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(type_label),
@@ -211,6 +213,7 @@ pub fn render_readonly_tree_row(
     node_meta: &Arc<HashMap<String, NodeMeta>>,
     view: Entity<CollectionView>,
     tree_state: Entity<TreeState>,
+    cx: &App,
 ) -> ListItem {
     let item_id = entry.item().id.to_string();
     let meta = node_meta.get(&item_id);
@@ -218,7 +221,7 @@ pub fn render_readonly_tree_row(
     let key_label =
         meta.map(|meta| meta.key_label.clone()).unwrap_or_else(|| entry.item().label.to_string());
     let value_label = meta.map(|meta| meta.value_label.clone()).unwrap_or_default();
-    let value_color = meta.map(|meta| meta.value_color).unwrap_or(colors::text_primary());
+    let value_color = meta.map(|meta| meta.value_color).unwrap_or_else(|| cx.theme().foreground);
     let type_label = meta.map(|meta| meta.type_label.clone()).unwrap_or_default();
     let is_root = meta.map(|meta| meta.path.is_empty()).unwrap_or(false);
 
@@ -254,7 +257,7 @@ pub fn render_readonly_tree_row(
             .child(
                 Icon::new(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                     .xsmall()
-                    .text_color(colors::text_muted()),
+                    .text_color(cx.theme().muted_foreground),
             )
             .into_any_element()
     } else {
@@ -268,9 +271,9 @@ pub fn render_readonly_tree_row(
         .gap(spacing::xs())
         .rounded(borders::radius_sm())
         .border_1()
-        .border_color(rgba(0x00000000))
-        .when(selected, |s: Div| s.bg(colors::list_selected()).border_color(colors::border()))
-        .when(!selected, |s: Div| s.hover(|s| s.bg(colors::list_hover())))
+        .border_color(colors::transparent())
+        .when(selected, |s: Div| s.bg(cx.theme().list_active).border_color(cx.theme().border))
+        .when(!selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
         .on_mouse_down(MouseButton::Left, {
             let row_item_id = item_id.clone();
             let row_view = view.clone();
@@ -292,13 +295,13 @@ pub fn render_readonly_tree_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label, is_root, false))
+        .child(render_key_column(depth, leading, &key_label, is_root, false, cx))
         .child(render_value_column_readonly(&value_label, value_color))
         .child(
             div()
                 .w(px(120.0))
                 .text_sm()
-                .text_color(colors::text_muted())
+                .text_color(cx.theme().muted_foreground)
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(type_label),
@@ -314,7 +317,9 @@ fn render_key_column(
     key_label: &str,
     is_root: bool,
     is_dirty: bool,
+    cx: &App,
 ) -> impl IntoElement {
+    let key_color = colors::syntax_key(cx);
     let key_label = key_label.to_string();
 
     div()
@@ -331,11 +336,11 @@ fn render_key_column(
                 .items_center()
                 .gap(spacing::xs())
                 .text_sm()
-                .text_color(colors::syntax_key())
+                .text_color(key_color)
                 .overflow_hidden()
                 .text_ellipsis()
                 .when(is_root && is_dirty, |s: Div| {
-                    s.child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(colors::accent()))
+                    s.child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary))
                 })
                 .child(key_label),
         )
@@ -349,7 +354,7 @@ fn render_value_column(
     is_dirty: bool,
     selected: bool,
     value_label: &str,
-    value_color: Rgba,
+    value_color: Hsla,
     inline_state: &Option<InlineEditor>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
     view: Entity<CollectionView>,
@@ -359,6 +364,7 @@ fn render_value_column(
     search_query: Option<&str>,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
+    cx: &App,
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
     let value_label = value_label.to_string();
@@ -373,15 +379,17 @@ fn render_value_column(
         .gap(spacing::xs())
         .flex_1()
         .min_w(px(0.0))
-        .when(is_dirty && !selected, |s: Div| {
-            s.bg(colors::bg_dirty()).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+        .when(is_dirty && !selected, {
+            let dirty_bg = colors::bg_dirty(cx);
+            move |s: Div| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
-        .when(is_match && !is_dirty && !selected, |s: Div| {
-            s.bg(colors::bg_dirty()).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+        .when(is_match && !is_dirty && !selected, {
+            let dirty_bg = colors::bg_dirty(cx);
+            move |s: Div| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
         .when(is_current_match && !selected, |s: Div| {
             s.border_1()
-                .border_color(colors::accent())
+                .border_color(cx.theme().primary)
                 .rounded(borders::radius_sm())
                 .px(spacing::xs())
                 .py(px(1.0))
@@ -429,7 +437,7 @@ fn render_value_column(
             }
         })
         .child(if is_editing {
-            render_inline_editor(ix, inline_state, view.clone())
+            render_inline_editor(ix, inline_state, view.clone(), cx)
         } else {
             div()
                 .text_sm()
@@ -445,6 +453,7 @@ fn render_inline_editor(
     ix: usize,
     inline_state: &Option<InlineEditor>,
     view: Entity<CollectionView>,
+    cx: &App,
 ) -> AnyElement {
     let Some(inline_state) = inline_state else {
         return div().into_any_element();
@@ -476,11 +485,13 @@ fn render_inline_editor(
                         });
                     }
                 }))
-                .child(div().text_xs().text_color(colors::text_secondary()).child(if current {
-                    "true"
-                } else {
-                    "false"
-                }))
+                .child(
+                    div().text_xs().text_color(cx.theme().secondary_foreground).child(if current {
+                        "true"
+                    } else {
+                        "false"
+                    }),
+                )
                 .into_any_element()
         }
     };
@@ -514,7 +525,7 @@ fn render_inline_editor(
 }
 
 #[allow(dead_code)]
-fn render_value_column_readonly(value_label: &str, value_color: Rgba) -> impl IntoElement {
+fn render_value_column_readonly(value_label: &str, value_color: Hsla) -> impl IntoElement {
     div().flex().items_center().gap(spacing::xs()).flex_1().min_w(px(0.0)).child(
         div()
             .text_sm()

@@ -1,5 +1,6 @@
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
@@ -11,7 +12,7 @@ use crate::keyboard::{
     QuitApp, RefreshView,
 };
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
-use crate::theme::{borders, colors, spacing};
+use crate::theme::{borders, spacing};
 
 // =============================================================================
 // App Component
@@ -125,8 +126,8 @@ impl Render for AppRoot {
             .flex_col()
             .size_full()
             .relative()
-            .bg(colors::bg_app())
-            .text_color(colors::text_primary())
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
             .font_family(crate::theme::fonts::ui())
             .line_height(crate::theme::fonts::ui_line_height())
             .on_action(cx.listener(|this, _: &CloseTab, _window, cx| {
@@ -270,9 +271,9 @@ impl Render for AppRoot {
                     .w(px(4.0))
                     .h_full()
                     .cursor_col_resize()
-                    .bg(gpui::transparent_black())
-                    .hover(|s| s.bg(colors::border_focus()))
-                    .when(is_dragging, |s: Stateful<Div>| s.bg(colors::border_focus()))
+                    .bg(crate::theme::colors::transparent())
+                    .hover(|s| s.bg(cx.theme().ring))
+                    .when(is_dragging, |s: Stateful<Div>| s.bg(cx.theme().ring))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -353,15 +354,22 @@ impl Render for AppRoot {
             .child(self.action_bar.clone());
 
         if self.key_debug {
-            root =
-                root.child(render_key_debug_overlay(&key_context, self.last_keystroke.as_deref()));
+            root = root.child(render_key_debug_overlay(
+                &key_context,
+                self.last_keystroke.as_deref(),
+                cx,
+            ));
         }
 
         root
     }
 }
 
-fn render_key_debug_overlay(key_context: &str, last_keystroke: Option<&str>) -> AnyElement {
+fn render_key_debug_overlay(
+    key_context: &str,
+    last_keystroke: Option<&str>,
+    cx: &App,
+) -> AnyElement {
     let last_keystroke = last_keystroke.unwrap_or("-");
     div()
         .absolute()
@@ -370,16 +378,16 @@ fn render_key_debug_overlay(key_context: &str, last_keystroke: Option<&str>) -> 
         .w(px(320.0))
         .p(spacing::sm())
         .rounded(borders::radius_sm())
-        .bg(colors::bg_header())
+        .bg(cx.theme().tab_bar)
         .border_1()
-        .border_color(colors::border())
+        .border_color(cx.theme().border)
         .text_xs()
-        .text_color(colors::text_primary())
+        .text_color(cx.theme().foreground)
         .font_family(crate::theme::fonts::mono())
         .child(div().text_sm().child("Keymap debug"))
-        .child(div().text_color(colors::text_muted()).child("Key context:"))
+        .child(div().text_color(cx.theme().muted_foreground).child("Key context:"))
         .child(div().child(key_context.to_string()))
-        .child(div().text_color(colors::text_muted()).child("Last keystroke:"))
+        .child(div().text_color(cx.theme().muted_foreground).child("Last keystroke:"))
         .child(div().child(last_keystroke.to_string()))
         .into_any_element()
 }
