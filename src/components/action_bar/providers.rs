@@ -167,8 +167,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("cmd:disconnect"),
             label: SharedString::from("Disconnect"),
             category: ActionCategory::Command,
-            shortcut: Some(SharedString::from("Cmd+Shift+D")),
-            available: is_connected,
+            available: has_connection,
             priority: 30,
             ..Default::default()
         },
@@ -221,6 +220,15 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("cmd:connect"),
+            label: SharedString::from("Connect"),
+            detail: Some(SharedString::from("Connect to a saved connection")),
+            category: ActionCategory::Command,
+            available: !state.connections.is_empty(),
+            priority: 4,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:change-theme"),
             label: SharedString::from("Theme Selector: Toggle"),
             category: ActionCategory::Command,
@@ -249,6 +257,42 @@ pub fn theme_actions(state: &AppState) -> Vec<ActionItem> {
     }
 
     actions
+}
+
+/// Connect: disconnected saved connections available to connect.
+pub fn connection_actions(state: &AppState) -> Vec<ActionItem> {
+    let active = state.active_connections_snapshot();
+    state
+        .connections
+        .iter()
+        .filter(|c| !active.contains_key(&c.id))
+        .map(|c| ActionItem {
+            id: SharedString::from(format!("connect:{}", c.id)),
+            label: SharedString::from(c.name.clone()),
+            detail: Some(SharedString::from("Connect")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 5,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Disconnect: connected connections available to disconnect.
+pub fn disconnect_actions(state: &AppState) -> Vec<ActionItem> {
+    let active = state.active_connections_snapshot();
+    active
+        .iter()
+        .map(|(id, conn)| ActionItem {
+            id: SharedString::from(format!("disconnect:{}", id)),
+            label: SharedString::from(conn.config.name.clone()),
+            detail: Some(SharedString::from("Disconnect")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 5,
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// View: subview toggles (documents/indexes/stats).

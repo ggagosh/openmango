@@ -57,6 +57,8 @@ pub enum PaletteMode {
     #[default]
     All,
     Theme,
+    Connect,
+    Disconnect,
 }
 
 /// Payload returned when user executes an action.

@@ -12,7 +12,10 @@ use crate::state::AppState;
 use crate::state::settings::AppTheme;
 use crate::theme::{borders, fonts, spacing};
 
-use providers::{command_actions, navigation_actions, tab_actions, theme_actions, view_actions};
+use providers::{
+    command_actions, connection_actions, disconnect_actions, navigation_actions, tab_actions,
+    theme_actions, view_actions,
+};
 use types::{FilteredAction, PaletteMode};
 
 type ExecuteHandler = Box<dyn Fn(ActionExecution, &mut Window, &mut App) + 'static>;
@@ -141,6 +144,36 @@ impl ActionBar {
         cx.notify();
     }
 
+    fn switch_to_connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = PaletteMode::Connect;
+        self.rebuild_actions(cx);
+        self.filter_actions("");
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        if let Some(input) = self.input_state.clone() {
+            input.update(cx, |state, cx| {
+                state.set_placeholder("Select Connection...", window, cx);
+                state.set_value("", window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn switch_to_disconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = PaletteMode::Disconnect;
+        self.rebuild_actions(cx);
+        self.filter_actions("");
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        if let Some(input) = self.input_state.clone() {
+            input.update(cx, |state, cx| {
+                state.set_placeholder("Select Connection to Disconnect...", window, cx);
+                state.set_value("", window, cx);
+            });
+        }
+        cx.notify();
+    }
+
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Revert to original theme if we were previewing
         if let Some(original) = self.original_theme.take() {
@@ -168,6 +201,8 @@ impl ActionBar {
                 actions
             }
             PaletteMode::Theme => theme_actions(state),
+            PaletteMode::Connect => connection_actions(state),
+            PaletteMode::Disconnect => disconnect_actions(state),
         };
     }
 
@@ -228,6 +263,18 @@ impl ActionBar {
         // Intercept "Theme Selector: Toggle" — switch to theme mode instead of closing
         if action.item.id.as_ref() == "cmd:change-theme" {
             self.switch_to_themes(window, cx);
+            return;
+        }
+
+        // Intercept "Connect" — switch to connect mode instead of closing
+        if action.item.id.as_ref() == "cmd:connect" {
+            self.switch_to_connect(window, cx);
+            return;
+        }
+
+        // Intercept "Disconnect" — switch to disconnect mode instead of closing
+        if action.item.id.as_ref() == "cmd:disconnect" {
+            self.switch_to_disconnect(window, cx);
             return;
         }
 

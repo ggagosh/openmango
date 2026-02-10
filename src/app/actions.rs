@@ -251,6 +251,22 @@ impl AppRoot {
             return;
         }
 
+        // Connect actions
+        if let Some(conn_str) = id.strip_prefix("connect:") {
+            if let Ok(conn_id) = Uuid::parse_str(conn_str) {
+                AppCommands::connect(state.clone(), conn_id, cx);
+            }
+            return;
+        }
+
+        // Disconnect actions
+        if let Some(conn_str) = id.strip_prefix("disconnect:") {
+            if let Ok(conn_id) = Uuid::parse_str(conn_str) {
+                AppCommands::disconnect(state.clone(), conn_id, cx);
+            }
+            return;
+        }
+
         // Theme actions
         if let Some(theme_id) = id.strip_prefix("theme:") {
             if let Some(theme) = AppTheme::from_theme_id(theme_id) {
@@ -316,9 +332,7 @@ impl AppRoot {
                 }
             }
             "cmd:disconnect" => {
-                if let Some(conn_id) = state.read(cx).selected_connection_id() {
-                    AppCommands::disconnect(state.clone(), conn_id, cx);
-                }
+                // Handled as two-step in ActionBar (switches to Disconnect mode)
             }
             "cmd:settings" => {
                 state.update(cx, |state, cx| {

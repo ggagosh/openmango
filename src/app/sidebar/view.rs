@@ -1,8 +1,9 @@
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _};
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::menu::ContextMenuExt;
+use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::{Icon, IconName, Sizable as _};
@@ -25,9 +26,17 @@ impl Render for Sidebar {
         let active_connections = state_ref.active_connections_snapshot();
         let connecting_id = self.model.connecting_connection;
 
+        // Collect disconnected connections for the connect dropdown
+        let disconnected_connections: Vec<_> = state_ref
+            .connections_snapshot()
+            .into_iter()
+            .filter(|c| !active_connections.contains_key(&c.id))
+            .collect();
+
         let state = self.state.clone();
         let state_for_add = state.clone();
         let state_for_manager = state.clone();
+        let state_for_connect = state.clone();
         let state_for_tree = self.state.clone();
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
@@ -138,6 +147,41 @@ impl Render for Sidebar {
                             .flex()
                             .items_center()
                             .gap(spacing::xs())
+                            .child({
+                                let sidebar_entity = sidebar_entity.clone();
+                                // Connect dropdown button
+                                Button::new("connect-dropdown-btn")
+                                    .icon(Icon::new(IconName::Globe).xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .dropdown_menu(move |mut menu: PopupMenu, _window, _cx| {
+                                        if disconnected_connections.is_empty() {
+                                            menu = menu.item(
+                                                PopupMenuItem::new("All connected").disabled(true),
+                                            );
+                                        } else {
+                                            for conn in &disconnected_connections {
+                                                let conn_id = conn.id;
+                                                let state = state_for_connect.clone();
+                                                let sidebar_entity = sidebar_entity.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(conn.name.clone())
+                                                        .on_click(move |_, _window, cx| {
+                                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                                sidebar.expand_connection_and_refresh(conn_id, cx);
+                                                            });
+                                                            AppCommands::connect(
+                                                                state.clone(),
+                                                                conn_id,
+                                                                cx,
+                                                            );
+                                                        }),
+                                                );
+                                            }
+                                        }
+                                        menu
+                                    })
+                            })
                             .child(
                                 // Add button
                                 div()
@@ -316,10 +360,26 @@ impl Render for Sidebar {
                     .overflow_y_scrollbar()
                     .child(if self.model.entries.is_empty() {
                         div()
-                            .p(spacing::md())
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("No connections yet")
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .flex_1()
+                            .gap(spacing::sm())
+                            .p(spacing::lg())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("No active connections"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .text_center()
+                                    .child("Use the connect button or Cmd+K to connect"),
+                            )
                             .into_any_element()
                     } else {
                         // Extract theme colors before the processor closure to avoid

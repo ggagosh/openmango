@@ -204,15 +204,18 @@ impl SidebarModel {
     ) -> Vec<SidebarEntry> {
         let mut items = Vec::new();
         for conn in connections {
+            let active_conn = active.get(&conn.id);
+            if active_conn.is_none() {
+                continue; // Only show connected
+            }
+
             let conn_node_id = TreeNodeId::connection(conn.id);
             let conn_expanded = expanded.contains(&conn_node_id);
-            let active_conn = active.get(&conn.id);
-            let conn_is_folder = active_conn.is_some();
             items.push(SidebarEntry {
                 id: conn_node_id,
                 label: conn.name.clone(),
                 depth: 0,
-                is_folder: conn_is_folder,
+                is_folder: true,
                 is_expanded: conn_expanded,
             });
 
