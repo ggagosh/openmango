@@ -192,21 +192,16 @@ impl ConnectionManager {
                 Button::new("save-connection")
                     .compact()
                     .primary()
-                    .label(if is_active_selection { "Save & Reconnect" } else { "Save" })
+                    .label(if is_active_selection { "Save & Reconnect" } else { "Save & Connect" })
                     .on_click({
                         let view = view.clone();
                         let state = state.clone();
                         move |_, window, cx| {
-                            let mut reconnect_id = None;
+                            let mut saved_id = None;
                             view.update(cx, |this, cx| {
-                                let saved_id = this.save_connection(window, cx);
-                                if let Some(saved_id) = saved_id
-                                    && this.state.read(cx).is_connected(saved_id)
-                                {
-                                    reconnect_id = Some(saved_id);
-                                }
+                                saved_id = this.save_connection(window, cx);
                             });
-                            if let Some(connection_id) = reconnect_id {
+                            if let Some(connection_id) = saved_id {
                                 AppCommands::connect(state.clone(), connection_id, cx);
                             }
                         }

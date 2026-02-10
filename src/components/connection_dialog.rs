@@ -12,7 +12,7 @@ use crate::helpers::{
     redact_uri_password, validate_mongodb_uri,
 };
 use crate::models::SavedConnection;
-use crate::state::AppState;
+use crate::state::{AppCommands, AppState};
 use crate::theme::spacing;
 
 #[derive(Clone, Debug)]
@@ -273,6 +273,13 @@ impl Render for ConnectionDialog {
         let can_save = matches!(self.status, TestStatus::Success)
             && self.last_tested_uri.as_deref() == Some(uri_trimmed);
         let is_edit = self.existing.is_some();
+        let is_connected =
+            self.existing.as_ref().is_some_and(|e| self.state.read(cx).is_connected(e.id));
+        let save_label = if is_edit {
+            if is_connected { "Update & Reconnect" } else { "Update & Connect" }
+        } else {
+            "Save & Connect"
+        };
 
         let (status_text, status_color) = match &self.status {
             TestStatus::Idle => {
@@ -374,7 +381,7 @@ impl Render for ConnectionDialog {
                     .child(
                         Button::new("save-connection")
                             .primary()
-                            .label(if is_edit { "Update" } else { "Save" })
+                            .label(save_label)
                             .disabled(!can_save)
                             .on_click({
                                 let state = self.state.clone();
@@ -416,8 +423,10 @@ impl Render for ConnectionDialog {
                                         name_input.trim().to_string()
                                     };
 
+                                    let mut connection_id = None;
                                     state.update(cx, |state, cx| {
                                         if let Some(existing) = existing.clone() {
+                                            connection_id = Some(existing.id);
                                             let connection = SavedConnection {
                                                 id: existing.id,
                                                 name,
@@ -429,9 +438,13 @@ impl Render for ConnectionDialog {
                                         } else {
                                             let mut connection = SavedConnection::new(name, uri);
                                             connection.read_only = read_only;
+                                            connection_id = Some(connection.id);
                                             state.add_connection(connection, cx);
                                         }
                                     });
+                                    if let Some(id) = connection_id {
+                                        AppCommands::connect(state.clone(), id, cx);
+                                    }
                                     window.close_dialog(cx);
                                 }
                             }),

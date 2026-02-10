@@ -68,13 +68,21 @@ function formatPrintValue(value: unknown, kind: "print" | "printjson"): string {
     value && typeof value === "object" && "printable" in (value as any)
       ? (value as any).printable
       : value;
-  if (kind === "printjson") {
-    return EJSON.stringify(printable as any, { relaxed: true, indent: 2 });
+  try {
+    if (kind === "printjson") {
+      return EJSON.stringify(printable as any, { relaxed: true, indent: 2 });
+    }
+    if (typeof printable === "string") {
+      return printable;
+    }
+    return EJSON.stringify(printable as any, { relaxed: true });
+  } catch {
+    try {
+      return JSON.stringify(printable, null, kind === "printjson" ? 2 : undefined);
+    } catch {
+      return String(printable);
+    }
   }
-  if (typeof printable === "string") {
-    return printable;
-  }
-  return EJSON.stringify(printable as any, { relaxed: true });
 }
 
 function splitLines(text: string): string[] {

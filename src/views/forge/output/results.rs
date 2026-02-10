@@ -317,12 +317,16 @@ impl ForgeController {
         {
             view.state.output.last_result = None;
         }
-        if Self::has_results(view) {
+        // Only auto-switch for positive results (documents/text), not errors alone
+        let has_displayable_results =
+            !view.state.output.result_pages.is_empty() || view.state.output.last_result.is_some();
+        if has_displayable_results {
             if view.state.output.output_tab == ForgeOutputTab::Raw {
                 view.state.output.output_tab = ForgeOutputTab::Results;
             }
-        } else {
+        } else if !Self::has_results(view) {
             view.state.output.output_tab = ForgeOutputTab::Raw;
         }
+        // When only errors exist: leave tab where it is (don't force-switch either way)
     }
 }

@@ -65,7 +65,7 @@ fn render_error_banner(message: String, state: Entity<AppState>, cx: &App) -> An
                         .flex_1()
                         .min_w(px(0.0))
                         .text_sm()
-                        .text_color(cx.theme().danger_foreground)
+                        .text_color(cx.theme().foreground)
                         .truncate()
                         .child(preview),
                 ),

@@ -9,9 +9,9 @@
   "dependencies": {
     "@mongosh/browser-runtime-electron": "3.29.1",
     "@mongosh/service-provider-node-driver": "3.18.1",
-    "bson": "7.1.1"
+    "bson": "^6.10.4"
   },
   "devDependencies": {
-    "esbuild": "0.20.2"
+    "esbuild": "^0.27.3"
   }
 }
