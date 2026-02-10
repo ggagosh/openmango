@@ -42,7 +42,7 @@ BIN_DIR="$ROOT_DIR/resources/bin/$ARCH_SUFFIX"
 REQUIRE_BUNDLED_TOOLS="${REQUIRE_BUNDLED_TOOLS:-0}"
 missing_tools=()
 
-for tool in mongodump mongorestore node; do
+for tool in mongodump mongorestore mongosh-sidecar; do
     if [[ -f "$BIN_DIR/$tool" ]]; then
         cp "$BIN_DIR/$tool" "$APP_DIR/Contents/Resources/bin/$tool"
         chmod +x "$APP_DIR/Contents/Resources/bin/$tool"
@@ -62,7 +62,7 @@ else
     echo "Warning: missing bundled binaries for $ARCH_SUFFIX: ${missing_tools[*]}"
     echo "Expected location: $BIN_DIR"
     echo "BSON export/import may require system-installed tools"
-    echo "Forge shell may require a system Node runtime"
+    echo "Forge shell requires 'just build-sidecar'"
 fi
 
 # Copy third-party notices (required for bundled tools attribution)
@@ -123,10 +123,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     if [[ -f "$APP_DIR/Contents/Resources/bin/mongorestore" ]]; then
         codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongorestore"
     fi
-    if [[ -f "$APP_DIR/Contents/Resources/bin/node" ]]; then
-        codesign --force --options runtime --timestamp \
-            --entitlements "$ROOT_DIR/scripts/node.entitlements" \
-            --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/node"
+    if [[ -f "$APP_DIR/Contents/Resources/bin/mongosh-sidecar" ]]; then
+        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR/Contents/Resources/bin/mongosh-sidecar"
     fi
     # Sign the main app bundle
     codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"

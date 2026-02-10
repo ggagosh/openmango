@@ -60,14 +60,10 @@ precommit: ci test
 download-tools:
     ./scripts/download_tools.sh
 
-# Download Node.js runtime for Forge (mongosh sidecar)
-download-node:
-    ./scripts/download_node.sh
-
-# Build Forge mongosh sidecar bundle
+# Build Forge mongosh sidecar (compiled binary via Bun)
 build-sidecar:
     ./scripts/build_mongosh_sidecar.sh
 
-# Verify Forge mongosh sidecar bundle is up to date
+# Verify Forge mongosh sidecar source bundles cleanly
 check-sidecar:
     ./scripts/check_mongosh_sidecar.sh

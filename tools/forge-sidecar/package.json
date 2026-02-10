@@ -4,14 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild ./src/sidecar.ts --bundle --platform=node --format=cjs --target=node18 --external:*.node --external:os-dns-native --external:electron --external:kerberos --external:mongodb-client-encryption --external:ssh2 --external:cpu-features --external:pac-proxy-agent --external:@babel/preset-typescript/package.json --outfile=../../assets/forge/mongosh-sidecar.js"
+    "build:compile": "bun build ./src/bun-entry.ts --compile --outfile ../../resources/bin/mongosh-sidecar --external electron --external os-dns-native --external kerberos --external mongodb-client-encryption --external ssh2 --external cpu-features --external pac-proxy-agent --external @babel/preset-typescript/package.json"
   },
   "dependencies": {
     "@mongosh/browser-runtime-electron": "3.29.1",
     "@mongosh/service-provider-node-driver": "3.18.1",
-    "bson": "^6.10.4"
-  },
-  "devDependencies": {
-    "esbuild": "^0.27.3"
+    "bson": "^6.10.4",
+    "@types/bun": "^1.3.9"
   }
 }

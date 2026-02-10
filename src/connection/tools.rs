@@ -17,9 +17,9 @@ pub fn mongorestore_path() -> Option<PathBuf> {
     find_bundled_tool("mongorestore")
 }
 
-/// Find the path to a bundled tool or runtime.
-pub fn node_path() -> Option<PathBuf> {
-    find_bundled_tool("node")
+/// Find the path to the compiled mongosh sidecar binary.
+pub fn mongosh_sidecar_path() -> Option<PathBuf> {
+    find_bundled_tool("mongosh-sidecar")
 }
 
 fn find_bundled_tool(name: &str) -> Option<PathBuf> {

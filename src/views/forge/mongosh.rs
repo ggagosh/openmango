@@ -10,8 +10,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::assets::EmbeddedAssets;
-use crate::connection::tools::node_path;
+use crate::connection::tools::mongosh_sidecar_path;
 use crate::error::{Error, Result};
 
 const CREATE_SESSION_TIMEOUT: Duration = Duration::from_secs(45);
@@ -72,16 +71,12 @@ pub struct MongoshBridge {
 
 impl MongoshBridge {
     pub fn new() -> Result<Arc<Self>> {
-        let node = node_path().ok_or_else(|| {
-            Error::ToolNotFound(
-                "Node runtime not found. Run 'just download-node' or install Node.js.".into(),
-            )
+        let sidecar = mongosh_sidecar_path().ok_or_else(|| {
+            Error::ToolNotFound("mongosh-sidecar not found. Run 'just build-sidecar'.".into())
         })?;
 
-        let sidecar_path = write_sidecar_asset("forge/mongosh-sidecar.js")?;
-
-        let mut cmd = Command::new(node);
-        cmd.arg(sidecar_path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut cmd = Command::new(sidecar);
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn()?;
         let stdin = child
@@ -344,18 +339,4 @@ impl Drop for MongoshBridge {
             let _ = child.wait();
         }
     }
-}
-
-fn write_sidecar_asset(path: &str) -> Result<std::path::PathBuf> {
-    let data = EmbeddedAssets::get(path)
-        .ok_or_else(|| Error::Parse(format!("Missing embedded asset: {}", path)))?;
-
-    let mut target_dir = std::env::temp_dir();
-    target_dir.push("openmango");
-    std::fs::create_dir_all(&target_dir)?;
-
-    let target_path = target_dir.join("mongosh-sidecar.js");
-    std::fs::write(&target_path, data.data)?;
-
-    Ok(target_path)
 }
