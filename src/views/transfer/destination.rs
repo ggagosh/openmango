@@ -5,6 +5,7 @@ use gpui_component::button::Button as MenuButton;
 use gpui_component::input::{Input, Position, RopeExt};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::select::Select;
+use gpui_component::spinner::Spinner;
 use gpui_component::{IconName, Sizable as _, Size};
 
 use crate::components::Button;
@@ -53,7 +54,17 @@ fn render_export_destination(
 ) -> AnyElement {
     // All export formats use folder picker + editable input with placeholders
     let Some(ref export_path_input_state) = view.export_path_input_state else {
-        return panel("Destination", div().child("Loading..."), cx).into_any_element();
+        return panel(
+            "Destination",
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .child(Spinner::new().small())
+                .child("Loading..."),
+            cx,
+        )
+        .into_any_element();
     };
 
     // Sync input state with transfer state file_path (when changed externally)
@@ -361,7 +372,17 @@ fn render_copy_destination(
 ) -> AnyElement {
     // Searchable select for destination connection
     let Some(ref dest_conn_state) = view.dest_conn_state else {
-        return panel("Destination", div().child("Loading..."), cx).into_any_element();
+        return panel(
+            "Destination",
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .child(Spinner::new().small())
+                .child("Loading..."),
+            cx,
+        )
+        .into_any_element();
     };
 
     let conn_select =

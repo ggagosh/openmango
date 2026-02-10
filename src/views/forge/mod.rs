@@ -16,10 +16,12 @@ mod runtime;
 mod state;
 mod types;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
 use gpui_component::resizable::{resizable_panel, v_resizable};
+use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Icon, IconName, Sizable};
 
@@ -439,9 +441,18 @@ impl Render for ForgeView {
                             .children(show_output_button)
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(status_text),
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::xs())
+                                    .when(self.state.runtime.is_running, |el: Div| {
+                                        el.child(Spinner::new().xsmall())
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(status_text),
+                                    ),
                             )
                             .child(
                                 Button::new("forge-restart")

@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Sizable as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::spinner::Spinner;
 use mongodb::bson::Document;
 
 use crate::theme::{fonts, spacing};
@@ -145,15 +147,20 @@ impl ForgeView {
                 });
             });
             body = body.child(render_results_view(props, on_toggle, cx));
+        } else if self.state.runtime.is_running {
+            body = body.child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(spacing::sm())
+                    .child(Spinner::new().small())
+                    .child(
+                        div().text_sm().text_color(cx.theme().muted_foreground).child("Running..."),
+                    ),
+            );
         } else {
-            let (text, color) = if let Some(result) = &self.state.output.last_result {
-                (result.clone(), cx.theme().secondary_foreground)
-            } else if self.state.runtime.is_running {
-                ("Running...".to_string(), cx.theme().secondary_foreground)
-            } else {
-                ("No output yet.".to_string(), cx.theme().muted_foreground)
-            };
-
             body = body.child(
                 div()
                     .flex_1()
@@ -161,8 +168,16 @@ impl ForgeView {
                     .overflow_y_scrollbar()
                     .text_xs()
                     .font_family(fonts::mono())
-                    .text_color(color)
-                    .child(text),
+                    .text_color(if self.state.output.last_result.is_some() {
+                        cx.theme().secondary_foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(if let Some(result) = &self.state.output.last_result {
+                        result.clone()
+                    } else {
+                        "No output yet.".to_string()
+                    }),
             );
         }
 

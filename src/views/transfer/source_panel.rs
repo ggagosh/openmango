@@ -3,6 +3,7 @@
 use gpui::*;
 use gpui_component::Sizable as _;
 use gpui_component::select::Select;
+use gpui_component::spinner::Spinner;
 
 use crate::state::{TransferMode, TransferScope, TransferTabState};
 use crate::theme::spacing;
@@ -24,10 +25,30 @@ impl TransferView {
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
-            return panel("Source", div().child("Loading..."), cx).into_any_element();
+            return panel(
+                "Source",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(Spinner::new().small())
+                    .child("Loading..."),
+                cx,
+            )
+            .into_any_element();
         };
         let Some(ref source_db_state) = self.source_db_state else {
-            return panel("Source", div().child("Loading..."), cx).into_any_element();
+            return panel(
+                "Source",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(Spinner::new().small())
+                    .child("Loading..."),
+                cx,
+            )
+            .into_any_element();
         };
 
         let conn_select =
