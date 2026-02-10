@@ -144,7 +144,8 @@ impl ActionBar {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Revert to original theme if we were previewing
         if let Some(original) = self.original_theme.take() {
-            crate::theme::apply_theme(original, window, cx);
+            let vibrancy = self.state.read(cx).startup_vibrancy;
+            crate::theme::apply_theme(original, vibrancy, window, cx);
         }
         self.open = false;
         self.mode = PaletteMode::All;
@@ -276,7 +277,8 @@ impl ActionBar {
             && let Some(theme_id) = item.item.id.as_ref().strip_prefix("theme:")
             && let Some(theme) = AppTheme::from_theme_id(theme_id)
         {
-            crate::theme::apply_theme(theme, window, cx);
+            let vibrancy = self.state.read(cx).startup_vibrancy;
+            crate::theme::apply_theme(theme, vibrancy, window, cx);
         }
 
         cx.notify();

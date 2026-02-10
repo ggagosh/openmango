@@ -18,11 +18,13 @@ pub struct AppearanceSettings {
     pub theme: AppTheme,
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
+    #[serde(default)]
+    pub vibrancy: bool,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        Self { theme: AppTheme::default(), show_status_bar: true }
+        Self { theme: AppTheme::default(), show_status_bar: true, vibrancy: false }
     }
 }
 
@@ -191,6 +193,7 @@ mod tests {
         let settings = AppSettings::default();
         assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
         assert!(settings.appearance.show_status_bar);
+        assert!(!settings.appearance.vibrancy);
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
     }

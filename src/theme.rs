@@ -35,7 +35,12 @@ pub fn load_theme_config(theme_id: &str) -> Option<Rc<ThemeConfig>> {
     theme_set.themes.into_iter().next().map(Rc::new)
 }
 
-pub fn apply_theme(app_theme: AppTheme, window: &mut gpui::Window, cx: &mut gpui::App) {
+pub fn apply_theme(
+    app_theme: AppTheme,
+    vibrancy: bool,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
         gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
 
@@ -44,8 +49,19 @@ pub fn apply_theme(app_theme: AppTheme, window: &mut gpui::Window, cx: &mut gpui
         theme.font_family = fonts::ui().into();
         theme.mono_font_family = fonts::mono().into();
 
+        if vibrancy {
+            apply_vibrancy(cx);
+        }
+
         window.refresh();
     }
+}
+
+/// Reduce alpha on background/sidebar so the macOS blur effect shows through.
+pub fn apply_vibrancy(cx: &mut gpui::App) {
+    let theme = gpui_component::theme::Theme::global_mut(cx);
+    theme.background.a = 0.82;
+    theme.sidebar.a = 0.82;
 }
 
 // =============================================================================

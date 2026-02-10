@@ -88,6 +88,7 @@ impl Render for AppRoot {
         let status_message = state.status_message();
         let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
         let show_status_bar = state.settings.appearance.show_status_bar;
+        let vibrancy = state.startup_vibrancy;
         let update_status = state.update_status.clone();
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
@@ -126,6 +127,7 @@ impl Render for AppRoot {
             .flex_col()
             .size_full()
             .relative()
+            .when(vibrancy, |s| s.pt(px(28.0)))
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .font_family(crate::theme::fonts::ui())

@@ -33,12 +33,13 @@ fn main() {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
+        // Load saved settings
+        let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
+        let vibrancy = saved_settings.appearance.vibrancy;
+
         // Load the saved theme (or default)
         {
-            let saved_theme = ConfigManager::default()
-                .load_settings()
-                .map(|s| s.appearance.theme)
-                .unwrap_or_default();
+            let saved_theme = saved_settings.appearance.theme;
             if let Some(config) = theme::load_theme_config(saved_theme.theme_id()) {
                 gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
             }
@@ -49,6 +50,11 @@ fn main() {
             let theme = gpui_component::theme::Theme::global_mut(cx);
             theme.font_family = theme::fonts::ui().into();
             theme.mono_font_family = theme::fonts::mono().into();
+        }
+
+        // Apply vibrancy alpha overrides after theme is fully configured
+        if vibrancy {
+            theme::apply_vibrancy(cx);
         }
 
         let workspace = ConfigManager::default().load_workspace().unwrap_or_default();
@@ -62,8 +68,14 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
+                window_background: if vibrancy {
+                    WindowBackgroundAppearance::Blurred
+                } else {
+                    WindowBackgroundAppearance::Opaque
+                },
                 titlebar: Some(TitlebarOptions {
                     title: Some("OpenMango".into()),
+                    appears_transparent: vibrancy,
                     ..Default::default()
                 }),
                 ..Default::default()

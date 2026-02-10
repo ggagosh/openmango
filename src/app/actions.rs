@@ -259,7 +259,8 @@ impl AppRoot {
                     state.save_settings();
                     cx.notify();
                 });
-                crate::theme::apply_theme(theme, window, cx);
+                let vibrancy = state.read(cx).startup_vibrancy;
+                crate::theme::apply_theme(theme, vibrancy, window, cx);
             }
             return;
         }

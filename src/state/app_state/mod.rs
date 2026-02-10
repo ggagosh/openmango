@@ -59,6 +59,9 @@ pub struct AppState {
     pub connections: Vec<SavedConnection>,
     pub settings: AppSettings,
 
+    /// Vibrancy state from startup (window creation). Runtime changes require restart.
+    pub startup_vibrancy: bool,
+
     // Connection manager (injected for testability)
     connection_manager: Arc<ConnectionManager>,
 
@@ -117,9 +120,12 @@ impl AppState {
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
+        let startup_vibrancy = settings.appearance.vibrancy;
+
         Self {
             connections,
             settings,
+            startup_vibrancy,
             connection_manager,
             conn: ConnectionState::default(),
             tabs: TabState::default(),

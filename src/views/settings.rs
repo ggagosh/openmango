@@ -180,7 +180,8 @@ fn render_appearance_section(
                             state.save_settings();
                             cx.notify();
                         });
-                        crate::theme::apply_theme(t, window, cx);
+                        let vibrancy = s.read(cx).startup_vibrancy;
+                        crate::theme::apply_theme(t, vibrancy, window, cx);
                     }));
                 }
                 // Light themes section (when available)
@@ -197,7 +198,8 @@ fn render_appearance_section(
                                     state.save_settings();
                                     cx.notify();
                                 });
-                                crate::theme::apply_theme(t, window, cx);
+                                let vibrancy = s.read(cx).startup_vibrancy;
+                                crate::theme::apply_theme(t, vibrancy, window, cx);
                             },
                         ));
                     }
@@ -221,6 +223,30 @@ fn render_appearance_section(
         )
     };
 
+    // Vibrancy toggle
+    let vibrancy_checkbox = {
+        let state = state.clone();
+        let checked = settings.appearance.vibrancy;
+        gpui_component::checkbox::Checkbox::new("vibrancy").checked(checked).on_click(
+            move |_, window, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.appearance.vibrancy = !checked;
+                    state.save_settings();
+                    cx.notify();
+                });
+                crate::components::open_confirm_dialog(
+                    window,
+                    cx,
+                    "Restart required",
+                    "Vibrancy changes require a restart to take effect.",
+                    "Restart now",
+                    false,
+                    |_window, cx| cx.quit(),
+                );
+            },
+        )
+    };
+
     section(
         "Appearance",
         div()
@@ -232,6 +258,12 @@ fn render_appearance_section(
                 "Show status bar",
                 "Display the status bar at the bottom of the window",
                 status_bar_checkbox,
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Vibrancy",
+                "Blurred transparent window background (restart required)",
+                vibrancy_checkbox,
                 cx,
             )),
         cx,
