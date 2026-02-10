@@ -48,7 +48,8 @@ jobs:
         run: rm -f .cargo/config.toml
 
       - name: Build Forge mongosh sidecar
-        run: ./scripts/build_mongosh_sidecar.sh
+        run: ./scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
+
 
       - name: Download MongoDB Database Tools
         run: |
