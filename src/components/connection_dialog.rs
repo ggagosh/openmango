@@ -7,7 +7,10 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::switch::Switch;
 
 use crate::components::{Button, cancel_button};
-use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
+use crate::helpers::{
+    REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
+    redact_uri_password, validate_mongodb_uri,
+};
 use crate::models::SavedConnection;
 use crate::state::AppState;
 use crate::theme::spacing;
@@ -24,6 +27,7 @@ pub struct ConnectionDialog {
     state: Entity<AppState>,
     name_state: Entity<InputState>,
     uri_state: Entity<InputState>,
+    password_state: Entity<InputState>,
     read_only: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
@@ -64,15 +68,32 @@ impl ConnectionDialog {
                 .default_value("mongodb://localhost:27017")
         });
 
+        let password_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("password").masked(true));
+
         let mut subscriptions = vec![];
         subscriptions.push(cx.subscribe_in(
             &uri_state,
             window,
-            move |view, _state, event, _window, cx| {
+            move |view, _state, event, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.status = TestStatus::Idle;
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;
+
+                    let uri = view.uri_state.read(cx).value().to_string();
+                    if let Some(password) = extract_uri_password(&uri)
+                        && password != REDACTED_PASSWORD
+                    {
+                        view.password_state.update(cx, |state, cx| {
+                            state.set_value(password, window, cx);
+                        });
+                        let redacted = redact_uri_password(&uri);
+                        view.uri_state.update(cx, |state, cx| {
+                            state.set_value(redacted, window, cx);
+                        });
+                    }
+
                     cx.notify();
                 }
             },
@@ -82,6 +103,7 @@ impl ConnectionDialog {
             state,
             name_state,
             uri_state,
+            password_state,
             read_only: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
@@ -104,21 +126,46 @@ impl ConnectionDialog {
                 .default_value(existing.name.clone())
         });
 
+        let extracted_password = extract_uri_password(&existing.uri);
+        let redacted_default = redact_uri_password(&existing.uri);
+
         let uri_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("mongodb://localhost:27017")
-                .default_value(existing.uri.clone())
+                .default_value(redacted_default.clone())
+        });
+
+        let password_state = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("password").masked(true);
+            if let Some(ref pw) = extracted_password {
+                s = s.default_value(pw.clone());
+            }
+            s
         });
 
         let mut subscriptions = vec![];
         subscriptions.push(cx.subscribe_in(
             &uri_state,
             window,
-            move |view, _state, event, _window, cx| {
+            move |view, _state, event, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.status = TestStatus::Idle;
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;
+
+                    let uri = view.uri_state.read(cx).value().to_string();
+                    if let Some(password) = extract_uri_password(&uri)
+                        && password != REDACTED_PASSWORD
+                    {
+                        view.password_state.update(cx, |state, cx| {
+                            state.set_value(password, window, cx);
+                        });
+                        let redacted = redact_uri_password(&uri);
+                        view.uri_state.update(cx, |state, cx| {
+                            state.set_value(redacted, window, cx);
+                        });
+                    }
+
                     cx.notify();
                 }
             },
@@ -128,18 +175,34 @@ impl ConnectionDialog {
             state,
             name_state,
             uri_state,
+            password_state,
             read_only: existing.read_only,
             status: TestStatus::Success,
-            last_tested_uri: Some(existing.uri.clone()),
+            last_tested_uri: Some(redacted_default),
             pending_test_uri: None,
             existing: Some(existing),
             _subscriptions: subscriptions,
         }
     }
 
+    fn real_uri(&self, cx: &App) -> String {
+        let uri = self.uri_state.read(cx).value().to_string();
+        if let Some(existing_pw) = extract_uri_password(&uri)
+            && existing_pw == REDACTED_PASSWORD
+        {
+            let real_pw = self.password_state.read(cx).value().to_string();
+            let real_pw = real_pw.trim();
+            if !real_pw.is_empty() {
+                return inject_uri_password(&uri, Some(real_pw));
+            }
+        }
+        uri
+    }
+
     fn start_test(view: Entity<ConnectionDialog>, cx: &mut App) {
-        let uri = view.read(cx).uri_state.read(cx).value().to_string();
-        if let Err(err) = validate_mongodb_uri(&uri) {
+        let display_uri = view.read(cx).uri_state.read(cx).value().to_string();
+        let real_uri = view.read(cx).real_uri(cx);
+        if let Err(err) = validate_mongodb_uri(&real_uri) {
             view.update(cx, |this, cx| {
                 this.status = TestStatus::Error(err.to_string());
                 this.last_tested_uri = None;
@@ -153,15 +216,14 @@ impl ConnectionDialog {
 
         view.update(cx, |this, cx| {
             this.status = TestStatus::Testing;
-            this.pending_test_uri = Some(uri.clone());
+            this.pending_test_uri = Some(display_uri);
             this.last_tested_uri = None;
             cx.notify();
         });
 
         let task = cx.background_spawn({
-            let uri = uri.clone();
             async move {
-                let temp = SavedConnection::new("Test".to_string(), uri);
+                let temp = SavedConnection::new("Test".to_string(), real_uri);
                 manager.test_connection(&temp, std::time::Duration::from_secs(5))?;
                 Ok::<(), crate::error::Error>(())
             }
@@ -248,6 +310,14 @@ impl Render for ConnectionDialog {
             .child(
                 div()
                     .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Password"))
+                    .child(Input::new(&self.password_state).mask_toggle()),
+            )
+            .child(
+                div()
+                    .flex()
                     .items_center()
                     .gap(spacing::sm())
                     .child(
@@ -310,11 +380,30 @@ impl Render for ConnectionDialog {
                                 let state = self.state.clone();
                                 let name_state = self.name_state.clone();
                                 let uri_state = self.uri_state.clone();
+                                let password_state = self.password_state.clone();
                                 let read_only = self.read_only;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
-                                    let uri = uri_state.read(cx).value().to_string();
+                                    let display_uri = uri_state.read(cx).value().to_string();
+
+                                    // Inject real password if the URI has a redacted placeholder
+                                    let uri = if let Some(pw) = extract_uri_password(&display_uri) {
+                                        if pw == REDACTED_PASSWORD {
+                                            let real_pw =
+                                                password_state.read(cx).value().to_string();
+                                            let real_pw = real_pw.trim();
+                                            if !real_pw.is_empty() {
+                                                inject_uri_password(&display_uri, Some(real_pw))
+                                            } else {
+                                                display_uri
+                                            }
+                                        } else {
+                                            display_uri
+                                        }
+                                    } else {
+                                        display_uri
+                                    };
 
                                     if validate_mongodb_uri(&uri).is_err() {
                                         return;

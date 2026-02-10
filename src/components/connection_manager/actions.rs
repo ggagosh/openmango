@@ -9,7 +9,10 @@ use gpui_component::input::{Input, InputState, Position};
 use uuid::Uuid;
 
 use crate::components::{Button, cancel_button, open_confirm_dialog};
-use crate::helpers::{extract_host_from_uri, validate_mongodb_uri};
+use crate::helpers::{
+    REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
+    redact_uri_password, validate_mongodb_uri,
+};
 use crate::models::SavedConnection;
 use crate::state::AppState;
 use crate::theme::spacing;
@@ -76,6 +79,20 @@ impl ConnectionManager {
             self.selected_id = None;
             self.draft.reset(window, cx);
         }
+    }
+
+    pub(super) fn real_uri(&self, cx: &App) -> String {
+        let uri = self.draft.uri_state.read(cx).value().to_string();
+        if let Some(existing_pw) = extract_uri_password(&uri)
+            && existing_pw == REDACTED_PASSWORD
+        {
+            let real_pw = self.draft.password_state.read(cx).value().to_string();
+            let real_pw = real_pw.trim();
+            if !real_pw.is_empty() {
+                return inject_uri_password(&uri, Some(real_pw));
+            }
+        }
+        uri
     }
 
     pub(super) fn import_from_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -147,6 +164,12 @@ impl ConnectionManager {
                 self.draft.tls = parse_bool(parts.get_query("tls"));
                 self.draft.tls_insecure = parse_bool(parts.get_query("tlsInsecure"));
                 self.parse_error = None;
+
+                let redacted = redact_uri_password(&uri);
+                self.draft.uri_state.update(cx, |state, cx| {
+                    state.set_value(redacted, window, cx);
+                    state.set_cursor_position(Position::new(0, 0), window, cx);
+                });
             }
             Err(err) => {
                 self.parse_error = Some(err);
@@ -208,7 +231,7 @@ impl ConnectionManager {
         parts.set_query("tls", bool_to_query(self.draft.tls));
         parts.set_query("tlsInsecure", bool_to_query(self.draft.tls_insecure));
 
-        let updated = parts.to_uri();
+        let updated = redact_uri_password(&parts.to_uri());
         self.draft.uri_state.update(cx, |state, cx| {
             state.set_value(updated, window, cx);
             state.set_cursor_position(Position::new(0, 0), window, cx);
@@ -218,8 +241,9 @@ impl ConnectionManager {
     }
 
     pub(super) fn start_test(view: Entity<ConnectionManager>, cx: &mut App) {
-        let uri = view.read(cx).draft.uri_state.read(cx).value().to_string();
-        if let Err(err) = validate_mongodb_uri(&uri) {
+        let display_uri = view.read(cx).draft.uri_state.read(cx).value().to_string();
+        let real_uri = view.read(cx).real_uri(cx);
+        if let Err(err) = validate_mongodb_uri(&real_uri) {
             view.update(cx, |this, cx| {
                 this.status = TestStatus::Error(err.to_string());
                 this.last_tested_uri = None;
@@ -233,15 +257,14 @@ impl ConnectionManager {
 
         view.update(cx, |this, cx| {
             this.status = TestStatus::Testing;
-            this.pending_test_uri = Some(uri.clone());
+            this.pending_test_uri = Some(display_uri.clone());
             this.last_tested_uri = None;
             cx.notify();
         });
 
         let task = cx.background_spawn({
-            let uri = uri.clone();
             async move {
-                let temp = SavedConnection::new("Test".to_string(), uri);
+                let temp = SavedConnection::new("Test".to_string(), real_uri);
                 manager.test_connection(&temp, std::time::Duration::from_secs(5))?;
                 Ok::<(), crate::error::Error>(())
             }
@@ -290,7 +313,7 @@ impl ConnectionManager {
         if !self.update_uri_from_fields(window, cx) {
             return None;
         }
-        let uri = self.draft.uri_state.read(cx).value().to_string();
+        let uri = self.real_uri(cx);
         if validate_mongodb_uri(&uri).is_err() {
             self.parse_error = Some("Invalid MongoDB URI".to_string());
             return None;

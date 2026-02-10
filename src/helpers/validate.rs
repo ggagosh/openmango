@@ -1,5 +1,50 @@
 // Validation helpers
 
+pub const REDACTED_PASSWORD: &str = "*****";
+
+/// Redact the password in a MongoDB URI.
+/// e.g. "mongodb://user:secret@host" → "mongodb://user:*****@host"
+pub fn redact_uri_password(uri: &str) -> String {
+    let uri = uri.trim();
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return uri.to_string();
+    };
+    let Some((userinfo, after_at)) = rest.rsplit_once('@') else {
+        return uri.to_string();
+    };
+    let Some((user, _password)) = userinfo.split_once(':') else {
+        return uri.to_string();
+    };
+    format!("{scheme}://{user}:{REDACTED_PASSWORD}@{after_at}")
+}
+
+/// Replace the redacted password in a URI with the real password.
+pub fn inject_uri_password(uri: &str, password: Option<&str>) -> String {
+    let Some(password) = password else {
+        return uri.to_string();
+    };
+    let uri = uri.trim();
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return uri.to_string();
+    };
+    let Some((userinfo, after_at)) = rest.rsplit_once('@') else {
+        return uri.to_string();
+    };
+    let Some((user, _old_password)) = userinfo.split_once(':') else {
+        return uri.to_string();
+    };
+    format!("{scheme}://{user}:{password}@{after_at}")
+}
+
+/// Extract the password from a MongoDB URI, if present.
+pub fn extract_uri_password(uri: &str) -> Option<String> {
+    let uri = uri.trim();
+    let (_, rest) = uri.split_once("://")?;
+    let (userinfo, _) = rest.rsplit_once('@')?;
+    let (_, password) = userinfo.split_once(':')?;
+    if password.is_empty() { None } else { Some(password.to_string()) }
+}
+
 /// Validate a MongoDB connection URI
 pub fn validate_mongodb_uri(uri: &str) -> Result<(), String> {
     let uri = uri.trim();
@@ -87,5 +132,71 @@ mod tests {
         );
         assert_eq!(extract_host_from_uri(""), None);
         assert_eq!(extract_host_from_uri("invalid"), None);
+    }
+
+    #[test]
+    fn test_redact_uri_password() {
+        assert_eq!(
+            redact_uri_password("mongodb://user:secret@localhost:27017"),
+            "mongodb://user:*****@localhost:27017"
+        );
+        assert_eq!(
+            redact_uri_password(
+                "mongodb+srv://admin:p%40ss@cluster0.abc.mongodb.net/db?retryWrites=true"
+            ),
+            "mongodb+srv://admin:*****@cluster0.abc.mongodb.net/db?retryWrites=true"
+        );
+        // No credentials
+        assert_eq!(redact_uri_password("mongodb://localhost:27017"), "mongodb://localhost:27017");
+        // Username only, no password
+        assert_eq!(
+            redact_uri_password("mongodb://user@localhost:27017"),
+            "mongodb://user@localhost:27017"
+        );
+        // Already redacted
+        assert_eq!(
+            redact_uri_password("mongodb://user:*****@localhost:27017"),
+            "mongodb://user:*****@localhost:27017"
+        );
+    }
+
+    #[test]
+    fn test_inject_uri_password() {
+        assert_eq!(
+            inject_uri_password("mongodb://user:*****@localhost:27017", Some("secret")),
+            "mongodb://user:secret@localhost:27017"
+        );
+        assert_eq!(
+            inject_uri_password(
+                "mongodb+srv://admin:*****@cluster0.abc.mongodb.net/db?retryWrites=true",
+                Some("p%40ss")
+            ),
+            "mongodb+srv://admin:p%40ss@cluster0.abc.mongodb.net/db?retryWrites=true"
+        );
+        // None password returns unchanged
+        assert_eq!(
+            inject_uri_password("mongodb://user:*****@localhost:27017", None),
+            "mongodb://user:*****@localhost:27017"
+        );
+        // No credentials in URI
+        assert_eq!(
+            inject_uri_password("mongodb://localhost:27017", Some("secret")),
+            "mongodb://localhost:27017"
+        );
+    }
+
+    #[test]
+    fn test_extract_uri_password() {
+        assert_eq!(
+            extract_uri_password("mongodb://user:secret@localhost:27017"),
+            Some("secret".into())
+        );
+        assert_eq!(
+            extract_uri_password("mongodb://user:*****@localhost:27017"),
+            Some("*****".into())
+        );
+        assert_eq!(extract_uri_password("mongodb://localhost:27017"), None);
+        assert_eq!(extract_uri_password("mongodb://user@localhost:27017"), None);
+        assert_eq!(extract_uri_password("invalid"), None);
     }
 }

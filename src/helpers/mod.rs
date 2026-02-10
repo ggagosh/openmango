@@ -2,4 +2,7 @@ pub mod format;
 pub mod validate;
 
 pub use format::{format_bytes, format_number};
-pub use validate::{extract_host_from_uri, validate_mongodb_uri};
+pub use validate::{
+    REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
+    redact_uri_password, validate_mongodb_uri,
+};
