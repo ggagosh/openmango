@@ -23,7 +23,7 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-./node_modules/.bin/esbuild "$SRC" --bundle --platform=node --format=cjs --target=node18 --external:*.node --external:electron --external:kerberos --external:mongodb-client-encryption --external:ssh2 --external:cpu-features --external:pac-proxy-agent --external:@babel/preset-typescript/package.json --outfile="$TMP_OUT" >/dev/null
+./node_modules/.bin/esbuild "$SRC" --bundle --platform=node --format=cjs --target=node18 --external:*.node --external:os-dns-native --external:electron --external:kerberos --external:mongodb-client-encryption --external:ssh2 --external:cpu-features --external:pac-proxy-agent --external:@babel/preset-typescript/package.json --outfile="$TMP_OUT" >/dev/null
 
 if ! cmp -s "$TMP_OUT" "$OUT"; then
   echo "Forge sidecar bundle is out of date. Run: ./scripts/build_mongosh_sidecar.sh" >&2
