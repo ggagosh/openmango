@@ -10,6 +10,7 @@ use gpui_component::Root;
 mod app;
 mod assets;
 mod bson;
+mod changelog;
 mod components;
 mod connection;
 mod error;

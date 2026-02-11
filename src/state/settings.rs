@@ -9,6 +9,12 @@ use super::app_state::{InsertMode, TransferFormat};
 pub struct AppSettings {
     pub appearance: AppearanceSettings,
     pub transfer: TransferSettings,
+    #[serde(default = "default_current_version")]
+    pub last_seen_version: String,
+}
+
+fn default_current_version() -> String {
+    env!("OPENMANGO_GIT_SHA").to_string()
 }
 
 /// Appearance settings

@@ -57,6 +57,29 @@ impl AppRoot {
         // Check for updates in background on startup
         AppCommands::check_for_updates(state.clone(), cx);
 
+        // Show "What's New" dialog if build changed since last launch
+        {
+            let current_sha = env!("OPENMANGO_GIT_SHA");
+            let last_seen = &state.read(cx).settings.last_seen_version;
+            // Skip if SHA matches, or if last_seen is a legacy semver value
+            // (pre-SHA migration) — treat those as "already seen"
+            let is_legacy_version = last_seen.contains('.');
+            let force_changelog = std::env::var("OPENMANGO_SHOW_CHANGELOG").is_ok();
+            let should_show = force_changelog || (!is_legacy_version && last_seen != current_sha);
+            if !force_changelog && is_legacy_version {
+                // Migrate legacy semver value to current SHA silently
+                state.update(cx, |state, _cx| {
+                    state.settings.last_seen_version = current_sha.to_string();
+                    state.save_settings();
+                });
+            } else if should_show {
+                let state_clone = state.clone();
+                window.defer(cx, move |window, cx| {
+                    crate::changelog::show_whats_new_dialog(state_clone, window, cx);
+                });
+            }
+        }
+
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
         let mut subscriptions = Vec::new();
 
