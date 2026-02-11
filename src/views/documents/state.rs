@@ -308,10 +308,8 @@ impl CollectionView {
             let state_ref = state.read(cx);
             let session = state_ref.current_session_key();
             if let Some(session_key) = session.clone() {
-                let should_load = state_ref
-                    .session_data(&session_key)
-                    .map(|data| data.items.is_empty())
-                    .unwrap_or(true);
+                let should_load =
+                    state_ref.session_data(&session_key).map(|data| !data.loaded).unwrap_or(true);
                 if should_load {
                     AppCommands::load_documents_for_session(state.clone(), session_key, cx);
                 }
@@ -329,13 +327,12 @@ impl CollectionView {
                 let should_load = next_session
                     .as_ref()
                     .map(|session| {
-                        state_ref
-                            .session_data(session)
-                            .map(|data| data.items.is_empty())
-                            .unwrap_or(true)
+                        state_ref.session_data(session).map(|data| !data.loaded).unwrap_or(true)
                     })
                     .unwrap_or(false);
-                if this.view_model.set_current_session(next_session.clone(), &state, cx) {
+                let session_changed =
+                    this.view_model.set_current_session(next_session.clone(), &state, cx);
+                if session_changed || should_load {
                     if let Some(session) = next_session.clone() {
                         if should_load {
                             AppCommands::load_documents_for_session(state.clone(), session, cx);
@@ -343,7 +340,9 @@ impl CollectionView {
                             this.view_model.rebuild_tree(&state, cx);
                         }
                     }
-                    this.update_search_results(cx);
+                    if session_changed {
+                        this.update_search_results(cx);
+                    }
                     cx.notify();
                 }
                 // Ensure subview-specific data is loaded (indexes/stats)

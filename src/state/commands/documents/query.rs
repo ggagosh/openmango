@@ -107,6 +107,7 @@ impl AppCommands {
                                 .collect();
                             session.data.items = items;
                             session.data.total = total;
+                            session.data.loaded = true;
                             session.data.is_loading = false;
 
                             if let Some(selected) = session.view.selected_doc.clone()

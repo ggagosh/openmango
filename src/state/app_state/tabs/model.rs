@@ -74,10 +74,7 @@ impl AppState {
     }
 
     pub(super) fn ensure_session_loaded(&mut self, key: SessionKey) {
-        let session = self.ensure_session(key);
-        if session.data.items.is_empty() {
-            session.data.is_loading = true;
-        }
+        self.ensure_session(key);
     }
 
     pub(in crate::state::app_state) fn open_collection_with_mode(
