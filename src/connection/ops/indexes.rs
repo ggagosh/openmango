@@ -48,6 +48,25 @@ impl ConnectionManager {
         })
     }
 
+    /// Create multiple indexes in a single command (runs in Tokio runtime)
+    pub fn create_indexes(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        indexes: Vec<Document>,
+    ) -> Result<()> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let db = client.database(&database);
+            db.run_command(doc! { "createIndexes": collection, "indexes": indexes }).await?;
+            Ok(())
+        })
+    }
+
     /// Drop an index by name in a collection (runs in Tokio runtime)
     pub fn drop_index(
         &self,

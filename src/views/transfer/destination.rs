@@ -364,7 +364,7 @@ fn render_import_destination(
     .into_any_element()
 }
 
-/// Render copy destination panel with connection selector.
+/// Render copy destination panel with connection, database, and collection selectors.
 fn render_copy_destination(
     view: &TransferView,
     transfer_state: &TransferTabState,
@@ -388,19 +388,49 @@ fn render_copy_destination(
     let conn_select =
         Select::new(dest_conn_state).small().w_full().placeholder("Select connection...");
 
-    let target_db = if transfer_state.config.destination_database.is_empty() {
-        &transfer_state.config.source_database
-    } else {
-        &transfer_state.config.destination_database
-    };
-
-    let target_coll = if transfer_state.config.destination_collection.is_empty() {
-        &transfer_state.config.source_collection
-    } else {
-        &transfer_state.config.destination_collection
-    };
-
+    let has_dest_conn = transfer_state.config.destination_connection_id.is_some();
+    let has_dest_db = !transfer_state.config.destination_database.is_empty();
     let show_coll = matches!(transfer_state.config.scope, TransferScope::Collection);
+
+    // Database selector (enabled when connection is selected)
+    let db_row: AnyElement = if let Some(ref dest_db_state) = view.dest_db_state {
+        let db_select = Select::new(dest_db_state)
+            .small()
+            .w_full()
+            .placeholder(if has_dest_conn {
+                "Select database..."
+            } else {
+                "Select connection first"
+            })
+            .disabled(!has_dest_conn);
+        form_row("Database", db_select, cx).into_any_element()
+    } else {
+        form_row_static("Database", &transfer_state.config.destination_database, cx)
+            .into_any_element()
+    };
+
+    // Collection selector (enabled when database is selected, only for collection scope)
+    let coll_row: Option<AnyElement> = if show_coll {
+        if let Some(ref dest_coll_state) = view.dest_coll_state {
+            let coll_select = Select::new(dest_coll_state)
+                .small()
+                .w_full()
+                .placeholder(if has_dest_db {
+                    "Select collection..."
+                } else {
+                    "Select database first"
+                })
+                .disabled(!has_dest_db);
+            Some(form_row("Collection", coll_select, cx).into_any_element())
+        } else {
+            Some(
+                form_row_static("Collection", &transfer_state.config.destination_collection, cx)
+                    .into_any_element(),
+            )
+        }
+    } else {
+        None
+    };
 
     panel(
         "Destination",
@@ -409,8 +439,8 @@ fn render_copy_destination(
             .flex_col()
             .gap(spacing::md())
             .child(form_row("Connection", conn_select, cx))
-            .child(form_row_static("Database", target_db, cx))
-            .children(show_coll.then(|| form_row_static("Collection", target_coll, cx))),
+            .child(db_row)
+            .children(coll_row),
         cx,
     )
     .into_any_element()

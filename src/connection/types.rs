@@ -164,13 +164,15 @@ pub struct ExportQueryOptions {
 pub struct CopyOptions {
     pub batch_size: usize,
     pub copy_indexes: bool,
+    pub insert_mode: InsertMode,
+    pub ordered: bool,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }
 
 impl CopyOptions {
     pub fn new(batch_size: usize, copy_indexes: bool) -> Self {
-        Self { batch_size, copy_indexes, progress: None, cancellation: None }
+        Self { batch_size, copy_indexes, ..Default::default() }
     }
 }
 
@@ -179,6 +181,8 @@ impl std::fmt::Debug for CopyOptions {
         f.debug_struct("CopyOptions")
             .field("batch_size", &self.batch_size)
             .field("copy_indexes", &self.copy_indexes)
+            .field("insert_mode", &self.insert_mode)
+            .field("ordered", &self.ordered)
             .field("progress", &self.progress.is_some())
             .field("cancellation", &self.cancellation.is_some())
             .finish()

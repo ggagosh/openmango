@@ -7,6 +7,7 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
+use crate::connection::InsertMode;
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferScope};
 
@@ -68,6 +69,12 @@ impl AppCommands {
         };
         let scope = config.scope;
         let batch_size = config.batch_size as usize;
+        let insert_mode = match config.insert_mode {
+            crate::state::InsertMode::Insert => InsertMode::Insert,
+            crate::state::InsertMode::Upsert => InsertMode::Upsert,
+            crate::state::InsertMode::Replace => InsertMode::Replace,
+        };
+        let stop_on_error = config.stop_on_error;
         let drop_before = config.drop_before_import;
         let clear_before = config.clear_before_import;
         let copy_indexes = config.copy_indexes;
@@ -99,6 +106,8 @@ impl AppCommands {
                     dest_collection,
                     batch_size,
                     copy_indexes,
+                    insert_mode,
+                    stop_on_error,
                     drop_before,
                     clear_before,
                     cx,
@@ -115,6 +124,8 @@ impl AppCommands {
                     dest_database,
                     batch_size,
                     copy_indexes,
+                    insert_mode,
+                    stop_on_error,
                     exclude_collections,
                     cx,
                 );
@@ -134,6 +145,8 @@ impl AppCommands {
         dest_database: String,
         batch_size: usize,
         copy_indexes: bool,
+        insert_mode: InsertMode,
+        stop_on_error: bool,
         exclude_collections: Vec<String>,
         cx: &mut App,
     ) {
@@ -236,6 +249,8 @@ impl AppCommands {
                                         let copy_options = crate::connection::CopyOptions {
                                             batch_size,
                                             copy_indexes,
+                                            insert_mode,
+                                            ordered: stop_on_error,
                                             progress: Some(progress_callback),
                                             cancellation: None,
                                         };
@@ -417,6 +432,8 @@ impl AppCommands {
         dest_collection: String,
         batch_size: usize,
         copy_indexes: bool,
+        insert_mode: InsertMode,
+        stop_on_error: bool,
         drop_before: bool,
         clear_before: bool,
         cx: &mut App,
@@ -454,6 +471,8 @@ impl AppCommands {
                 let copy_options = CopyOptions {
                     batch_size,
                     copy_indexes,
+                    insert_mode,
+                    ordered: stop_on_error,
                     progress: Some(progress_callback),
                     cancellation: None,
                 };

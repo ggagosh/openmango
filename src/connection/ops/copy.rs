@@ -45,8 +45,8 @@ impl ConnectionManager {
         dest_collection: &str,
         options: CopyOptions,
     ) -> Result<u64> {
+        use crate::connection::ops::import::import_batch_by_mode;
         use futures::TryStreamExt;
-        use mongodb::options::InsertManyOptions;
 
         let src_client = src_client.clone();
         let dest_client = dest_client.clone();
@@ -55,6 +55,8 @@ impl ConnectionManager {
         let dest_database = dest_database.to_string();
         let dest_collection = dest_collection.to_string();
         let batch_size = options.batch_size;
+        let insert_mode = options.insert_mode;
+        let ordered = options.ordered;
         let progress = options.progress.clone();
         let cancellation = options.cancellation.clone();
 
@@ -68,8 +70,6 @@ impl ConnectionManager {
             let mut batch: Vec<Document> = Vec::with_capacity(batch_size);
             let mut copied = 0u64;
 
-            let insert_options = InsertManyOptions::builder().ordered(false).build();
-
             while let Some(doc) = cursor.try_next().await? {
                 // Check cancellation
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
@@ -79,8 +79,7 @@ impl ConnectionManager {
                 batch.push(doc);
                 if batch.len() >= batch_size {
                     let docs = std::mem::take(&mut batch);
-                    copied += docs.len() as u64;
-                    dest_coll.insert_many(docs).with_options(insert_options.clone()).await?;
+                    copied += import_batch_by_mode(&dest_coll, &docs, insert_mode, ordered).await?;
 
                     // Report progress
                     if let Some(ref progress_fn) = progress {
@@ -91,8 +90,7 @@ impl ConnectionManager {
 
             // Flush remaining
             if !batch.is_empty() {
-                copied += batch.len() as u64;
-                dest_coll.insert_many(batch).with_options(insert_options).await?;
+                copied += import_batch_by_mode(&dest_coll, &batch, insert_mode, ordered).await?;
 
                 // Report final progress
                 if let Some(ref progress_fn) = progress {
@@ -106,6 +104,8 @@ impl ConnectionManager {
         // Copy indexes if requested (after documents are copied)
         if options.copy_indexes {
             let indexes = self.list_indexes(&src_client, &src_database, &src_collection)?;
+            let mut index_docs: Vec<Document> = Vec::new();
+
             for index in indexes {
                 // Skip _id_ index (auto-created)
                 let name = index
@@ -138,12 +138,15 @@ impl ConnectionManager {
                     }
                 }
 
-                // Non-fatal: log warning if index creation fails
-                if let Err(e) =
-                    self.create_index(&dest_client, &dest_database, &dest_collection, index_doc)
-                {
-                    log::warn!("Failed to copy index '{}': {}", name, e);
-                }
+                index_docs.push(index_doc);
+            }
+
+            // Create all indexes in a single command
+            if !index_docs.is_empty()
+                && let Err(e) =
+                    self.create_indexes(&dest_client, &dest_database, &dest_collection, index_docs)
+            {
+                log::warn!("Failed to copy indexes: {}", e);
             }
         }
 

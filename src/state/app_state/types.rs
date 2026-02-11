@@ -454,11 +454,9 @@ pub struct TransferPreview {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TransferTabState {
     /// Core configuration (mode, scope, source/destination)
-    #[serde(flatten)]
     pub config: TransferConfig,
 
     /// Mode-specific options
-    #[serde(flatten)]
     pub options: TransferOptions,
 
     /// Runtime execution state (not serialized)

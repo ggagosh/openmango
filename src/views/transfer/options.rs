@@ -499,7 +499,112 @@ pub(super) fn render_copy_options(
     exclude_coll_state: Option<&Entity<SelectState<SearchableVec<SharedString>>>>,
     cx: &App,
 ) {
-    // Copy Options - only show implemented options (copy_indexes, batch_size)
+    // Insert mode dropdown
+    let insert_mode_dropdown = {
+        let state = state.clone();
+        MenuButton::new(("copy-insert-mode", key))
+            .compact()
+            .label(transfer_state.options.insert_mode.label())
+            .dropdown_caret(true)
+            .rounded(borders::radius_sm())
+            .with_size(gpui_component::Size::XSmall)
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                let s1 = state.clone();
+                let s2 = state.clone();
+                let s3 = state.clone();
+                menu.item(PopupMenuItem::new("Insert").on_click(move |_, _, cx| {
+                    s1.update(cx, |state, cx| {
+                        if let Some(id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(id)
+                        {
+                            tab.options.insert_mode = InsertMode::Insert;
+                            cx.notify();
+                        }
+                    });
+                }))
+                .item(PopupMenuItem::new("Upsert").on_click(move |_, _, cx| {
+                    s2.update(cx, |state, cx| {
+                        if let Some(id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(id)
+                        {
+                            tab.options.insert_mode = InsertMode::Upsert;
+                            cx.notify();
+                        }
+                    });
+                }))
+                .item(PopupMenuItem::new("Replace").on_click(move |_, _, cx| {
+                    s3.update(cx, |state, cx| {
+                        if let Some(id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(id)
+                        {
+                            tab.options.insert_mode = InsertMode::Replace;
+                            cx.notify();
+                        }
+                    });
+                }))
+            })
+    };
+
+    let drop_checkbox = {
+        let state = state.clone();
+        let checked = transfer_state.options.drop_before_import;
+        checkbox_field(
+            ("copy-drop-before", key),
+            checked,
+            move |cx| {
+                state.update(cx, |state, cx| {
+                    if let Some(id) = state.active_transfer_tab_id()
+                        && let Some(tab) = state.transfer_tab_mut(id)
+                    {
+                        tab.options.drop_before_import = !checked;
+                        cx.notify();
+                    }
+                });
+            },
+            cx,
+        )
+    };
+
+    let clear_checkbox = {
+        let state = state.clone();
+        let checked = transfer_state.options.clear_before_import;
+        checkbox_field(
+            ("copy-clear-before", key),
+            checked,
+            move |cx| {
+                state.update(cx, |state, cx| {
+                    if let Some(id) = state.active_transfer_tab_id()
+                        && let Some(tab) = state.transfer_tab_mut(id)
+                    {
+                        tab.options.clear_before_import = !checked;
+                        cx.notify();
+                    }
+                });
+            },
+            cx,
+        )
+    };
+
+    let stop_checkbox = {
+        let state = state.clone();
+        let checked = transfer_state.options.stop_on_error;
+        checkbox_field(
+            ("copy-stop-on-error", key),
+            checked,
+            move |cx| {
+                state.update(cx, |state, cx| {
+                    if let Some(id) = state.active_transfer_tab_id()
+                        && let Some(tab) = state.transfer_tab_mut(id)
+                    {
+                        tab.options.stop_on_error = !checked;
+                        cx.notify();
+                    }
+                });
+            },
+            cx,
+        )
+    };
+
     let copy_indexes_checkbox = {
         let state = state.clone();
         let checked = transfer_state.options.copy_indexes;
@@ -524,12 +629,16 @@ pub(super) fn render_copy_options(
         option_section(
             "Copy Options",
             vec![
-                option_field("Copy indexes", copy_indexes_checkbox.into_any_element(), cx),
+                option_field("Insert mode", insert_mode_dropdown.into_any_element(), cx),
                 option_field_static(
                     "Batch size",
                     transfer_state.options.batch_size.to_string(),
                     cx,
                 ),
+                option_field("Drop before copy", drop_checkbox.into_any_element(), cx),
+                option_field("Clear before copy", clear_checkbox.into_any_element(), cx),
+                option_field("Stop on error", stop_checkbox.into_any_element(), cx),
+                option_field("Copy indexes", copy_indexes_checkbox.into_any_element(), cx),
             ],
             cx,
         )

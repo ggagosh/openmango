@@ -54,6 +54,12 @@ impl TransferView {
         let dest_conn_state = cx.new(|cx| {
             SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
         });
+        let dest_db_state = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
+        });
+        let dest_coll_state = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
+        });
 
         // Create exclude collections select state (searchable multi-select behavior)
         let exclude_coll_state = cx.new(|cx| {
@@ -166,13 +172,86 @@ impl TransferView {
         let sub4 = cx.subscribe_in(
             &dest_conn_state,
             window,
-            move |_view, _select_state, event, _window, cx| {
+            move |view, _select_state, event, window, cx| {
                 if let SelectEvent::Confirm(Some(conn_id)) = event {
                     state_clone.update(cx, |state, cx| {
                         if let Some(tab_id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
                             tab.config.destination_connection_id = Some(*conn_id);
+                            tab.config.destination_database.clear();
+                            tab.config.destination_collection.clear();
+                            cx.notify();
+                        }
+                    });
+                    // Clear dependent selects
+                    if let Some(ref db_state) = view.dest_db_state {
+                        db_state.update(cx, |s, cx| {
+                            s.set_selected_index(None, window, cx);
+                        });
+                    }
+                    if let Some(ref coll_state) = view.dest_coll_state {
+                        coll_state.update(cx, |s, cx| {
+                            s.set_selected_index(None, window, cx);
+                        });
+                    }
+                }
+            },
+        );
+
+        let state_clone = state.clone();
+        let sub_dest_db = cx.subscribe_in(
+            &dest_db_state,
+            window,
+            move |view,
+                  _select_state,
+                  event: &SelectEvent<SearchableVec<SharedString>>,
+                  window,
+                  cx| {
+                if let SelectEvent::Confirm(Some(db_name)) = event {
+                    let db_str = db_name.to_string();
+                    let conn_id = state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            tab.config.destination_database = db_str.clone();
+                            tab.config.destination_collection.clear();
+                            cx.notify();
+                            return tab.config.destination_connection_id;
+                        }
+                        None
+                    });
+                    // Clear collection select
+                    if let Some(ref coll_state) = view.dest_coll_state {
+                        coll_state.update(cx, |s, cx| {
+                            s.set_selected_index(None, window, cx);
+                        });
+                    }
+                    // Load collections for the selected database
+                    if let Some(conn_id) = conn_id {
+                        AppCommands::load_collections(state_clone.clone(), conn_id, db_str, cx);
+                    }
+                    cx.notify();
+                }
+            },
+        );
+
+        let state_clone = state.clone();
+        let sub_dest_coll = cx.subscribe_in(
+            &dest_coll_state,
+            window,
+            move |_view,
+                  _select_state,
+                  event: &SelectEvent<SearchableVec<SharedString>>,
+                  _window,
+                  cx| {
+                if let SelectEvent::Confirm(Some(coll_name)) = event {
+                    let coll_str = coll_name.to_string();
+                    state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            tab.config.destination_collection = coll_str;
                             cx.notify();
                         }
                     });
@@ -248,11 +327,14 @@ impl TransferView {
             },
         );
 
-        self._select_subscriptions = vec![sub1, sub2, sub3, sub4, sub5, sub6];
+        self._select_subscriptions =
+            vec![sub1, sub2, sub3, sub4, sub_dest_db, sub_dest_coll, sub5, sub6];
         self.source_conn_state = Some(source_conn_state);
         self.source_db_state = Some(source_db_state);
         self.source_coll_state = Some(source_coll_state);
         self.dest_conn_state = Some(dest_conn_state);
+        self.dest_db_state = Some(dest_db_state);
+        self.dest_coll_state = Some(dest_coll_state);
         self.exclude_coll_state = Some(exclude_coll_state);
         self.export_path_input_state = Some(export_path_input_state);
     }

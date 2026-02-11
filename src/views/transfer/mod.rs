@@ -17,6 +17,7 @@ use gpui_component::input::InputState;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, SelectState};
+use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
@@ -44,6 +45,8 @@ pub struct TransferView {
     source_db_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
     source_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
     dest_conn_state: Option<Entity<SelectState<SearchableVec<ConnectionItem>>>>,
+    dest_db_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    dest_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
 
     // Exclude collections multi-select state
     exclude_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
@@ -55,6 +58,8 @@ pub struct TransferView {
     prev_conn_ids: Vec<Uuid>,
     prev_db_names: Vec<String>,
     prev_coll_names: Vec<String>,
+    prev_dest_db_names: Vec<String>,
+    prev_dest_coll_names: Vec<String>,
 
     // JSON editor modal state
     query_edit_modal: Option<QueryEditField>, // Which field is being edited (None = closed)
@@ -74,11 +79,15 @@ impl TransferView {
             source_db_state: None,
             source_coll_state: None,
             dest_conn_state: None,
+            dest_db_state: None,
+            dest_coll_state: None,
             exclude_coll_state: None,
             export_path_input_state: None,
             prev_conn_ids: Vec::new(),
             prev_db_names: Vec::new(),
             prev_coll_names: Vec::new(),
+            prev_dest_db_names: Vec::new(),
+            prev_dest_coll_names: Vec::new(),
             query_edit_modal: None,
             query_edit_input: None,
         }
@@ -91,7 +100,15 @@ impl Render for TransferView {
         self.ensure_select_states(window, cx);
 
         // Read state once at the start
-        let (transfer_id, transfer_state, connections, databases, collections) = {
+        let (
+            transfer_id,
+            transfer_state,
+            connections,
+            databases,
+            collections,
+            dest_databases,
+            dest_collections,
+        ) = {
             let state_ref = self.state.read(cx);
             let Some(id) = state_ref.active_transfer_tab_id() else {
                 return div()
@@ -130,7 +147,27 @@ impl Render for TransferView {
                 })
                 .unwrap_or_default();
 
-            (id, transfer, connections, databases, collections)
+            let dest_databases: Vec<String> = transfer
+                .config
+                .destination_connection_id
+                .and_then(|conn_id| active.get(&conn_id).map(|conn| conn.databases.clone()))
+                .unwrap_or_default();
+
+            let dest_collections: Vec<String> = transfer
+                .config
+                .destination_connection_id
+                .and_then(|conn_id| {
+                    if !transfer.config.destination_database.is_empty() {
+                        active.get(&conn_id).and_then(|conn| {
+                            conn.collections.get(&transfer.config.destination_database).cloned()
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            (id, transfer, connections, databases, collections, dest_databases, dest_collections)
         };
 
         // Update select items and sync selected indices
@@ -159,31 +196,31 @@ impl Render for TransferView {
             self.prev_conn_ids = conn_ids.clone();
         }
 
-        // Sync source connection selected index
+        // Sync source connection selected value
         if let Some(ref source_conn_state) = self.source_conn_state {
-            let expected_row = transfer_state
-                .config
-                .source_connection_id
-                .and_then(|id| conn_ids.iter().position(|c| *c == id));
             source_conn_state.update(cx, |s, cx| {
-                let current_row = s.selected_index(cx).map(|ip| ip.row);
-                if current_row != expected_row {
-                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                let current = s.selected_value().copied();
+                if current != transfer_state.config.source_connection_id {
+                    let idx = transfer_state
+                        .config
+                        .source_connection_id
+                        .and_then(|id| conn_ids.iter().position(|c| *c == id))
+                        .map(|r| IndexPath::default().row(r));
                     s.set_selected_index(idx, window, cx);
                 }
             });
         }
 
-        // Sync destination connection selected index
+        // Sync destination connection selected value
         if let Some(ref dest_conn_state) = self.dest_conn_state {
-            let expected_row = transfer_state
-                .config
-                .destination_connection_id
-                .and_then(|id| conn_ids.iter().position(|c| *c == id));
             dest_conn_state.update(cx, |s, cx| {
-                let current_row = s.selected_index(cx).map(|ip| ip.row);
-                if current_row != expected_row {
-                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                let current = s.selected_value().copied();
+                if current != transfer_state.config.destination_connection_id {
+                    let idx = transfer_state
+                        .config
+                        .destination_connection_id
+                        .and_then(|id| conn_ids.iter().position(|c| *c == id))
+                        .map(|r| IndexPath::default().row(r));
                     s.set_selected_index(idx, window, cx);
                 }
             });
@@ -207,17 +244,19 @@ impl Render for TransferView {
             self.prev_db_names = db_names.clone();
         }
 
-        // Sync database selected index
+        // Sync database selected value
         if let Some(ref source_db_state) = self.source_db_state {
-            let expected_row = if !transfer_state.config.source_database.is_empty() {
-                db_names.iter().position(|d| d == &transfer_state.config.source_database)
+            let expected: Option<&str> = if !transfer_state.config.source_database.is_empty() {
+                Some(&transfer_state.config.source_database)
             } else {
                 None
             };
             source_db_state.update(cx, |s, cx| {
-                let current_row = s.selected_index(cx).map(|ip| ip.row);
-                if current_row != expected_row {
-                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                let current = s.selected_value().map(|v| v.as_ref());
+                if current != expected {
+                    let idx = expected
+                        .and_then(|v| db_names.iter().position(|d| d == v))
+                        .map(|r| IndexPath::default().row(r));
                     s.set_selected_index(idx, window, cx);
                 }
             });
@@ -251,17 +290,96 @@ impl Render for TransferView {
             self.prev_coll_names = coll_names.clone();
         }
 
-        // Sync collection selected index
+        // Sync collection selected value
         if let Some(ref source_coll_state) = self.source_coll_state {
-            let expected_row = if !transfer_state.config.source_collection.is_empty() {
-                coll_names.iter().position(|c| c == &transfer_state.config.source_collection)
+            let expected: Option<&str> = if !transfer_state.config.source_collection.is_empty() {
+                Some(&transfer_state.config.source_collection)
             } else {
                 None
             };
             source_coll_state.update(cx, |s, cx| {
-                let current_row = s.selected_index(cx).map(|ip| ip.row);
-                if current_row != expected_row {
-                    let idx = expected_row.map(|r| IndexPath::default().row(r));
+                let current = s.selected_value().map(|v| v.as_ref());
+                if current != expected {
+                    let idx = expected
+                        .and_then(|v| coll_names.iter().position(|c| c == v))
+                        .map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
+        }
+
+        // Destination database items
+        let dest_db_names: Vec<String> =
+            if transfer_state.config.destination_connection_id.is_some() {
+                dest_databases.clone()
+            } else {
+                Vec::new()
+            };
+
+        if dest_db_names != self.prev_dest_db_names {
+            let db_items: Vec<SharedString> =
+                dest_db_names.iter().map(|s| SharedString::from(s.clone())).collect();
+            if let Some(ref dest_db_state) = self.dest_db_state {
+                dest_db_state.update(cx, |s, cx| {
+                    s.set_items(SearchableVec::new(db_items), window, cx);
+                });
+            }
+            self.prev_dest_db_names = dest_db_names.clone();
+        }
+
+        // Sync destination database selected value
+        if let Some(ref dest_db_state) = self.dest_db_state {
+            let expected: Option<&str> = if !transfer_state.config.destination_database.is_empty() {
+                Some(&transfer_state.config.destination_database)
+            } else {
+                None
+            };
+            dest_db_state.update(cx, |s, cx| {
+                let current = s.selected_value().map(|v| v.as_ref());
+                if current != expected {
+                    let idx = expected
+                        .and_then(|v| dest_db_names.iter().position(|d| d == v))
+                        .map(|r| IndexPath::default().row(r));
+                    s.set_selected_index(idx, window, cx);
+                }
+            });
+        }
+
+        // Destination collection items
+        let dest_coll_names: Vec<String> =
+            if transfer_state.config.destination_connection_id.is_some()
+                && !transfer_state.config.destination_database.is_empty()
+            {
+                dest_collections.clone()
+            } else {
+                Vec::new()
+            };
+
+        if dest_coll_names != self.prev_dest_coll_names {
+            let coll_items: Vec<SharedString> =
+                dest_coll_names.iter().map(|s| SharedString::from(s.clone())).collect();
+            if let Some(ref dest_coll_state) = self.dest_coll_state {
+                dest_coll_state.update(cx, |s, cx| {
+                    s.set_items(SearchableVec::new(coll_items), window, cx);
+                });
+            }
+            self.prev_dest_coll_names = dest_coll_names.clone();
+        }
+
+        // Sync destination collection selected value
+        if let Some(ref dest_coll_state) = self.dest_coll_state {
+            let expected: Option<&str> = if !transfer_state.config.destination_collection.is_empty()
+            {
+                Some(&transfer_state.config.destination_collection)
+            } else {
+                None
+            };
+            dest_coll_state.update(cx, |s, cx| {
+                let current = s.selected_value().map(|v| v.as_ref());
+                if current != expected {
+                    let idx = expected
+                        .and_then(|v| dest_coll_names.iter().position(|c| c == v))
+                        .map(|r| IndexPath::default().row(r));
                     s.set_selected_index(idx, window, cx);
                 }
             });
@@ -508,14 +626,61 @@ impl Render for TransferView {
         let summary_panel =
             render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name, cx);
 
-        // Progress panel for database-scope operations (only shown when running)
-        let progress_panel: AnyElement = if let Some(ref db_progress) =
-            transfer_state.runtime.database_progress
-        {
-            render_progress_panel(db_progress, state.clone(), transfer_id, cx).into_any_element()
-        } else {
-            div().into_any_element()
-        };
+        // Progress panel
+        let progress_panel: AnyElement =
+            if let Some(ref db_progress) = transfer_state.runtime.database_progress {
+                // Database-scope: existing per-collection progress panel
+                render_progress_panel(db_progress, state.clone(), transfer_id, cx)
+                    .into_any_element()
+            } else if transfer_state.runtime.is_running {
+                // Collection-scope running: spinner + live count
+                let verb = match transfer_state.config.mode {
+                    TransferMode::Export => "Exporting...",
+                    TransferMode::Import => "Importing...",
+                    TransferMode::Copy => "Copying...",
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .p(spacing::md())
+                    .bg(cx.theme().sidebar)
+                    .border_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .rounded(borders::radius_sm())
+                    .child(Spinner::new().small())
+                    .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
+                        "{} {} documents",
+                        verb, transfer_state.runtime.progress_count
+                    )))
+                    .into_any_element()
+            } else if transfer_state.runtime.progress_count > 0
+                && transfer_state.runtime.error_message.is_none()
+            {
+                // Collection-scope completed: check icon + final count
+                let verb = match transfer_state.config.mode {
+                    TransferMode::Export => "Exported",
+                    TransferMode::Import => "Imported",
+                    TransferMode::Copy => "Copied",
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .p(spacing::md())
+                    .bg(cx.theme().sidebar)
+                    .border_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .rounded(borders::radius_sm())
+                    .child(Icon::new(IconName::Check).xsmall().text_color(cx.theme().success))
+                    .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
+                        "{} {} documents",
+                        verb, transfer_state.runtime.progress_count
+                    )))
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            };
 
         // Warning banners
         let warnings = render_warnings(&transfer_state, cx);

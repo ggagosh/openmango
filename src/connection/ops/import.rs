@@ -331,13 +331,15 @@ pub(crate) async fn import_batch_insert(
     Ok(batch.len() as u64)
 }
 
-/// Upsert documents using concurrent update operations.
+/// Upsert documents using update_one with $set.
 /// Groups documents by whether they have _id for efficient processing.
+/// Unordered mode runs up to 50 concurrent operations for throughput.
 pub(crate) async fn import_batch_upsert(
     coll: &mongodb::Collection<Document>,
     batch: &[Document],
     ordered: bool,
 ) -> Result<u64> {
+    use futures::StreamExt;
     use mongodb::options::{InsertManyOptions, UpdateOptions};
 
     if batch.is_empty() {
@@ -359,24 +361,40 @@ pub(crate) async fn import_batch_upsert(
     let mut count = 0u64;
     let update_options = UpdateOptions::builder().upsert(true).build();
 
-    // Process documents with _id using update_one with upsert
-    // Note: MongoDB doesn't have bulk_write on Collection, only on Client (8.0+)
-    // We optimize by not creating options for every document
-    for doc in with_id {
-        let id = doc.get("_id").unwrap();
-        let filter = doc! { "_id": id.clone() };
-        let mut update_doc = doc.clone();
-        update_doc.remove("_id");
+    if ordered {
+        // Ordered: process sequentially, stop on first error
+        for doc in with_id {
+            let id = doc.get("_id").unwrap();
+            let filter = doc! { "_id": id.clone() };
+            let mut update_doc = doc.clone();
+            update_doc.remove("_id");
 
-        let result = coll
-            .update_one(filter, doc! { "$set": update_doc })
-            .with_options(update_options.clone())
-            .await;
+            coll.update_one(filter, doc! { "$set": update_doc })
+                .with_options(update_options.clone())
+                .await?;
+            count += 1;
+        }
+    } else {
+        // Unordered: run concurrently for throughput (50 in-flight at a time)
+        let results: Vec<_> = futures::stream::iter(with_id.into_iter().map(|doc| {
+            let coll = coll.clone();
+            let opts = update_options.clone();
+            async move {
+                let id = doc.get("_id").unwrap();
+                let filter = doc! { "_id": id.clone() };
+                let mut update_doc = doc.clone();
+                update_doc.remove("_id");
+                coll.update_one(filter, doc! { "$set": update_doc }).with_options(opts).await
+            }
+        }))
+        .buffer_unordered(50)
+        .collect()
+        .await;
 
-        match result {
-            Ok(_) => count += 1,
-            Err(e) if ordered => return Err(e.into()),
-            Err(_) => {} // Continue on error in unordered mode
+        for result in results {
+            if result.is_ok() {
+                count += 1;
+            }
         }
     }
 
@@ -393,57 +411,31 @@ pub(crate) async fn import_batch_upsert(
     Ok(count)
 }
 
-/// Replace documents using concurrent replace operations.
+/// Replace documents by deleting existing and re-inserting.
+/// Uses delete_many + insert_many for bulk throughput (2 round-trips per batch
+/// instead of N individual replace_one calls).
 pub(crate) async fn import_batch_replace(
     coll: &mongodb::Collection<Document>,
     batch: &[Document],
     ordered: bool,
 ) -> Result<u64> {
-    use mongodb::options::{InsertManyOptions, ReplaceOptions};
+    use mongodb::bson::Bson;
+    use mongodb::options::InsertManyOptions;
 
     if batch.is_empty() {
         return Ok(0);
     }
 
-    // Separate documents with _id (replace) from those without (insert)
-    let mut with_id: Vec<&Document> = Vec::new();
-    let mut without_id: Vec<Document> = Vec::new();
+    // Collect _ids from docs that have them — these need to be deleted first
+    let ids: Vec<Bson> = batch.iter().filter_map(|d| d.get("_id").cloned()).collect();
 
-    for doc in batch {
-        if doc.get("_id").is_some() {
-            with_id.push(doc);
-        } else {
-            without_id.push(doc.clone());
-        }
+    // Delete existing documents with matching _ids (single round-trip)
+    if !ids.is_empty() {
+        coll.delete_many(doc! { "_id": { "$in": &ids } }).await?;
     }
 
-    let mut count = 0u64;
-    let replace_options = ReplaceOptions::builder().upsert(true).build();
-
-    // Process documents with _id using replace_one with upsert
-    for doc in with_id {
-        let id = doc.get("_id").unwrap();
-        let filter = doc! { "_id": id.clone() };
-
-        let result =
-            coll.replace_one(filter, doc.clone()).with_options(replace_options.clone()).await;
-
-        match result {
-            Ok(_) => count += 1,
-            Err(e) if ordered => return Err(e.into()),
-            Err(_) => {} // Continue on error in unordered mode
-        }
-    }
-
-    // Insert documents without _id
-    if !without_id.is_empty() {
-        let insert_options = InsertManyOptions::builder().ordered(ordered).build();
-        match coll.insert_many(without_id.clone()).with_options(insert_options).await {
-            Ok(_) => count += without_id.len() as u64,
-            Err(e) if ordered => return Err(e.into()),
-            Err(_) => {}
-        }
-    }
-
-    Ok(count)
+    // Insert all documents (single round-trip)
+    let insert_options = InsertManyOptions::builder().ordered(ordered).build();
+    coll.insert_many(batch.to_vec()).with_options(insert_options).await?;
+    Ok(batch.len() as u64)
 }
