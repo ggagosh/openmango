@@ -19,6 +19,6 @@ pub use ops::export::generate_export_preview;
 pub use tools::tools_available;
 pub use types::{
     AggregatePipelineError, BsonOutputFormat, BsonToolProgress, CopyOptions, CsvImportOptions,
-    ExportQueryOptions, ExtendedJsonMode, FileEncoding, FindDocumentsOptions, InsertMode,
+    Encoding, ExportQueryOptions, ExtendedJsonMode, FindDocumentsOptions, InsertMode,
     JsonExportOptions, JsonImportOptions, JsonTransferFormat, ProgressCallback,
 };

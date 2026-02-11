@@ -4,12 +4,13 @@ use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use uuid::Uuid;
 
-use crate::components::{ConnectionManager, TreeNodeId, open_confirm_dialog};
+use crate::components::{ConnectionManager, open_confirm_dialog};
 use crate::keyboard::{
     CopyConnectionUri, CopySelectionName, CopyTreeItem, CreateCollection, DeleteSelection,
     DisconnectConnection, EditConnection, OpenForge, OpenSelection, PasteTreeItem, RefreshView,
     RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
+use crate::models::TreeNodeId;
 use crate::state::{
     AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
 };

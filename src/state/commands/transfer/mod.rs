@@ -11,7 +11,7 @@ use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::csv_utils::detect_problematic_fields;
-use crate::connection::{ExtendedJsonMode, JsonTransferFormat, generate_export_preview};
+use crate::connection::{JsonTransferFormat, generate_export_preview};
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{
     AppCommands, AppEvent, AppState, SessionKey, StatusMessage, TransferFormat, TransferMode,
@@ -133,10 +133,7 @@ impl AppCommands {
                 return;
             }
 
-            let json_mode = match tab.options.json_mode {
-                crate::state::ExtendedJsonMode::Relaxed => ExtendedJsonMode::Relaxed,
-                crate::state::ExtendedJsonMode::Canonical => ExtendedJsonMode::Canonical,
-            };
+            let json_mode = tab.options.json_mode;
 
             (
                 conn_id,
@@ -284,6 +281,11 @@ impl AppCommands {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 // Increment generation to invalidate any running operation
                 tab.runtime.transfer_generation.fetch_add(1, Ordering::SeqCst);
+
+                // Signal cancellation token (cooperative cancellation in loops)
+                if let Some(ref token) = tab.runtime.cancellation_token {
+                    token.cancel();
+                }
 
                 // Abort any pending async operation
                 if let Ok(mut handle) = tab.runtime.abort_handle.lock()

@@ -9,7 +9,7 @@ use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
 use crate::connection::types::{
-    CsvImportOptions, FileEncoding, InsertMode, JsonImportOptions, JsonTransferFormat,
+    CsvImportOptions, Encoding, InsertMode, JsonImportOptions, JsonTransferFormat,
 };
 use crate::error::{Error, Result};
 
@@ -58,8 +58,8 @@ impl ConnectionManager {
                     // Stream JSONL line-by-line to minimize memory usage
                     let file = File::open(&path)?;
                     let reader: Box<dyn BufRead + Send> = match options.encoding {
-                        FileEncoding::Utf8 => Box::new(BufReader::new(file)),
-                        FileEncoding::Latin1 => {
+                        Encoding::Utf8 => Box::new(BufReader::new(file)),
+                        Encoding::Latin1 => {
                             // For Latin-1, we need to decode first (read entire file)
                             // This is unavoidable for non-UTF-8 encodings
                             let bytes = std::fs::read(&path)?;
@@ -141,13 +141,13 @@ impl ConnectionManager {
                     // Use streaming JSON parser for large arrays
                     let file = File::open(&path)?;
                     let content = match options.encoding {
-                        FileEncoding::Utf8 => {
+                        Encoding::Utf8 => {
                             let mut reader = BufReader::new(file);
                             let mut content = String::new();
                             reader.read_to_string(&mut content)?;
                             content
                         }
-                        FileEncoding::Latin1 => {
+                        Encoding::Latin1 => {
                             let bytes = std::fs::read(&path)?;
                             let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
                             decoded.into_owned()
@@ -217,8 +217,8 @@ impl ConnectionManager {
             // Create CSV reader with streaming
             let file = File::open(&path)?;
             let reader: Box<dyn std::io::Read + Send> = match options.encoding {
-                FileEncoding::Utf8 => Box::new(BufReader::new(file)),
-                FileEncoding::Latin1 => {
+                Encoding::Utf8 => Box::new(BufReader::new(file)),
+                Encoding::Latin1 => {
                     // For Latin-1, decode the entire file first
                     let bytes = std::fs::read(&path)?;
                     let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);

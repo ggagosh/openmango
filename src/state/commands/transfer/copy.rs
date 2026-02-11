@@ -7,9 +7,8 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::connection::InsertMode;
 use crate::state::app_state::CollectionTransferStatus;
-use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferScope};
+use crate::state::{AppCommands, AppEvent, AppState, InsertMode, StatusMessage, TransferScope};
 
 use super::{
     CollectionProgressMessage, CopyConfig, PARALLEL_COLLECTION_LIMIT, TransferProgressMessage,
@@ -69,16 +68,14 @@ impl AppCommands {
         };
         let scope = config.scope;
         let batch_size = config.batch_size as usize;
-        let insert_mode = match config.insert_mode {
-            crate::state::InsertMode::Insert => InsertMode::Insert,
-            crate::state::InsertMode::Upsert => InsertMode::Upsert,
-            crate::state::InsertMode::Replace => InsertMode::Replace,
-        };
+        let insert_mode = config.insert_mode;
         let stop_on_error = config.stop_on_error;
         let drop_before = config.drop_before_import;
         let clear_before = config.clear_before_import;
         let copy_indexes = config.copy_indexes;
         let exclude_collections = config.exclude_collections;
+
+        let cancellation_token = crate::connection::types::CancellationToken::new();
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -86,6 +83,7 @@ impl AppCommands {
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new copy
+                tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
             state.set_status_message(Some(StatusMessage::info("Copying...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -110,6 +108,7 @@ impl AppCommands {
                     stop_on_error,
                     drop_before,
                     clear_before,
+                    cancellation_token,
                     cx,
                 );
             }
@@ -127,6 +126,7 @@ impl AppCommands {
                     insert_mode,
                     stop_on_error,
                     exclude_collections,
+                    cancellation_token,
                     cx,
                 );
             }
@@ -148,6 +148,7 @@ impl AppCommands {
         insert_mode: InsertMode,
         stop_on_error: bool,
         exclude_collections: Vec<String>,
+        cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
         // Create channel for progress updates from background thread
@@ -192,6 +193,7 @@ impl AppCommands {
                             let dest_database = dest_database.clone();
                             let handle = runtime_handle.clone();
                             let manager = manager.clone();
+                            let cancellation_token = cancellation_token.clone();
 
                             async move {
                                 // Send InProgress status
@@ -252,7 +254,7 @@ impl AppCommands {
                                             insert_mode,
                                             ordered: stop_on_error,
                                             progress: Some(progress_callback),
-                                            cancellation: None,
+                                            cancellation: Some(cancellation_token.clone()),
                                         };
 
                                         // Copy collection
@@ -436,6 +438,7 @@ impl AppCommands {
         stop_on_error: bool,
         drop_before: bool,
         clear_before: bool,
+        cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
         use crate::connection::{CopyOptions, ProgressCallback};
@@ -474,7 +477,7 @@ impl AppCommands {
                     insert_mode,
                     ordered: stop_on_error,
                     progress: Some(progress_callback),
-                    cancellation: None,
+                    cancellation: Some(cancellation_token),
                 };
 
                 let result = manager.copy_collection_with_options(

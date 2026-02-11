@@ -23,22 +23,22 @@ async fn test_connection_and_list_databases() {
 async fn test_create_and_drop_database() {
     let mongo = MongoTestContainer::start().await;
 
-    let db_name = "test_create_drop_db";
-    let db = mongo.database(db_name);
+    let db = mongo.database("test_create_drop_db");
+    let namespaced = mongo.db_name("test_create_drop_db");
 
     // Create a collection to ensure database exists
     db.create_collection("temp_collection").await.expect("Failed to create collection");
 
     // Verify database appears in list
     let databases = mongo.client.list_database_names().await.expect("Failed to list");
-    assert!(databases.contains(&db_name.to_string()));
+    assert!(databases.contains(&namespaced));
 
     // Drop the database
     db.drop().await.expect("Failed to drop database");
 
     // Verify it's gone
     let databases = mongo.client.list_database_names().await.expect("Failed to list");
-    assert!(!databases.contains(&db_name.to_string()));
+    assert!(!databases.contains(&namespaced));
 }
 
 /// Test listing collections in a database.

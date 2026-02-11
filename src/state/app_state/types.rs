@@ -179,65 +179,8 @@ impl TransferFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum InsertMode {
-    #[default]
-    Insert,
-    Upsert,
-    Replace,
-}
-
-impl InsertMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            InsertMode::Insert => "Insert",
-            InsertMode::Upsert => "Upsert",
-            InsertMode::Replace => "Replace",
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn description(self) -> &'static str {
-        match self {
-            InsertMode::Insert => "Insert new documents (fail on duplicates)",
-            InsertMode::Upsert => "Update existing documents or insert new ones",
-            InsertMode::Replace => "Replace existing documents or insert new ones",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ExtendedJsonMode {
-    #[default]
-    Relaxed,
-    Canonical,
-}
-
-impl ExtendedJsonMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            ExtendedJsonMode::Relaxed => "Relaxed",
-            ExtendedJsonMode::Canonical => "Canonical",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum BsonOutputFormat {
-    #[default]
-    Folder,
-    Archive,
-}
-
-impl BsonOutputFormat {
-    #[allow(dead_code)]
-    pub fn label(self) -> &'static str {
-        match self {
-            BsonOutputFormat::Folder => "Folder",
-            BsonOutputFormat::Archive => "Archive (.archive)",
-        }
-    }
-}
+// InsertMode, ExtendedJsonMode, BsonOutputFormat: canonical definitions in crate::connection::types
+pub use crate::connection::{BsonOutputFormat, ExtendedJsonMode, InsertMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CompressionMode {
@@ -255,21 +198,8 @@ impl CompressionMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Encoding {
-    #[default]
-    Utf8,
-    Latin1,
-}
-
-impl Encoding {
-    pub fn label(self) -> &'static str {
-        match self {
-            Encoding::Utf8 => "UTF-8",
-            Encoding::Latin1 => "Latin-1",
-        }
-    }
-}
+// Encoding: canonical definition in crate::connection::types
+pub use crate::connection::Encoding;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransferTabKey {
@@ -413,6 +343,7 @@ pub struct TransferRuntime {
     pub error_message: Option<String>,
     pub transfer_generation: Arc<AtomicU64>,
     pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    pub cancellation_token: Option<crate::connection::types::CancellationToken>,
     pub database_progress: Option<DatabaseTransferProgress>,
 }
 
@@ -426,6 +357,7 @@ impl Clone for TransferRuntime {
                 self.transfer_generation.load(std::sync::atomic::Ordering::SeqCst),
             )),
             abort_handle: Arc::new(Mutex::new(None)),
+            cancellation_token: None,
             database_progress: self.database_progress.clone(),
         }
     }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::components::TreeNodeId;
+use crate::models::TreeNodeId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SidebarEntry {

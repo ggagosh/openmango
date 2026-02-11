@@ -1,5 +1,4 @@
 //! Tree-related components and utilities.
 
-mod node_id;
-
-pub use node_id::*;
+// TreeNodeId moved to crate::models::tree_node_id
+pub use crate::models::TreeNodeId;

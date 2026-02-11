@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use crate::components::TreeNodeId;
+use crate::models::TreeNodeId;
 use crate::models::{ActiveConnection, SavedConnection};
 
 use super::search::SidebarEntry;

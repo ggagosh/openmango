@@ -1,6 +1,6 @@
 use gpui::*;
 
-use crate::components::TreeNodeId;
+use crate::models::TreeNodeId;
 use crate::state::AppCommands;
 
 use super::Sidebar;

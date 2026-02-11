@@ -10,7 +10,7 @@ use mongodb::Client;
 use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
-use crate::connection::types::ExportQueryOptions;
+use crate::connection::types::{CancellationToken, ExportQueryOptions};
 use crate::error::Result;
 
 impl ConnectionManager {
@@ -31,11 +31,13 @@ impl ConnectionManager {
             path,
             gzip,
             ExportQueryOptions::default(),
+            None,
         )
     }
 
     /// Export a collection to CSV with query options (runs in Tokio runtime).
     /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
+    #[allow(clippy::too_many_arguments)]
     pub fn export_collection_csv_with_query(
         &self,
         client: &Client,
@@ -44,6 +46,7 @@ impl ConnectionManager {
         path: &Path,
         gzip: bool,
         query: ExportQueryOptions,
+        cancellation: Option<CancellationToken>,
     ) -> Result<u64> {
         use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
@@ -108,6 +111,11 @@ impl ConnectionManager {
 
             // Continue streaming remaining documents from same cursor
             while let Some(doc) = cursor.try_next().await? {
+                // Check cancellation
+                if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+
                 let flat = flatten_document(&doc);
                 let row: Vec<String> =
                     columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();

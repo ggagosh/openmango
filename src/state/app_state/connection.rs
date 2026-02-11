@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use gpui::Context;
 
 use super::AppState;
-use crate::components::TreeNodeId;
+use crate::models::TreeNodeId;
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::ActiveTab;
 use crate::state::View;

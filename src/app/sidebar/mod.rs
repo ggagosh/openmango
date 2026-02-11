@@ -4,7 +4,8 @@ use gpui::*;
 use gpui_component::input::InputState;
 use uuid::Uuid;
 
-use crate::components::{ConnectionDialog, ConnectionManager, TreeNodeId, open_confirm_dialog};
+use crate::components::{ConnectionDialog, ConnectionManager, open_confirm_dialog};
+use crate::models::TreeNodeId;
 use crate::state::{
     AppCommands, AppEvent, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
 };

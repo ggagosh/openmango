@@ -8,8 +8,7 @@ use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::{
-    BsonToolProgress, CsvImportOptions, FileEncoding, InsertMode, JsonImportOptions,
-    JsonTransferFormat,
+    BsonToolProgress, CsvImportOptions, Encoding, InsertMode, JsonImportOptions, JsonTransferFormat,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
@@ -84,25 +83,21 @@ impl AppCommands {
         };
 
         let scope = config.scope;
-        let insert_mode = match config.insert_mode {
-            crate::state::InsertMode::Insert => InsertMode::Insert,
-            crate::state::InsertMode::Upsert => InsertMode::Upsert,
-            crate::state::InsertMode::Replace => InsertMode::Replace,
-        };
+        let insert_mode = config.insert_mode;
         let stop_on_error = config.stop_on_error;
         let batch_size = config.batch_size as usize;
         let drop_before = config.drop_before_import;
         let clear_before = config.clear_before_import;
-        let encoding = match config.encoding {
-            crate::state::Encoding::Utf8 => FileEncoding::Utf8,
-            crate::state::Encoding::Latin1 => FileEncoding::Latin1,
-        };
+        let encoding = config.encoding;
+
+        let cancellation_token = crate::connection::types::CancellationToken::new();
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 tab.runtime.is_running = true;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
+                tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
             state.set_status_message(Some(StatusMessage::info("Importing...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -129,6 +124,7 @@ impl AppCommands {
                 encoding,
                 drop_before,
                 clear_before,
+                cancellation_token,
                 cx,
             );
             return;
@@ -353,9 +349,10 @@ impl AppCommands {
         insert_mode: InsertMode,
         stop_on_error: bool,
         batch_size: usize,
-        encoding: FileEncoding,
+        encoding: Encoding,
         drop_before: bool,
         clear_before: bool,
+        cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
         use crate::connection::ProgressCallback;
@@ -406,7 +403,7 @@ impl AppCommands {
                                 batch_size,
                                 encoding,
                                 progress: Some(progress_callback),
-                                cancellation: None,
+                                cancellation: Some(cancellation_token.clone()),
                             },
                         )
                     }
@@ -421,7 +418,7 @@ impl AppCommands {
                             batch_size,
                             encoding,
                             progress: Some(progress_callback),
-                            cancellation: None,
+                            cancellation: Some(cancellation_token),
                         },
                     ),
                     TransferFormat::Bson => Err(crate::error::Error::Parse(

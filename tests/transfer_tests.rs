@@ -1,8 +1,4 @@
 //! Integration tests for Import/Export/Copy operations using Testcontainers.
-//!
-//! These tests exercise the export/import/copy patterns that would be used
-//! by the application. Since the main crate doesn't expose a library, we test
-//! the MongoDB operations directly using the same patterns as the application.
 
 mod common;
 
@@ -13,6 +9,10 @@ use std::io::{BufRead, BufReader, Write};
 use common::{MongoTestContainer, fixtures};
 use futures::TryStreamExt;
 use mongodb::bson::{Bson, Document, doc};
+use openmango::connection::ConnectionManager;
+use openmango::connection::types::{
+    CancellationToken, CopyOptions, JsonExportOptions, JsonImportOptions, JsonTransferFormat,
+};
 use tempfile::TempDir;
 
 // =============================================================================
@@ -789,6 +789,170 @@ async fn test_import_csv_nested() {
 }
 
 // =============================================================================
+// Cancellation Tests
+// =============================================================================
+
+/// Test that JSON export respects a pre-cancelled token.
+#[tokio::test]
+async fn test_export_json_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "cancel_export_json");
+
+    let docs = fixtures::generate_test_documents(100);
+    collection.insert_many(docs).await.expect("Failed to insert");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let export_path = temp_dir.path().join("cancelled.jsonl");
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let client = mongo.client.clone();
+    let db = mongo.db_name("test_db");
+
+    // ConnectionManager::block_on can't nest inside tokio, so run off the async thread
+    let result = tokio::task::spawn_blocking(move || {
+        let mgr = ConnectionManager::new();
+        mgr.export_collection_json_with_options(
+            &client,
+            &db,
+            "cancel_export_json",
+            &export_path,
+            JsonExportOptions { cancellation: Some(token), ..Default::default() },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("cancelled"), "Expected 'cancelled' in error: {err_msg}");
+}
+
+/// Test that CSV export respects a pre-cancelled token.
+#[tokio::test]
+async fn test_export_csv_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "cancel_export_csv");
+
+    // Insert >1000 docs so the cursor moves past the buffered sample phase
+    let docs = fixtures::generate_test_documents(1500);
+    collection.insert_many(docs).await.expect("Failed to insert");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let export_path = temp_dir.path().join("cancelled.csv");
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let client = mongo.client.clone();
+    let db = mongo.db_name("test_db");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mgr = ConnectionManager::new();
+        mgr.export_collection_csv_with_query(
+            &client,
+            &db,
+            "cancel_export_csv",
+            &export_path,
+            false,
+            Default::default(),
+            Some(token),
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("cancelled"), "Expected 'cancelled' in error: {err_msg}");
+}
+
+/// Test that collection copy respects a pre-cancelled token.
+#[tokio::test]
+async fn test_copy_collection_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "cancel_copy_src");
+
+    let docs = fixtures::generate_test_documents(100);
+    collection.insert_many(docs).await.expect("Failed to insert");
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let client = mongo.client.clone();
+    let db = mongo.db_name("test_db");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mgr = ConnectionManager::new();
+        mgr.copy_collection_with_options(
+            &client,
+            &db,
+            "cancel_copy_src",
+            &client,
+            &db,
+            "cancel_copy_dest",
+            CopyOptions { batch_size: 50, cancellation: Some(token), ..Default::default() },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("cancelled"), "Expected 'cancelled' in error: {err_msg}");
+
+    // Destination should have fewer docs than source (or none at all)
+    let dest = mongo.collection::<Document>("test_db", "cancel_copy_dest");
+    let dest_count = dest.count_documents(doc! {}).await.unwrap_or(0);
+    assert!(dest_count < 100, "Expected fewer than 100 docs in dest, got {dest_count}");
+}
+
+/// Test that JSON import respects a pre-cancelled token.
+#[tokio::test]
+async fn test_import_json_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("import.jsonl");
+
+    // Write a JSONL file with several lines
+    {
+        let mut f = File::create(&import_path).expect("Failed to create file");
+        for i in 0..50 {
+            writeln!(f, r#"{{"index": {i}, "name": "doc{i}"}}"#).expect("Failed to write");
+        }
+    }
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let client = mongo.client.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mgr = ConnectionManager::new();
+        mgr.import_collection_json_with_options(
+            &client,
+            "test_db",
+            "cancel_import_json",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 10,
+                cancellation: Some(token),
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("cancelled"), "Expected 'cancelled' in error: {err_msg}");
+}
+
+// =============================================================================
 // Copy Tests
 // =============================================================================
 
@@ -803,7 +967,7 @@ async fn test_copy_collection_same_db() {
     source_collection.insert_many(docs).await.expect("Failed to insert");
 
     // Copy collection using aggregation $out
-    let pipeline = vec![doc! { "$out": { "db": "test_db", "coll": "copy_dest" } }];
+    let pipeline = vec![doc! { "$out": { "db": mongo.db_name("test_db"), "coll": "copy_dest" } }];
     let _: Vec<Document> = source_collection
         .aggregate(pipeline)
         .await
@@ -829,7 +993,7 @@ async fn test_copy_collection_different_db() {
     source_collection.insert_many(docs).await.expect("Failed to insert");
 
     // Copy collection to different database using $out
-    let pipeline = vec![doc! { "$out": { "db": "dest_db", "coll": "copy_dest" } }];
+    let pipeline = vec![doc! { "$out": { "db": mongo.db_name("dest_db"), "coll": "copy_dest" } }];
     let _: Vec<Document> = source_collection
         .aggregate(pipeline)
         .await
@@ -870,7 +1034,8 @@ async fn test_copy_collection_with_indexes() {
         .expect("Failed to create index");
 
     // Copy collection data
-    let pipeline = vec![doc! { "$out": { "db": "test_db", "coll": "copy_with_indexes_dest" } }];
+    let pipeline =
+        vec![doc! { "$out": { "db": mongo.db_name("test_db"), "coll": "copy_with_indexes_dest" } }];
     let _: Vec<Document> = source_collection
         .aggregate(pipeline)
         .await
@@ -939,7 +1104,8 @@ async fn test_copy_database() {
             continue;
         }
         let src_coll = mongo.collection::<Document>("copy_db_source", &coll_name);
-        let pipeline = vec![doc! { "$out": { "db": "copy_db_dest", "coll": &coll_name } }];
+        let pipeline =
+            vec![doc! { "$out": { "db": mongo.db_name("copy_db_dest"), "coll": &coll_name } }];
         let _: Vec<Document> = src_coll
             .aggregate(pipeline)
             .await

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde::{Deserialize, Serialize};
+
 /// Error type for aggregation pipeline operations
 #[derive(Debug)]
 pub enum AggregatePipelineError {
@@ -24,15 +26,24 @@ pub enum JsonTransferFormat {
 }
 
 /// Extended JSON output mode
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtendedJsonMode {
     #[default]
     Relaxed,
     Canonical,
 }
 
+impl ExtendedJsonMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExtendedJsonMode::Relaxed => "Relaxed",
+            ExtendedJsonMode::Canonical => "Canonical",
+        }
+    }
+}
+
 /// Insert mode for imports
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InsertMode {
     #[default]
     Insert,
@@ -40,20 +51,57 @@ pub enum InsertMode {
     Replace,
 }
 
+impl InsertMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            InsertMode::Insert => "Insert",
+            InsertMode::Upsert => "Upsert",
+            InsertMode::Replace => "Replace",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn description(self) -> &'static str {
+        match self {
+            InsertMode::Insert => "Insert new documents (fail on duplicates)",
+            InsertMode::Upsert => "Update existing documents or insert new ones",
+            InsertMode::Replace => "Replace existing documents or insert new ones",
+        }
+    }
+}
+
 /// Text encoding for file imports
-#[derive(Clone, Copy, Debug, Default)]
-pub enum FileEncoding {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Encoding {
     #[default]
     Utf8,
     Latin1,
 }
 
+impl Encoding {
+    pub fn label(self) -> &'static str {
+        match self {
+            Encoding::Utf8 => "UTF-8",
+            Encoding::Latin1 => "Latin-1",
+        }
+    }
+}
+
 /// BSON output format for mongodump
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BsonOutputFormat {
     #[default]
     Folder,
     Archive,
+}
+
+impl BsonOutputFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            BsonOutputFormat::Folder => "Folder",
+            BsonOutputFormat::Archive => "Archive (.archive)",
+        }
+    }
 }
 
 /// Progress callback type for reporting operation progress.
@@ -66,12 +114,10 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self { cancelled: Arc::new(AtomicBool::new(false)) }
     }
 
-    #[allow(dead_code)]
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
@@ -82,22 +128,24 @@ impl CancellationToken {
 }
 
 /// Options for JSON export
-#[derive(Clone, Debug)]
+#[derive(Clone, Default)]
 pub struct JsonExportOptions {
     pub format: JsonTransferFormat,
     pub json_mode: ExtendedJsonMode,
     pub pretty_print: bool,
     pub gzip: bool,
+    pub cancellation: Option<CancellationToken>,
 }
 
-impl Default for JsonExportOptions {
-    fn default() -> Self {
-        Self {
-            format: JsonTransferFormat::JsonLines,
-            json_mode: ExtendedJsonMode::Relaxed,
-            pretty_print: false,
-            gzip: false,
-        }
+impl std::fmt::Debug for JsonExportOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsonExportOptions")
+            .field("format", &self.format)
+            .field("json_mode", &self.json_mode)
+            .field("pretty_print", &self.pretty_print)
+            .field("gzip", &self.gzip)
+            .field("cancellation", &self.cancellation.is_some())
+            .finish()
     }
 }
 
@@ -108,7 +156,7 @@ pub struct JsonImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
-    pub encoding: FileEncoding,
+    pub encoding: Encoding,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }
@@ -133,7 +181,7 @@ pub struct CsvImportOptions {
     pub insert_mode: InsertMode,
     pub stop_on_error: bool,
     pub batch_size: usize,
-    pub encoding: FileEncoding,
+    pub encoding: Encoding,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }

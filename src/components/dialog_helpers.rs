@@ -6,14 +6,6 @@ use gpui_component::WindowExt as _;
 use crate::components::Button;
 
 /// Creates a standard Cancel button that closes the dialog.
-///
-/// # Example
-/// ```ignore
-/// vec![
-///     cancel_button("cancel-db"),
-///     Button::new("create-db").primary().label("Create").on_click(...).into_any_element(),
-/// ]
-/// ```
 pub fn cancel_button(id: impl Into<ElementId>) -> AnyElement {
     Button::new(id)
         .label("Cancel")
@@ -24,17 +16,6 @@ pub fn cancel_button(id: impl Into<ElementId>) -> AnyElement {
 }
 
 /// Creates a standard primary action button for dialogs.
-///
-/// # Example
-/// ```ignore
-/// vec![
-///     cancel_button("cancel-db"),
-///     primary_button("create-db", "Create", move |window, cx| {
-///         // Handle submit
-///         window.close_dialog(cx);
-///     }),
-/// ]
-/// ```
 pub fn primary_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,

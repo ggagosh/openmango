@@ -2,26 +2,13 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use crate::assets::{Assets, embedded_fonts};
-use crate::state::ConfigManager;
 use gpui::*;
 use gpui_component::Root;
-
-mod app;
-mod assets;
-mod bson;
-mod changelog;
-mod components;
-mod connection;
-mod error;
-mod helpers;
-mod keyboard;
-mod models;
-mod state;
-mod theme;
-mod views;
-
-use app::AppRoot;
+use openmango::app::AppRoot;
+use openmango::assets::{Assets, embedded_fonts};
+use openmango::keyboard;
+use openmango::state::ConfigManager;
+use openmango::theme;
 
 fn main() {
     env_logger::init();

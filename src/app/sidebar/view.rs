@@ -8,12 +8,13 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::{Icon, IconName, Sizable as _};
 
-use crate::components::{ConnectionManager, TreeNodeId};
+use crate::components::ConnectionManager;
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenSelection, OpenSelectionPreview,
     PasteTreeItem, RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
+use crate::models::TreeNodeId;
 use crate::state::{AppCommands, TransferMode};
 use crate::theme::{borders, sizing, spacing};
 

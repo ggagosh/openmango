@@ -10,8 +10,7 @@ use uuid::Uuid;
 
 use crate::bson::parse_document_from_json;
 use crate::connection::{
-    BsonOutputFormat as MongoBsonOutputFormat, BsonToolProgress, ExportQueryOptions,
-    ExtendedJsonMode, JsonExportOptions,
+    BsonOutputFormat, BsonToolProgress, ExportQueryOptions, ExtendedJsonMode, JsonExportOptions,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
@@ -73,15 +72,9 @@ impl AppCommands {
         let path = PathBuf::from(&expanded_path);
         let format = config.format;
         let scope = config.scope;
-        let json_mode = match config.json_mode {
-            crate::state::ExtendedJsonMode::Relaxed => ExtendedJsonMode::Relaxed,
-            crate::state::ExtendedJsonMode::Canonical => ExtendedJsonMode::Canonical,
-        };
+        let json_mode = config.json_mode;
         let pretty_print = config.pretty_print;
-        let bson_output = match config.bson_output {
-            crate::state::BsonOutputFormat::Folder => MongoBsonOutputFormat::Folder,
-            crate::state::BsonOutputFormat::Archive => MongoBsonOutputFormat::Archive,
-        };
+        let bson_output = config.bson_output;
         let gzip = matches!(config.compression, crate::state::CompressionMode::Gzip);
 
         // Export query options (only for collection scope) - already cloned
@@ -91,12 +84,15 @@ impl AppCommands {
 
         let exclude_collections = config.exclude_collections;
 
+        let cancellation_token = crate::connection::types::CancellationToken::new();
+
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 tab.runtime.is_running = true;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new export
+                tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
             state.set_status_message(Some(StatusMessage::info("Exporting...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
@@ -120,6 +116,7 @@ impl AppCommands {
                 pretty_print,
                 gzip,
                 exclude_collections,
+                cancellation_token.clone(),
                 cx,
             );
             return;
@@ -145,6 +142,7 @@ impl AppCommands {
                 export_filter,
                 export_projection,
                 export_sort,
+                cancellation_token.clone(),
                 cx,
             );
             return;
@@ -204,6 +202,7 @@ impl AppCommands {
         pretty_print: bool,
         gzip: bool,
         exclude_collections: Vec<String>,
+        cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
         // Create channel for progress updates from background thread
@@ -215,7 +214,6 @@ impl AppCommands {
         cx.background_spawn({
             let exclude_set: HashSet<String> = exclude_collections.iter().cloned().collect();
             async move {
-
                 // Get collection list
                 let collections = match manager.list_collection_names(&client, &database) {
                     Ok(colls) => colls
@@ -255,6 +253,7 @@ impl AppCommands {
                             let path = path.clone();
                             let handle = runtime_handle.clone();
                             let manager = manager.clone();
+                            let cancellation_token = cancellation_token.clone();
 
                             async move {
                                 // Send InProgress status
@@ -301,6 +300,7 @@ impl AppCommands {
                                                     json_mode,
                                                     pretty_print,
                                                     gzip,
+                                                    cancellation: Some(cancellation_token.clone()),
                                                 };
                                                 manager.export_collection_json_with_options(
                                                     &client,
@@ -311,12 +311,14 @@ impl AppCommands {
                                                 )
                                             }
                                             TransferFormat::Csv => {
-                                                manager.export_collection_csv(
+                                                manager.export_collection_csv_with_query(
                                                     &client,
                                                     &database,
                                                     &coll_name_for_task,
                                                     &file_path,
                                                     gzip,
+                                                    crate::connection::ExportQueryOptions::default(),
+                                                    Some(cancellation_token),
                                                 )
                                             }
                                             TransferFormat::Bson => {
@@ -471,7 +473,7 @@ impl AppCommands {
         connection_uri: String,
         database: String,
         path: PathBuf,
-        output_format: MongoBsonOutputFormat,
+        output_format: BsonOutputFormat,
         gzip: bool,
         exclude_collections: Vec<String>,
         cx: &mut App,
@@ -649,6 +651,7 @@ impl AppCommands {
         export_filter: String,
         export_projection: String,
         export_sort: String,
+        cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
         // Create channel for progress updates from background thread
@@ -698,6 +701,7 @@ impl AppCommands {
                                     json_mode,
                                     pretty_print,
                                     gzip,
+                                    cancellation: Some(cancellation_token.clone()),
                                 };
                                 if let Some(query) = query_options {
                                     manager.export_collection_json_with_query(
@@ -727,14 +731,17 @@ impl AppCommands {
                                         &path,
                                         gzip,
                                         query,
+                                        Some(cancellation_token),
                                     )
                                 } else {
-                                    manager.export_collection_csv(
+                                    manager.export_collection_csv_with_query(
                                         &client,
                                         &database,
                                         &collection,
                                         &path,
                                         gzip,
+                                        crate::connection::ExportQueryOptions::default(),
+                                        Some(cancellation_token),
                                     )
                                 }
                             }

@@ -19,8 +19,7 @@ impl AppState {
     pub fn set_workspace_expanded_nodes(&mut self, nodes: Vec<String>) {
         if self.workspace.expanded_nodes != nodes {
             self.workspace.expanded_nodes = nodes;
-            self.bump_workspace_generation();
-            self.save_workspace();
+            self.save_workspace_debounced();
         }
     }
 
@@ -28,8 +27,7 @@ impl AppState {
         let window_state = WindowState::from_bounds(bounds);
         if self.workspace.window_state.as_ref() != Some(&window_state) {
             self.workspace.window_state = Some(window_state);
-            self.bump_workspace_generation();
-            self.save_workspace();
+            self.save_workspace_debounced();
         }
     }
 
@@ -47,19 +45,7 @@ impl AppState {
             return;
         }
         self.update_workspace_from_state_inner();
-        let generation = self.bump_workspace_generation();
-        let workspace_snapshot = self.workspace.clone();
-        let config = self.config.clone();
-        let generation_counter = self.aggregation_workspace_save_gen.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(400));
-            if generation_counter.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            if let Err(err) = config.save_workspace(&workspace_snapshot) {
-                log::error!("Failed to save workspace: {err}");
-            }
-        });
+        self.save_workspace_debounced();
     }
 
     pub fn restore_workspace_after_connect(&mut self, cx: &mut Context<Self>) {
@@ -159,5 +145,23 @@ impl AppState {
         if let Err(err) = self.config.save_workspace(&self.workspace) {
             log::error!("Failed to save workspace: {err}");
         }
+    }
+
+    /// Debounced workspace save — coalesces rapid changes (e.g. window resize, tree expand)
+    /// into a single disk write after 400ms of inactivity.
+    fn save_workspace_debounced(&self) {
+        let generation = self.bump_workspace_generation();
+        let workspace_snapshot = self.workspace.clone();
+        let config = self.config.clone();
+        let generation_counter = self.aggregation_workspace_save_gen.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            if generation_counter.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Err(err) = config.save_workspace(&workspace_snapshot) {
+                log::error!("Failed to save workspace: {err}");
+            }
+        });
     }
 }

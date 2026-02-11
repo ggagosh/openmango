@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Switched sidecar runtime from Node.js to Bun
 - Updated JSON editor font
+- Integration tests now share one MongoDB container per test binary instead of spawning one per test (121 → 9 containers), with UUID-namespaced databases for isolation
+- Upgraded test MongoDB image from 5.0.6 (EOL) to 7.0 LTS
+- Fixed MongoDB 7.0 compatibility in stats tests (`i64` field types, removed `indexDetails` option, `currentOp` admin-only enforcement)
 
 ## [0.1.6] - 2026-02-07
 

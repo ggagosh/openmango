@@ -112,7 +112,7 @@ async fn test_database_stats() {
     let stats = db.run_command(doc! { "dbStats": 1 }).await.expect("Failed to get stats");
 
     // Verify database stats
-    assert_eq!(stats.get_str("db").unwrap(), "stats_test_db");
+    assert_eq!(stats.get_str("db").unwrap(), mongo.db_name("stats_test_db"));
     assert!(stats.get("collections").is_some());
     assert!(stats.get("dataSize").is_some());
     assert!(stats.get("storageSize").is_some());
@@ -120,7 +120,11 @@ async fn test_database_stats() {
     assert!(stats.get("indexSize").is_some());
 
     // Should have at least 1 collection
-    let collections = stats.get_i32("collections").unwrap_or(0);
+    let collections = stats
+        .get_i64("collections")
+        .ok()
+        .or_else(|| stats.get_i32("collections").ok().map(|v| v as i64))
+        .unwrap_or(0);
     assert!(collections >= 1);
 }
 
@@ -142,7 +146,11 @@ async fn test_database_stats_multiple_collections() {
     let stats = db.run_command(doc! { "dbStats": 1 }).await.expect("Failed to get stats");
 
     // Verify collection count
-    let collections = stats.get_i32("collections").unwrap_or(0);
+    let collections = stats
+        .get_i64("collections")
+        .ok()
+        .or_else(|| stats.get_i32("collections").ok().map(|v| v as i64))
+        .unwrap_or(0);
     assert_eq!(collections, 5);
 
     // Verify aggregate object count (20 + 40 + 60 + 80 + 100 = 300)
@@ -183,7 +191,7 @@ async fn test_server_status() {
 #[tokio::test]
 async fn test_current_op() {
     let mongo = MongoTestContainer::start().await;
-    let db = mongo.database("admin");
+    let db = mongo.client.database("admin");
 
     // Get current operations
     let result = db.run_command(doc! { "currentOp": 1 }).await.expect("Failed to get currentOp");
@@ -247,12 +255,10 @@ async fn test_collection_stats_with_indexes() {
         .await
         .expect("Failed to create index");
 
-    // Get stats with index details
+    // Get stats (indexDetails option removed in MongoDB 7.0)
     let db = mongo.database("test_db");
-    let stats = db
-        .run_command(doc! { "collStats": "stats_indexes", "indexDetails": true })
-        .await
-        .expect("Failed to get stats");
+    let stats =
+        db.run_command(doc! { "collStats": "stats_indexes" }).await.expect("Failed to get stats");
 
     // Should have 3 indexes (_id, name, value)
     assert_eq!(stats.get_i32("nindexes").unwrap_or(0), 3);

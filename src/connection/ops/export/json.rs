@@ -101,6 +101,11 @@ impl ConnectionManager {
 
             let mut first = true;
             while let Some(doc) = cursor.try_next().await? {
+                // Check cancellation
+                if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+
                 let json_value = match options.json_mode {
                     ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
                     ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
@@ -197,6 +202,11 @@ impl ConnectionManager {
 
             let mut first = true;
             while let Some(doc) = cursor.try_next().await? {
+                // Check cancellation
+                if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+
                 let json_value = match options.json_mode {
                     ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
                     ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
@@ -292,6 +302,11 @@ impl ConnectionManager {
 
             let mut first = true;
             while let Some(doc) = cursor.try_next().await? {
+                // Check cancellation
+                if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+
                 let json_value = match options.json_mode {
                     ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
                     ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),
@@ -409,6 +424,11 @@ impl ConnectionManager {
 
                 let mut first = true;
                 while let Some(doc) = cursor.try_next().await? {
+                    // Check cancellation
+                    if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
+                        return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    }
+
                     let json_value = match options.json_mode {
                         ExtendedJsonMode::Relaxed => Bson::Document(doc).into_relaxed_extjson(),
                         ExtendedJsonMode::Canonical => Bson::Document(doc).into_canonical_extjson(),

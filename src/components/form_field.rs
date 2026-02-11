@@ -7,14 +7,6 @@ use gpui_component::input::{Input, InputState};
 use crate::theme::spacing;
 
 /// A reusable form field component that renders a label above an input.
-///
-/// # Example
-/// ```ignore
-/// let input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter name"));
-/// FormField::new("Name", &input)
-///     .required(true)
-///     .render(cx)
-/// ```
 pub struct FormField {
     label: SharedString,
     input: Entity<InputState>,
