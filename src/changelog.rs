@@ -155,10 +155,11 @@ fn render_section(entry: &ChangelogEntry, cx: &App) -> AnyElement {
                     .flex()
                     .items_start()
                     .gap(spacing::sm())
+                    .min_w_0()
                     .child(
                         div().flex_shrink_0().mt(px(7.0)).size(px(5.0)).rounded(px(2.5)).bg(muted),
                     )
-                    .child(div().text_sm().child(text))
+                    .child(div().flex_1().min_w_0().text_sm().whitespace_normal().child(text))
             }),
         ))
         .into_any_element()
@@ -175,9 +176,32 @@ pub fn show_whats_new_dialog(
 ) {
     let build_id = env!("OPENMANGO_GIT_SHA");
     let pkg_version = env!("CARGO_PKG_VERSION");
+    let release_channel = option_env!("OPENMANGO_RELEASE_CHANNEL").unwrap_or("stable");
+    let is_nightly = release_channel.eq_ignore_ascii_case("nightly");
 
-    // Try the exact version section first, fall back to [Unreleased]
-    let (section_md, title) = if let Some(section) = extract_version_section(pkg_version) {
+    // Stable builds prefer exact semver notes.
+    // Nightly builds prefer [Unreleased], since Cargo version usually stays at the last stable tag.
+    let (section_md, title) = if is_nightly {
+        if let Some(section) = extract_unreleased_section() {
+            let title: SharedString = if build_id.is_empty() {
+                "What's New (Nightly)".into()
+            } else {
+                let short_sha = &build_id[..7.min(build_id.len())];
+                format!("What's New (Nightly {short_sha})").into()
+            };
+            (section, title)
+        } else if let Some(section) = extract_version_section(pkg_version) {
+            let title: SharedString = format!("What's New in v{pkg_version}").into();
+            (section, title)
+        } else {
+            // No changelog content at all — silently update and skip
+            state.update(cx, |state, _cx| {
+                state.settings.last_seen_version = build_id.to_string();
+                state.save_settings();
+            });
+            return;
+        }
+    } else if let Some(section) = extract_version_section(pkg_version) {
         let title: SharedString = format!("What's New in v{pkg_version}").into();
         (section, title)
     } else if let Some(section) = extract_unreleased_section() {
