@@ -24,6 +24,14 @@ impl AppState {
         &self.tabs.open
     }
 
+    pub(crate) fn tab_drag_over(&self) -> Option<(usize, bool)> {
+        self.tabs.drag_over
+    }
+
+    pub(crate) fn set_tab_drag_over(&mut self, target: Option<(usize, bool)>) {
+        self.tabs.drag_over = target;
+    }
+
     pub fn preview_tab(&self) -> Option<&SessionKey> {
         self.tabs.preview.as_ref()
     }
@@ -576,6 +584,35 @@ impl AppState {
         }
     }
 
+    /// Reorder permanent tabs by moving one tab to a target insertion index.
+    ///
+    /// `to` is an insertion slot in `[0..=open_tabs.len()]` before the move.
+    /// For example, `to == open_tabs.len()` means "move to end".
+    pub fn move_open_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let len = self.tabs.open.len();
+        if len < 2 || from >= len {
+            return;
+        }
+
+        let to = to.min(len);
+        if from == to || from + 1 == to {
+            return;
+        }
+
+        let insert_index = if from < to { to - 1 } else { to };
+        let moved_tab = self.tabs.open.remove(from);
+        self.tabs.open.insert(insert_index, moved_tab);
+
+        if let Some(active) = self.active_index() {
+            let remapped = remap_active_index_after_tab_move(active, from, to);
+            self.set_active_index(remapped.min(self.tabs.open.len().saturating_sub(1)));
+        }
+
+        self.tabs.drag_over = None;
+        self.update_workspace_from_state();
+        cx.notify();
+    }
+
     pub fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.open.len() {
             return;
@@ -972,8 +1009,22 @@ fn matches_collection(tab: &TabKey, key: &SessionKey) -> bool {
     matches!(tab, TabKey::Collection(tab) if tab == key)
 }
 
+fn remap_active_index_after_tab_move(active: usize, from: usize, to: usize) -> usize {
+    let moved_to = if from < to { to - 1 } else { to };
+    if active == from {
+        moved_to
+    } else if from < active && active < to {
+        active - 1
+    } else if to <= active && active < from {
+        active + 1
+    } else {
+        active
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::remap_active_index_after_tab_move;
     use crate::state::{AppState, SessionKey};
 
     #[test]
@@ -989,5 +1040,22 @@ mod tests {
         state.tabs.preview = Some(key.clone());
         state.cleanup_session(&key);
         assert!(state.session(&key).is_some());
+    }
+
+    #[test]
+    fn remap_active_index_after_tab_move_handles_common_cases() {
+        // Active tab is moved toward the end insertion slot.
+        assert_eq!(remap_active_index_after_tab_move(2, 2, 5), 4);
+        // Active tab is moved toward the front insertion slot.
+        assert_eq!(remap_active_index_after_tab_move(4, 4, 1), 1);
+
+        // Active tab sits between source and target, shifts left.
+        assert_eq!(remap_active_index_after_tab_move(3, 1, 5), 2);
+        // Active tab sits between target and source, shifts right.
+        assert_eq!(remap_active_index_after_tab_move(2, 4, 1), 3);
+
+        // Active tab unaffected when move does not cross it.
+        assert_eq!(remap_active_index_after_tab_move(0, 3, 5), 0);
+        assert_eq!(remap_active_index_after_tab_move(5, 1, 3), 5);
     }
 }

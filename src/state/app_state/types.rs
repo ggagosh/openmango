@@ -464,6 +464,8 @@ pub struct TabState {
     pub preview: Option<SessionKey>,
     /// Tabs with unsaved changes
     pub dirty: HashSet<SessionKey>,
+    /// Current drag-over target for open tab reordering: (tab_index, insert_after)
+    pub drag_over: Option<(usize, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

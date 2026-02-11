@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use gpui::*;
+use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
@@ -8,8 +9,13 @@ use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, spacing};
 use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
 
+const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
+const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
+
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
+    pub(crate) tabs_scroll_handle: &'a ScrollHandle,
+    pub(crate) scroll_to_end_once: bool,
     pub(crate) tabs: &'a [TabKey],
     pub(crate) active_tab: ActiveTab,
     pub(crate) preview_tab: Option<SessionKey>,
@@ -23,6 +29,44 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
 }
 
+#[derive(Clone)]
+struct DraggedOpenTab {
+    from_index: usize,
+    label: SharedString,
+}
+
+impl Render for DraggedOpenTab {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(spacing::sm())
+            .py(px(4.0))
+            .rounded(borders::radius_sm())
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tab_active)
+            .text_sm()
+            .text_color(cx.theme().tab_active_foreground)
+            .child(self.label.clone())
+    }
+}
+
+fn scroll_tabs_by(scroll_handle: &ScrollHandle, delta_x: Pixels) {
+    let mut offset = scroll_handle.offset();
+    let viewport = scroll_handle.bounds().size.width;
+    let content = scroll_handle.content_size().width;
+    let min_x = (viewport - content).min(px(0.0));
+
+    offset.x += delta_x;
+    if offset.x > px(0.0) {
+        offset.x = px(0.0);
+    }
+    if offset.x < min_x {
+        offset.x = min_x;
+    }
+
+    scroll_handle.set_offset(offset);
+}
+
 pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let selected_index = match host.active_tab {
         ActiveTab::Preview => host.tabs.len(),
@@ -33,11 +77,42 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let tabs = host.tabs;
     let dirty_tabs = host.dirty_tabs;
     let state = host.state.clone();
+    let scroll_handle = host.tabs_scroll_handle.clone();
+    if host.scroll_to_end_once {
+        // This mirrors Zed-like behavior: reveal the selected tab minimally, not by forcing max-end.
+        scroll_handle.scroll_to_item(selected_index);
+    }
+
     let tab_bar = TabBar::new("collection-tabs")
         .underline()
         .small()
+        .min_w(px(0.0))
+        .track_scroll(&scroll_handle)
         .selected_index(selected_index)
-        .menu(true)
+        .menu(false)
+        .last_empty_space(
+            div()
+                .id("collection-tabs-end-drop")
+                .h_full()
+                .min_w(px(24.0))
+                .flex_grow()
+                .can_drop(move |value, _window, _cx| {
+                    value.downcast_ref::<DraggedOpenTab>().is_some()
+                })
+                .drag_over::<DraggedOpenTab>(|style, _drag, _window, cx| {
+                    style.bg(cx.theme().drop_target)
+                })
+                .on_drop({
+                    let state = host.state.clone();
+                    move |drag: &DraggedOpenTab, _window, cx| {
+                        let to = state.read(cx).open_tabs().len();
+                        state.update(cx, |state, cx| {
+                            state.move_open_tab(drag.from_index, to, cx);
+                            state.set_tab_drag_over(None);
+                        });
+                    }
+                }),
+        )
         .on_click(move |index, _window, cx| {
             let index = *index;
             state.update(cx, |state, cx| {
@@ -90,12 +165,113 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                     let dirty_dot =
                         div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
 
-                    let mut tab_view = Tab::new().label(label);
+                    let drag_label: SharedString = label.clone().into();
+                    let mut tab_view = Tab::new()
+                        .max_w(px(OPEN_TAB_MAX_WIDTH))
+                        .child(div().max_w(px(OPEN_TAB_LABEL_MAX_WIDTH)).truncate().child(label));
                     if is_dirty {
                         tab_view = tab_view.prefix(dirty_dot);
                     }
 
-                    tab_view.suffix(close_button)
+                    let drag_data = DraggedOpenTab { from_index: index, label: drag_label };
+                    let drag_state = host.state.clone();
+
+                    tab_view
+                        .suffix(close_button)
+                        .can_drop(move |value, _window, _cx| {
+                            value
+                                .downcast_ref::<DraggedOpenTab>()
+                                .is_some_and(|drag| drag.from_index != index)
+                        })
+                        .drag_over::<DraggedOpenTab>({
+                            let drag_state = drag_state.clone();
+                            move |style, drag, _window, cx| {
+                                if drag.from_index == index {
+                                    return style;
+                                }
+
+                                let insert_after = drag_state
+                                    .read(cx)
+                                    .tab_drag_over()
+                                    .and_then(|(target, after)| (target == index).then_some(after))
+                                    .unwrap_or(false);
+
+                                if insert_after {
+                                    style
+                                        .border_r_2()
+                                        .border_l_0()
+                                        .border_color(cx.theme().drag_border)
+                                } else {
+                                    style
+                                        .border_l_2()
+                                        .border_r_0()
+                                        .border_color(cx.theme().drag_border)
+                                }
+                            }
+                        })
+                        .on_drag_move({
+                            let drag_state = drag_state.clone();
+                            let scroll_handle = scroll_handle.clone();
+                            move |event: &DragMoveEvent<DraggedOpenTab>, _window, cx| {
+                                let drag = event.drag(cx);
+                                if drag.from_index == index {
+                                    return;
+                                }
+
+                                let insert_after = event.event.position.x > event.bounds.center().x;
+                                drag_state.update(cx, |state, cx| {
+                                    let next = Some((index, insert_after));
+                                    if state.tab_drag_over() != next {
+                                        state.set_tab_drag_over(next);
+                                        cx.notify();
+                                    }
+                                });
+
+                                let left_threshold = event.bounds.left() + px(28.0);
+                                let right_threshold = event.bounds.right() - px(28.0);
+                                if event.event.position.x <= left_threshold {
+                                    scroll_tabs_by(&scroll_handle, px(18.0));
+                                    drag_state.update(cx, |_state, cx| cx.notify());
+                                } else if event.event.position.x >= right_threshold {
+                                    scroll_tabs_by(&scroll_handle, -px(18.0));
+                                    drag_state.update(cx, |_state, cx| cx.notify());
+                                }
+                            }
+                        })
+                        .on_drop({
+                            let drag_state = drag_state.clone();
+                            move |drag: &DraggedOpenTab, _window, cx| {
+                                let to = drag_state
+                                    .read(cx)
+                                    .tab_drag_over()
+                                    .and_then(|(target, after)| {
+                                        (target == index).then_some(if after {
+                                            index + 1
+                                        } else {
+                                            index
+                                        })
+                                    })
+                                    .unwrap_or(index);
+
+                                drag_state.update(cx, |state, cx| {
+                                    state.move_open_tab(drag.from_index, to, cx);
+                                    state.set_tab_drag_over(None);
+                                });
+                            }
+                        })
+                        .on_drag(drag_data, {
+                            let drag_state = drag_state.clone();
+                            move |drag, _position, _window, cx| {
+                                cx.stop_propagation();
+                                drag_state.update(cx, |state, cx| {
+                                    if state.tab_drag_over().is_some() {
+                                        state.set_tab_drag_over(None);
+                                        cx.notify();
+                                    }
+                                });
+                                cx.new(|_| drag.clone())
+                            }
+                        })
                 })
                 .chain(host.preview_tab.clone().map(|tab| {
                     let label = format!("{}/{}", tab.database, tab.collection);
@@ -126,8 +302,14 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                     let dirty_dot =
                         div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
 
-                    let mut tab_view = Tab::new()
-                        .child(div().italic().text_color(cx.theme().muted_foreground).child(label));
+                    let mut tab_view = Tab::new().max_w(px(OPEN_TAB_MAX_WIDTH)).child(
+                        div()
+                            .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
+                            .truncate()
+                            .italic()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(label),
+                    );
                     if is_dirty {
                         tab_view = tab_view.prefix(dirty_dot);
                     }
@@ -178,7 +360,44 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         .flex_1()
         .h_full()
         .min_h(px(0.0))
-        .child(div().pl(spacing::sm()).child(tab_bar))
+        .min_w(px(0.0))
+        .child(
+            div()
+                .id("collection-tabs-strip")
+                .w_full()
+                .min_w(px(0.0))
+                .border_b_1()
+                .border_color(cx.theme().border.opacity(0.65))
+                .bg(cx.theme().tab_bar.opacity(0.4))
+                .on_scroll_wheel({
+                    let scroll_handle = scroll_handle.clone();
+                    let state = host.state.clone();
+                    move |event, _window, cx| {
+                        let delta = event.delta.pixel_delta(px(1.0));
+                        let axis = if delta.x.is_zero() { delta.y } else { delta.x };
+                        if !axis.is_zero() {
+                            scroll_tabs_by(&scroll_handle, axis);
+                            state.update(cx, |_state, cx| cx.notify());
+                        }
+                    }
+                })
+                .on_drag_move({
+                    let scroll_handle = scroll_handle.clone();
+                    let state = host.state.clone();
+                    move |event: &DragMoveEvent<DraggedOpenTab>, _window, cx| {
+                        let left_threshold = event.bounds.left() + px(28.0);
+                        let right_threshold = event.bounds.right() - px(28.0);
+                        if event.event.position.x <= left_threshold {
+                            scroll_tabs_by(&scroll_handle, px(18.0));
+                            state.update(cx, |_state, cx| cx.notify());
+                        } else if event.event.position.x >= right_threshold {
+                            scroll_tabs_by(&scroll_handle, -px(18.0));
+                            state.update(cx, |_state, cx| cx.notify());
+                        }
+                    }
+                })
+                .child(div().min_w(px(0.0)).child(tab_bar)),
+        )
         .child(content)
         .into_any_element()
 }

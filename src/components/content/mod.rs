@@ -1,6 +1,6 @@
 use gpui::*;
 
-use crate::state::{AppEvent, AppState, StatusLevel, View};
+use crate::state::{ActiveTab, AppEvent, AppState, StatusLevel, View};
 use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
 
 mod empty;
@@ -14,6 +14,10 @@ use tabs::{TabsHost, render_tabs_host};
 /// Content area component that shows collection view or welcome screen
 pub struct ContentArea {
     state: Entity<AppState>,
+    tabs_scroll_handle: ScrollHandle,
+    last_seen_open_tab_count: usize,
+    last_seen_active_tab: ActiveTab,
+    pending_scroll_to_end_frames: u8,
     collection_view: Option<Entity<CollectionView>>,
     database_view: Option<Entity<DatabaseView>>,
     transfer_view: Option<Entity<TransferView>>,
@@ -99,9 +103,16 @@ impl ContentArea {
         } else {
             None
         };
+        let state_ref = state.read(cx);
+        let last_seen_open_tab_count = state_ref.open_tabs().len();
+        let last_seen_active_tab = state_ref.active_tab();
 
         Self {
             state,
+            tabs_scroll_handle: ScrollHandle::new(),
+            last_seen_open_tab_count,
+            last_seen_active_tab,
+            pending_scroll_to_end_frames: 0,
             collection_view,
             database_view,
             transfer_view,
@@ -176,6 +187,16 @@ impl Render for ContentArea {
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
+        let tab_count = tabs.len();
+        let active_changed = active_tab != self.last_seen_active_tab;
+        let tab_count_increased = tab_count > self.last_seen_open_tab_count;
+        if tab_count_increased || active_changed {
+            // Multi-frame reveal is needed because content width can settle after the first render.
+            self.pending_scroll_to_end_frames = self.pending_scroll_to_end_frames.max(4);
+        }
+        self.last_seen_open_tab_count = tab_count;
+        self.last_seen_active_tab = active_tab;
+
         let has_tabs = !tabs.is_empty() || preview_tab.is_some();
         if has_tabs {
             self.ensure_views(
@@ -186,8 +207,17 @@ impl Render for ContentArea {
                 should_settings_view,
                 cx,
             );
+            let scroll_to_end_once = self.pending_scroll_to_end_frames > 0;
+            if self.pending_scroll_to_end_frames > 0 {
+                self.pending_scroll_to_end_frames -= 1;
+                if self.pending_scroll_to_end_frames > 0 {
+                    cx.notify();
+                }
+            }
             let host = TabsHost {
                 state: self.state.clone(),
+                tabs_scroll_handle: &self.tabs_scroll_handle,
+                scroll_to_end_once,
                 tabs: &tabs,
                 active_tab,
                 preview_tab,
@@ -203,6 +233,7 @@ impl Render for ContentArea {
             let content = render_tabs_host(host, cx);
             return render_shell(error_text, self.state.clone(), content, false, cx);
         }
+        self.pending_scroll_to_end_frames = 0;
 
         if matches!(current_view, View::Settings) {
             self.ensure_views(false, false, false, false, should_settings_view, cx);

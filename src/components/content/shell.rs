@@ -14,7 +14,7 @@ pub(crate) fn render_shell(
     with_background: bool,
     cx: &App,
 ) -> AnyElement {
-    let mut root = div().flex().flex_col().flex_1().h_full().min_h(px(0.0));
+    let mut root = div().flex().flex_col().flex_1().h_full().min_h(px(0.0)).min_w(px(0.0));
     if with_background {
         root = root.bg(cx.theme().background);
     }
