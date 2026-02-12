@@ -34,6 +34,7 @@ use super::CollectionView;
 /// Render the header bar with collection title and action buttons.
 impl CollectionView {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::views::documents) fn render_header(
         &self,
         collection_name: &str,
@@ -44,9 +45,12 @@ impl CollectionView {
         dirty_selected: bool,
         is_loading: bool,
         filter_state: Option<Entity<InputState>>,
+        filter_valid: bool,
         filter_active: bool,
         sort_state: Option<Entity<InputState>>,
         projection_state: Option<Entity<InputState>>,
+        sort_valid: bool,
+        projection_valid: bool,
         sort_active: bool,
         projection_active: bool,
         query_options_open: bool,
@@ -119,10 +123,12 @@ impl CollectionView {
                 self.state.clone(),
                 session_key.clone(),
                 filter_state.clone(),
+                filter_valid,
                 filter_active,
                 sort_active,
                 projection_active,
                 query_options_open,
+                cx,
             ));
 
             // Add query options panel if open
@@ -132,6 +138,8 @@ impl CollectionView {
                     session_key.clone(),
                     sort_state,
                     projection_state,
+                    sort_valid,
+                    projection_valid,
                     sort_active,
                     projection_active,
                     cx,

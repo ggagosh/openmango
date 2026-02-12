@@ -7,7 +7,7 @@ mod actions;
 mod completion;
 mod controller;
 mod editor;
-mod editor_behavior;
+pub(crate) mod editor_behavior;
 mod logic;
 mod mongosh;
 mod output;

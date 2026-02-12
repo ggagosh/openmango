@@ -19,28 +19,36 @@ impl Default for IndentConfig {
     }
 }
 
-/// What to do when user types an opening bracket.
+/// What to do when user types an opening bracket or quote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairAction {
     /// Insert the closing char after cursor.
     InsertClosing(char),
     /// Wrap the current selection in open/close chars.
     WrapSelection(char, char),
+    /// Skip past the existing closing char (overtype).
+    Overtype,
     /// Do nothing (inside string/comment, or closing bracket already follows).
     Skip,
 }
 
-/// Pure decision function for auto-pairing brackets.
+/// Pure decision function for auto-pairing brackets and quotes.
 pub fn pair_action(
     inserted_char: char,
     char_after_cursor: Option<char>,
     in_string_or_comment: bool,
     has_selection: bool,
 ) -> PairAction {
+    // Overtype: typing `"` when `"` follows cursor
+    if !has_selection && inserted_char == '"' && char_after_cursor == Some('"') {
+        return PairAction::Overtype;
+    }
+
     let closing = match inserted_char {
         '{' => '}',
         '[' => ']',
         '(' => ')',
+        '"' => '"',
         _ => return PairAction::Skip,
     };
 
@@ -50,11 +58,6 @@ pub fn pair_action(
 
     if has_selection {
         return PairAction::WrapSelection(inserted_char, closing);
-    }
-
-    // If closing bracket already follows cursor, skip
-    if char_after_cursor == Some(closing) {
-        return PairAction::Skip;
     }
 
     PairAction::InsertClosing(closing)
@@ -142,7 +145,8 @@ mod tests {
 
     #[test]
     fn pair_closing_after_cursor() {
-        assert_eq!(pair_action('{', Some('}'), false, false), PairAction::Skip);
+        // Typing `{` when `}` follows should still insert closing `}` to support nesting.
+        assert_eq!(pair_action('{', Some('}'), false, false), PairAction::InsertClosing('}'));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::state::{CollectionStats, CollectionSubview, SessionKey};
 use crate::theme::spacing;
 use gpui::*;
@@ -7,6 +9,8 @@ use gpui_component::scroll::ScrollableElement;
 
 use super::CollectionView;
 use super::header::render_stats_row;
+use super::query::is_valid_query;
+use super::query_completion::QueryCompletionProvider;
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search_state.is_none() {
@@ -108,6 +112,10 @@ impl Render for CollectionView {
         let filter_active = !matches!(filter_raw.trim(), "" | "{}");
         let sort_active = !matches!(sort_raw.trim(), "" | "{}");
         let projection_active = !matches!(projection_raw.trim(), "" | "{}");
+        // Show error only after user presses Enter on invalid input (not live).
+        let filter_valid = !self.filter_error;
+        let sort_valid = !self.sort_error;
+        let projection_valid = !self.projection_error;
         let per_page_u64 = per_page.max(1) as u64;
         let total_pages = total.div_ceil(per_page_u64).max(1);
         let display_page = page.min(total_pages.saturating_sub(1));
@@ -116,15 +124,36 @@ impl Render for CollectionView {
 
         if self.filter_state.is_none() {
             let filter_state = cx.new(|cx| {
-                let mut state =
-                    InputState::new(window, cx).placeholder("Filter (JSON)").clean_on_escape();
+                let mut state = InputState::new(window, cx)
+                    .code_editor("javascript")
+                    .line_number(false)
+                    .auto_indent(false)
+                    .submit_on_enter(true)
+                    .placeholder("Filter (JSON)")
+                    .clean_on_escape();
+                state.lsp.completion_provider =
+                    Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
                 state.set_value("{}".to_string(), window, cx);
                 state
             });
             let subscription =
                 cx.subscribe_in(&filter_state, window, move |view, state, event, window, cx| {
                     match event {
+                        InputEvent::Change => {
+                            if view.filter_auto_pair.try_auto_pair(state, false, window, cx) {
+                                return;
+                            }
+                            view.filter_auto_pair.sync(state.read(cx).value().as_ref());
+                            view.filter_error = false;
+                        }
                         InputEvent::PressEnter { .. } => {
+                            let raw = state.read(cx).value().to_string();
+                            if !is_valid_query(&raw) {
+                                view.filter_error = true;
+                                cx.notify();
+                                return;
+                            }
+                            view.filter_error = false;
                             if let Some(session_key) = view.view_model.current_session()
                                 && let Some(filter_state) = view.filter_state.clone()
                             {
@@ -143,6 +172,7 @@ impl Render for CollectionView {
                                 state.update(cx, |input, cx| {
                                     input.set_value("{}".to_string(), window, cx);
                                 });
+                                view.filter_auto_pair.sync("{}");
                             }
                         }
                         _ => {}
@@ -154,15 +184,36 @@ impl Render for CollectionView {
 
         if self.sort_state.is_none() {
             let sort_state = cx.new(|cx| {
-                let mut state =
-                    InputState::new(window, cx).placeholder("Sort (JSON)").clean_on_escape();
+                let mut state = InputState::new(window, cx)
+                    .code_editor("javascript")
+                    .line_number(false)
+                    .auto_indent(false)
+                    .submit_on_enter(true)
+                    .placeholder("Sort (JSON)")
+                    .clean_on_escape();
+                state.lsp.completion_provider =
+                    Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
                 state.set_value("{}".to_string(), window, cx);
                 state
             });
             let subscription =
                 cx.subscribe_in(&sort_state, window, move |view, state, event, window, cx| {
                     match event {
+                        InputEvent::Change => {
+                            if view.sort_auto_pair.try_auto_pair(state, false, window, cx) {
+                                return;
+                            }
+                            view.sort_auto_pair.sync(state.read(cx).value().as_ref());
+                            view.sort_error = false;
+                        }
                         InputEvent::PressEnter { .. } => {
+                            let raw = state.read(cx).value().to_string();
+                            if !is_valid_query(&raw) {
+                                view.sort_error = true;
+                                cx.notify();
+                                return;
+                            }
+                            view.sort_error = false;
                             if let Some(session_key) = view.view_model.current_session()
                                 && let (Some(sort_state), Some(projection_state)) =
                                     (view.sort_state.clone(), view.projection_state.clone())
@@ -183,6 +234,7 @@ impl Render for CollectionView {
                                 state.update(cx, |input, cx| {
                                     input.set_value("{}".to_string(), window, cx);
                                 });
+                                view.sort_auto_pair.sync("{}");
                             }
                         }
                         _ => {}
@@ -194,8 +246,15 @@ impl Render for CollectionView {
 
         if self.projection_state.is_none() {
             let projection_state = cx.new(|cx| {
-                let mut state =
-                    InputState::new(window, cx).placeholder("Projection (JSON)").clean_on_escape();
+                let mut state = InputState::new(window, cx)
+                    .code_editor("javascript")
+                    .line_number(false)
+                    .auto_indent(false)
+                    .submit_on_enter(true)
+                    .placeholder("Projection (JSON)")
+                    .clean_on_escape();
+                state.lsp.completion_provider =
+                    Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
                 state.set_value("{}".to_string(), window, cx);
                 state
             });
@@ -203,7 +262,21 @@ impl Render for CollectionView {
                 &projection_state,
                 window,
                 move |view, state, event, window, cx| match event {
+                    InputEvent::Change => {
+                        if view.projection_auto_pair.try_auto_pair(state, false, window, cx) {
+                            return;
+                        }
+                        view.projection_auto_pair.sync(state.read(cx).value().as_ref());
+                        view.projection_error = false;
+                    }
                     InputEvent::PressEnter { .. } => {
+                        let raw = state.read(cx).value().to_string();
+                        if !is_valid_query(&raw) {
+                            view.projection_error = true;
+                            cx.notify();
+                            return;
+                        }
+                        view.projection_error = false;
                         if let Some(session_key) = view.view_model.current_session()
                             && let (Some(sort_state), Some(projection_state)) =
                                 (view.sort_state.clone(), view.projection_state.clone())
@@ -224,6 +297,7 @@ impl Render for CollectionView {
                             state.update(cx, |input, cx| {
                                 input.set_value("{}".to_string(), window, cx);
                             });
+                            view.projection_auto_pair.sync("{}");
                         }
                     }
                     _ => {}
@@ -236,31 +310,34 @@ impl Render for CollectionView {
         if self.input_session != session_key {
             self.input_session = session_key.clone();
             if let Some(filter_state) = self.filter_state.clone() {
+                let val = if filter_raw.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    filter_raw.clone()
+                };
                 filter_state.update(cx, |state, cx| {
-                    if filter_raw.trim().is_empty() {
-                        state.set_value("{}".to_string(), window, cx);
-                    } else {
-                        state.set_value(filter_raw.clone(), window, cx);
-                    }
+                    state.set_value(val.clone(), window, cx);
                 });
+                self.filter_auto_pair.sync(&val);
             }
             if let Some(sort_state) = self.sort_state.clone() {
+                let val =
+                    if sort_raw.trim().is_empty() { "{}".to_string() } else { sort_raw.clone() };
                 sort_state.update(cx, |state, cx| {
-                    if sort_raw.trim().is_empty() {
-                        state.set_value("{}".to_string(), window, cx);
-                    } else {
-                        state.set_value(sort_raw.clone(), window, cx);
-                    }
+                    state.set_value(val.clone(), window, cx);
                 });
+                self.sort_auto_pair.sync(&val);
             }
             if let Some(projection_state) = self.projection_state.clone() {
+                let val = if projection_raw.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    projection_raw.clone()
+                };
                 projection_state.update(cx, |state, cx| {
-                    if projection_raw.trim().is_empty() {
-                        state.set_value("{}".to_string(), window, cx);
-                    } else {
-                        state.set_value(projection_raw.clone(), window, cx);
-                    }
+                    state.set_value(val.clone(), window, cx);
                 });
+                self.projection_auto_pair.sync(&val);
             }
         }
 
@@ -291,9 +368,12 @@ impl Render for CollectionView {
                 dirty_selected,
                 is_loading,
                 filter_state,
+                filter_valid,
                 filter_active,
                 sort_state,
                 projection_state,
+                sort_valid,
+                projection_valid,
                 sort_active,
                 projection_active,
                 query_options_open,

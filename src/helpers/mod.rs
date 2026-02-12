@@ -1,3 +1,4 @@
+pub mod auto_pair;
 pub mod format;
 pub mod validate;
 

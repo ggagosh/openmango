@@ -10,16 +10,36 @@ use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 
+/// Render a query input wrapped with validation border.
+fn render_query_input(
+    input_state: &Entity<InputState>,
+    valid: bool,
+    disabled: bool,
+    cx: &App,
+) -> Div {
+    let border = if valid { cx.theme().input } else { cx.theme().danger };
+
+    div().border_1().border_color(border).rounded(cx.theme().radius).child(
+        Input::new(input_state)
+            .font_family(crate::theme::fonts::mono())
+            .bordered(false)
+            .w_full()
+            .disabled(disabled),
+    )
+}
+
 /// Render the filter row with filter input and buttons.
 #[allow(clippy::too_many_arguments)]
 pub fn render_filter_row(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     filter_state: Option<Entity<InputState>>,
+    filter_valid: bool,
     filter_active: bool,
     sort_active: bool,
     projection_active: bool,
     query_options_open: bool,
+    cx: &App,
 ) -> Div {
     let state_for_filter = state.clone();
     let state_for_clear = state.clone();
@@ -31,23 +51,25 @@ pub fn render_filter_row(
         Icon::new(if query_options_open { IconName::ChevronDown } else { IconName::ChevronRight })
             .xsmall();
 
+    let hint = if !filter_valid { "invalid json" } else { "enter to run" };
+    let hint_color = if !filter_valid { cx.theme().danger } else { cx.theme().muted_foreground };
+
     div()
         .flex()
         .items_center()
         .gap(spacing::sm())
         .child(if let Some(filter_state) = filter_state.clone() {
             div()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_w(px(240.0))
+                .gap(spacing::xs())
                 .on_mouse_down(MouseButton::Left, |_, _window, cx| {
                     cx.stop_propagation();
                 })
-                .child(
-                    Input::new(&filter_state)
-                        .font_family(crate::theme::fonts::mono())
-                        .w_full()
-                        .disabled(session_key.is_none()),
-                )
+                .child(render_query_input(&filter_state, filter_valid, session_key.is_none(), cx))
+                .child(div().text_xs().text_color(hint_color).child(hint.to_string()))
                 .into_any_element()
         } else {
             div().flex_1().into_any_element()
@@ -56,7 +78,7 @@ pub fn render_filter_row(
             Button::new("apply-filter")
                 .compact()
                 .label("Filter")
-                .disabled(session_key.is_none())
+                .disabled(session_key.is_none() || !filter_valid)
                 .on_click({
                     let session_key = session_key.clone();
                     let filter_state = filter_state.clone();
@@ -133,17 +155,22 @@ pub fn render_filter_row(
 }
 
 /// Render the query options panel (sort/projection).
+#[allow(clippy::too_many_arguments)]
 pub fn render_query_options(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     sort_state: Option<Entity<InputState>>,
     projection_state: Option<Entity<InputState>>,
+    sort_valid: bool,
+    projection_valid: bool,
     sort_active: bool,
     projection_active: bool,
     cx: &App,
 ) -> Div {
     let state_for_query = state.clone();
     let state_for_clear = state.clone();
+
+    let apply_disabled = session_key.is_none() || !sort_valid || !projection_valid;
 
     div()
         .flex()
@@ -155,10 +182,17 @@ pub fn render_query_options(
         .border_1()
         .border_color(cx.theme().sidebar_border)
         .rounded(borders::radius_sm())
-        .child(render_query_option_row("Sort", sort_state.clone(), session_key.is_none(), cx))
+        .child(render_query_option_row(
+            "Sort",
+            sort_state.clone(),
+            sort_valid,
+            session_key.is_none(),
+            cx,
+        ))
         .child(render_query_option_row(
             "Project",
             projection_state.clone(),
+            projection_valid,
             session_key.is_none(),
             cx,
         ))
@@ -172,7 +206,7 @@ pub fn render_query_options(
                     Button::new("apply-query")
                         .compact()
                         .label("Apply")
-                        .disabled(session_key.is_none())
+                        .disabled(apply_disabled)
                         .on_click({
                             let session_key = session_key.clone();
                             let sort_state = sort_state.clone();
@@ -243,6 +277,7 @@ pub fn render_query_options(
 pub fn render_query_option_row(
     label: &str,
     state: Option<Entity<InputState>>,
+    valid: bool,
     disabled: bool,
     cx: &App,
 ) -> AnyElement {
@@ -268,12 +303,7 @@ pub fn render_query_option_row(
                 .on_mouse_down(MouseButton::Left, |_, _window, cx| {
                     cx.stop_propagation();
                 })
-                .child(
-                    Input::new(&state)
-                        .font_family(crate::theme::fonts::mono())
-                        .w_full()
-                        .disabled(disabled),
-                ),
+                .child(render_query_input(&state, valid, disabled, cx)),
         )
         .into_any_element()
 }

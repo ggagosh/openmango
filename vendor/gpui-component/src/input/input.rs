@@ -287,6 +287,7 @@ impl RenderOnce for Input {
                     .on_action(window.listener_for(&self.state, InputState::delete_previous_word))
                     .on_action(window.listener_for(&self.state, InputState::delete_next_word))
                     .on_action(window.listener_for(&self.state, InputState::enter))
+                    .on_action(window.listener_for(&self.state, InputState::insert_newline))
                     .on_action(window.listener_for(&self.state, InputState::escape))
                     .on_action(window.listener_for(&self.state, InputState::paste))
                     .on_action(window.listener_for(&self.state, InputState::copy))

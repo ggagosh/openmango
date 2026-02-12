@@ -33,6 +33,9 @@ pub(crate) enum InputMode {
         line_number: bool,
         /// Auto indent when pressing Enter
         auto_indent: bool,
+        /// When true, Enter emits PressEnter without inserting a newline.
+        /// Use Shift+Enter to insert a newline instead.
+        submit_on_enter: bool,
         language: SharedString,
         indent_guides: bool,
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
@@ -67,6 +70,7 @@ impl InputMode {
             highlighter: Rc::new(RefCell::new(None)),
             line_number: true,
             auto_indent: true,
+            submit_on_enter: false,
             indent_guides: true,
             diagnostics: DiagnosticSet::new(&Rope::new()),
         }
@@ -204,6 +208,19 @@ impl InputMode {
         }
     }
 
+    pub(super) fn submit_on_enter(&self) -> bool {
+        match self {
+            InputMode::CodeEditor { submit_on_enter, .. } => *submit_on_enter,
+            _ => false,
+        }
+    }
+
+    pub(super) fn set_submit_on_enter(&mut self, value: bool) {
+        if let InputMode::CodeEditor { submit_on_enter, .. } = self {
+            *submit_on_enter = value;
+        }
+    }
+
     pub(super) fn update_highlighter(
         &mut self,
         selected_range: &Range<usize>,
@@ -302,6 +319,7 @@ mod tests {
             multi_line: false,
             line_number: true,
             auto_indent: true,
+            submit_on_enter: false,
             indent_guides: true,
             rows: 0,
             tab: Default::default(),

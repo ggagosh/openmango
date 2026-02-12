@@ -8,6 +8,7 @@ use regex::RegexBuilder;
 use std::collections::HashSet;
 
 use crate::bson::DocumentKey;
+use crate::helpers::auto_pair::AutoPairState;
 use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
 
 use super::node_meta::NodeMeta;
@@ -23,6 +24,12 @@ pub struct CollectionView {
     pub(crate) filter_state: Option<Entity<InputState>>,
     pub(crate) sort_state: Option<Entity<InputState>>,
     pub(crate) projection_state: Option<Entity<InputState>>,
+    pub(crate) filter_auto_pair: AutoPairState,
+    pub(crate) sort_auto_pair: AutoPairState,
+    pub(crate) projection_auto_pair: AutoPairState,
+    pub(crate) filter_error: bool,
+    pub(crate) sort_error: bool,
+    pub(crate) projection_error: bool,
     pub(crate) search_state: Option<Entity<InputState>>,
     pub(crate) search_visible: bool,
     pub(crate) search_matches: Vec<String>,
@@ -411,6 +418,12 @@ impl CollectionView {
             filter_state: None,
             sort_state: None,
             projection_state: None,
+            filter_auto_pair: AutoPairState::new("{}"),
+            sort_auto_pair: AutoPairState::new("{}"),
+            projection_auto_pair: AutoPairState::new("{}"),
+            filter_error: false,
+            sort_error: false,
+            projection_error: false,
             search_state: None,
             search_visible: false,
             search_matches: Vec::new(),

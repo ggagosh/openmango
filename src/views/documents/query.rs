@@ -106,6 +106,15 @@ impl CollectionView {
     }
 }
 
+/// Check if a query string is valid (empty, `{}`, or parseable as a document).
+pub(super) fn is_valid_query(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "{}" {
+        return true;
+    }
+    parse_document_from_json(trimmed).is_ok()
+}
+
 fn parse_optional_doc(raw: &str) -> Result<(String, Option<Document>), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "{}" {

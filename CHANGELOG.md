@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Smart query inputs for filter, sort, and projection with autocomplete for MongoDB operators (`$gt`, `$in`, `$regex`, etc.) and field names from loaded documents
+- Auto-closing brackets, braces, and quotes in query inputs and Forge editor
+- JSON validation on query submit with red border and "invalid json" hint when invalid
+- Shift+Enter in query inputs to insert newlines with auto-indentation between braces
+- Tab key accepts autocomplete suggestions in all code inputs
+- In-document search (Cmd/Ctrl+F) with case-sensitive, whole word, regex, and values-only modes
+- Expand All / Collapse All buttons for document trees, aggregation results, and Forge results
+- Drag-and-drop tab reordering with scroll wheel support for overflowing tabs
+- Pinnable result tabs in Forge shell to keep important results across runs
+- Search and Format JSON buttons in JSON editing dialogs
+- Pagination for aggregation results
 - Theme system with Vercel Dark and Darcula Dark themes, runtime switching
 - Window vibrancy effect
 
@@ -21,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Switched sidecar runtime from Node.js to Bun
 - Updated JSON editor font
+- Preview tabs now shown in italic to distinguish from pinned tabs
+- JSON dialogs now use soft-wrapped editors with line numbers
 - Integration tests now share one MongoDB container per test binary instead of spawning one per test (121 → 9 containers), with UUID-namespaced databases for isolation
 - Upgraded test MongoDB image from 5.0.6 (EOL) to 7.0 LTS
 - Fixed MongoDB 7.0 compatibility in stats tests (`i64` field types, removed `indexDetails` option, `currentOp` admin-only enforcement)

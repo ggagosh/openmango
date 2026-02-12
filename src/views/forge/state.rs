@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use super::types::{ForgeOutputTab, ForgeRunOutput, ResultPage};
+use crate::helpers::auto_pair::AutoPairState;
 
 pub struct ForgeEditorState {
     pub editor_state: Option<gpui::Entity<InputState>>,
@@ -13,7 +14,7 @@ pub struct ForgeEditorState {
     pub current_text: String,
     pub editor_focus_requested: bool,
     pub active_tab_id: Option<uuid::Uuid>,
-    pub auto_pair_guard: bool,
+    pub auto_pair: AutoPairState,
 }
 
 pub struct ForgeRuntimeState {
@@ -62,7 +63,7 @@ impl ForgeState {
                 current_text: String::new(),
                 editor_focus_requested: false,
                 active_tab_id: None,
-                auto_pair_guard: false,
+                auto_pair: AutoPairState::new(""),
             },
             output: ForgeOutputState {
                 raw_output_state: None,

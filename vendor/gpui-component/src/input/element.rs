@@ -893,8 +893,14 @@ impl Element for TextElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         if state.mode.is_multi_line() {
-            style.flex_grow = 1.0;
-            style.size.height = relative(1.).into();
+            if state.mode.submit_on_enter() {
+                // Auto-grow based on content lines for submit-on-enter inputs.
+                let lines = state.text.lines_len().max(1);
+                style.size.height = (lines as f32 * line_height).into();
+            } else {
+                style.flex_grow = 1.0;
+                style.size.height = relative(1.).into();
+            }
             if state.mode.is_auto_grow() {
                 // Auto grow to let height match to rows, but not exceed max rows.
                 let rows = state.mode.max_rows().min(state.mode.rows());
@@ -1107,7 +1113,9 @@ impl Element for TextElement {
         let ghost_lines_height = ghost_line_count as f32 * line_height;
 
         let total_wrapped_lines = state.text_wrapper.len();
-        let empty_bottom_height = if state.mode.is_code_editor() {
+        let empty_bottom_height = if state.mode.is_code_editor()
+            && !state.mode.submit_on_enter()
+        {
             bounds
                 .size
                 .height

@@ -8,9 +8,7 @@ use super::logic::statement_bounds;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
-use super::editor_behavior::{
-    IndentConfig, IndentResult, PairAction, indent_after_enter, pair_action,
-};
+use super::editor_behavior::{IndentConfig, IndentResult, indent_after_enter};
 use super::parser::parse_context;
 
 impl ForgeView {
@@ -75,6 +73,7 @@ impl ForgeView {
         };
         let text = editor_state.read(cx).value().to_string();
         self.state.editor.current_text = text.clone();
+        self.state.editor.auto_pair.sync(&text);
         self.app_state.update(cx, |state, _cx| {
             state.set_forge_tab_content(tab_id, text);
         });
@@ -139,6 +138,7 @@ impl ForgeView {
             self.app_state.read(cx).forge_tab_content(active_id).unwrap_or("").to_string();
 
         self.state.editor.current_text = content.clone();
+        self.state.editor.auto_pair.sync(&content);
         if let Some(editor_state) = &self.state.editor.editor_state {
             editor_state.update(cx, |editor, cx| {
                 editor.set_value(content.clone(), window, cx);
@@ -197,6 +197,7 @@ impl ForgeView {
 
     pub fn handle_editor_change(&mut self, text: &str, cx: &mut Context<Self>) {
         self.state.editor.current_text = text.to_string();
+        self.state.editor.auto_pair.sync(text);
         if let Some(tab_id) = self.state.editor.active_tab_id {
             let content = self.state.editor.current_text.clone();
             self.app_state.update(cx, |state, _cx| {
@@ -211,75 +212,14 @@ impl ForgeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.state.editor.auto_pair_guard {
-            self.state.editor.auto_pair_guard = false;
-            return false;
-        }
-
-        let mut snapshot: Option<(String, usize)> = None;
-        state.update(cx, |input, _cx| {
-            snapshot = Some((input.value().to_string(), input.cursor()));
-        });
-
-        let Some((current, cursor)) = snapshot else {
-            return false;
+        let current = state.read(cx).value().to_string();
+        let cursor = state.read(cx).cursor();
+        let in_comment = if cursor > 0 && cursor <= current.len() {
+            parse_context(&current, cursor.saturating_sub(1)).in_comment
+        } else {
+            false
         };
-        if cursor == 0 || cursor > current.len() {
-            return false;
-        }
-
-        let previous = self.state.editor.current_text.clone();
-        let Some((prev_range, current_range)) = diff_ranges(&previous, &current) else {
-            return false;
-        };
-        let Some(inserted_text) = current.get(current_range.clone()) else {
-            return false;
-        };
-        let mut chars = inserted_text.chars();
-        let inserted_char = match (chars.next(), chars.next()) {
-            (Some(ch), None) => ch,
-            _ => return false,
-        };
-
-        // Check if we're inside a string or comment — skip auto-pair if so
-        let in_string_or_comment = parse_context(&current, cursor.saturating_sub(1)).in_comment;
-        let char_after_cursor = current.get(cursor..).and_then(|s| s.chars().next());
-        let has_selection = !prev_range.is_empty() && current_range.len() == 1;
-
-        let action =
-            pair_action(inserted_char, char_after_cursor, in_string_or_comment, has_selection);
-
-        match action {
-            PairAction::Skip => false,
-            PairAction::WrapSelection(open, close) => {
-                let Some(selected_text) = previous.get(prev_range.clone()) else {
-                    return false;
-                };
-                let replacement = format!("{}{}{}", open, selected_text, close);
-                let cursor_offset = current_range.start + 1 + selected_text.len();
-                self.state.editor.auto_pair_guard = true;
-                state.update(cx, |input, cx| {
-                    input.replace_text_in_range(Some(current_range), &replacement, window, cx);
-                    let position = input.text().offset_to_position(cursor_offset);
-                    input.set_cursor_position(position, window, cx);
-                });
-                true
-            }
-            PairAction::InsertClosing(close) => {
-                if current.len() != previous.len() + 1 {
-                    return false;
-                }
-                self.state.editor.auto_pair_guard = true;
-                state.update(cx, |input, cx| {
-                    let range = cursor..cursor;
-                    let text = close.to_string();
-                    input.replace_text_in_range(Some(range), &text, window, cx);
-                    let position = input.text().offset_to_position(cursor);
-                    input.set_cursor_position(position, window, cx);
-                });
-                true
-            }
-        }
+        self.state.editor.auto_pair.try_auto_pair(state, in_comment, window, cx)
     }
 }
 
@@ -392,33 +332,4 @@ fn apply_custom_indent(
             true
         }
     }
-}
-
-fn diff_ranges(
-    previous: &str,
-    current: &str,
-) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
-    if previous == current {
-        return None;
-    }
-
-    let prev_bytes = previous.as_bytes();
-    let curr_bytes = current.as_bytes();
-    let mut start = 0;
-    let min_len = prev_bytes.len().min(curr_bytes.len());
-    while start < min_len && prev_bytes[start] == curr_bytes[start] {
-        start += 1;
-    }
-
-    let mut prev_end = prev_bytes.len();
-    let mut curr_end = curr_bytes.len();
-    while prev_end > start
-        && curr_end > start
-        && prev_bytes[prev_end - 1] == curr_bytes[curr_end - 1]
-    {
-        prev_end -= 1;
-        curr_end -= 1;
-    }
-
-    Some((start..prev_end, start..curr_end))
 }

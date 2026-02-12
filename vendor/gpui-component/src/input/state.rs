@@ -83,6 +83,7 @@ actions!(
         MoveToPreviousWord,
         MoveToNextWord,
         Escape,
+        InsertNewline,
         ToggleCodeActions,
         Search,
         GoToDefinition,
@@ -117,6 +118,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, Some(CONTEXT)),
         KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
         KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
+        KeyBinding::new("shift-enter", InsertNewline, Some(CONTEXT)),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
         KeyBinding::new("down", MoveDown, Some(CONTEXT)),
@@ -513,6 +515,13 @@ impl InputState {
         debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
         self.mode.set_auto_indent(auto_indent);
         cx.notify();
+    }
+
+    /// When enabled, pressing Enter emits `PressEnter` without inserting a newline.
+    /// Use Shift+Enter to insert a newline instead.
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.mode.set_submit_on_enter(submit);
+        self
     }
 
     /// Set the number of rows for the multi-line Textarea.
@@ -1182,6 +1191,12 @@ impl InputState {
             return;
         }
 
+        if self.mode.submit_on_enter() {
+            // submit_on_enter: Enter just submits, Shift+Enter inserts newline.
+            cx.emit(InputEvent::PressEnter { secondary: false });
+            return;
+        }
+
         if self.mode.is_multi_line() {
             // Get current line indent
             let indent = if self.mode.is_code_editor() && self.mode.auto_indent() {
@@ -1200,6 +1215,77 @@ impl InputState {
         }
 
         cx.emit(InputEvent::PressEnter { secondary: false });
+    }
+
+    pub(super) fn insert_newline(
+        &mut self,
+        _action: &InsertNewline,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.mode.is_multi_line() {
+            return;
+        }
+
+        // Clear inline completion
+        if self.has_inline_completion() {
+            self.clear_inline_completion(cx);
+        }
+
+        if self.mode.is_code_editor() {
+            self.insert_newline_with_indent(window, cx);
+        } else {
+            self.replace_text_in_range_silent(None, "\n", window, cx);
+        }
+        self.pause_blink_cursor(cx);
+    }
+
+    fn insert_newline_with_indent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cursor = self.cursor();
+        let text_str = self.text.to_string();
+        let bytes = text_str.as_bytes();
+
+        // Find chars around cursor
+        let prev_char = if cursor > 0 { bytes.get(cursor - 1).map(|&b| b as char) } else { None };
+        let next_char = bytes.get(cursor).map(|&b| b as char);
+
+        // Get current line's base indent
+        let mut line_start = cursor;
+        while line_start > 0 && bytes[line_start - 1] != b'\n' {
+            line_start -= 1;
+        }
+        let mut indent_end = line_start;
+        while indent_end < bytes.len() && (bytes[indent_end] == b' ' || bytes[indent_end] == b'\t')
+        {
+            indent_end += 1;
+        }
+        let base_indent = &text_str[line_start..indent_end];
+
+        let tab = self.current_tab_size();
+        let step = if tab.hard_tabs { "\t".to_string() } else { " ".repeat(tab.tab_size) };
+
+        let opens = matches!(prev_char, Some('{') | Some('[') | Some('('));
+        let closes = matches!(next_char, Some('}') | Some(']') | Some(')'));
+
+        if opens && closes {
+            // Between braces: expand to two lines
+            let inner = format!("{}{}", base_indent, step);
+            let insertion = format!("\n{}\n{}", inner, base_indent);
+            self.replace_text_in_range_silent(None, &insertion, window, cx);
+            // Position cursor at end of inner indent line
+            let new_cursor = cursor + 1 + inner.len();
+            let position = self.text.offset_to_position(new_cursor);
+            self.set_cursor_position(position, window, cx);
+        } else if opens {
+            // After opening brace: indent one level deeper
+            let indent = format!("{}{}", base_indent, step);
+            let insertion = format!("\n{}", indent);
+            self.replace_text_in_range_silent(None, &insertion, window, cx);
+        } else {
+            // Normal: continue with same indent
+            let insertion = format!("\n{}", base_indent);
+            self.replace_text_in_range_silent(None, &insertion, window, cx);
+        }
     }
 
     pub(super) fn clean(&mut self, window: &mut Window, cx: &mut Context<Self>) {
