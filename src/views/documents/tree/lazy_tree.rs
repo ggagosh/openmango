@@ -36,6 +36,60 @@ pub struct VisibleRow {
     pub key_label: String,
 }
 
+/// Collect all expandable node IDs (documents, sub-documents, arrays) from a set of documents.
+/// Used by "expand all" to populate the expanded nodes set.
+pub fn collect_all_expandable_nodes(documents: &[SessionDocument]) -> HashSet<String> {
+    let mut nodes = HashSet::new();
+    for item in documents {
+        let root_id = doc_root_id(&item.key);
+        if !item.doc.is_empty() {
+            nodes.insert(root_id);
+        }
+        collect_expandable_in_doc(&mut nodes, &item.key, &item.doc, &[]);
+    }
+    nodes
+}
+
+fn collect_expandable_in_doc(
+    nodes: &mut HashSet<String>,
+    doc_key: &DocumentKey,
+    doc: &Document,
+    parent_path: &[PathSegment],
+) {
+    for (key, value) in doc.iter() {
+        let mut path = parent_path.to_vec();
+        path.push(PathSegment::Key(key.clone()));
+        collect_expandable_bson(nodes, doc_key, &path, value);
+    }
+}
+
+fn collect_expandable_bson(
+    nodes: &mut HashSet<String>,
+    doc_key: &DocumentKey,
+    path: &[PathSegment],
+    value: &Bson,
+) {
+    match value {
+        Bson::Document(inner) => {
+            nodes.insert(path_to_id(doc_key, path));
+            for (key, child) in inner.iter() {
+                let mut child_path = path.to_vec();
+                child_path.push(PathSegment::Key(key.clone()));
+                collect_expandable_bson(nodes, doc_key, &child_path, child);
+            }
+        }
+        Bson::Array(arr) => {
+            nodes.insert(path_to_id(doc_key, path));
+            for (idx, child) in arr.iter().enumerate() {
+                let mut child_path = path.to_vec();
+                child_path.push(PathSegment::Index(idx));
+                collect_expandable_bson(nodes, doc_key, &child_path, child);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Build the list of visible rows based on expanded state.
 ///
 /// This walks through documents and only descends into expanded nodes,

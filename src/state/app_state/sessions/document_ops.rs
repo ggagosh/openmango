@@ -2,6 +2,8 @@
 
 use mongodb::bson::{Bson, Document};
 
+use std::collections::HashSet;
+
 use crate::bson::{DocumentKey, PathSegment, path_to_id, set_bson_at_path};
 use crate::state::AppState;
 use crate::state::app_state::types::SessionKey;
@@ -66,6 +68,18 @@ impl AppState {
             for depth in 0..=path.len() {
                 session.view.expanded_nodes.insert(path_to_id(doc_key, &path[..depth]));
             }
+        }
+    }
+
+    pub fn clear_expanded_nodes(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.expanded_nodes.clear();
+        }
+    }
+
+    pub fn set_expanded_nodes(&mut self, session_key: &SessionKey, nodes: HashSet<String>) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.expanded_nodes = nodes;
         }
     }
 

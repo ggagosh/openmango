@@ -6,9 +6,12 @@ use gpui_component::Sizable as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
+use gpui_component::{Icon, IconName};
 use mongodb::bson::Document;
 
+use crate::components::Button;
 use crate::theme::{fonts, spacing};
+use crate::views::documents::tree::lazy_tree::collect_all_expandable_nodes;
 use crate::views::results::{
     ResultEmptyState, ResultViewMode, ResultViewProps, render_results_view,
 };
@@ -116,15 +119,54 @@ impl ForgeView {
             .bordered(true)
             .focus_bordered(true)
             .w(px(220.0));
-        body = body.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_end()
-                .px(spacing::sm())
-                .py(spacing::xs())
-                .child(search_input),
-        );
+        let view_entity = cx.entity();
+        let documents_for_buttons = self.current_result_documents();
+        let mut search_row = div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(spacing::xs())
+            .px(spacing::sm())
+            .py(spacing::xs());
+        if let Some(documents) = documents_for_buttons {
+            search_row = search_row
+                .child(
+                    Button::new("forge-expand-all")
+                        .ghost()
+                        .compact()
+                        .icon(Icon::new(IconName::ChevronDown).xsmall())
+                        .tooltip("Expand all")
+                        .on_click({
+                            let view_entity = view_entity.clone();
+                            let documents = documents.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                let nodes = collect_all_expandable_nodes(&documents);
+                                view_entity.update(cx, |view, cx| {
+                                    view.state.output.result_expanded_nodes = nodes;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("forge-collapse-all")
+                        .ghost()
+                        .compact()
+                        .icon(Icon::new(IconName::ChevronUp).xsmall())
+                        .tooltip("Collapse all")
+                        .on_click({
+                            let view_entity = view_entity.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                view_entity.update(cx, |view, cx| {
+                                    view.state.output.result_expanded_nodes.clear();
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                );
+        }
+        search_row = search_row.child(search_input);
+        body = body.child(search_row);
 
         if let Some(documents) = self.current_result_documents() {
             let props = ResultViewProps {

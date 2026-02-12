@@ -5,6 +5,7 @@ use gpui_component::Sizable as _;
 use gpui_component::input::Input;
 use gpui_component::spinner::Spinner;
 use gpui_component::switch::Switch;
+use gpui_component::{Icon, IconName};
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
@@ -13,7 +14,7 @@ use crate::state::app_state::{PipelineState, StageStatsMode};
 use crate::state::{AppCommands, SessionDocument, SessionKey};
 use crate::theme::spacing;
 use crate::views::documents::tree::lazy_row::{compute_row_meta, render_lazy_readonly_row};
-use crate::views::documents::tree::lazy_tree::build_visible_rows;
+use crate::views::documents::tree::lazy_tree::{build_visible_rows, collect_all_expandable_nodes};
 
 use crate::views::CollectionView;
 
@@ -505,13 +506,64 @@ fn render_results_tree(
                         .text_color(cx.theme().muted_foreground)
                         .child("Value"),
                 )
-                .child(
+                .child({
+                    let view_entity = view_entity.clone();
+                    let documents_for_expand = documents.clone();
                     div()
                         .w(px(120.0))
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Type"),
-                ),
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div().text_xs().text_color(cx.theme().muted_foreground).child("Type"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    Button::new("agg-expand-all")
+                                        .ghost()
+                                        .compact()
+                                        .icon(Icon::new(IconName::ChevronDown).xsmall())
+                                        .tooltip("Expand all")
+                                        .on_click({
+                                            let view_entity = view_entity.clone();
+                                            let documents = documents_for_expand.clone();
+                                            move |_: &ClickEvent,
+                                                  _window: &mut Window,
+                                                  cx: &mut App| {
+                                                let nodes =
+                                                    collect_all_expandable_nodes(
+                                                        &documents,
+                                                    );
+                                                view_entity.update(cx, |view, cx| {
+                                                    view.aggregation_results_expanded_nodes = nodes;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    Button::new("agg-collapse-all")
+                                        .ghost()
+                                        .compact()
+                                        .icon(Icon::new(IconName::ChevronUp).xsmall())
+                                        .tooltip("Collapse all")
+                                        .on_click({
+                                            let view_entity = view_entity.clone();
+                                            move |_: &ClickEvent,
+                                                  _window: &mut Window,
+                                                  cx: &mut App| {
+                                                view_entity.update(cx, |view, cx| {
+                                                    view.aggregation_results_expanded_nodes.clear();
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }),
+                                ),
+                        )
+                }),
         )
         .child(
             div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(

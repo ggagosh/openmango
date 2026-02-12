@@ -11,6 +11,7 @@ use crate::state::{AppState, SessionDocument, SessionKey};
 use crate::theme::{borders, spacing};
 
 use super::super::CollectionView;
+use super::super::tree::lazy_tree::collect_all_expandable_nodes;
 use super::super::tree::tree_content::render_tree_row;
 
 impl CollectionView {
@@ -99,13 +100,115 @@ impl CollectionView {
                                     .text_color(cx.theme().muted_foreground)
                                     .child("Value"),
                             )
-                            .child(
+                            .child({
+                                let state = self.state.clone();
+                                let view = view.clone();
+                                let session_key_for_expand = session_key.clone();
+                                let documents_for_expand: Vec<SessionDocument> = documents.to_vec();
                                 div()
                                     .w(px(120.0))
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Type"),
-                            ),
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Type"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                Button::new("expand-all")
+                                                    .ghost()
+                                                    .compact()
+                                                    .icon(Icon::new(IconName::ChevronDown).xsmall())
+                                                    .tooltip("Expand all")
+                                                    .on_click({
+                                                        let state = state.clone();
+                                                        let view = view.clone();
+                                                        let session_key =
+                                                            session_key_for_expand.clone();
+                                                        let documents =
+                                                            documents_for_expand.clone();
+                                                        move |_: &ClickEvent,
+                                                              _window: &mut Window,
+                                                              cx: &mut App| {
+                                                            let Some(session_key) =
+                                                                session_key.clone()
+                                                            else {
+                                                                return;
+                                                            };
+                                                            let nodes =
+                                                                collect_all_expandable_nodes(
+                                                                    &documents,
+                                                                );
+                                                            state.update(
+                                                                cx,
+                                                                |state, cx| {
+                                                                    state
+                                                                        .set_expanded_nodes(
+                                                                            &session_key,
+                                                                            nodes,
+                                                                        );
+                                                                    cx.notify();
+                                                                },
+                                                            );
+                                                            view.update(cx, |this, cx| {
+                                                                this.view_model
+                                                                    .rebuild_tree(
+                                                                        &this.state,
+                                                                        cx,
+                                                                    );
+                                                                cx.notify();
+                                                            });
+                                                        }
+                                                    }),
+                                            )
+                                            .child(
+                                                Button::new("collapse-all")
+                                                    .ghost()
+                                                    .compact()
+                                                    .icon(Icon::new(IconName::ChevronUp).xsmall())
+                                                    .tooltip("Collapse all")
+                                                    .on_click({
+                                                        let state = state.clone();
+                                                        let view = view.clone();
+                                                        let session_key =
+                                                            session_key_for_expand.clone();
+                                                        move |_: &ClickEvent,
+                                                              _window: &mut Window,
+                                                              cx: &mut App| {
+                                                            let Some(session_key) =
+                                                                session_key.clone()
+                                                            else {
+                                                                return;
+                                                            };
+                                                            state.update(
+                                                                cx,
+                                                                |state, cx| {
+                                                                    state
+                                                                        .clear_expanded_nodes(
+                                                                            &session_key,
+                                                                        );
+                                                                    cx.notify();
+                                                                },
+                                                            );
+                                                            view.update(cx, |this, cx| {
+                                                                this.view_model
+                                                                    .rebuild_tree(
+                                                                        &this.state,
+                                                                        cx,
+                                                                    );
+                                                                cx.notify();
+                                                            });
+                                                        }
+                                                    }),
+                                            ),
+                                    )
+                            }),
                     )
                     .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(
                         if is_loading {
