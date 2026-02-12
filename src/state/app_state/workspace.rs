@@ -101,6 +101,9 @@ impl AppState {
                     TabKey::Settings => {
                         self.current_view = View::Settings;
                     }
+                    TabKey::Changelog => {
+                        self.current_view = View::Changelog;
+                    }
                 }
             }
         } else if let Some(selected_db) = self.workspace.selected_database.clone() {
@@ -125,6 +128,13 @@ impl AppState {
         }
 
         self.workspace_restore_pending = false;
+
+        // Re-open the changelog tab if it was deferred during startup
+        if self.changelog_pending {
+            self.changelog_pending = false;
+            self.open_changelog_tab(cx);
+        }
+
         self.update_workspace_from_state();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();

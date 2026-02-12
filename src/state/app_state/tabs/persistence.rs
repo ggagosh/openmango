@@ -23,7 +23,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
                 (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-                (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
+                (_, TabKey::Settings | TabKey::Changelog) => false,
                 _ => false,
             })
             .and_then(|tab| {
@@ -38,7 +38,7 @@ impl AppState {
                 (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
                 (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
                 (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-                (_, TabKey::Settings) => false, // Settings tab not persisted per-connection
+                (_, TabKey::Settings | TabKey::Changelog) => false,
                 _ => false,
             })
             .map(|tab| self.build_workspace_tab(tab))
@@ -278,8 +278,8 @@ impl AppState {
                     forge_content: content,
                 }
             }
-            TabKey::Settings => {
-                // Settings tab is not persisted in workspace
+            TabKey::Settings | TabKey::Changelog => {
+                // Settings/Changelog tabs are not persisted in workspace
                 WorkspaceTab {
                     database: String::new(),
                     collection: String::new(),
@@ -326,8 +326,8 @@ impl AppState {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
                 }
-                TabKey::Settings => {
-                    // Settings tab doesn't affect selection
+                TabKey::Settings | TabKey::Changelog => {
+                    // Settings/Changelog tabs don't affect selection
                 }
             }
         } else {

@@ -7,7 +7,9 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, spacing};
-use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
+use crate::views::{
+    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
+};
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
 const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
@@ -27,6 +29,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
+    pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
 }
 
 #[derive(Clone)]
@@ -140,6 +143,7 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         }
                         TabKey::Forge(tab) => (host.state.read(cx).forge_tab_label(tab.id), false),
                         TabKey::Settings => ("Settings".to_string(), false),
+                        TabKey::Changelog => ("What's New".to_string(), false),
                     };
                     let state = host.state.clone();
                     let close_button = div()
@@ -333,6 +337,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::Settings => host
             .settings_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Changelog => host
+            .changelog_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         _ => {

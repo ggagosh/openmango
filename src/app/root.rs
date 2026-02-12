@@ -74,8 +74,8 @@ impl AppRoot {
                 });
             } else if should_show {
                 let state_clone = state.clone();
-                window.defer(cx, move |window, cx| {
-                    crate::changelog::show_whats_new_dialog(state_clone, window, cx);
+                window.defer(cx, move |_window, cx| {
+                    crate::changelog::open_changelog_tab(state_clone, cx);
                 });
             }
         }
@@ -138,6 +138,7 @@ impl Render for AppRoot {
             View::Forge => key_context.push_str(" Forge"),
             View::Welcome => key_context.push_str(" Welcome"),
             View::Settings => key_context.push_str(" Settings"),
+            View::Changelog => key_context.push_str(" Changelog"),
         }
 
         // Render dialog layer (Context derefs to App)

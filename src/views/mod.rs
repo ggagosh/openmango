@@ -8,6 +8,7 @@ pub mod results;
 pub mod settings;
 pub mod transfer;
 
+pub use crate::changelog::ChangelogView;
 pub use databases::DatabaseView;
 pub use documents::CollectionView;
 pub use forge::ForgeView;

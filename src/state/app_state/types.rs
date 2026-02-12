@@ -26,6 +26,7 @@ pub enum View {
     Transfer,
     Forge,
     Settings,
+    Changelog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -93,6 +94,7 @@ pub enum TabKey {
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
     Settings,
+    Changelog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -185,7 +185,7 @@ impl AppState {
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
-                super::types::TabKey::Settings => false,
+                super::types::TabKey::Settings | super::types::TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
             .collect();

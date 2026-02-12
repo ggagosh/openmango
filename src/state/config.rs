@@ -44,7 +44,7 @@ impl ConfigManager {
         self.config_dir.join(filename)
     }
 
-    /// Load data from a binary file
+    /// Load data from a binary (postcard) file
     fn load<T: DeserializeOwned>(&self, filename: &str) -> Result<Option<T>> {
         let path = self.file_path(filename);
 
@@ -60,7 +60,7 @@ impl ConfigManager {
         Ok(Some(value))
     }
 
-    /// Save data to a binary file
+    /// Save data to a binary (postcard) file
     fn save<T: Serialize + ?Sized>(&self, filename: &str, data: &T) -> Result<()> {
         let path = self.file_path(filename);
 
@@ -68,6 +68,35 @@ impl ConfigManager {
             .with_context(|| format!("Failed to serialize {}", filename))?;
 
         fs::write(&path, bytes).with_context(|| format!("Failed to write {}", filename))?;
+
+        Ok(())
+    }
+
+    /// Load data from a JSON file
+    fn load_json<T: DeserializeOwned>(&self, filename: &str) -> Result<Option<T>> {
+        let path = self.file_path(filename);
+
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let data =
+            fs::read_to_string(&path).with_context(|| format!("Failed to read {}", filename))?;
+
+        let value: T = serde_json::from_str(&data)
+            .with_context(|| format!("Failed to deserialize {}", filename))?;
+
+        Ok(Some(value))
+    }
+
+    /// Save data to a JSON file
+    fn save_json<T: Serialize + ?Sized>(&self, filename: &str, data: &T) -> Result<()> {
+        let path = self.file_path(filename);
+
+        let json = serde_json::to_string_pretty(data)
+            .with_context(|| format!("Failed to serialize {}", filename))?;
+
+        fs::write(&path, json).with_context(|| format!("Failed to write {}", filename))?;
 
         Ok(())
     }
@@ -107,16 +136,30 @@ impl ConfigManager {
     // Settings
     // =========================================================================
 
-    const SETTINGS_FILE: &'static str = "settings.bin";
+    const SETTINGS_FILE: &'static str = "settings.json";
+    const SETTINGS_FILE_LEGACY: &'static str = "settings.bin";
 
-    /// Load application settings from disk
+    /// Load application settings from disk (JSON, with postcard migration)
     pub fn load_settings(&self) -> Result<AppSettings> {
-        Ok(self.load(Self::SETTINGS_FILE)?.unwrap_or_default())
+        // Try JSON first
+        if let Some(settings) = self.load_json(Self::SETTINGS_FILE)? {
+            return Ok(settings);
+        }
+
+        // Migrate from legacy postcard format
+        if let Ok(Some(settings)) = self.load::<AppSettings>(Self::SETTINGS_FILE_LEGACY) {
+            // Save as JSON and remove the old binary file
+            self.save_json(Self::SETTINGS_FILE, &settings)?;
+            let _ = fs::remove_file(self.file_path(Self::SETTINGS_FILE_LEGACY));
+            return Ok(settings);
+        }
+
+        Ok(AppSettings::default())
     }
 
     /// Save application settings to disk
     pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
-        self.save(Self::SETTINGS_FILE, settings)
+        self.save_json(Self::SETTINGS_FILE, settings)
     }
 }
 

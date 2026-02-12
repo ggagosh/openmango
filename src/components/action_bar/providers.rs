@@ -89,6 +89,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                 (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
             }
             TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
+            TabKey::Changelog => ("What's New".to_string(), "Changelog".to_string()),
         };
 
         actions.push(ActionItem {
@@ -179,6 +180,15 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             shortcut: Some(SharedString::from("Cmd+,")),
             available: true,
             priority: 100,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:whats-new"),
+            label: SharedString::from("What's New"),
+            detail: Some(SharedString::from("View changelog")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 105,
             ..Default::default()
         },
         ActionItem {

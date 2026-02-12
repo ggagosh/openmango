@@ -88,6 +88,7 @@ pub struct AppState {
     // Workspace persistence
     pub workspace: WorkspaceState,
     pub(crate) workspace_restore_pending: bool,
+    pub(crate) changelog_pending: bool,
     aggregation_workspace_save_gen: Arc<AtomicU64>,
 
     // Auto-update
@@ -141,6 +142,7 @@ impl AppState {
             config,
             workspace,
             workspace_restore_pending,
+            changelog_pending: false,
             aggregation_workspace_save_gen,
             update_status: UpdateStatus::Idle,
         }

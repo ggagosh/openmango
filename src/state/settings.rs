@@ -7,7 +7,9 @@ use super::app_state::{InsertMode, TransferFormat};
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppSettings {
+    #[serde(default)]
     pub appearance: AppearanceSettings,
+    #[serde(default)]
     pub transfer: TransferSettings,
     #[serde(default = "default_current_version")]
     pub last_seen_version: String,

@@ -403,6 +403,28 @@ impl AppState {
         cx.notify();
     }
 
+    /// Open changelog tab (singleton - only one changelog tab allowed)
+    pub fn open_changelog_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.tabs.open.iter().position(|tab| matches!(tab, TabKey::Changelog))
+        {
+            if self.active_index() != Some(index) {
+                self.set_active_index(index);
+                self.current_view = View::Changelog;
+                self.clear_error_status();
+                cx.emit(AppEvent::ViewChanged);
+                cx.notify();
+            }
+            return;
+        }
+
+        self.tabs.open.push(TabKey::Changelog);
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::Changelog;
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
     /// Open a Forge query shell tab for a database (optionally prefilled for a collection).
     pub fn open_forge_tab(
         &mut self,
@@ -531,6 +553,9 @@ impl AppState {
             TabKey::Settings => {
                 self.current_view = View::Settings;
             }
+            TabKey::Changelog => {
+                self.current_view = View::Changelog;
+            }
             TabKey::Forge(tab) => {
                 self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
@@ -633,8 +658,8 @@ impl AppState {
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
-            TabKey::Settings => {
-                // No cleanup needed for settings tab
+            TabKey::Settings | TabKey::Changelog => {
+                // No cleanup needed
             }
         }
 
@@ -712,6 +737,9 @@ impl AppState {
                     TabKey::Settings => {
                         self.current_view = View::Settings;
                     }
+                    TabKey::Changelog => {
+                        self.current_view = View::Changelog;
+                    }
                 }
                 cx.emit(AppEvent::ViewChanged);
             }
@@ -775,6 +803,9 @@ impl AppState {
                         TabKey::Settings => {
                             self.current_view = View::Settings;
                         }
+                        TabKey::Changelog => {
+                            self.current_view = View::Changelog;
+                        }
                     }
                     cx.emit(AppEvent::ViewChanged);
                 }
@@ -820,6 +851,9 @@ impl AppState {
                     }
                     TabKey::Settings => {
                         self.current_view = View::Settings;
+                    }
+                    TabKey::Changelog => {
+                        self.current_view = View::Changelog;
                     }
                 }
                 cx.emit(AppEvent::ViewChanged);
@@ -896,8 +930,7 @@ impl AppState {
                 TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
-                TabKey::Transfer(_) => false,
-                TabKey::Settings => false,
+                TabKey::Transfer(_) | TabKey::Settings | TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
             .collect();

@@ -1,7 +1,9 @@
 use gpui::*;
 
 use crate::state::{ActiveTab, AppEvent, AppState, StatusLevel, View};
-use crate::views::{CollectionView, DatabaseView, ForgeView, SettingsView, TransferView};
+use crate::views::{
+    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
+};
 
 mod empty;
 mod shell;
@@ -23,6 +25,7 @@ pub struct ContentArea {
     transfer_view: Option<Entity<TransferView>>,
     forge_view: Option<Entity<ForgeView>>,
     settings_view: Option<Entity<SettingsView>>,
+    changelog_view: Option<Entity<ChangelogView>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -41,6 +44,7 @@ impl ContentArea {
                     should_create_transfer,
                     should_create_forge,
                     should_create_settings,
+                    should_create_changelog,
                 ) = {
                     let state_ref = state.read(cx);
                     (
@@ -50,6 +54,7 @@ impl ContentArea {
                         matches!(state_ref.current_view, View::Transfer),
                         matches!(state_ref.current_view, View::Forge),
                         matches!(state_ref.current_view, View::Settings),
+                        matches!(state_ref.current_view, View::Changelog),
                     )
                 };
 
@@ -68,6 +73,9 @@ impl ContentArea {
                 }
                 if should_create_settings && this.settings_view.is_none() {
                     this.settings_view = Some(cx.new(|cx| SettingsView::new(state.clone(), cx)));
+                }
+                if should_create_changelog && this.changelog_view.is_none() {
+                    this.changelog_view = Some(cx.new(|cx| ChangelogView::new(state.clone(), cx)));
                 }
 
                 cx.notify();
@@ -103,6 +111,11 @@ impl ContentArea {
         } else {
             None
         };
+        let changelog_view = if matches!(state.read(cx).current_view, View::Changelog) {
+            Some(cx.new(|cx| ChangelogView::new(state.clone(), cx)))
+        } else {
+            None
+        };
         let state_ref = state.read(cx);
         let last_seen_open_tab_count = state_ref.open_tabs().len();
         let last_seen_active_tab = state_ref.active_tab();
@@ -118,10 +131,12 @@ impl ContentArea {
             transfer_view,
             forge_view,
             settings_view,
+            changelog_view,
             _subscriptions: subscriptions,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_views(
         &mut self,
         should_collection: bool,
@@ -129,6 +144,7 @@ impl ContentArea {
         should_transfer: bool,
         should_forge: bool,
         should_settings: bool,
+        should_changelog: bool,
         cx: &mut Context<Self>,
     ) {
         if should_collection && self.collection_view.is_none() {
@@ -145,6 +161,9 @@ impl ContentArea {
         }
         if should_settings && self.settings_view.is_none() {
             self.settings_view = Some(cx.new(|cx| SettingsView::new(self.state.clone(), cx)));
+        }
+        if should_changelog && self.changelog_view.is_none() {
+            self.changelog_view = Some(cx.new(|cx| ChangelogView::new(self.state.clone(), cx)));
         }
     }
 }
@@ -187,6 +206,7 @@ impl Render for ContentArea {
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
+        let should_changelog_view = matches!(current_view, View::Changelog);
         let tab_count = tabs.len();
         let active_changed = active_tab != self.last_seen_active_tab;
         let tab_count_increased = tab_count > self.last_seen_open_tab_count;
@@ -205,6 +225,7 @@ impl Render for ContentArea {
                 should_transfer_view,
                 should_forge_view,
                 should_settings_view,
+                should_changelog_view,
                 cx,
             );
             let scroll_to_end_once = self.pending_scroll_to_end_frames > 0;
@@ -229,6 +250,7 @@ impl Render for ContentArea {
                 transfer_view: self.transfer_view.as_ref(),
                 forge_view: self.forge_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
+                changelog_view: self.changelog_view.as_ref(),
             };
             let content = render_tabs_host(host, cx);
             return render_shell(error_text, self.state.clone(), content, false, cx);
@@ -236,35 +258,42 @@ impl Render for ContentArea {
         self.pending_scroll_to_end_frames = 0;
 
         if matches!(current_view, View::Settings) {
-            self.ensure_views(false, false, false, false, should_settings_view, cx);
+            self.ensure_views(false, false, false, false, should_settings_view, false, cx);
             if let Some(view) = &self.settings_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
+        if matches!(current_view, View::Changelog) {
+            self.ensure_views(false, false, false, false, false, should_changelog_view, cx);
+            if let Some(view) = &self.changelog_view {
+                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+            }
+        }
+
         if matches!(current_view, View::Database) {
-            self.ensure_views(false, should_database_view, false, false, false, cx);
+            self.ensure_views(false, should_database_view, false, false, false, false, cx);
             if let Some(view) = &self.database_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Transfer) {
-            self.ensure_views(false, false, should_transfer_view, false, false, cx);
+            self.ensure_views(false, false, should_transfer_view, false, false, false, cx);
             if let Some(view) = &self.transfer_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Forge) {
-            self.ensure_views(false, false, false, should_forge_view, false, cx);
+            self.ensure_views(false, false, false, should_forge_view, false, false, cx);
             if let Some(view) = &self.forge_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if has_collection {
-            self.ensure_views(should_collection_view, false, false, false, false, cx);
+            self.ensure_views(should_collection_view, false, false, false, false, false, cx);
             if let Some(view) = &self.collection_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
