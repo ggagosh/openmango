@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-02-12
+
 ### Added
 - Smart query inputs for filter, sort, and projection with autocomplete for MongoDB operators (`$gt`, `$in`, `$regex`, etc.) and field names from loaded documents
 - Auto-closing brackets, braces, and quotes in query inputs and Forge editor
@@ -30,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Forge shell spinner not appearing
 
 ### Changed
+- Replaced "What's New" dialog with a scrollable changelog tab in the tab bar
 - Switched sidecar runtime from Node.js to Bun
 - Updated JSON editor font
 - Preview tabs now shown in italic to distinguish from pinned tabs

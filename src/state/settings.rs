@@ -16,7 +16,9 @@ pub struct AppSettings {
 }
 
 fn default_current_version() -> String {
-    env!("OPENMANGO_GIT_SHA").to_string()
+    // Empty string so that upgrading users (whose JSON lacks this field)
+    // will see the changelog on first launch after the update.
+    String::new()
 }
 
 /// Appearance settings
