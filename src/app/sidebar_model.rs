@@ -197,6 +197,13 @@ impl SidebarModel {
         None
     }
 
+    pub(crate) fn find_parent_connection_index(
+        entries: &[SidebarEntry],
+        from: usize,
+    ) -> Option<usize> {
+        (0..=from).rev().find(|&i| entries[i].depth == 0)
+    }
+
     pub(crate) fn build_entries(
         connections: &[SavedConnection],
         active: &std::collections::HashMap<Uuid, ActiveConnection>,

@@ -33,6 +33,7 @@ pub(crate) struct Sidebar {
     scroll_handle: UniformListScrollHandle,
     width: Pixels,
     collapsed: bool,
+    sticky_connection_index: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -172,6 +173,7 @@ impl Sidebar {
             scroll_handle: UniformListScrollHandle::default(),
             width: SIDEBAR_DEFAULT_WIDTH,
             collapsed: false,
+            sticky_connection_index: None,
             _subscriptions: subscriptions,
         };
 

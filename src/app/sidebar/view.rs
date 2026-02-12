@@ -19,6 +19,7 @@ use crate::state::{AppCommands, TransferMode};
 use crate::theme::{borders, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
+use super::super::sidebar_model::SidebarModel;
 use super::Sidebar;
 
 impl Render for Sidebar {
@@ -41,6 +42,15 @@ impl Render for Sidebar {
         let state_for_tree = self.state.clone();
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
+
+        // Sticky connection header (one-frame-delayed: uses index computed by previous processor run)
+        let sticky_info = self.sticky_connection_index.and_then(|idx| {
+            let entry = self.model.entries.get(idx)?;
+            let connection_id = entry.id.connection_id();
+            let is_connected = active_connections.contains_key(&connection_id);
+            let is_connecting = connecting_id == Some(connection_id);
+            Some((idx, entry.label.clone(), connection_id, is_connected, is_connecting))
+        });
 
         let search_query = self.search_state.read(cx).value().to_string();
         let search_results = if self.model.search_open {
@@ -358,8 +368,14 @@ impl Render for Sidebar {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .overflow_y_scrollbar()
-                    .child(if self.model.entries.is_empty() {
+                    .relative()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .overflow_y_scrollbar()
+                            .child(if self.model.entries.is_empty() {
                         div()
                             .flex()
                             .flex_col()
@@ -388,8 +404,6 @@ impl Render for Sidebar {
                         let theme_list_hover = cx.theme().list_hover;
                         let theme_list_active = cx.theme().list_active;
                         let theme_muted_foreground = cx.theme().muted_foreground;
-                        let theme_success = cx.theme().success;
-                        let theme_warning = cx.theme().warning;
                         let theme_foreground = cx.theme().foreground;
                         let theme_secondary_foreground = cx.theme().secondary_foreground;
                         uniform_list("sidebar-rows", self.model.entries.len(), {
@@ -400,6 +414,7 @@ impl Render for Sidebar {
                                       visible_range: std::ops::Range<usize>,
                                       _window,
                                       _cx| {
+                                    let visible_start = visible_range.start;
                                     let mut items = Vec::with_capacity(visible_range.len());
                                     let active_connections = active_connections.clone();
                                     let connecting_id = connecting_id;
@@ -624,29 +639,12 @@ impl Render for Sidebar {
                                             .when(!is_folder, |this| {
                                                 this.child(div().w(sizing::icon_sm()))
                                             })
-                                            // Connection: status dot + server icon
+                                            // Connection: server icon
                                             .when(is_connection, |this| {
                                                 this.child(
-                                                    div()
-                                                        .w(sizing::status_dot())
-                                                        .h(sizing::status_dot())
-                                                        .rounded_full()
-                                                        .bg(if is_connected {
-                                                            theme_success
-                                                        } else if is_connecting {
-                                                            theme_warning
-                                                        } else {
-                                                            theme_muted_foreground
-                                                        }),
-                                                )
-                                                .child(
                                                     Icon::new(IconName::Globe)
                                                         .size(sizing::icon_md())
-                                                        .text_color(if is_connected {
-                                                            theme_foreground
-                                                        } else {
-                                                            theme_secondary_foreground
-                                                        }),
+                                                        .text_color(theme_foreground),
                                                 )
                                             })
                                             // Database: folder icon
@@ -743,6 +741,20 @@ impl Render for Sidebar {
                                         items.push(row);
                                     }
 
+                                    // Compute sticky connection header
+                                    sidebar.sticky_connection_index =
+                                        if !sidebar.model.entries.is_empty()
+                                            && visible_start > 0
+                                        {
+                                            SidebarModel::find_parent_connection_index(
+                                                &sidebar.model.entries,
+                                                visible_start,
+                                            )
+                                            .filter(|&idx| idx < visible_start)
+                                        } else {
+                                            None
+                                        };
+
                                     items
                                 },
                             )
@@ -752,6 +764,52 @@ impl Render for Sidebar {
                         .track_scroll(scroll_handle)
                         .with_sizing_behavior(ListSizingBehavior::Auto)
                         .into_any_element()
+                    }),
+                    )
+                    // Sticky connection header overlay
+                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting)| {
+                        let scroll_handle = self.scroll_handle.clone();
+                        let sidebar_entity = sidebar_entity.clone();
+                        this.child(
+                            div()
+                                .id("sticky-connection-header")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .pl(px(8.0))
+                                .py(px(2.0))
+                                .bg(cx.theme().sidebar)
+                                .border_b_1()
+                                .border_color(cx.theme().border)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(cx.theme().list_hover))
+                                .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                    scroll_handle.scroll_to_item(idx, gpui::ScrollStrategy::Top);
+                                    sidebar_entity.update(cx, |_sidebar, cx| {
+                                        cx.notify();
+                                    });
+                                })
+                                // Globe icon
+                                .child(
+                                    Icon::new(IconName::Globe)
+                                        .size(sizing::icon_md())
+                                        .text_color(cx.theme().foreground),
+                                )
+                                // Label
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .truncate()
+                                        .child(label),
+                                ),
+                        )
                     }),
             )
     }
