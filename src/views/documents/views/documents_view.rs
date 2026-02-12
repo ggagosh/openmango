@@ -12,7 +12,7 @@ use crate::theme::{borders, spacing};
 
 use super::super::CollectionView;
 use super::super::tree::lazy_tree::collect_all_expandable_nodes;
-use super::super::tree::tree_content::render_tree_row;
+use super::super::tree::tree_content::{SearchOptions, render_tree_row};
 
 impl CollectionView {
     #[allow(clippy::too_many_arguments)]
@@ -248,7 +248,13 @@ impl CollectionView {
                                 let tree_state = tree_state.clone();
                                 let state_clone = self.state.clone();
                                 let session_key = session_key.clone();
-                                let search_query = search_query.clone();
+                                let search_opts = SearchOptions {
+                                    query: search_query.clone(),
+                                    case_sensitive: self.search_case_sensitive,
+                                    whole_word: self.search_whole_word,
+                                    use_regex: self.search_regex,
+                                    values_only: self.search_values_only,
+                                };
                                 let current_match_id = current_match_id.clone();
                                 let documents_focus = self.documents_focus.clone();
 
@@ -264,7 +270,7 @@ impl CollectionView {
                                         tree_state.clone(),
                                         state_clone.clone(),
                                         session_key.clone(),
-                                        search_query.as_deref(),
+                                        &search_opts,
                                         current_match_id.as_deref(),
                                         documents_focus.clone(),
                                         cx,
@@ -277,6 +283,14 @@ impl CollectionView {
                     .child(if show_search {
                         let search_state = self.search_state.clone();
                         let view = view.clone();
+                        let case_active = self.search_case_sensitive;
+                        let word_active = self.search_whole_word;
+                        let regex_active = self.search_regex;
+                        let values_active = self.search_values_only;
+                        let active_bg = cx.theme().secondary;
+                        let active_fg = cx.theme().foreground;
+                        let inactive_fg = cx.theme().muted_foreground;
+                        let divider_color = cx.theme().border;
                         div()
                             .absolute()
                             .top(px(8.0))
@@ -295,12 +309,83 @@ impl CollectionView {
                             } else {
                                 div().into_any_element()
                             })
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(match_label.clone()),
-                            )
+                            // Match mode toggles
+                            .child(search_toggle_button(
+                                "search-case",
+                                Icon::new(IconName::CaseSensitive).xsmall(),
+                                case_active,
+                                "Case Sensitive",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_case_sensitive(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(search_toggle_button(
+                                "search-word",
+                                Icon::default().path("icons/whole-word.svg").xsmall(),
+                                word_active,
+                                "Whole Word",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_whole_word(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(search_toggle_button(
+                                "search-regex",
+                                Icon::default().path("icons/regex.svg").xsmall(),
+                                regex_active,
+                                "Regex",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_regex(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            // Divider between match mode and scope
+                            .child(search_divider(divider_color))
+                            .child(search_toggle_button(
+                                "search-values",
+                                Icon::default().path("icons/braces.svg").xsmall(),
+                                values_active,
+                                "Values Only",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_values_only(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            // Divider between scope and navigation
+                            .child(search_divider(divider_color))
                             .child(
                                 Button::new("search-prev")
                                     .ghost()
@@ -332,6 +417,12 @@ impl CollectionView {
                                             });
                                         }
                                     }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(match_label.clone()),
                             )
                             .child(
                                 Button::new("search-close")
@@ -374,4 +465,28 @@ impl CollectionView {
             ))
             .into_any_element()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_toggle_button(
+    id: impl Into<ElementId>,
+    icon: Icon,
+    active: bool,
+    tooltip_text: impl Into<SharedString>,
+    active_bg: Hsla,
+    active_fg: Hsla,
+    inactive_fg: Hsla,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    let icon = if active { icon.text_color(active_fg) } else { icon.text_color(inactive_fg) };
+    let mut btn =
+        Button::new(id).ghost().compact().icon(icon).tooltip(tooltip_text).on_click(on_click);
+    if active {
+        btn = btn.active_style(active_bg);
+    }
+    btn
+}
+
+fn search_divider(color: Hsla) -> Div {
+    div().w(px(1.0)).h(px(16.0)).bg(color)
 }

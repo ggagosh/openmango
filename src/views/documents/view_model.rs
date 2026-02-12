@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::*;
-use gpui_component::input::{InputState, NumberInputEvent, StepAction};
+use gpui_component::input::{InputEvent, InputState, NumberInputEvent, StepAction};
 use gpui_component::tree::{TreeItem, TreeState};
 use mongodb::bson::Bson;
 
@@ -25,6 +25,7 @@ pub struct DocumentViewModel {
     tree_order_all: Vec<String>,
     inline_editor_state: Option<InlineEditor>,
     inline_editor_subscription: Option<Subscription>,
+    inline_blur_subscription: Option<Subscription>,
     editing_node_id: Option<String>,
     editing_doc_key: Option<DocumentKey>,
     editing_path: Vec<PathSegment>,
@@ -41,6 +42,7 @@ impl DocumentViewModel {
             tree_order_all: Vec::new(),
             inline_editor_state: None,
             inline_editor_subscription: None,
+            inline_blur_subscription: None,
             editing_node_id: None,
             editing_doc_key: None,
             editing_path: Vec::new(),
@@ -169,6 +171,7 @@ impl DocumentViewModel {
         self.editing_original = None;
         self.inline_editor_state = None;
         self.inline_editor_subscription = None;
+        self.inline_blur_subscription = None;
     }
 
     pub fn begin_inline_edit(
@@ -266,6 +269,15 @@ impl DocumentViewModel {
         };
 
         self.inline_editor_state = Some(editor);
+        if let Some(state) = &focus_state {
+            let blur_sub = cx.subscribe_in(state, window, |view, _state, event, _window, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    view.view_model.clear_inline_edit();
+                    cx.notify();
+                }
+            });
+            self.inline_blur_subscription = Some(blur_sub);
+        }
         if let Some(state) = focus_state {
             let focus = state.read(cx).focus_handle(cx);
             window.defer(cx, move |window, _cx| {

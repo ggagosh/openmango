@@ -12,7 +12,7 @@ impl Render for CollectionView {
         if self.search_state.is_none() {
             let search_state = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Find in values (Cmd/Ctrl+F)")
+                    .placeholder("Find in document (Cmd/Ctrl+F)")
                     .clean_on_escape()
             });
             let subscription =

@@ -28,6 +28,7 @@ pub struct Button {
     focus_handle: Option<FocusHandle>,
     tab_index: Option<isize>,
     tooltip: Option<(SharedString, Option<TooltipAction>)>,
+    active_bg: Option<Hsla>,
 }
 
 impl Button {
@@ -44,6 +45,7 @@ impl Button {
             focus_handle: None,
             tab_index: None,
             tooltip: None,
+            active_bg: None,
         }
     }
 
@@ -110,6 +112,11 @@ impl Button {
         self
     }
 
+    pub fn active_style(mut self, bg: Hsla) -> Self {
+        self.active_bg = Some(bg);
+        self
+    }
+
     pub fn tooltip_with_action(
         mut self,
         tooltip: impl Into<SharedString>,
@@ -151,6 +158,12 @@ impl RenderOnce for Button {
                 cx.theme().foreground,
                 crate::theme::colors::transparent(),
             ),
+        };
+
+        let (bg, border_color) = if let Some(active_bg) = self.active_bg {
+            (active_bg, active_bg)
+        } else {
+            (bg, border_color)
         };
 
         let height = if self.compact { px(22.0) } else { sizing::button_height() };

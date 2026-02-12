@@ -16,10 +16,20 @@ use crate::components::Button;
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::state::matches_query;
 use crate::views::documents::types::InlineEditor;
 
 use super::super::CollectionView;
 use super::tree_menus::{build_document_menu, build_property_menu};
+
+#[derive(Clone)]
+pub struct SearchOptions {
+    pub query: Option<String>,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub use_regex: bool,
+    pub values_only: bool,
+}
 
 /// Render a single tree row with optional inline editing.
 #[allow(clippy::too_many_arguments)]
@@ -34,7 +44,7 @@ pub fn render_tree_row(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    search_query: Option<&str>,
+    search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
     cx: &App,
@@ -143,7 +153,17 @@ pub fn render_tree_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label, is_root, is_dirty, cx))
+        .child(render_key_column(
+            depth,
+            leading,
+            &key_label,
+            is_root,
+            is_dirty,
+            search_opts,
+            current_match_id,
+            &item_id,
+            cx,
+        ))
         .child(render_value_column(
             ix,
             &item_id,
@@ -158,7 +178,7 @@ pub fn render_tree_row(
             tree_state.clone(),
             state.clone(),
             session_key.clone(),
-            search_query,
+            search_opts,
             current_match_id,
             documents_focus.clone(),
             cx,
@@ -295,7 +315,23 @@ pub fn render_readonly_tree_row(
                 }
             }
         })
-        .child(render_key_column(depth, leading, &key_label, is_root, false, cx))
+        .child(render_key_column(
+            depth,
+            leading,
+            &key_label,
+            is_root,
+            false,
+            &SearchOptions {
+                query: None,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: false,
+                values_only: false,
+            },
+            None,
+            &item_id,
+            cx,
+        ))
         .child(render_value_column_readonly(&value_label, value_color))
         .child(
             div()
@@ -317,10 +353,26 @@ fn render_key_column(
     key_label: &str,
     is_root: bool,
     is_dirty: bool,
+    search_opts: &SearchOptions,
+    current_match_id: Option<&str>,
+    item_id: &str,
     cx: &App,
 ) -> impl IntoElement {
     let key_color = colors::syntax_key(cx);
     let key_label = key_label.to_string();
+    let is_key_match = if let Some(query) = &search_opts.query {
+        !search_opts.values_only
+            && matches_query(
+                query,
+                &key_label,
+                search_opts.case_sensitive,
+                search_opts.whole_word,
+                search_opts.use_regex,
+            )
+    } else {
+        false
+    };
+    let is_current_match = current_match_id.is_some_and(|id| id == item_id);
 
     div()
         .flex()
@@ -342,6 +394,19 @@ fn render_key_column(
                 .when(is_root && is_dirty, |s: Div| {
                     s.child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary))
                 })
+                .when(is_key_match && !is_dirty, {
+                    let dirty_bg = colors::bg_dirty(cx);
+                    move |s: Div| {
+                        s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+                    }
+                })
+                .when(is_current_match && is_key_match, |s: Div| {
+                    s.border_1()
+                        .border_color(cx.theme().primary)
+                        .rounded(borders::radius_sm())
+                        .px(spacing::xs())
+                        .py(px(1.0))
+                })
                 .child(key_label),
         )
 }
@@ -361,15 +426,24 @@ fn render_value_column(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    search_query: Option<&str>,
+    search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
     cx: &App,
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
     let value_label = value_label.to_string();
-    let query = search_query.unwrap_or("").trim();
-    let is_match = !query.is_empty() && value_label.to_lowercase().contains(query);
+    let is_match = if let Some(query) = &search_opts.query {
+        matches_query(
+            query,
+            &value_label,
+            search_opts.case_sensitive,
+            search_opts.whole_word,
+            search_opts.use_regex,
+        )
+    } else {
+        false
+    };
     let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
     let focus_handle = documents_focus.clone();
 

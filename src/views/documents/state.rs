@@ -3,6 +3,7 @@ use gpui_component::input::InputState;
 use gpui_component::tree::TreeState;
 
 use mongodb::bson::Document;
+use regex::RegexBuilder;
 
 use std::collections::HashSet;
 
@@ -26,6 +27,10 @@ pub struct CollectionView {
     pub(crate) search_visible: bool,
     pub(crate) search_matches: Vec<String>,
     pub(crate) search_index: Option<usize>,
+    pub(crate) search_case_sensitive: bool,
+    pub(crate) search_whole_word: bool,
+    pub(crate) search_regex: bool,
+    pub(crate) search_values_only: bool,
     pub(crate) input_session: Option<SessionKey>,
     pub(crate) aggregation_input_session: Option<SessionKey>,
     pub(crate) aggregation_selected_stage: Option<usize>,
@@ -410,6 +415,10 @@ impl CollectionView {
             search_visible: false,
             search_matches: Vec::new(),
             search_index: None,
+            search_case_sensitive: false,
+            search_whole_word: false,
+            search_regex: false,
+            search_values_only: false,
             input_session: None,
             aggregation_input_session: None,
             aggregation_selected_stage: None,
@@ -530,8 +539,8 @@ impl CollectionView {
             .as_ref()
             .map(|state| state.read(cx).value().to_string())
             .unwrap_or_default();
-        let trimmed = raw.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_lowercase()) }
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
     }
 
     pub(crate) fn show_search_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -547,7 +556,7 @@ impl CollectionView {
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_visible = false;
-        window.blur();
+        window.focus(&self.documents_focus);
         if let Some(search_state) = self.search_state.clone() {
             search_state.update(cx, |state, cx| {
                 state.set_value(String::new(), window, cx);
@@ -555,6 +564,30 @@ impl CollectionView {
         }
         self.search_matches.clear();
         self.search_index = None;
+        self.search_case_sensitive = false;
+        self.search_whole_word = false;
+        self.search_regex = false;
+        self.search_values_only = false;
+    }
+
+    pub(crate) fn toggle_search_case_sensitive(&mut self, cx: &mut Context<Self>) {
+        self.search_case_sensitive = !self.search_case_sensitive;
+        self.update_search_results(cx);
+    }
+
+    pub(crate) fn toggle_search_whole_word(&mut self, cx: &mut Context<Self>) {
+        self.search_whole_word = !self.search_whole_word;
+        self.update_search_results(cx);
+    }
+
+    pub(crate) fn toggle_search_regex(&mut self, cx: &mut Context<Self>) {
+        self.search_regex = !self.search_regex;
+        self.update_search_results(cx);
+    }
+
+    pub(crate) fn toggle_search_values_only(&mut self, cx: &mut Context<Self>) {
+        self.search_values_only = !self.search_values_only;
+        self.update_search_results(cx);
     }
 
     pub(crate) fn update_search_results(&mut self, cx: &mut Context<Self>) {
@@ -563,6 +596,11 @@ impl CollectionView {
             self.search_index = None;
             return;
         };
+
+        let case_sensitive = self.search_case_sensitive;
+        let whole_word = self.search_whole_word;
+        let use_regex = self.search_regex;
+        let values_only = self.search_values_only;
 
         let node_meta = self.view_model.node_meta();
         let mut matches = Vec::new();
@@ -573,7 +611,11 @@ impl CollectionView {
             if meta.path.is_empty() {
                 continue;
             }
-            if meta.value_label.to_lowercase().contains(&query) {
+            let key_matches = !values_only
+                && matches_query(&query, &meta.key_label, case_sensitive, whole_word, use_regex);
+            let value_matches =
+                matches_query(&query, &meta.value_label, case_sensitive, whole_word, use_regex);
+            if key_matches || value_matches {
                 matches.push(node_id.clone());
             }
         }
@@ -766,5 +808,50 @@ impl CollectionView {
                 tree.scroll_to_item(ix, ScrollStrategy::Center);
             });
         }
+    }
+}
+
+pub(crate) fn matches_query(
+    query: &str,
+    text: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+    use_regex: bool,
+) -> bool {
+    if query.is_empty() {
+        return false;
+    }
+
+    if use_regex {
+        let Ok(re) = RegexBuilder::new(query).case_insensitive(!case_sensitive).build() else {
+            return false;
+        };
+        if whole_word {
+            // Check that any regex match is a whole word
+            for m in re.find_iter(text) {
+                let start_ok =
+                    m.start() == 0 || !text[..m.start()].ends_with(char::is_alphanumeric);
+                let end_ok =
+                    m.end() == text.len() || !text[m.end()..].starts_with(char::is_alphanumeric);
+                if start_ok && end_ok {
+                    return true;
+                }
+            }
+            false
+        } else {
+            re.is_match(text)
+        }
+    } else if whole_word {
+        let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric() && c != '_').collect();
+        if case_sensitive {
+            words.contains(&query)
+        } else {
+            let q = query.to_lowercase();
+            words.iter().any(|w| w.to_lowercase() == q)
+        }
+    } else if case_sensitive {
+        text.contains(query)
+    } else {
+        text.to_lowercase().contains(&query.to_lowercase())
     }
 }

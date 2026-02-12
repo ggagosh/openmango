@@ -4862,6 +4862,7 @@ dependencies = [
  "parking_lot",
  "postcard",
  "raw-window-handle",
+ "regex",
  "reqwest",
  "rfd",
  "ropey",
