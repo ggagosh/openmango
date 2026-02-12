@@ -109,6 +109,8 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         state.update(cx, |state, cx| {
                             state.move_open_tab(drag.from_index, to, cx);
                             state.set_tab_drag_over(None);
+                            let final_index = state.open_tabs().len().saturating_sub(1);
+                            state.select_tab(final_index, cx);
                         });
                     }
                 }),
@@ -211,13 +213,11 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         })
                         .on_drag_move({
                             let drag_state = drag_state.clone();
-                            let scroll_handle = scroll_handle.clone();
                             move |event: &DragMoveEvent<DraggedOpenTab>, _window, cx| {
                                 let drag = event.drag(cx);
                                 if drag.from_index == index {
                                     return;
                                 }
-
                                 let insert_after = event.event.position.x > event.bounds.center().x;
                                 drag_state.update(cx, |state, cx| {
                                     let next = Some((index, insert_after));
@@ -226,16 +226,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                                         cx.notify();
                                     }
                                 });
-
-                                let left_threshold = event.bounds.left() + px(28.0);
-                                let right_threshold = event.bounds.right() - px(28.0);
-                                if event.event.position.x <= left_threshold {
-                                    scroll_tabs_by(&scroll_handle, px(18.0));
-                                    drag_state.update(cx, |_state, cx| cx.notify());
-                                } else if event.event.position.x >= right_threshold {
-                                    scroll_tabs_by(&scroll_handle, -px(18.0));
-                                    drag_state.update(cx, |_state, cx| cx.notify());
-                                }
                             }
                         })
                         .on_drop({
@@ -254,8 +244,18 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                                     .unwrap_or(index);
 
                                 drag_state.update(cx, |state, cx| {
-                                    state.move_open_tab(drag.from_index, to, cx);
+                                    let from = drag.from_index;
+                                    state.move_open_tab(from, to, cx);
                                     state.set_tab_drag_over(None);
+                                    // Activate the dropped tab (Zed behavior)
+                                    let final_index = if from == to || from + 1 == to {
+                                        from
+                                    } else if from < to {
+                                        to - 1
+                                    } else {
+                                        to
+                                    };
+                                    state.select_tab(final_index, cx);
                                 });
                             }
                         })
@@ -377,21 +377,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         let axis = if delta.x.is_zero() { delta.y } else { delta.x };
                         if !axis.is_zero() {
                             scroll_tabs_by(&scroll_handle, axis);
-                            state.update(cx, |_state, cx| cx.notify());
-                        }
-                    }
-                })
-                .on_drag_move({
-                    let scroll_handle = scroll_handle.clone();
-                    let state = host.state.clone();
-                    move |event: &DragMoveEvent<DraggedOpenTab>, _window, cx| {
-                        let left_threshold = event.bounds.left() + px(28.0);
-                        let right_threshold = event.bounds.right() - px(28.0);
-                        if event.event.position.x <= left_threshold {
-                            scroll_tabs_by(&scroll_handle, px(18.0));
-                            state.update(cx, |_state, cx| cx.notify());
-                        } else if event.event.position.x >= right_threshold {
-                            scroll_tabs_by(&scroll_handle, -px(18.0));
                             state.update(cx, |_state, cx| cx.notify());
                         }
                     }
