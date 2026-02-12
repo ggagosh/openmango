@@ -294,7 +294,7 @@ pub(super) fn open_import_pipeline_dialog(
         let pipeline_state =
             window.use_keyed_state(("agg-import-pipeline-input", session_id), cx, |window, cx| {
                 InputState::new(window, cx)
-                    .code_editor("json")
+                    .code_editor("javascript")
                     .line_number(true)
                     .soft_wrap(true)
                     .placeholder("Paste pipeline JSON array")

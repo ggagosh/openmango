@@ -8,7 +8,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use mongodb::bson::{Bson, Document, doc};
 
-use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
+use crate::bson::{DocumentKey, document_to_shell_string, parse_document_from_json};
 use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::spacing;
@@ -55,21 +55,21 @@ impl BulkUpdateDialog {
     ) -> Self {
         let filter_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor("json")
+                .code_editor("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
         });
         let update_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor("json")
+                .code_editor("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
         });
 
         let current_filter = state.read(cx).session_filter(&session_key).unwrap_or_default();
-        let filter_value = document_to_relaxed_extjson_string(&current_filter);
+        let filter_value = document_to_shell_string(&current_filter);
         filter_state.update(cx, |state, cx| {
             state.set_value(filter_value, window, cx);
         });

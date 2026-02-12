@@ -3,8 +3,8 @@ use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
-    DocumentKey, PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string,
-    get_bson_at_path, parse_documents_from_json,
+    DocumentKey, PathSegment, bson_value_for_edit, document_to_shell_string,
+    format_relaxed_json_value, get_bson_at_path, parse_documents_from_json,
 };
 use crate::components::open_confirm_dialog;
 use crate::keyboard::{
@@ -71,7 +71,7 @@ pub(super) fn build_document_menu(
                 let doc_key = doc_key.clone();
                 move |_, _window, cx| {
                     if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
-                        let json = document_to_relaxed_extjson_string(&doc);
+                        let json = document_to_shell_string(&doc);
                         cx.write_to_clipboard(ClipboardItem::new_string(json));
                     }
                 }
@@ -378,10 +378,10 @@ pub(crate) fn paste_documents_from_clipboard(
 
 fn format_bson_for_clipboard(value: &Bson) -> String {
     match value {
-        Bson::Document(doc) => document_to_relaxed_extjson_string(doc),
+        Bson::Document(doc) => document_to_shell_string(doc),
         Bson::Array(arr) => {
             let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
+            format_relaxed_json_value(&value)
         }
         _ => bson_value_for_edit(value),
     }

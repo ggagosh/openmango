@@ -107,7 +107,7 @@ impl CollectionView {
         if self.aggregation_stage_body_state.is_none() {
             let body_state = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .code_editor("json")
+                    .code_editor("javascript")
                     .line_number(true)
                     .searchable(true)
                     .soft_wrap(true)

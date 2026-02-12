@@ -12,7 +12,7 @@ use gpui_component::input::InputState;
 use mongodb::IndexModel;
 use mongodb::bson::{Bson, Document, to_bson};
 
-use crate::bson::{document_to_relaxed_extjson_string, parse_document_from_json};
+use crate::bson::{document_to_shell_string, parse_document_from_json};
 use crate::state::{AppEvent, AppState, SessionKey};
 
 use key_rows::IndexKeyRow;
@@ -84,19 +84,19 @@ impl IndexCreateDialog {
         let partial_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Partial filter (JSON)")
-                .code_editor("json")
+                .code_editor("javascript")
                 .soft_wrap(true)
         });
         let collation_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Collation (JSON)")
-                .code_editor("json")
+                .code_editor("javascript")
                 .soft_wrap(true)
         });
         let json_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("{ \"key\": { \"field\": 1 } }")
-                .code_editor("json")
+                .code_editor("javascript")
                 .line_number(true)
                 .soft_wrap(true)
         });
@@ -219,7 +219,7 @@ impl IndexCreateDialog {
             }
 
             if let Some(partial) = options.partial_filter_expression.as_ref() {
-                let formatted = document_to_relaxed_extjson_string(partial);
+                let formatted = document_to_shell_string(partial);
                 self.partial_state.update(cx, |state, cx| {
                     state.set_value(formatted, window, cx);
                 });
@@ -229,7 +229,7 @@ impl IndexCreateDialog {
                 && let Ok(bson) = to_bson(collation)
                 && let Bson::Document(doc) = bson
             {
-                let formatted = document_to_relaxed_extjson_string(&doc);
+                let formatted = document_to_shell_string(&doc);
                 self.collation_state.update(cx, |state, cx| {
                     state.set_value(formatted, window, cx);
                 });
@@ -267,7 +267,7 @@ impl IndexCreateDialog {
             json_doc.insert("collation", doc);
         }
 
-        let json_text = document_to_relaxed_extjson_string(&json_doc);
+        let json_text = document_to_shell_string(&json_doc);
         self.json_state.update(cx, |state, cx| {
             state.set_value(json_text, window, cx);
         });

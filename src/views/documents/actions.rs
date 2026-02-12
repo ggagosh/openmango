@@ -2,7 +2,8 @@ use gpui::*;
 use mongodb::bson::{Bson, oid::ObjectId};
 
 use crate::bson::{
-    PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string, get_bson_at_path,
+    PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
+    get_bson_at_path,
 };
 use crate::components::open_confirm_dialog;
 use crate::keyboard::{
@@ -147,7 +148,7 @@ impl CollectionView {
             else {
                 return;
             };
-            let json = document_to_relaxed_extjson_string(&doc);
+            let json = document_to_shell_string(&doc);
             cx.write_to_clipboard(ClipboardItem::new_string(json));
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
@@ -685,10 +686,10 @@ fn property_flags(meta: &NodeMeta) -> PropertyFlags {
 
 fn format_bson_for_clipboard(value: &Bson) -> String {
     match value {
-        Bson::Document(doc) => document_to_relaxed_extjson_string(doc),
+        Bson::Document(doc) => document_to_shell_string(doc),
         Bson::Array(arr) => {
             let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
+            format_relaxed_json_value(&value)
         }
         _ => bson_value_for_edit(value),
     }

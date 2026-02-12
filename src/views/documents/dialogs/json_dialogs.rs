@@ -3,7 +3,10 @@ use gpui_component::WindowExt;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 
-use crate::bson::{DocumentKey, document_to_relaxed_extjson_string, parse_document_from_json};
+use crate::bson::{
+    DocumentKey, document_to_shell_string, format_relaxed_json_value, parse_document_from_json,
+    parse_value_from_relaxed_json,
+};
 use crate::components::{Button, cancel_button};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::spacing;
@@ -30,13 +33,13 @@ impl CollectionView {
 
         let json_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor("json")
+                .code_editor("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
         });
 
-        let json_text = document_to_relaxed_extjson_string(&doc);
+        let json_text = document_to_shell_string(&doc);
         json_state.update(cx, |state, cx| {
             state.set_value(json_text, window, cx);
         });
@@ -70,11 +73,8 @@ impl CollectionView {
                                     let json_state = json_state.clone();
                                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         let raw = json_state.read(cx).value().to_string();
-                                        if let Ok(parsed) =
-                                            serde_json::from_str::<serde_json::Value>(&raw)
-                                            && let Ok(formatted) =
-                                                serde_json::to_string_pretty(&parsed)
-                                        {
+                                        if let Ok(value) = parse_value_from_relaxed_json(&raw) {
+                                            let formatted = format_relaxed_json_value(&value);
                                             json_state.update(cx, |state, cx| {
                                                 state.set_value(formatted, window, cx);
                                             });
@@ -132,7 +132,7 @@ impl CollectionView {
     ) {
         let json_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor("json")
+                .code_editor("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
@@ -166,11 +166,8 @@ impl CollectionView {
                                     let json_state = json_state.clone();
                                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         let raw = json_state.read(cx).value().to_string();
-                                        if let Ok(parsed) =
-                                            serde_json::from_str::<serde_json::Value>(&raw)
-                                            && let Ok(formatted) =
-                                                serde_json::to_string_pretty(&parsed)
-                                        {
+                                        if let Ok(value) = parse_value_from_relaxed_json(&raw) {
+                                            let formatted = format_relaxed_json_value(&value);
                                             json_state.update(cx, |state, cx| {
                                                 state.set_value(formatted, window, cx);
                                             });

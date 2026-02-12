@@ -1,6 +1,8 @@
 use mongodb::bson::{Bson, DateTime};
 
-use crate::bson::{PathSegment, bson_value_for_edit, document_to_relaxed_extjson_string};
+use crate::bson::{
+    PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PropertyActionKind {
@@ -149,10 +151,10 @@ pub(super) fn dot_path(path: &[PathSegment]) -> String {
 
 pub(super) fn format_bson_for_input(value: &Bson) -> String {
     match value {
-        Bson::Document(doc) => document_to_relaxed_extjson_string(doc),
+        Bson::Document(doc) => document_to_shell_string(doc),
         Bson::Array(arr) => {
             let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
+            format_relaxed_json_value(&value)
         }
         _ => bson_value_for_edit(value),
     }

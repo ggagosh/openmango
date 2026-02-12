@@ -370,9 +370,52 @@ fn format_relaxed_array(items: &[Value], indent: usize) -> String {
     out
 }
 
+fn try_format_shell_constructor(map: &serde_json::Map<String, Value>) -> Option<String> {
+    if map.len() == 1 {
+        if let Some(Value::String(v)) = map.get("$oid") {
+            return Some(format!("ObjectId(\"{}\")", v));
+        }
+        if let Some(Value::String(v)) = map.get("$date") {
+            return Some(format!("ISODate(\"{}\")", v));
+        }
+        if let Some(Value::String(v)) = map.get("$numberLong") {
+            return Some(format!("NumberLong(\"{}\")", v));
+        }
+        if let Some(Value::String(v)) = map.get("$numberInt") {
+            return Some(format!("NumberInt({})", v));
+        }
+        if let Some(Value::String(v)) = map.get("$numberDecimal") {
+            return Some(format!("NumberDecimal(\"{}\")", v));
+        }
+        if let Some(Value::String(v)) = map.get("$numberDouble") {
+            return Some(format!("NumberDouble(\"{}\")", v));
+        }
+        if let Some(Value::String(v)) = map.get("$uuid") {
+            return Some(format!("UUID(\"{}\")", v));
+        }
+    }
+    if map.len() == 2 {
+        if let Some(Value::Object(ts)) = map.get("$timestamp")
+            && let (Some(Value::Number(t)), Some(Value::Number(i))) = (ts.get("t"), ts.get("i"))
+        {
+            return Some(format!("Timestamp({}, {})", t, i));
+        }
+        if let Some(Value::Object(re)) = map.get("$regularExpression")
+            && let (Some(Value::String(pattern)), Some(Value::String(options))) =
+                (re.get("pattern"), re.get("options"))
+        {
+            return Some(format!("/{}/{}", pattern, options));
+        }
+    }
+    None
+}
+
 fn format_relaxed_object(map: &serde_json::Map<String, Value>, indent: usize) -> String {
     if map.is_empty() {
         return "{}".to_string();
+    }
+    if let Some(shell) = try_format_shell_constructor(map) {
+        return shell;
     }
 
     let next_indent = indent + 2;
@@ -447,6 +490,9 @@ fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String
     if map.is_empty() {
         return "{}".to_string();
     }
+    if let Some(shell) = try_format_shell_constructor(map) {
+        return shell;
+    }
     let mut out = String::new();
     out.push('{');
     let len = map.len();
@@ -502,10 +548,13 @@ pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> 
     }
 }
 
-/// Convert a BSON document to a pretty-printed relaxed Extended JSON string.
-pub fn document_to_relaxed_extjson_string(doc: &Document) -> String {
+/// Convert a BSON document to a pretty-printed MongoDB shell-style string.
+///
+/// Uses shell constructors like `ObjectId("...")`, `ISODate("...")` instead of
+/// Extended JSON wrappers like `{"$oid": "..."}`.
+pub fn document_to_shell_string(doc: &Document) -> String {
     let value = bson::Bson::Document(doc.clone()).into_relaxed_extjson();
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{doc:?}"))
+    format_relaxed_json_value(&value)
 }
 
 /// Parse a JSON string into a BSON document.

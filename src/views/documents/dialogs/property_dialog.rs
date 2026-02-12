@@ -242,7 +242,7 @@ impl PropertyActionDialog {
         let value_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(ValueType::String.placeholder())
-                .code_editor("json")
+                .code_editor("javascript")
                 .soft_wrap(true)
         });
 
