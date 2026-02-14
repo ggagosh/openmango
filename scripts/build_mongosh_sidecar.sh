@@ -61,12 +61,12 @@ if [ ! -d node_modules ]; then
 fi
 
 BUN_TARGET_FLAG=()
-if [[ -n "$BUN_TARGET" ]]; then
+if [[ -n "${BUN_TARGET:-}" ]]; then
   BUN_TARGET_FLAG=(--target "$BUN_TARGET")
 fi
 
 bun build ./src/bun-entry.ts --compile \
-  "${BUN_TARGET_FLAG[@]}" \
+  ${BUN_TARGET_FLAG[@]+"${BUN_TARGET_FLAG[@]}"} \
   --outfile "$OUT_DIR/mongosh-sidecar" \
   --external electron \
   --external os-dns-native \

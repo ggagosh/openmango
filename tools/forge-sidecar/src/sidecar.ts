@@ -27,6 +27,21 @@ type ResponseMessage = {
 
 const sessions = new Map<string, Session>();
 
+const IDLE_TIMEOUT_MS = 30_000;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => {
+    for (const [, session] of sessions) {
+      try { await session.provider.close(true); } catch {}
+    }
+    sessions.clear();
+  }, IDLE_TIMEOUT_MS);
+}
+
+resetIdleTimer();
+
 function send(message: ResponseMessage) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
@@ -263,6 +278,7 @@ async function handleRequest(req: RequestMessage) {
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
 rl.on("line", async (line) => {
+  resetIdleTimer();
   const trimmed = line.trim();
   if (!trimmed) return;
 

@@ -82,8 +82,23 @@ impl ForgeView {
             let result = runtime_handle
                 .spawn_blocking(move || {
                     bridge.ensure_session(session_id, &uri, &database)?;
-                    let mut eval =
-                        bridge.evaluate(session_id, &code, Some(seq), Duration::from_secs(60))?;
+                    let mut eval = match bridge.evaluate(
+                        session_id,
+                        &code,
+                        Some(seq),
+                        Duration::from_secs(60),
+                    ) {
+                        Err(e) if e.to_string().contains("Session not found") => {
+                            bridge.ensure_session(session_id, &uri, &database)?;
+                            bridge.evaluate(
+                                session_id,
+                                &code,
+                                Some(seq),
+                                Duration::from_secs(60),
+                            )?
+                        }
+                        other => other?,
+                    };
                     if ForgeView::should_auto_preview(eval.result_type.as_deref(), &code)
                         && let Some(preview_code) = ForgeView::build_preview_code(&code)
                         && let Ok(preview) = bridge.evaluate(

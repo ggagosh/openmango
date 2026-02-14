@@ -216,15 +216,27 @@ impl MongoshBridge {
         Ok(())
     }
 
+    pub fn invalidate_session(&self, session_id: Uuid) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.remove(&session_id);
+        }
+    }
+
     pub fn complete(&self, session_id: Uuid, code: &str, timeout: Duration) -> Result<Vec<String>> {
-        let value = self.send_request(
-            "complete",
-            json!({
-                "session_id": session_id,
-                "code": code,
-            }),
-            timeout,
-        )?;
+        let value = self
+            .send_request(
+                "complete",
+                json!({
+                    "session_id": session_id,
+                    "code": code,
+                }),
+                timeout,
+            )
+            .inspect_err(|err| {
+                if err.to_string().contains("Session not found") {
+                    self.invalidate_session(session_id);
+                }
+            })?;
 
         let items: Vec<CompletionItem> = serde_json::from_value(value)?;
         Ok(items.into_iter().map(|item| item.completion).collect())
@@ -237,15 +249,21 @@ impl MongoshBridge {
         run_id: Option<u64>,
         timeout: Duration,
     ) -> Result<RuntimeEvaluationResult> {
-        let value = self.send_request(
-            "evaluate",
-            json!({
-                "session_id": session_id,
-                "code": code,
-                "run_id": run_id,
-            }),
-            timeout,
-        )?;
+        let value = self
+            .send_request(
+                "evaluate",
+                json!({
+                    "session_id": session_id,
+                    "code": code,
+                    "run_id": run_id,
+                }),
+                timeout,
+            )
+            .inspect_err(|err| {
+                if err.to_string().contains("Session not found") {
+                    self.invalidate_session(session_id);
+                }
+            })?;
 
         serde_json::from_value(value).map_err(Error::from)
     }

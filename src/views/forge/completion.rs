@@ -459,7 +459,13 @@ impl CompletionProvider for ForgeCompletionProvider {
                 .spawn_blocking(move || {
                     let bridge = runtime.ensure_bridge()?;
                     bridge.ensure_session(session_id, &uri, &database)?;
-                    bridge.complete(session_id, &request_text, Duration::from_millis(500))
+                    match bridge.complete(session_id, &request_text, Duration::from_millis(500)) {
+                        Err(e) if e.to_string().contains("Session not found") => {
+                            bridge.ensure_session(session_id, &uri, &database)?;
+                            bridge.complete(session_id, &request_text, Duration::from_millis(500))
+                        }
+                        other => other,
+                    }
                 })
                 .await;
 
