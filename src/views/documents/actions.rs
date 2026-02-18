@@ -152,6 +152,7 @@ impl CollectionView {
             cx.write_to_clipboard(ClipboardItem::new_string(json));
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
+            this.view_model.commit_inline_edit(&this.state, cx);
             let Some((session_key, doc_key, doc)) = this.selected_draft_for_current_session(cx)
             else {
                 return;

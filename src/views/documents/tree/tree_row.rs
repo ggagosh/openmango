@@ -576,6 +576,11 @@ fn render_inline_editor(
         .gap(spacing::xs())
         .flex_1()
         .min_w(px(0.0))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            // Prevent the parent row's mousedown handler from stealing focus,
+            // which would blur the inline editor before the Save button click fires.
+            cx.stop_propagation();
+        })
         .child(editor)
         .child(Button::new("inline-save").compact().primary().label("Save").on_click({
             let view = view.clone();

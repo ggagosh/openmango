@@ -126,10 +126,14 @@ pub fn render_documents_actions(
                 .on_click({
                     let selected_doc = selected_doc.clone();
                     let state_for_apply = state_for_apply.clone();
+                    let view = view.clone();
                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                         let Some(doc_key) = selected_doc.clone() else {
                             return;
                         };
+                        view.update(cx, |this, cx| {
+                            this.view_model.commit_inline_edit(&this.state, cx);
+                        });
                         let doc = {
                             let state_ref = state_for_apply.read(cx);
                             let session_key = state_ref.current_session_key();
