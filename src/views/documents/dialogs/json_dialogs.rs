@@ -50,6 +50,7 @@ impl CollectionView {
             dialog
                 .title("Document JSON Editor")
                 .min_w(px(720.0))
+                .overlay_closable(false)
                 .child(
                     div().flex().flex_col().gap(spacing::sm()).p(spacing::md()).child(
                         Input::new(&json_state)
@@ -146,6 +147,7 @@ impl CollectionView {
             dialog
                 .title("Insert Document")
                 .min_w(px(720.0))
+                .overlay_closable(false)
                 .child(
                     div().flex().flex_col().gap(spacing::sm()).p(spacing::md()).child(
                         Input::new(&json_state)
