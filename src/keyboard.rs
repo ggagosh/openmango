@@ -72,6 +72,7 @@ actions!(
         FocusForgeEditor,
         FocusForgeOutput,
         FindInForgeOutput,
+        SelectAllDocuments,
         DownloadUpdate,
         InstallUpdate,
     ]
@@ -224,6 +225,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         ),
         KeyBinding::new("cmd-shift-v", PasteDocuments, Some("Documents && !Input")),
         KeyBinding::new("ctrl-shift-v", PasteDocuments, Some("Documents && !Input")),
+        KeyBinding::new("cmd-a", SelectAllDocuments, Some("Documents && !Input && !Aggregation")),
+        KeyBinding::new("ctrl-a", SelectAllDocuments, Some("Documents && !Input && !Aggregation")),
         KeyBinding::new("alt-enter", EditValueType, Some("Documents && !Input")),
         KeyBinding::new("alt-return", EditValueType, Some("Documents && !Input")),
         KeyBinding::new("f2", RenameField, Some("Documents && !Input")),

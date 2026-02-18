@@ -1,6 +1,6 @@
 //! Tree row rendering for document viewer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -12,6 +12,7 @@ use gpui_component::switch::Switch;
 use gpui_component::tree::{TreeEntry, TreeState};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
+use crate::bson::DocumentKey;
 use crate::components::Button;
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
@@ -44,6 +45,8 @@ pub fn render_tree_row(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
+    selected_docs: &HashSet<DocumentKey>,
+    tree_order: &[String],
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
@@ -60,6 +63,8 @@ pub fn render_tree_row(
     let type_label = meta.map(|meta| meta.type_label.clone()).unwrap_or_default();
     let is_dirty = meta.map(|meta| meta.is_dirty).unwrap_or(false);
     let is_root = meta.map(|meta| meta.path.is_empty()).unwrap_or(false);
+    let is_multi_selected =
+        meta.map(|m| m.path.is_empty() && selected_docs.contains(&m.doc_key)).unwrap_or(false);
 
     let depth = entry.depth();
     let is_folder = entry.is_folder();
@@ -118,7 +123,8 @@ pub fn render_tree_row(
         .border_1()
         .border_color(colors::transparent())
         .when(_selected, |s: Div| s.bg(cx.theme().list_active).border_color(cx.theme().border))
-        .when(!_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
+        .when(!_selected && is_multi_selected, |s: Div| s.bg(cx.theme().list_active))
+        .when(!_selected && !is_multi_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
         .on_mouse_down(MouseButton::Left, {
@@ -126,19 +132,54 @@ pub fn render_tree_row(
             let row_session = row_session.clone();
             let row_state = row_state.clone();
             let row_tree = row_tree.clone();
+            let range_node_meta = node_meta.clone();
+            let range_tree_order: Vec<String> = tree_order.to_vec();
             move |event, window, cx| {
                 window.focus(&row_focus);
                 cx.stop_propagation();
-                row_tree.update(cx, |tree, cx| {
-                    tree.set_selected_index(Some(ix), cx);
-                });
+                let is_shift = event.modifiers.shift;
+                let anchor = row_tree.read(cx).selected_index();
+                // Only move the anchor on non-shift clicks so repeated
+                // shift+clicks always extend from the original anchor.
+                if !is_shift {
+                    row_tree.update(cx, |tree, cx| {
+                        tree.set_selected_index(Some(ix), cx);
+                    });
+                }
                 if let (Some(meta), Some(session_key)) = (row_meta.clone(), row_session.clone()) {
+                    let is_cmd = event.modifiers.secondary() || event.modifiers.control;
                     row_state.update(cx, |state, cx| {
-                        state.set_selected_node(
-                            &session_key,
-                            meta.doc_key.clone(),
-                            row_item_id.clone(),
-                        );
+                        if is_shift && meta.path.is_empty() {
+                            let anchor_ix = anchor.unwrap_or(0);
+                            let lo = anchor_ix.min(ix);
+                            let hi = anchor_ix.max(ix);
+                            let doc_keys: HashSet<DocumentKey> = range_tree_order
+                                [lo..=hi.min(range_tree_order.len().saturating_sub(1))]
+                                .iter()
+                                .filter_map(|id| range_node_meta.get(id))
+                                .filter(|m| m.path.is_empty())
+                                .map(|m| m.doc_key.clone())
+                                .collect();
+                            state.select_doc_range(
+                                &session_key,
+                                doc_keys,
+                                meta.doc_key.clone(),
+                                row_item_id.clone(),
+                            );
+                        } else if is_cmd && meta.path.is_empty() {
+                            state.toggle_doc_selection(&session_key, &meta.doc_key);
+                            state.set_selected_node(
+                                &session_key,
+                                meta.doc_key.clone(),
+                                row_item_id.clone(),
+                            );
+                        } else {
+                            state.select_single_doc(
+                                &session_key,
+                                meta.doc_key.clone(),
+                                row_item_id.clone(),
+                            );
+                        }
                         if event.click_count == 2 && meta.is_folder {
                             state.toggle_expanded_node(&session_key, &row_item_id);
                         }
@@ -193,6 +234,7 @@ pub fn render_tree_row(
                 .child(type_label),
         );
 
+    let selected_count = selected_docs.len();
     let row = row.context_menu({
         let menu_meta = menu_meta.clone();
         let state = state.clone();
@@ -215,6 +257,7 @@ pub fn render_tree_row(
                     session_key,
                     meta.doc_key.clone(),
                     meta.is_dirty,
+                    selected_count,
                 )
             } else {
                 build_property_menu(menu, state.clone(), session_key, meta)

@@ -22,7 +22,8 @@ pub fn render_documents_actions(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     selected_doc: Option<DocumentKey>,
-    dirty_selected: bool,
+    selected_count: usize,
+    any_selected_dirty: bool,
     is_loading: bool,
     filter_active: bool,
     cx: &mut Context<CollectionView>,
@@ -71,7 +72,7 @@ pub fn render_documents_actions(
             Button::new("edit-json")
                 .compact()
                 .label("Edit JSON")
-                .disabled(selected_doc.is_none() || session_key.is_none())
+                .disabled(selected_doc.is_none() || session_key.is_none() || selected_count > 1)
                 .on_click({
                     let selected_doc = selected_doc.clone();
                     let session_key = session_key.clone();
@@ -96,62 +97,86 @@ pub fn render_documents_actions(
                 }),
         )
         .child(
-            Button::new("discard").compact().label("Discard").disabled(!dirty_selected).on_click({
-                let selected_doc = selected_doc.clone();
-                let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                    if let Some(doc_key) = selected_doc.clone() {
+            Button::new("discard")
+                .compact()
+                .label("Discard")
+                .disabled(!any_selected_dirty)
+                .on_click({
+                    let view = view.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                         view.update(cx, |this, cx| {
-                            if let Some(session_key) = this.view_model.current_session() {
-                                this.state.update(cx, |state, cx| {
-                                    state.clear_draft(&session_key, &doc_key);
-                                    cx.notify();
-                                });
-                            }
+                            let Some(session_key) = this.view_model.current_session() else {
+                                return;
+                            };
+                            let dirty_selected: Vec<_> = {
+                                let state_ref = this.state.read(cx);
+                                let Some(session) = state_ref.session(&session_key) else {
+                                    return;
+                                };
+                                session
+                                    .view
+                                    .selected_docs
+                                    .iter()
+                                    .filter(|dk| session.view.dirty.contains(*dk))
+                                    .cloned()
+                                    .collect()
+                            };
+                            this.state.update(cx, |state, cx| {
+                                for doc_key in &dirty_selected {
+                                    state.clear_draft(&session_key, doc_key);
+                                }
+                                cx.notify();
+                            });
                             this.view_model.clear_inline_edit();
                             this.view_model.rebuild_tree(&this.state, cx);
                             this.view_model.sync_dirty_state(&this.state, cx);
                             cx.notify();
                         });
                     }
-                }
-            }),
+                }),
         )
         .child(
             Button::new("apply")
                 .primary()
                 .compact()
                 .label("Apply")
-                .disabled(!dirty_selected)
+                .disabled(!any_selected_dirty)
                 .on_click({
-                    let selected_doc = selected_doc.clone();
                     let state_for_apply = state_for_apply.clone();
                     let view = view.clone();
                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        let Some(doc_key) = selected_doc.clone() else {
-                            return;
-                        };
                         view.update(cx, |this, cx| {
                             this.view_model.commit_inline_edit(&this.state, cx);
                         });
-                        let doc = {
-                            let state_ref = state_for_apply.read(cx);
-                            let session_key = state_ref.current_session_key();
-                            session_key.as_ref().and_then(|session_key| {
-                                state_ref.session_draft(session_key, &doc_key)
-                            })
+                        let Some(session_key) = state_for_apply.read(cx).current_session_key()
+                        else {
+                            return;
                         };
-                        if let Some(doc) = doc
-                            && let Some(session_key) =
-                                state_for_apply.read(cx).current_session_key()
-                        {
-                            AppCommands::save_document(
-                                state_for_apply.clone(),
-                                session_key,
-                                doc_key.clone(),
-                                doc,
-                                cx,
-                            );
+                        let dirty_docs: Vec<_> = {
+                            let state_ref = state_for_apply.read(cx);
+                            let Some(session) = state_ref.session(&session_key) else {
+                                return;
+                            };
+                            session
+                                .view
+                                .selected_docs
+                                .iter()
+                                .filter(|dk| session.view.dirty.contains(*dk))
+                                .cloned()
+                                .collect()
+                        };
+                        for doc_key in dirty_docs {
+                            let doc =
+                                state_for_apply.read(cx).session_draft(&session_key, &doc_key);
+                            if let Some(doc) = doc {
+                                AppCommands::save_document(
+                                    state_for_apply.clone(),
+                                    session_key.clone(),
+                                    doc_key,
+                                    doc,
+                                    cx,
+                                );
+                            }
                         }
                     }
                 }),
@@ -182,7 +207,7 @@ pub fn render_documents_actions(
         .child(render_delete_menu(
             state_for_delete.clone(),
             session_key.clone(),
-            selected_doc.clone(),
+            selected_count,
             filter_active,
             delete_variant,
         ))
@@ -285,10 +310,15 @@ pub fn render_documents_actions(
 fn render_delete_menu(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    selected_doc: Option<DocumentKey>,
+    selected_count: usize,
     filter_active: bool,
     delete_variant: ButtonCustomVariant,
 ) -> impl IntoElement {
+    let delete_selected_label = if selected_count > 1 {
+        format!("Delete {} documents", selected_count)
+    } else {
+        "Delete selected".to_string()
+    };
     MenuButton::new("delete-menu")
         .compact()
         .label("Delete")
@@ -299,48 +329,95 @@ fn render_delete_menu(
         .disabled(session_key.is_none())
         .dropdown_menu_with_anchor(Corner::BottomLeft, {
             let session_key = session_key.clone();
-            let selected_doc = selected_doc.clone();
             let state_for_delete = state.clone();
-            move |menu: PopupMenu, _window, _cx| {
+            move |menu: PopupMenu, _window, cx| {
+                let selected_docs: Vec<_> = {
+                    let state_ref = state_for_delete.read(cx);
+                    session_key
+                        .as_ref()
+                        .and_then(|sk| state_ref.session(sk))
+                        .map(|session| session.view.selected_docs.iter().cloned().collect())
+                        .unwrap_or_default()
+                };
+                let count = selected_docs.len();
                 menu.item(
-                    PopupMenuItem::new("Delete selected")
-                        .disabled(selected_doc.is_none())
+                    PopupMenuItem::new(delete_selected_label.clone())
+                        .disabled(count == 0)
                         .on_click({
-                            let selected_doc = selected_doc.clone();
                             let session_key = session_key.clone();
                             let state_for_delete = state_for_delete.clone();
                             move |_, window, cx| {
-                                let Some(doc_key) = selected_doc.clone() else {
-                                    return;
-                                };
                                 let Some(session_key) = session_key.clone() else {
                                     return;
                                 };
-                                let message = format!(
-                                    "Delete document {}? This cannot be undone.",
-                                    doc_key
-                                );
-                                open_confirm_dialog(
-                                    window,
-                                    cx,
-                                    "Delete document",
-                                    message,
-                                    "Delete",
-                                    true,
-                                    {
-                                        let state_for_delete = state_for_delete.clone();
-                                        let session_key = session_key.clone();
-                                        let doc_key = doc_key.clone();
-                                        move |_window, cx| {
-                                            AppCommands::delete_document(
-                                                state_for_delete.clone(),
-                                                session_key.clone(),
-                                                doc_key.clone(),
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                );
+                                if count == 1 {
+                                    let doc_key = selected_docs[0].clone();
+                                    let message = format!(
+                                        "Delete document {}? This cannot be undone.",
+                                        doc_key
+                                    );
+                                    open_confirm_dialog(
+                                        window,
+                                        cx,
+                                        "Delete document",
+                                        message,
+                                        "Delete",
+                                        true,
+                                        {
+                                            let state_for_delete = state_for_delete.clone();
+                                            let session_key = session_key.clone();
+                                            move |_window, cx| {
+                                                AppCommands::delete_document(
+                                                    state_for_delete.clone(),
+                                                    session_key.clone(),
+                                                    doc_key.clone(),
+                                                    cx,
+                                                );
+                                            }
+                                        },
+                                    );
+                                } else {
+                                    let ids: Vec<mongodb::bson::Bson> = {
+                                        let state_ref = state_for_delete.read(cx);
+                                        selected_docs
+                                            .iter()
+                                            .filter_map(|dk| {
+                                                state_ref
+                                                    .document_for_key(&session_key, dk)
+                                                    .and_then(|d| d.get("_id").cloned())
+                                            })
+                                            .collect()
+                                    };
+                                    if ids.is_empty() {
+                                        return;
+                                    }
+                                    let filter =
+                                        mongodb::bson::doc! { "_id": { "$in": ids } };
+                                    let message = format!(
+                                        "Delete {} documents? This cannot be undone.",
+                                        count
+                                    );
+                                    open_confirm_dialog(
+                                        window,
+                                        cx,
+                                        "Delete documents",
+                                        message,
+                                        "Delete",
+                                        true,
+                                        {
+                                            let state_for_delete = state_for_delete.clone();
+                                            let session_key = session_key.clone();
+                                            move |_window, cx| {
+                                                AppCommands::delete_documents_by_filter(
+                                                    state_for_delete.clone(),
+                                                    session_key.clone(),
+                                                    filter.clone(),
+                                                    cx,
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
                             }
                         }),
                 )

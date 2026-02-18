@@ -6,7 +6,6 @@ use crate::bson::{
     DocumentKey, PathSegment, bson_value_for_edit, document_to_shell_string,
     format_relaxed_json_value, get_bson_at_path, parse_documents_from_json,
 };
-use crate::components::open_confirm_dialog;
 use crate::keyboard::{
     AddElement, AddField, CopyDocumentJson, CopyKey, CopyValue, DeleteDocument,
     DiscardDocumentChanges, DuplicateDocument, EditDocumentJson, EditValueType, PasteDocuments,
@@ -25,61 +24,48 @@ pub(super) fn build_document_menu(
     session_key: SessionKey,
     doc_key: DocumentKey,
     is_dirty: bool,
+    selected_count: usize,
 ) -> PopupMenu {
+    let delete_label = if selected_count > 1 {
+        format!("Delete {} Documents", selected_count)
+    } else {
+        "Delete Document".to_string()
+    };
+    let copy_label = if selected_count > 1 {
+        format!("Copy {} Documents JSON", selected_count)
+    } else {
+        "Copy Document JSON".to_string()
+    };
+    let multi = selected_count > 1;
     menu = menu
-        .item(PopupMenuItem::new("Edit JSON").action(Box::new(EditDocumentJson)).on_click({
-            let view = view.clone();
-            let state = state.clone();
-            let session_key = session_key.clone();
-            let doc_key = doc_key.clone();
-            move |_, window, cx| {
-                CollectionView::open_document_json_editor(
-                    view.clone(),
-                    state.clone(),
-                    session_key.clone(),
-                    doc_key.clone(),
-                    window,
-                    cx,
-                );
-            }
-        }))
-        .item(PopupMenuItem::new("Delete Document").action(Box::new(DeleteDocument)).on_click({
-            let state = state.clone();
-            let session_key = session_key.clone();
-            let doc_key = doc_key.clone();
-            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                let message = format!("Delete document {}? This cannot be undone.", doc_key);
-                open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
+        .item(
+            PopupMenuItem::new("Edit JSON")
+                .disabled(multi)
+                .action(Box::new(EditDocumentJson))
+                .on_click({
+                    let view = view.clone();
                     let state = state.clone();
                     let session_key = session_key.clone();
                     let doc_key = doc_key.clone();
-                    move |_window, cx| {
-                        AppCommands::delete_document(
+                    move |_, window, cx| {
+                        CollectionView::open_document_json_editor(
+                            view.clone(),
                             state.clone(),
                             session_key.clone(),
                             doc_key.clone(),
+                            window,
                             cx,
                         );
                     }
-                });
-            }
-        }))
-        .item(PopupMenuItem::new("Copy Document JSON").action(Box::new(CopyDocumentJson)).on_click(
-            {
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let doc_key = doc_key.clone();
-                move |_, _window, cx| {
-                    if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
-                        let json = document_to_shell_string(&doc);
-                        cx.write_to_clipboard(ClipboardItem::new_string(json));
-                    }
-                }
-            },
-        ))
+                }),
+        )
+        .item(PopupMenuItem::new(delete_label).action(Box::new(DeleteDocument)))
+        .item(PopupMenuItem::new(copy_label).action(Box::new(CopyDocumentJson)))
         .item(
-            PopupMenuItem::new("Duplicate Document").action(Box::new(DuplicateDocument)).on_click(
-                {
+            PopupMenuItem::new("Duplicate Document")
+                .disabled(multi)
+                .action(Box::new(DuplicateDocument))
+                .on_click({
                     let state = state.clone();
                     let session_key = session_key.clone();
                     let doc_key = doc_key.clone();
@@ -95,8 +81,7 @@ pub(super) fn build_document_menu(
                             );
                         }
                     }
-                },
-            ),
+                }),
         )
         .item(PopupMenuItem::new("Paste Document(s)").action(Box::new(PasteDocuments)).on_click({
             let state = state.clone();

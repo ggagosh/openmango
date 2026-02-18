@@ -1,5 +1,5 @@
 use gpui::*;
-use mongodb::bson::{Bson, oid::ObjectId};
+use mongodb::bson::{Bson, doc, oid::ObjectId};
 
 use crate::bson::{
     PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
@@ -12,8 +12,9 @@ use crate::keyboard::{
     DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
     FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
     PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation,
-    SaveDocument, SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
-    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
+    SaveDocument, SelectAllDocuments, SelectNextAggregationStage, SelectPrevAggregationStage,
+    ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
+    ToggleAggregationStageEnabled,
 };
 use crate::state::{AppCommands, CollectionSubview, StatusMessage};
 
@@ -80,6 +81,15 @@ impl CollectionView {
             let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
                 return;
             };
+            let selected_count = this
+                .state
+                .read(cx)
+                .session(&session_key)
+                .map(|s| s.view.selected_docs.len())
+                .unwrap_or(0);
+            if selected_count > 1 {
+                return;
+            }
             CollectionView::open_document_json_editor(
                 cx.entity(),
                 this.state.clone(),
@@ -94,28 +104,79 @@ impl CollectionView {
             else {
                 return;
             };
+            let selected_count = this
+                .state
+                .read(cx)
+                .session(&session_key)
+                .map(|s| s.view.selected_docs.len())
+                .unwrap_or(0);
+            if selected_count > 1 {
+                return;
+            }
             let mut new_doc = doc.clone();
             new_doc.insert("_id", ObjectId::new());
             AppCommands::insert_document(this.state.clone(), session_key, new_doc, cx);
         }))
         .on_action(cx.listener(|this, _: &DeleteDocument, window, cx| {
-            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+            let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            let message = format!("Delete document {}? This cannot be undone.", doc_key);
-            open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
-                let state = this.state.clone();
-                let session_key = session_key.clone();
-                let doc_key = doc_key.clone();
-                move |_window, cx| {
-                    AppCommands::delete_document(
-                        state.clone(),
-                        session_key.clone(),
-                        doc_key.clone(),
-                        cx,
-                    );
+            let selected_docs: Vec<_> = {
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                session.view.selected_docs.iter().cloned().collect()
+            };
+            if selected_docs.is_empty() {
+                return;
+            }
+            if selected_docs.len() == 1 {
+                let doc_key = selected_docs.into_iter().next().unwrap();
+                let message = format!("Delete document {}? This cannot be undone.", doc_key);
+                open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
+                    let state = this.state.clone();
+                    let session_key = session_key.clone();
+                    move |_window, cx| {
+                        AppCommands::delete_document(
+                            state.clone(),
+                            session_key.clone(),
+                            doc_key.clone(),
+                            cx,
+                        );
+                    }
+                });
+            } else {
+                let count = selected_docs.len();
+                let ids: Vec<Bson> = {
+                    let state_ref = this.state.read(cx);
+                    selected_docs
+                        .iter()
+                        .filter_map(|dk| {
+                            state_ref
+                                .document_for_key(&session_key, dk)
+                                .and_then(|d| d.get("_id").cloned())
+                        })
+                        .collect()
+                };
+                if ids.is_empty() {
+                    return;
                 }
-            });
+                let filter = doc! { "_id": { "$in": ids } };
+                let message = format!("Delete {} documents? This cannot be undone.", count);
+                open_confirm_dialog(window, cx, "Delete documents", message, "Delete", true, {
+                    let state = this.state.clone();
+                    let session_key = session_key.clone();
+                    move |_window, cx| {
+                        AppCommands::delete_documents_by_filter(
+                            state.clone(),
+                            session_key.clone(),
+                            filter.clone(),
+                            cx,
+                        );
+                    }
+                });
+            }
         }))
         .on_action(cx.listener(|this, _: &DeleteCollection, window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
@@ -136,6 +197,16 @@ impl CollectionView {
                 }
             });
         }))
+        .on_action(cx.listener(|this, _: &SelectAllDocuments, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            this.state.update(cx, |state, cx| {
+                state.select_all_docs(&session_key);
+                cx.notify();
+            });
+            cx.notify();
+        }))
         .on_action(cx.listener(|this, _: &PasteDocuments, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
@@ -143,21 +214,69 @@ impl CollectionView {
             paste_documents_from_clipboard(this.state.clone(), session_key, cx);
         }))
         .on_action(cx.listener(|this, _: &CopyDocumentJson, _window, cx| {
-            let Some((_session_key, _doc_key, doc)) =
-                this.selected_document_for_current_session(cx)
-            else {
+            let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            let json = document_to_shell_string(&doc);
-            cx.write_to_clipboard(ClipboardItem::new_string(json));
+            let selected_docs: Vec<_> = {
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                session.view.selected_docs.iter().cloned().collect()
+            };
+            if selected_docs.is_empty() {
+                return;
+            }
+            if selected_docs.len() == 1 {
+                let doc_key = &selected_docs[0];
+                if let Some(doc) = this.resolve_document(&session_key, doc_key, cx) {
+                    let json = document_to_shell_string(&doc);
+                    cx.write_to_clipboard(ClipboardItem::new_string(json));
+                }
+            } else {
+                let state_ref = this.state.read(cx);
+                let docs: Vec<String> = selected_docs
+                    .iter()
+                    .filter_map(|dk| {
+                        state_ref
+                            .session_draft_or_document(&session_key, dk)
+                            .map(|d| document_to_shell_string(&d))
+                    })
+                    .collect();
+                let json = format!("[{}]", docs.join(",\n"));
+                cx.write_to_clipboard(ClipboardItem::new_string(json));
+            }
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
             this.view_model.commit_inline_edit(&this.state, cx);
-            let Some((session_key, doc_key, doc)) = this.selected_draft_for_current_session(cx)
-            else {
+            let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
+            let dirty_selected: Vec<_> = {
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                session
+                    .view
+                    .selected_docs
+                    .iter()
+                    .filter(|dk| session.view.dirty.contains(*dk))
+                    .cloned()
+                    .collect()
+            };
+            for doc_key in dirty_selected {
+                let doc = this.state.read(cx).session_draft(&session_key, &doc_key);
+                if let Some(doc) = doc {
+                    AppCommands::save_document(
+                        this.state.clone(),
+                        session_key.clone(),
+                        doc_key,
+                        doc,
+                        cx,
+                    );
+                }
+            }
         }))
         .on_action(cx.listener(|this, _: &EditValueType, window, cx| {
             let Some((session_key, meta)) = this.selected_property_context(cx) else {
@@ -288,11 +407,29 @@ impl CollectionView {
             cx.write_to_clipboard(ClipboardItem::new_string(meta.key_label));
         }))
         .on_action(cx.listener(|this, _: &DiscardDocumentChanges, _window, cx| {
-            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+            let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
+            let dirty_selected: Vec<_> = {
+                let state_ref = this.state.read(cx);
+                let Some(session) = state_ref.session(&session_key) else {
+                    return;
+                };
+                session
+                    .view
+                    .selected_docs
+                    .iter()
+                    .filter(|dk| session.view.dirty.contains(*dk))
+                    .cloned()
+                    .collect()
+            };
+            if dirty_selected.is_empty() {
+                return;
+            }
             this.state.update(cx, |state, cx| {
-                state.clear_draft(&session_key, &doc_key);
+                for doc_key in &dirty_selected {
+                    state.clear_draft(&session_key, doc_key);
+                }
                 cx.notify();
             });
             this.view_model.clear_inline_edit();

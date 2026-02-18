@@ -95,8 +95,9 @@ impl AppState {
     pub fn session_snapshot(&self, key: &SessionKey) -> Option<SessionSnapshot> {
         let session = self.session(key)?;
         let selected_doc = session.view.selected_doc.clone();
-        let dirty_selected =
-            selected_doc.as_ref().is_some_and(|doc| session.view.dirty.contains(doc));
+        let selected_docs = session.view.selected_docs.clone();
+        let selected_count = selected_docs.len();
+        let any_selected_dirty = selected_docs.iter().any(|k| session.view.dirty.contains(k));
         Some(SessionSnapshot {
             items: session.data.items.clone(),
             total: session.data.total,
@@ -104,7 +105,9 @@ impl AppState {
             per_page: session.data.per_page,
             is_loading: session.data.is_loading,
             selected_doc,
-            dirty_selected,
+            selected_docs,
+            selected_count,
+            any_selected_dirty,
             filter_raw: session.data.filter_raw.clone(),
             sort_raw: session.data.sort_raw.clone(),
             projection_raw: session.data.projection_raw.clone(),

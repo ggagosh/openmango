@@ -542,6 +542,7 @@ impl Default for SessionData {
 pub struct SessionViewState {
     pub selected_doc: Option<DocumentKey>,
     pub selected_node_id: Option<String>,
+    pub selected_docs: HashSet<DocumentKey>,
     pub expanded_nodes: HashSet<String>,
     pub drafts: HashMap<DocumentKey, Document>,
     pub dirty: HashSet<DocumentKey>,
@@ -565,7 +566,9 @@ pub struct SessionSnapshot {
     pub per_page: i64,
     pub is_loading: bool,
     pub selected_doc: Option<DocumentKey>,
-    pub dirty_selected: bool,
+    pub selected_docs: HashSet<DocumentKey>,
+    pub selected_count: usize,
+    pub any_selected_dirty: bool,
     pub filter_raw: String,
     pub sort_raw: String,
     pub projection_raw: String,

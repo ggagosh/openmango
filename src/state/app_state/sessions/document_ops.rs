@@ -83,6 +83,62 @@ impl AppState {
         }
     }
 
+    /// Toggle a document in the multi-selection set.
+    pub fn toggle_doc_selection(&mut self, session_key: &SessionKey, doc_key: &DocumentKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            if session.view.selected_docs.contains(doc_key) {
+                session.view.selected_docs.remove(doc_key);
+            } else {
+                session.view.selected_docs.insert(doc_key.clone());
+            }
+        }
+    }
+
+    /// Clear multi-selection, insert a single doc, and set it as the primary selection.
+    pub fn select_single_doc(
+        &mut self,
+        session_key: &SessionKey,
+        doc_key: DocumentKey,
+        node_id: String,
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_docs.clear();
+            session.view.selected_docs.insert(doc_key.clone());
+            session.view.selected_doc = Some(doc_key);
+            session.view.selected_node_id = Some(node_id);
+        }
+    }
+
+    /// Select all documents currently loaded in the session.
+    pub fn select_all_docs(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_docs =
+                session.data.items.iter().map(|item| item.key.clone()).collect();
+        }
+    }
+
+    /// Replace multi-selection with a range of doc keys and set the primary selection.
+    pub fn select_doc_range(
+        &mut self,
+        session_key: &SessionKey,
+        doc_keys: HashSet<DocumentKey>,
+        primary_doc_key: DocumentKey,
+        primary_node_id: String,
+    ) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_docs = doc_keys;
+            session.view.selected_doc = Some(primary_doc_key);
+            session.view.selected_node_id = Some(primary_node_id);
+        }
+    }
+
+    /// Clear the multi-selection set.
+    pub fn clear_doc_selection(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_docs.clear();
+        }
+    }
+
     pub fn set_draft(&mut self, session_key: &SessionKey, doc_key: DocumentKey, doc: Document) {
         if let Some(session) = self.session_mut(session_key) {
             session.view.drafts.insert(doc_key.clone(), doc);

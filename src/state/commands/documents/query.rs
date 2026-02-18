@@ -110,6 +110,8 @@ impl AppCommands {
                             session.data.loaded = true;
                             session.data.is_loading = false;
 
+                            session.view.selected_docs.clear();
+
                             if let Some(selected) = session.view.selected_doc.clone()
                                 && !session.data.index_by_key.contains_key(&selected)
                             {

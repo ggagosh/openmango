@@ -510,15 +510,6 @@ impl CollectionView {
         Some((session_key, doc_key))
     }
 
-    pub(crate) fn selected_draft(
-        &self,
-        session_key: &SessionKey,
-        doc_key: &DocumentKey,
-        cx: &App,
-    ) -> Option<Document> {
-        self.state.read(cx).session_draft(session_key, doc_key)
-    }
-
     pub(crate) fn resolve_document(
         &self,
         session_key: &SessionKey,
@@ -534,15 +525,6 @@ impl CollectionView {
     ) -> Option<(SessionKey, DocumentKey, Document)> {
         let (session_key, doc_key) = self.selected_doc_key_for_current_session(cx)?;
         let doc = self.resolve_document(&session_key, &doc_key, cx)?;
-        Some((session_key, doc_key, doc))
-    }
-
-    pub(crate) fn selected_draft_for_current_session(
-        &self,
-        cx: &App,
-    ) -> Option<(SessionKey, DocumentKey, Document)> {
-        let (session_key, doc_key) = self.selected_doc_key_for_current_session(cx)?;
-        let doc = self.selected_draft(&session_key, &doc_key, cx)?;
         Some((session_key, doc_key, doc))
     }
 
@@ -697,12 +679,12 @@ impl CollectionView {
             tree.scroll_to_item(new_ix, ScrollStrategy::Top);
         });
 
-        // Update app state selected node
+        // Update app state selected node — arrow keys clear multi-selection
         if let Some(node_id) = tree_order.get(new_ix) {
             let node_meta = this.view_model.node_meta();
             if let Some(meta) = node_meta.get(node_id) {
                 this.state.update(cx, |state, cx| {
-                    state.set_selected_node(session_key, meta.doc_key.clone(), node_id.clone());
+                    state.select_single_doc(session_key, meta.doc_key.clone(), node_id.clone());
                     cx.notify();
                 });
             }

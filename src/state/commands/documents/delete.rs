@@ -65,6 +65,7 @@ impl AppCommands {
                                 }
                                 session.view.drafts.remove(&doc_key);
                                 session.view.dirty.remove(&doc_key);
+                                session.view.selected_docs.remove(&doc_key);
                                 if session.view.selected_doc.as_ref() == Some(&doc_key) {
                                     session.view.selected_doc = None;
                                     session.view.selected_node_id = None;

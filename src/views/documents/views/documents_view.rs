@@ -6,6 +6,7 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tree::tree;
 use gpui_component::{Icon, IconName, Sizable as _};
 
+use crate::bson::DocumentKey;
 use crate::components::Button;
 use crate::state::{AppState, SessionDocument, SessionKey};
 use crate::theme::{borders, spacing};
@@ -26,6 +27,7 @@ impl CollectionView {
         range_end: u64,
         is_loading: bool,
         session_key: Option<SessionKey>,
+        selected_docs: std::collections::HashSet<DocumentKey>,
         state_for_prev: Entity<AppState>,
         state_for_next: Entity<AppState>,
         cx: &mut Context<Self>,
@@ -248,6 +250,8 @@ impl CollectionView {
                                 let tree_state = tree_state.clone();
                                 let state_clone = self.state.clone();
                                 let session_key = session_key.clone();
+                                let selected_docs = selected_docs.clone();
+                                let tree_order: Vec<String> = self.view_model.tree_order().to_vec();
                                 let search_opts = SearchOptions {
                                     query: search_query.clone(),
                                     case_sensitive: self.search_case_sensitive,
@@ -270,6 +274,8 @@ impl CollectionView {
                                         tree_state.clone(),
                                         state_clone.clone(),
                                         session_key.clone(),
+                                        &selected_docs,
+                                        &tree_order,
                                         &search_opts,
                                         current_match_id.as_deref(),
                                         documents_focus.clone(),
