@@ -39,9 +39,14 @@ pub fn pair_action(
     in_string_or_comment: bool,
     has_selection: bool,
 ) -> PairAction {
-    // Overtype: typing `"` when `"` follows cursor
-    if !has_selection && inserted_char == '"' && char_after_cursor == Some('"') {
-        return PairAction::Overtype;
+    // Overtype: typing closing char when same char follows cursor
+    if !has_selection {
+        if inserted_char == '"' && char_after_cursor == Some('"') {
+            return PairAction::Overtype;
+        }
+        if matches!(inserted_char, '}' | ']' | ')') && char_after_cursor == Some(inserted_char) {
+            return PairAction::Overtype;
+        }
     }
 
     let closing = match inserted_char {
@@ -157,6 +162,26 @@ mod tests {
     #[test]
     fn pair_non_bracket_char() {
         assert_eq!(pair_action('a', None, false, false), PairAction::Skip);
+    }
+
+    #[test]
+    fn pair_overtype_closing_brace() {
+        assert_eq!(pair_action('}', Some('}'), false, false), PairAction::Overtype);
+    }
+
+    #[test]
+    fn pair_overtype_closing_bracket() {
+        assert_eq!(pair_action(']', Some(']'), false, false), PairAction::Overtype);
+    }
+
+    #[test]
+    fn pair_overtype_closing_paren() {
+        assert_eq!(pair_action(')', Some(')'), false, false), PairAction::Overtype);
+    }
+
+    #[test]
+    fn pair_closing_brace_no_overtype_when_different() {
+        assert_eq!(pair_action('}', Some(' '), false, false), PairAction::Skip);
     }
 
     // ── IndentResult tests ──────────────────────────────────────────
