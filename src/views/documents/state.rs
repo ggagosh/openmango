@@ -334,6 +334,11 @@ impl CollectionView {
 
         subscriptions.push(cx.subscribe(&state, |this, state, event, cx| match event {
             AppEvent::ViewChanged | AppEvent::Connected(_) => {
+                let next_session = state.read(cx).current_session_key();
+                if this.input_session != next_session {
+                    this.persist_query_input_drafts(cx);
+                }
+
                 let state_ref = state.read(cx);
                 let next_session = state_ref.current_session_key();
                 let should_load = next_session
@@ -491,6 +496,53 @@ impl CollectionView {
         {
             AppCommands::load_collection_stats(state.clone(), session_key.clone(), cx);
         }
+    }
+
+    fn persist_query_input_drafts(&mut self, cx: &mut Context<Self>) {
+        let Some(session_key) = self.input_session.clone() else {
+            return;
+        };
+
+        let filter_raw = self.filter_state.as_ref().map(|input| input.read(cx).value().to_string());
+        let sort_raw = self.sort_state.as_ref().map(|input| input.read(cx).value().to_string());
+        let projection_raw =
+            self.projection_state.as_ref().map(|input| input.read(cx).value().to_string());
+
+        let (stored_filter, stored_sort, stored_projection) = {
+            let state_ref = self.state.read(cx);
+            let Some(session_data) = state_ref.session_data(&session_key) else {
+                return;
+            };
+            (
+                session_data.filter_raw.clone(),
+                session_data.sort_raw.clone(),
+                session_data.projection_raw.clone(),
+            )
+        };
+
+        let next_filter = filter_raw.unwrap_or_else(|| stored_filter.clone());
+        let next_sort = sort_raw.unwrap_or_else(|| stored_sort.clone());
+        let next_projection = projection_raw.unwrap_or_else(|| stored_projection.clone());
+
+        let filter_changed = next_filter != stored_filter;
+        let sort_projection_changed =
+            next_sort != stored_sort || next_projection != stored_projection;
+        if !filter_changed && !sort_projection_changed {
+            return;
+        }
+
+        self.state.update(cx, |state, _| {
+            if filter_changed {
+                state.save_filter_draft(&session_key, next_filter.clone());
+            }
+            if sort_projection_changed {
+                state.save_sort_projection_draft(
+                    &session_key,
+                    next_sort.clone(),
+                    next_projection.clone(),
+                );
+            }
+        });
     }
 
     pub(crate) fn selected_doc_key(

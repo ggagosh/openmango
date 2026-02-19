@@ -36,6 +36,29 @@ impl AppState {
         self.tabs.preview.as_ref()
     }
 
+    pub(crate) fn promote_preview_collection_tab(&mut self, session_key: &SessionKey) -> bool {
+        if self.tabs.preview.as_ref() != Some(session_key) {
+            return false;
+        }
+
+        let index = if let Some(index) =
+            self.tabs.open.iter().position(|tab| matches_collection(tab, session_key))
+        {
+            index
+        } else {
+            self.tabs.open.push(TabKey::Collection(session_key.clone()));
+            self.tabs.open.len() - 1
+        };
+
+        self.tabs.preview = None;
+        if self.is_preview_active() {
+            self.set_active_index(index);
+        }
+
+        self.update_workspace_from_state();
+        true
+    }
+
     pub fn active_tab(&self) -> ActiveTab {
         self.tabs.active
     }

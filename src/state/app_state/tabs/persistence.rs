@@ -11,38 +11,48 @@ use super::super::types::{ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, Se
 impl AppState {
     pub(in crate::state::app_state) fn update_workspace_tabs(&mut self) {
         let selected_connection = self.conn.selected_connection;
-        let active_index = match self.tabs.active {
-            ActiveTab::Index(index) if index < self.tabs.open.len() => Some(index),
-            _ => None,
+        let persists_for_selected_connection = |tab: &TabKey| match (selected_connection, tab) {
+            (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
+            (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+            (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
+            (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
+            (_, TabKey::Settings | TabKey::Changelog) => false,
+            _ => false,
         };
 
-        self.workspace.active_tab = active_index
-            .and_then(|index| self.tabs.open.get(index))
-            .filter(|tab| match (selected_connection, tab) {
-                (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
-                (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
-                (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
-                (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-                (_, TabKey::Settings | TabKey::Changelog) => false,
-                _ => false,
-            })
-            .and_then(|tab| {
-                self.tabs.open.iter().position(|candidate| std::ptr::eq(candidate, tab))
-            });
-        self.workspace.open_tabs = self
-            .tabs
-            .open
-            .iter()
-            .filter(|tab| match (selected_connection, tab) {
-                (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
-                (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
-                (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
-                (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-                (_, TabKey::Settings | TabKey::Changelog) => false,
-                _ => false,
-            })
-            .map(|tab| self.build_workspace_tab(tab))
-            .collect();
+        let mut workspace_tabs = Vec::new();
+        let mut active_tab = None;
+
+        for (index, tab) in self.tabs.open.iter().enumerate() {
+            if !persists_for_selected_connection(tab) {
+                continue;
+            }
+            if matches!(self.tabs.active, ActiveTab::Index(active) if active == index) {
+                active_tab = Some(workspace_tabs.len());
+            }
+            workspace_tabs.push(self.build_workspace_tab(tab));
+        }
+
+        // Persist preview collection tabs as regular collection tabs so a single opened preview
+        // still restores as a visible tab after app restart.
+        if let Some(preview) = self.tabs.preview.clone() {
+            let preview_for_selected =
+                selected_connection.is_some_and(|conn_id| preview.connection_id == conn_id);
+            let preview_already_persisted = self
+                .tabs
+                .open
+                .iter()
+                .any(|tab| matches!(tab, TabKey::Collection(key) if key == &preview));
+            if preview_for_selected && !preview_already_persisted {
+                if matches!(self.tabs.active, ActiveTab::Preview) {
+                    active_tab = Some(workspace_tabs.len());
+                }
+                workspace_tabs.push(self.build_workspace_tab(&TabKey::Collection(preview)));
+            }
+        }
+
+        self.workspace.active_tab = active_tab;
+        self.workspace.open_tabs = workspace_tabs;
 
         self.update_workspace_selection();
     }
@@ -350,5 +360,52 @@ fn restore_doc_option(raw: &str, mut apply: impl FnMut(String, Option<mongodb::b
             log::warn!("Invalid filter JSON, resetting to empty: {e}");
             apply(String::new(), None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::app_state::types::{ActiveTab, SessionKey, TabKey};
+
+    #[test]
+    fn update_workspace_tabs_persists_preview_collection_as_tab() {
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+        let session = SessionKey::new(conn_id, "db", "col");
+
+        state.conn.selected_connection = Some(conn_id);
+        state.ensure_session(session.clone());
+        state.tabs.preview = Some(session);
+        state.tabs.active = ActiveTab::Preview;
+
+        state.update_workspace_tabs();
+
+        assert_eq!(state.workspace.open_tabs.len(), 1);
+        assert_eq!(state.workspace.active_tab, Some(0));
+        assert_eq!(state.workspace.open_tabs[0].kind, WorkspaceTabKind::Collection);
+        assert_eq!(state.workspace.open_tabs[0].database, "db");
+        assert_eq!(state.workspace.open_tabs[0].collection, "col");
+    }
+
+    #[test]
+    fn update_workspace_tabs_keeps_preview_active_index_after_open_tabs() {
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+        let open = SessionKey::new(conn_id, "db", "open");
+        let preview = SessionKey::new(conn_id, "db", "preview");
+
+        state.conn.selected_connection = Some(conn_id);
+        state.ensure_session(open.clone());
+        state.ensure_session(preview.clone());
+        state.tabs.open.push(TabKey::Collection(open));
+        state.tabs.preview = Some(preview);
+        state.tabs.active = ActiveTab::Preview;
+
+        state.update_workspace_tabs();
+
+        assert_eq!(state.workspace.open_tabs.len(), 2);
+        assert_eq!(state.workspace.active_tab, Some(1));
+        assert_eq!(state.workspace.open_tabs[1].collection, "preview");
     }
 }

@@ -151,6 +151,15 @@ impl Render for CollectionView {
                             }
                             view.filter_auto_pair.sync(state.read(cx).value().as_ref());
                             view.filter_error = false;
+                            if state.read(cx).focus_handle(cx).is_focused(window)
+                                && let Some(session_key) = view.view_model.current_session()
+                            {
+                                view.state.update(cx, |state, cx| {
+                                    if state.promote_preview_collection_tab(&session_key) {
+                                        cx.notify();
+                                    }
+                                });
+                            }
                         }
                         InputEvent::PressEnter { .. } => {
                             let raw = state.read(cx).value().to_string();
@@ -211,6 +220,15 @@ impl Render for CollectionView {
                             }
                             view.sort_auto_pair.sync(state.read(cx).value().as_ref());
                             view.sort_error = false;
+                            if state.read(cx).focus_handle(cx).is_focused(window)
+                                && let Some(session_key) = view.view_model.current_session()
+                            {
+                                view.state.update(cx, |state, cx| {
+                                    if state.promote_preview_collection_tab(&session_key) {
+                                        cx.notify();
+                                    }
+                                });
+                            }
                         }
                         InputEvent::PressEnter { .. } => {
                             let raw = state.read(cx).value().to_string();
@@ -274,6 +292,15 @@ impl Render for CollectionView {
                         }
                         view.projection_auto_pair.sync(state.read(cx).value().as_ref());
                         view.projection_error = false;
+                        if state.read(cx).focus_handle(cx).is_focused(window)
+                            && let Some(session_key) = view.view_model.current_session()
+                        {
+                            view.state.update(cx, |state, cx| {
+                                if state.promote_preview_collection_tab(&session_key) {
+                                    cx.notify();
+                                }
+                            });
+                        }
                     }
                     InputEvent::PressEnter { .. } => {
                         let raw = state.read(cx).value().to_string();
