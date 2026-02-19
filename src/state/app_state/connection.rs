@@ -183,9 +183,6 @@ impl AppState {
             .filter(|(_, tab)| match tab {
                 super::types::TabKey::Collection(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
-                super::types::TabKey::JsonEditor(tab) => self
-                    .json_editor_tab(tab.id)
-                    .is_some_and(|state| state.session_key.connection_id == connection_id),
                 super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Settings | super::types::TabKey::Changelog => false,

@@ -16,7 +16,6 @@ impl AppState {
             (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
             (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
             (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-            (_, TabKey::JsonEditor(_)) => false,
             (_, TabKey::Settings | TabKey::Changelog) => false,
             _ => false,
         };
@@ -289,8 +288,8 @@ impl AppState {
                     forge_content: content,
                 }
             }
-            TabKey::JsonEditor(_) | TabKey::Settings | TabKey::Changelog => {
-                // JSON editor/Settings/Changelog tabs are not persisted in workspace
+            TabKey::Settings | TabKey::Changelog => {
+                // Settings/Changelog tabs are not persisted in workspace
                 WorkspaceTab {
                     database: String::new(),
                     collection: String::new(),
@@ -336,13 +335,6 @@ impl AppState {
                 TabKey::Forge(key) => {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
-                }
-                TabKey::JsonEditor(key) => {
-                    if let Some(tab) = self.json_editor_tabs.get(&key.id) {
-                        self.workspace.selected_database = Some(tab.session_key.database.clone());
-                        self.workspace.selected_collection =
-                            Some(tab.session_key.collection.clone());
-                    }
                 }
                 TabKey::Settings | TabKey::Changelog => {
                     // Settings/Changelog tabs don't affect selection

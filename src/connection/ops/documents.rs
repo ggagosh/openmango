@@ -209,6 +209,26 @@ impl ConnectionManager {
         })
     }
 
+    /// Find a single document by _id (runs in Tokio runtime)
+    pub fn find_document_by_id(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+    ) -> Result<Option<Document>> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let result = coll.find_one(doc! { "_id": id }).await?;
+            Ok(result)
+        })
+    }
+
     /// Delete a document by _id in a collection (runs in Tokio runtime)
     pub fn delete_document(
         &self,

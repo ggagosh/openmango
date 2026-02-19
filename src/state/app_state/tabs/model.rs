@@ -5,14 +5,12 @@ use std::collections::HashSet;
 use gpui::Context;
 use uuid::Uuid;
 
-use crate::bson::{DocumentKey, document_to_shell_string};
 use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
 use crate::state::app_state::types::{
-    ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, JsonEditorTabKey, JsonEditorTabState,
-    JsonEditorTarget, SessionKey, TabKey, TransferMode, TransferScope, TransferTabKey,
-    TransferTabState, View,
+    ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey, TabKey, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -113,18 +111,6 @@ impl AppState {
                 self.conn.selected_collection = None;
                 self.current_view = View::Database;
                 self.ensure_database_session(tab);
-            }
-            TabKey::JsonEditor(tab) => {
-                let editor = self.json_editor_tabs.get(&tab.id).cloned();
-                if let Some(editor) = editor {
-                    self.set_selected_connection_internal(editor.session_key.connection_id);
-                    self.conn.selected_database = Some(editor.session_key.database.clone());
-                    self.conn.selected_collection = Some(editor.session_key.collection.clone());
-                    self.ensure_session_loaded(editor.session_key);
-                    self.current_view = View::JsonEditor;
-                } else {
-                    self.current_view = View::Documents;
-                }
             }
             TabKey::Transfer(tab) => {
                 if let Some(conn_id) = tab.connection_id {
@@ -334,111 +320,6 @@ impl AppState {
             self.clear_error_status();
             cx.emit(AppEvent::ViewChanged);
         }
-        cx.notify();
-    }
-
-    pub fn open_document_json_editor_tab(
-        &mut self,
-        session_key: SessionKey,
-        doc_key: DocumentKey,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.conn.active.contains_key(&session_key.connection_id) {
-            return;
-        }
-        self.promote_preview_collection_tab(&session_key);
-
-        if let Some(index) = self.tabs.open.iter().position(|tab| {
-            let TabKey::JsonEditor(tab_key) = tab else {
-                return false;
-            };
-            let Some(tab_state) = self.json_editor_tabs.get(&tab_key.id) else {
-                return false;
-            };
-            if tab_state.session_key != session_key {
-                return false;
-            }
-            matches!(
-                tab_state.target,
-                JsonEditorTarget::Document {
-                    doc_key: ref existing_key,
-                    ..
-                } if existing_key == &doc_key
-            )
-        }) {
-            self.set_active_index(index);
-            self.apply_tab_selection(self.tabs.open[index].clone());
-            self.update_workspace_from_state();
-            self.clear_error_status();
-            cx.emit(AppEvent::ViewChanged);
-            cx.notify();
-            return;
-        }
-
-        let Some(document) = self.session_draft_or_document(&session_key, &doc_key) else {
-            return;
-        };
-
-        let id = Uuid::new_v4();
-        let tab_state = JsonEditorTabState {
-            session_key: session_key.clone(),
-            target: JsonEditorTarget::Document { doc_key, baseline_document: document.clone() },
-            content: document_to_shell_string(&document),
-        };
-
-        self.json_editor_tabs.insert(id, tab_state);
-        self.tabs.open.push(TabKey::JsonEditor(JsonEditorTabKey { id }));
-        self.set_active_index(self.tabs.open.len() - 1);
-        self.apply_tab_selection(self.tabs.open[self.tabs.open.len() - 1].clone());
-        self.update_workspace_from_state();
-        self.clear_error_status();
-        cx.emit(AppEvent::ViewChanged);
-        cx.notify();
-    }
-
-    pub fn open_insert_document_json_editor_tab(
-        &mut self,
-        session_key: SessionKey,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.conn.active.contains_key(&session_key.connection_id) {
-            return;
-        }
-        self.promote_preview_collection_tab(&session_key);
-
-        if let Some(index) = self.tabs.open.iter().position(|tab| {
-            let TabKey::JsonEditor(tab_key) = tab else {
-                return false;
-            };
-            let Some(tab_state) = self.json_editor_tabs.get(&tab_key.id) else {
-                return false;
-            };
-            tab_state.session_key == session_key
-                && matches!(tab_state.target, JsonEditorTarget::Insert)
-        }) {
-            self.set_active_index(index);
-            self.apply_tab_selection(self.tabs.open[index].clone());
-            self.update_workspace_from_state();
-            self.clear_error_status();
-            cx.emit(AppEvent::ViewChanged);
-            cx.notify();
-            return;
-        }
-
-        let id = Uuid::new_v4();
-        let tab_state = JsonEditorTabState {
-            session_key,
-            target: JsonEditorTarget::Insert,
-            content: "{}".to_string(),
-        };
-
-        self.json_editor_tabs.insert(id, tab_state);
-        self.tabs.open.push(TabKey::JsonEditor(JsonEditorTabKey { id }));
-        self.set_active_index(self.tabs.open.len() - 1);
-        self.apply_tab_selection(self.tabs.open[self.tabs.open.len() - 1].clone());
-        self.update_workspace_from_state();
-        self.clear_error_status();
-        cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
 
@@ -798,9 +679,6 @@ impl AppState {
             TabKey::Database(key) => {
                 self.db_sessions.remove(key);
             }
-            TabKey::JsonEditor(key) => {
-                self.json_editor_tabs.remove(&key.id);
-            }
             TabKey::Transfer(key) => {
                 self.transfer_tabs.remove(&key.id);
             }
@@ -911,13 +789,6 @@ impl AppState {
                         && tab.database == database
                         && tab.collection == collection
                 }
-                TabKey::JsonEditor(tab) => {
-                    self.json_editor_tabs.get(&tab.id).is_some_and(|state| {
-                        state.session_key.connection_id == connection_id
-                            && state.session_key.database == database
-                            && state.session_key.collection == collection
-                    })
-                }
                 _ => false,
             })
             .map(|(idx, _)| idx)
@@ -956,12 +827,6 @@ impl AppState {
                 TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
-                TabKey::JsonEditor(tab) => {
-                    self.json_editor_tabs.get(&tab.id).is_some_and(|state| {
-                        state.session_key.connection_id == connection_id
-                            && state.session_key.database == database
-                    })
-                }
                 TabKey::Transfer(_) | TabKey::Settings | TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
@@ -994,15 +859,6 @@ impl AppState {
                 && tab.collection == from
             {
                 tab.collection = to.to_string();
-            }
-        }
-
-        for editor in self.json_editor_tabs.values_mut() {
-            if editor.session_key.connection_id == connection_id
-                && editor.session_key.database == database
-                && editor.session_key.collection == from
-            {
-                editor.session_key.collection = to.to_string();
             }
         }
 

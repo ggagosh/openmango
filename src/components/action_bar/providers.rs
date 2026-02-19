@@ -75,15 +75,6 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (key.database.clone(), conn_name)
             }
-            TabKey::JsonEditor(key) => {
-                let detail = state
-                    .json_editor_tab(key.id)
-                    .map(|tab| {
-                        format!("{}/{}", tab.session_key.database, tab.session_key.collection)
-                    })
-                    .unwrap_or_else(|| "JSON editor".to_string());
-                (state.json_editor_tab_label(key.id), detail)
-            }
             TabKey::Transfer(key) => {
                 let conn_name = key
                     .connection_id

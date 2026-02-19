@@ -54,78 +54,6 @@ impl AppRoot {
                     return;
                 }
 
-                if cmd_or_ctrl && !alt && !shift && key == "n" {
-                    match this.state.read(cx).current_view {
-                        View::Documents => {
-                            let subview = this
-                                .state
-                                .read(cx)
-                                .current_session_key()
-                                .and_then(|key| this.state.read(cx).session_subview(&key))
-                                .unwrap_or(CollectionSubview::Documents);
-                            if let Some(session_key) = this.state.read(cx).current_session_key() {
-                                match subview {
-                                    CollectionSubview::Documents => {
-                                        CollectionView::open_insert_document_json_editor(
-                                            this.state.clone(),
-                                            session_key,
-                                            window,
-                                            cx,
-                                        );
-                                        cx.stop_propagation();
-                                    }
-                                    CollectionSubview::Indexes => {
-                                        CollectionView::open_index_create_dialog(
-                                            this.state.clone(),
-                                            session_key,
-                                            window,
-                                            cx,
-                                        );
-                                        cx.stop_propagation();
-                                    }
-                                    CollectionSubview::Stats | CollectionSubview::Aggregation => {}
-                                }
-                            }
-                        }
-                        View::Database => {
-                            let database = this.state.read(cx).selected_database_name();
-                            if let Some(database) = database {
-                                open_create_collection_dialog(
-                                    this.state.clone(),
-                                    database,
-                                    window,
-                                    cx,
-                                );
-                                cx.stop_propagation();
-                            }
-                        }
-                        View::JsonEditor
-                        | View::Transfer
-                        | View::Forge
-                        | View::Settings
-                        | View::Changelog => {}
-                        View::Welcome | View::Databases | View::Collections => {
-                            ConnectionDialog::open(this.state.clone(), window, cx);
-                            cx.stop_propagation();
-                        }
-                    }
-                    return;
-                }
-
-                if cmd_or_ctrl && shift && !alt && key == "n" {
-                    if !matches!(this.state.read(cx).current_view, View::Documents) {
-                        this.handle_create_database(window, cx);
-                        cx.stop_propagation();
-                    }
-                    return;
-                }
-
-                if cmd_or_ctrl && !alt && !shift && key == "w" {
-                    this.handle_close_tab(cx);
-                    cx.stop_propagation();
-                    return;
-                }
-
                 if cmd_or_ctrl && !alt && !shift && key == "r" {
                     this.handle_refresh(cx);
                     cx.stop_propagation();
@@ -433,7 +361,7 @@ impl AppRoot {
                 };
                 AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
             }
-            View::JsonEditor | View::Transfer | View::Forge | View::Settings | View::Changelog => {}
+            View::Transfer | View::Forge | View::Settings | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

@@ -78,18 +78,6 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
                     }
-                    TabKey::JsonEditor(key) => {
-                        if let Some(session_key) =
-                            self.json_editor_tab(key.id).map(|tab| tab.session_key.clone())
-                        {
-                            self.conn.selected_connection = Some(session_key.connection_id);
-                            self.conn.selected_database = Some(session_key.database.clone());
-                            self.conn.selected_collection = Some(session_key.collection.clone());
-                            self.current_view = View::JsonEditor;
-                        } else {
-                            self.current_view = View::Databases;
-                        }
-                    }
                     TabKey::Transfer(key) => {
                         self.conn.selected_connection = Some(connection_id);
                         if let Some(transfer) = self.transfer_tabs.get(&key.id) {

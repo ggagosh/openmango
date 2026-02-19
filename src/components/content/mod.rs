@@ -2,8 +2,7 @@ use gpui::*;
 
 use crate::state::{ActiveTab, AppEvent, AppState, StatusLevel, View};
 use crate::views::{
-    ChangelogView, CollectionView, DatabaseView, ForgeView, JsonEditorView, SettingsView,
-    TransferView,
+    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
 };
 
 mod empty;
@@ -23,7 +22,6 @@ pub struct ContentArea {
     pending_scroll_to_end_frames: u8,
     collection_view: Option<Entity<CollectionView>>,
     database_view: Option<Entity<DatabaseView>>,
-    json_editor_view: Option<Entity<JsonEditorView>>,
     transfer_view: Option<Entity<TransferView>>,
     forge_view: Option<Entity<ForgeView>>,
     settings_view: Option<Entity<SettingsView>>,
@@ -43,7 +41,6 @@ impl ContentArea {
                 let (
                     should_create_collection,
                     should_create_database,
-                    should_create_json_editor,
                     should_create_transfer,
                     should_create_forge,
                     should_create_settings,
@@ -54,7 +51,6 @@ impl ContentArea {
                         state_ref.selected_collection().is_some(),
                         matches!(state_ref.current_view, View::Database)
                             && state_ref.selected_database().is_some(),
-                        matches!(state_ref.current_view, View::JsonEditor),
                         matches!(state_ref.current_view, View::Transfer),
                         matches!(state_ref.current_view, View::Forge),
                         matches!(state_ref.current_view, View::Settings),
@@ -68,10 +64,6 @@ impl ContentArea {
                 }
                 if should_create_database && this.database_view.is_none() {
                     this.database_view = Some(cx.new(|cx| DatabaseView::new(state.clone(), cx)));
-                }
-                if should_create_json_editor && this.json_editor_view.is_none() {
-                    this.json_editor_view =
-                        Some(cx.new(|cx| JsonEditorView::new(state.clone(), cx)));
                 }
                 if should_create_transfer && this.transfer_view.is_none() {
                     this.transfer_view = Some(cx.new(|cx| TransferView::new(state.clone(), cx)));
@@ -101,11 +93,6 @@ impl ContentArea {
             && state.read(cx).selected_database().is_some()
         {
             Some(cx.new(|cx| DatabaseView::new(state.clone(), cx)))
-        } else {
-            None
-        };
-        let json_editor_view = if matches!(state.read(cx).current_view, View::JsonEditor) {
-            Some(cx.new(|cx| JsonEditorView::new(state.clone(), cx)))
         } else {
             None
         };
@@ -141,7 +128,6 @@ impl ContentArea {
             pending_scroll_to_end_frames: 0,
             collection_view,
             database_view,
-            json_editor_view,
             transfer_view,
             forge_view,
             settings_view,
@@ -155,7 +141,6 @@ impl ContentArea {
         &mut self,
         should_collection: bool,
         should_database: bool,
-        should_json_editor: bool,
         should_transfer: bool,
         should_forge: bool,
         should_settings: bool,
@@ -167,9 +152,6 @@ impl ContentArea {
         }
         if should_database && self.database_view.is_none() {
             self.database_view = Some(cx.new(|cx| DatabaseView::new(self.state.clone(), cx)));
-        }
-        if should_json_editor && self.json_editor_view.is_none() {
-            self.json_editor_view = Some(cx.new(|cx| JsonEditorView::new(self.state.clone(), cx)));
         }
         if should_transfer && self.transfer_view.is_none() {
             self.transfer_view = Some(cx.new(|cx| TransferView::new(self.state.clone(), cx)));
@@ -221,7 +203,6 @@ impl Render for ContentArea {
 
         let should_collection_view = matches!(current_view, View::Documents);
         let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
-        let should_json_editor_view = matches!(current_view, View::JsonEditor);
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
@@ -241,7 +222,6 @@ impl Render for ContentArea {
             self.ensure_views(
                 should_collection_view,
                 should_database_view,
-                should_json_editor_view,
                 should_transfer_view,
                 should_forge_view,
                 should_settings_view,
@@ -267,7 +247,6 @@ impl Render for ContentArea {
                 has_collection,
                 collection_view: self.collection_view.as_ref(),
                 database_view: self.database_view.as_ref(),
-                json_editor_view: self.json_editor_view.as_ref(),
                 transfer_view: self.transfer_view.as_ref(),
                 forge_view: self.forge_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
@@ -279,58 +258,42 @@ impl Render for ContentArea {
         self.pending_scroll_to_end_frames = 0;
 
         if matches!(current_view, View::Settings) {
-            self.ensure_views(false, false, false, false, false, should_settings_view, false, cx);
+            self.ensure_views(false, false, false, false, should_settings_view, false, cx);
             if let Some(view) = &self.settings_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Changelog) {
-            self.ensure_views(false, false, false, false, false, false, should_changelog_view, cx);
+            self.ensure_views(false, false, false, false, false, should_changelog_view, cx);
             if let Some(view) = &self.changelog_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
-        if matches!(current_view, View::JsonEditor) {
-            self.ensure_views(
-                false,
-                false,
-                should_json_editor_view,
-                false,
-                false,
-                false,
-                false,
-                cx,
-            );
-            if let Some(view) = &self.json_editor_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
-            }
-        }
-
         if matches!(current_view, View::Database) {
-            self.ensure_views(false, should_database_view, false, false, false, false, false, cx);
+            self.ensure_views(false, should_database_view, false, false, false, false, cx);
             if let Some(view) = &self.database_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Transfer) {
-            self.ensure_views(false, false, false, should_transfer_view, false, false, false, cx);
+            self.ensure_views(false, false, should_transfer_view, false, false, false, cx);
             if let Some(view) = &self.transfer_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if matches!(current_view, View::Forge) {
-            self.ensure_views(false, false, false, false, should_forge_view, false, false, cx);
+            self.ensure_views(false, false, false, should_forge_view, false, false, cx);
             if let Some(view) = &self.forge_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }
 
         if has_collection {
-            self.ensure_views(should_collection_view, false, false, false, false, false, false, cx);
+            self.ensure_views(should_collection_view, false, false, false, false, false, cx);
             if let Some(view) = &self.collection_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }

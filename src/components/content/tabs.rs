@@ -8,8 +8,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, spacing};
 use crate::views::{
-    ChangelogView, CollectionView, DatabaseView, ForgeView, JsonEditorView, SettingsView,
-    TransferView,
+    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
 };
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
@@ -29,7 +28,6 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
-    pub(crate) json_editor_view: Option<&'a Entity<JsonEditorView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
     pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
 }
@@ -140,9 +138,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                             dirty_tabs.contains(tab),
                         ),
                         TabKey::Database(tab) => (tab.database.clone(), false),
-                        TabKey::JsonEditor(tab) => {
-                            (host.state.read(cx).json_editor_tab_label(tab.id), false)
-                        }
                         TabKey::Transfer(tab) => {
                             (host.state.read(cx).transfer_tab_label(tab.id), false)
                         }
@@ -330,10 +325,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let content = match host.current_view {
         View::Database => host
             .database_view
-            .map(|view| view.clone().into_any_element())
-            .unwrap_or_else(|| div().into_any_element()),
-        View::JsonEditor => host
-            .json_editor_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::Transfer => host

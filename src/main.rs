@@ -69,9 +69,11 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                // Quit the app when the window is closed (standard macOS single-window behavior)
+                // Quit only when the last window is closed.
                 window.on_window_should_close(cx, |_window, cx| {
-                    cx.quit();
+                    if cx.windows().len() == 1 {
+                        cx.quit();
+                    }
                     true
                 });
 

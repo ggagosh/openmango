@@ -4,6 +4,7 @@
 pub mod app_state;
 pub mod commands;
 pub mod config;
+pub mod editor_sessions;
 pub mod events;
 pub mod settings;
 pub mod status;
@@ -12,12 +13,15 @@ pub mod workspace;
 pub use app_state::{
     ActiveTab, AppState, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
     CompressionMode, CopiedTreeItem, DatabaseKey, DatabaseSessionData, DatabaseSessionState,
-    DatabaseStats, Encoding, ExtendedJsonMode, InsertMode, JsonEditorTabKey, JsonEditorTabState,
-    JsonEditorTarget, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
-    TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    DatabaseStats, Encoding, ExtendedJsonMode, InsertMode, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;
+pub use editor_sessions::{
+    EditorSession, EditorSessionId, EditorSessionStore, EditorSessionTarget,
+};
 pub use events::AppEvent;
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,

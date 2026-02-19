@@ -4,7 +4,6 @@ mod aggregation;
 mod connection;
 mod database_sessions;
 mod forge;
-mod json_editor;
 mod selection;
 mod sessions;
 mod status;
@@ -24,9 +23,9 @@ pub use types::{
     ActiveTab, BsonOutputFormat, CollectionOverview, CollectionProgress, CollectionStats,
     CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem, DatabaseKey,
     DatabaseSessionData, DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, Encoding,
-    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, JsonEditorTabKey, JsonEditorTabState,
-    JsonEditorTarget, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
-    TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -38,6 +37,7 @@ use gpui::{Context, EventEmitter};
 use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::StatusMessage;
+use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
 use crate::state::settings::AppSettings;
 use crate::state::{ConfigManager, WorkspaceState};
@@ -71,7 +71,6 @@ pub struct AppState {
     tabs: TabState,
     sessions: SessionStore,
     db_sessions: DatabaseSessionStore,
-    json_editor_tabs: HashMap<uuid::Uuid, JsonEditorTabState>,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
     forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
@@ -95,6 +94,9 @@ pub struct AppState {
 
     // Auto-update
     pub update_status: UpdateStatus,
+
+    // Shared detached JSON editor sessions
+    editor_sessions: EditorSessionStore,
 }
 
 impl AppState {
@@ -134,7 +136,6 @@ impl AppState {
             tabs: TabState::default(),
             sessions: SessionStore::new(),
             db_sessions: DatabaseSessionStore::new(),
-            json_editor_tabs: HashMap::new(),
             transfer_tabs: HashMap::new(),
             forge_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
@@ -148,6 +149,7 @@ impl AppState {
             changelog_pending: false,
             aggregation_workspace_save_gen,
             update_status: UpdateStatus::Idle,
+            editor_sessions: EditorSessionStore::default(),
         }
     }
 
@@ -158,6 +160,10 @@ impl AppState {
 
     pub fn status_message(&self) -> Option<StatusMessage> {
         self.status_message.clone()
+    }
+
+    pub fn editor_sessions(&self) -> EditorSessionStore {
+        self.editor_sessions.clone()
     }
 
     pub fn set_status_message(&mut self, message: Option<StatusMessage>) {

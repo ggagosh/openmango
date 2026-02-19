@@ -91,7 +91,6 @@ impl AppCommands {
                                 session.view.drafts.remove(&doc_key);
                                 session.view.dirty.remove(&doc_key);
                             }
-                            state.refresh_json_editor_baseline(&session_key, &doc_key);
                             let event = AppEvent::DocumentSaved {
                                 session: session_key.clone(),
                                 document: doc_key.clone(),

@@ -7,22 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- You can now select and work with multiple documents at once.
-- JSON editing opens in tabs, so you can keep editing while using the rest of the app.
-- The JSON editor now has common productivity shortcuts (move/duplicate/delete line, join lines, toggle comment, format document).
-- The JSON editor now shows clear inline messages for actions like format, save, and insert.
+- Multi-document selection in document lists.
+- JSON editing now opens in a dedicated editor window, so you can browse and copy data while editing.
+- JSON editor productivity shortcuts: move line, duplicate line, delete line, join lines, toggle comment, and format document.
+- Clear inline status messages in the JSON editor for format/save/insert actions.
 
 ### Fixed
-- Saving from the JSON editor is now reliable and gives visible success/failure feedback.
-- Query text is kept when switching tabs.
-- Preview tabs are now promoted and restored more consistently after normal use and restart.
-- Inline editing save behavior is more consistent.
-- Typing around paired characters in Forge is smoother.
+- Re-opening Edit/Insert now focuses the existing editor window instead of creating duplicates.
+- `Cmd/Ctrl+W` now closes the editor window instead of the main app tab.
+- Save and Insert now close the editor window after a successful operation.
+- Safer document saving: detects changed/deleted server documents and unapplied inline drafts, with recovery actions (`Reload`, `Load Inline Draft`, `Create as New`).
+- Query text no longer clears when switching tabs.
+- Preview tabs now promote/restore more consistently, including after restart.
+- Inline field-edit save flow is more reliable.
+- Typing around auto-paired characters in Forge is smoother.
 
 ### Changed
-- "Edit JSON" and "Insert" now open in tabs instead of modal popups.
-- Clear shortcuts for Forge output and aggregation stage are now `Cmd/Ctrl+Alt+K`.
-- JSON editor tab titles are now easier to understand.
+- JSON editor window titles are now clearer and more descriptive.
+- Clear shortcut for Forge output and aggregation stage is now `Cmd/Ctrl+Alt+K`.
 
 ## [0.1.7] - 2026-02-12
 

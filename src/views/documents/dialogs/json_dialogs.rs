@@ -2,6 +2,9 @@ use gpui::*;
 
 use crate::bson::DocumentKey;
 use crate::state::{AppState, SessionKey};
+use crate::views::json_editor_detached::{
+    open_document_json_editor_window, open_insert_json_editor_window,
+};
 
 use super::super::CollectionView;
 use super::index_create::IndexCreateDialog;
@@ -15,9 +18,7 @@ impl CollectionView {
         _window: &mut Window,
         cx: &mut App,
     ) {
-        state.update(cx, |state, cx| {
-            state.open_document_json_editor_tab(session_key, doc_key, cx);
-        });
+        open_document_json_editor_window(state, session_key, doc_key, cx);
     }
 
     pub(crate) fn open_insert_document_json_editor(
@@ -26,9 +27,7 @@ impl CollectionView {
         _window: &mut Window,
         cx: &mut App,
     ) {
-        state.update(cx, |state, cx| {
-            state.open_insert_document_json_editor_tab(session_key, cx);
-        });
+        open_insert_json_editor_window(state, session_key, cx);
     }
 
     pub(crate) fn open_index_create_dialog(
