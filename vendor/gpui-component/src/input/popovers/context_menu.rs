@@ -42,6 +42,7 @@ impl InputState {
         }
 
         let is_enable = !self.disabled;
+        let is_multiline = self.mode.is_multi_line();
         let has_goto_definition = is_enable && self.lsp.definition_provider.is_some();
         let has_code_action = is_enable && !self.lsp.code_action_providers.is_empty();
         let is_selected = !self.selected_range.is_empty();
@@ -62,6 +63,47 @@ impl InputState {
                             t!("Input.Show Code Actions"),
                             Box::new(input::ToggleCodeActions),
                             has_code_action,
+                        )
+                        .separator()
+                        .menu_with_enable(
+                            t!("Input.Move Line Up"),
+                            Box::new(input::MoveLineUp),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Move Line Down"),
+                            Box::new(input::MoveLineDown),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Duplicate Line Up"),
+                            Box::new(input::DuplicateLineUp),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Duplicate Line Down"),
+                            Box::new(input::DuplicateLineDown),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Delete Line"),
+                            Box::new(input::DeleteLine),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Join Lines"),
+                            Box::new(input::JoinLines),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Toggle Line Comment"),
+                            Box::new(input::ToggleLineComment),
+                            is_enable && is_multiline,
+                        )
+                        .menu_with_enable(
+                            t!("Input.Format Document"),
+                            Box::new(input::FormatDocument),
+                            is_enable && is_multiline,
                         )
                         .separator()
                     })

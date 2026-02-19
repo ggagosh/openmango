@@ -299,6 +299,14 @@ impl RenderOnce for Input {
                             .on_action(window.listener_for(&self.state, InputState::outdent_inline))
                             .on_action(window.listener_for(&self.state, InputState::indent_block))
                             .on_action(window.listener_for(&self.state, InputState::outdent_block))
+                            .on_action(window.listener_for(&self.state, InputState::move_line_up))
+                            .on_action(window.listener_for(&self.state, InputState::move_line_down))
+                            .on_action(window.listener_for(&self.state, InputState::duplicate_line_up))
+                            .on_action(window.listener_for(&self.state, InputState::duplicate_line_down))
+                            .on_action(window.listener_for(&self.state, InputState::delete_line))
+                            .on_action(window.listener_for(&self.state, InputState::join_lines))
+                            .on_action(window.listener_for(&self.state, InputState::toggle_line_comment))
+                            .on_action(window.listener_for(&self.state, InputState::format_document))
                     })
                     .on_action(
                         window.listener_for(&self.state, InputState::on_action_toggle_code_actions),

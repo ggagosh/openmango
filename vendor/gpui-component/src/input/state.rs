@@ -47,6 +47,7 @@ actions!(
     [
         Backspace,
         Delete,
+        DeleteLine,
         DeleteToBeginningOfLine,
         DeleteToEndOfLine,
         DeleteToPreviousWordStart,
@@ -55,6 +56,13 @@ actions!(
         Outdent,
         IndentInline,
         OutdentInline,
+        MoveLineUp,
+        MoveLineDown,
+        DuplicateLineUp,
+        DuplicateLineDown,
+        JoinLines,
+        ToggleLineComment,
+        FormatDocument,
         MoveUp,
         MoveDown,
         MoveLeft,
@@ -136,6 +144,23 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-[", Outdent, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-[", Outdent, Some(CONTEXT)),
+        KeyBinding::new("alt-up", MoveLineUp, Some(CONTEXT)),
+        KeyBinding::new("alt-down", MoveLineDown, Some(CONTEXT)),
+        KeyBinding::new("shift-alt-up", DuplicateLineUp, Some(CONTEXT)),
+        KeyBinding::new("shift-alt-down", DuplicateLineDown, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-k", DeleteLine, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-k", DeleteLine, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-j", JoinLines, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-j", JoinLines, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-/", ToggleLineComment, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-/", ToggleLineComment, Some(CONTEXT)),
+        KeyBinding::new("shift-alt-f", FormatDocument, Some(CONTEXT)),
         KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
@@ -256,6 +281,21 @@ impl LastLayout {
         }
 
         self.lines.get(row.saturating_sub(self.visible_range.start))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LineBlock {
+    start_row: usize,
+    end_row: usize,
+    start: usize,
+    end: usize,
+}
+
+impl LineBlock {
+    #[inline]
+    fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
     }
 }
 
@@ -1064,6 +1104,516 @@ impl InputState {
         } else {
             return current_indent;
         }
+    }
+
+    #[inline]
+    fn is_code_editor_multiline(&self) -> bool {
+        self.mode.is_code_editor() && self.mode.is_multi_line()
+    }
+
+    #[inline]
+    fn line_end_with_newline(&self, row: usize) -> usize {
+        let end = self.text.line_end_offset(row);
+        if self.text.char_at(end) == Some('\n') {
+            end + 1
+        } else {
+            end
+        }
+    }
+
+    fn selected_line_block(&self) -> LineBlock {
+        let line_count = self.text.lines_len().max(1);
+
+        if self.selected_range.is_empty() {
+            let row = self
+                .text
+                .offset_to_point(self.cursor().min(self.text.len()))
+                .row
+                .min(line_count.saturating_sub(1));
+            let start = self.text.line_start_offset(row);
+            let end = self.line_end_with_newline(row);
+            return LineBlock {
+                start_row: row,
+                end_row: row,
+                start,
+                end,
+            };
+        }
+
+        let start_offset = self.selected_range.start.min(self.selected_range.end);
+        let end_offset = self.selected_range.start.max(self.selected_range.end);
+        let start_row = self
+            .text
+            .offset_to_point(start_offset.min(self.text.len()))
+            .row
+            .min(line_count.saturating_sub(1));
+        let mut end_row = self
+            .text
+            .offset_to_point(end_offset.min(self.text.len()))
+            .row
+            .min(line_count.saturating_sub(1));
+
+        // If selection ends at the start of a line, don't include that next line.
+        if end_offset > start_offset
+            && end_offset == self.text.line_start_offset(end_row)
+            && end_row > start_row
+        {
+            end_row -= 1;
+        }
+
+        let start = self.text.line_start_offset(start_row);
+        let end = self.line_end_with_newline(end_row);
+        LineBlock {
+            start_row,
+            end_row,
+            start,
+            end,
+        }
+    }
+
+    fn replace_range_and_set_selection(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        new_selection: Range<usize>,
+        selection_reversed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace_text_in_range_silent(Some(self.range_to_utf16(&range)), new_text, window, cx);
+
+        let max_len = self.text.len();
+        let start = new_selection.start.min(max_len);
+        let end = new_selection.end.min(max_len);
+        let (start, end) = (start.min(end), start.max(end));
+
+        self.selected_range = (start..end).into();
+        self.selection_reversed = selection_reversed && start != end;
+        if start == end {
+            self.update_preferred_column();
+        }
+        self.pause_blink_cursor(cx);
+        cx.notify();
+    }
+
+    fn line_comment_prefix(&self) -> Option<&'static str> {
+        let InputMode::CodeEditor { language, .. } = &self.mode else {
+            return None;
+        };
+        let language = language.as_ref().to_ascii_lowercase();
+        match language.as_str() {
+            "javascript" | "typescript" | "tsx" | "jsx" | "json" | "jsonc" | "rust" | "go"
+            | "c" | "cpp" | "java" | "scala" | "swift" | "proto" => Some("//"),
+            "python" | "yaml" | "yml" | "bash" | "shell" | "sh" | "toml" | "makefile"
+            | "dockerfile" => Some("#"),
+            "sql" => Some("--"),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn leading_whitespace_len(line: &str) -> usize {
+        line.char_indices()
+            .find(|(_, ch)| !matches!(ch, ' ' | '\t'))
+            .map(|(idx, _)| idx)
+            .unwrap_or(line.len())
+    }
+
+    pub(super) fn move_line_up(
+        &mut self,
+        action: &MoveLineUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        if block.start_row == 0 || block.len() == 0 {
+            return;
+        }
+
+        let prev_row = block.start_row - 1;
+        let prev_start = self.text.line_start_offset(prev_row);
+        let prev_end = self.line_end_with_newline(prev_row);
+        let prev_text = self.text.slice(prev_start..prev_end).to_string();
+        let block_text = self.text.slice(block.start..block.end).to_string();
+        let replacement = format!("{block_text}{prev_text}");
+
+        let was_reversed = self.selection_reversed;
+        let new_selection = if self.selected_range.is_empty() {
+            let new_cursor = self.cursor().saturating_sub(prev_text.len());
+            new_cursor..new_cursor
+        } else {
+            self.selected_range.start.saturating_sub(prev_text.len())
+                ..self.selected_range.end.saturating_sub(prev_text.len())
+        };
+
+        self.replace_range_and_set_selection(
+            prev_start..block.end,
+            &replacement,
+            new_selection,
+            was_reversed,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn move_line_down(
+        &mut self,
+        action: &MoveLineDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        if block.len() == 0 {
+            return;
+        }
+
+        let line_count = self.text.lines_len().max(1);
+        if block.end_row + 1 >= line_count {
+            return;
+        }
+
+        let next_row = block.end_row + 1;
+        let next_start = self.text.line_start_offset(next_row);
+        let next_end = self.line_end_with_newline(next_row);
+        let next_text = self.text.slice(next_start..next_end).to_string();
+        let block_text = self.text.slice(block.start..block.end).to_string();
+        let replacement = format!("{next_text}{block_text}");
+
+        let was_reversed = self.selection_reversed;
+        let new_selection = if self.selected_range.is_empty() {
+            let new_cursor = self.cursor() + next_text.len();
+            new_cursor..new_cursor
+        } else {
+            (self.selected_range.start + next_text.len())..(self.selected_range.end + next_text.len())
+        };
+
+        self.replace_range_and_set_selection(
+            block.start..next_end,
+            &replacement,
+            new_selection,
+            was_reversed,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn duplicate_line_up(
+        &mut self,
+        action: &DuplicateLineUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        if block.len() == 0 {
+            return;
+        }
+
+        let block_text = self.text.slice(block.start..block.end).to_string();
+        let was_reversed = self.selection_reversed;
+        let new_selection = if self.selected_range.is_empty() {
+            let new_cursor = self.cursor();
+            new_cursor..new_cursor
+        } else {
+            self.selected_range.start..self.selected_range.end
+        };
+
+        self.replace_range_and_set_selection(
+            block.start..block.start,
+            &block_text,
+            new_selection,
+            was_reversed,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn duplicate_line_down(
+        &mut self,
+        action: &DuplicateLineDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        if block.len() == 0 {
+            return;
+        }
+
+        let block_text = self.text.slice(block.start..block.end).to_string();
+        let was_reversed = self.selection_reversed;
+        let new_selection = if self.selected_range.is_empty() {
+            let new_cursor = self.cursor() + block_text.len();
+            new_cursor..new_cursor
+        } else {
+            (self.selected_range.start + block_text.len())..(self.selected_range.end + block_text.len())
+        };
+
+        self.replace_range_and_set_selection(
+            block.end..block.end,
+            &block_text,
+            new_selection,
+            was_reversed,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn delete_line(
+        &mut self,
+        action: &DeleteLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        if block.len() == 0 {
+            return;
+        }
+
+        let cursor = block.start.min(self.text.len().saturating_sub(block.len()));
+        self.replace_range_and_set_selection(
+            block.start..block.end,
+            "",
+            cursor..cursor,
+            false,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn join_lines(
+        &mut self,
+        action: &JoinLines,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let block = self.selected_line_block();
+        let line_count = self.text.lines_len().max(1);
+        let start_row = block.start_row.min(line_count.saturating_sub(1));
+        let mut end_row = if self.selected_range.is_empty() {
+            start_row + 1
+        } else {
+            block.end_row
+        };
+        if end_row <= start_row {
+            end_row = start_row + 1;
+        }
+        if end_row >= line_count {
+            end_row = line_count.saturating_sub(1);
+        }
+        if end_row <= start_row {
+            return;
+        }
+
+        let replace_start = self.text.line_start_offset(start_row);
+        let replace_end = self.text.line_end_offset(end_row);
+        let mut joined = String::new();
+
+        let mut first_line = self.text.slice_line(start_row).to_string();
+        if first_line.ends_with('\r') {
+            first_line.pop();
+        }
+        let first_trimmed = first_line.trim_end();
+        joined.push_str(first_trimmed);
+
+        for row in (start_row + 1)..=end_row {
+            let mut line = self.text.slice_line(row).to_string();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            let piece = line.trim();
+            if piece.is_empty() {
+                continue;
+            }
+            if !joined.is_empty() {
+                joined.push(' ');
+            }
+            joined.push_str(piece);
+        }
+
+        let cursor = (replace_start + first_trimmed.len()).min(replace_start + joined.len());
+        self.replace_range_and_set_selection(
+            replace_start..replace_end,
+            &joined,
+            cursor..cursor,
+            false,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn toggle_line_comment(
+        &mut self,
+        action: &ToggleLineComment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.is_code_editor_multiline() {
+            return;
+        }
+
+        let Some(prefix) = self.line_comment_prefix() else {
+            return;
+        };
+        let block = self.selected_line_block();
+        if block.len() == 0 {
+            return;
+        }
+
+        let mut all_commented = true;
+        for row in block.start_row..=block.end_row {
+            let mut line = self.text.slice_line(row).to_string();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let ws = Self::leading_whitespace_len(&line);
+            let rest = &line[ws..];
+            if !rest.starts_with(prefix) {
+                all_commented = false;
+                break;
+            }
+        }
+
+        let mut replacement = String::with_capacity(block.len() + (block.end_row - block.start_row + 1));
+        for row in block.start_row..=block.end_row {
+            let mut line = self.text.slice_line(row).to_string();
+            let had_cr = line.ends_with('\r');
+            if had_cr {
+                line.pop();
+            }
+            let has_newline = self.text.char_at(self.text.line_end_offset(row)) == Some('\n');
+
+            let transformed = if line.trim().is_empty() {
+                line
+            } else {
+                let ws = Self::leading_whitespace_len(&line);
+                if all_commented {
+                    let rest = &line[ws..];
+                    if let Some(rest) = rest.strip_prefix(prefix) {
+                        let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                        format!("{}{}", &line[..ws], rest)
+                    } else {
+                        line
+                    }
+                } else {
+                    format!("{}{} {}", &line[..ws], prefix, &line[ws..])
+                }
+            };
+
+            replacement.push_str(&transformed);
+            if had_cr {
+                replacement.push('\r');
+            }
+            if has_newline {
+                replacement.push('\n');
+            }
+        }
+
+        let had_selection = !self.selected_range.is_empty();
+        let was_reversed = self.selection_reversed;
+        let selection = if had_selection {
+            block.start..(block.start + replacement.len())
+        } else {
+            let old_cursor = self.cursor();
+            let delta = replacement.len() as isize - block.len() as isize;
+            let min_cursor = block.start as isize;
+            let max_cursor = (block.start + replacement.len()) as isize;
+            let new_cursor = (old_cursor as isize + delta).clamp(min_cursor, max_cursor) as usize;
+            new_cursor..new_cursor
+        };
+
+        self.replace_range_and_set_selection(
+            block.start..block.end,
+            &replacement,
+            selection,
+            was_reversed,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn format_document(
+        &mut self,
+        action: &FormatDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+        if !self.mode.is_code_editor() {
+            return;
+        }
+
+        let text = self.text.to_string();
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let Ok(mut formatted) = serde_json::to_string_pretty(&value) else {
+            return;
+        };
+        if text.ends_with('\n') {
+            formatted.push('\n');
+        }
+        if formatted == text {
+            return;
+        }
+
+        let cursor = self.cursor().min(formatted.len());
+        self.replace_range_and_set_selection(
+            0..self.text.len(),
+            &formatted,
+            cursor..cursor,
+            false,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {

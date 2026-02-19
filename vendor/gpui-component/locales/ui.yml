@@ -188,6 +188,38 @@ Input:
     en: Show Code Actions
     zh-CN: 显示代码操作
     zh-HK: 顯示代碼操作
+  Move Line Up:
+    en: Move Line Up
+    zh-CN: 上移行
+    zh-HK: 上移行
+  Move Line Down:
+    en: Move Line Down
+    zh-CN: 下移行
+    zh-HK: 下移行
+  Duplicate Line Up:
+    en: Duplicate Line Up
+    zh-CN: 向上复制行
+    zh-HK: 向上複製行
+  Duplicate Line Down:
+    en: Duplicate Line Down
+    zh-CN: 向下复制行
+    zh-HK: 向下複製行
+  Delete Line:
+    en: Delete Line
+    zh-CN: 删除行
+    zh-HK: 刪除行
+  Join Lines:
+    en: Join Lines
+    zh-CN: 合并行
+    zh-HK: 合併行
+  Toggle Line Comment:
+    en: Toggle Line Comment
+    zh-CN: 切换行注释
+    zh-HK: 切換行註釋
+  Format Document:
+    en: Format Document
+    zh-CN: 格式化文档
+    zh-HK: 格式化文檔
 Settings:
   search_placeholder:
     en: Search...
