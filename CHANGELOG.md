@@ -7,13 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Multi-document selection support in document views, including updated header/tree actions for batch operations.
+- You can now select and work with multiple documents at once.
+- JSON editing opens in tabs, so you can keep editing while using the rest of the app.
+- The JSON editor now has common productivity shortcuts (move/duplicate/delete line, join lines, toggle comment, format document).
+- The JSON editor now shows clear inline messages for actions like format, save, and insert.
 
 ### Fixed
-- Inline save now commits pending inline editor changes before document save actions run.
-- JSON editor dialogs (edit/insert) no longer close when clicking outside the modal overlay.
-- Forge editor overtype detection now handles closing `}`, `]`, and `)` when the same character follows the cursor.
-- Query drafts are preserved when switching tabs, and preview collection tabs are promoted/persisted correctly after user interaction and app restart.
+- Saving from the JSON editor is now reliable and gives visible success/failure feedback.
+- Query text is kept when switching tabs.
+- Preview tabs are now promoted and restored more consistently after normal use and restart.
+- Inline editing save behavior is more consistent.
+- Typing around paired characters in Forge is smoother.
+
+### Changed
+- "Edit JSON" and "Insert" now open in tabs instead of modal popups.
+- Clear shortcuts for Forge output and aggregation stage are now `Cmd/Ctrl+Alt+K`.
+- JSON editor tab titles are now easier to understand.
 
 ## [0.1.7] - 2026-02-12
 
