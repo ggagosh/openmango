@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Multi-document selection support in document views, including updated header/tree actions for batch operations.
+
+### Fixed
+- Inline save now commits pending inline editor changes before document save actions run.
+- JSON editor dialogs (edit/insert) no longer close when clicking outside the modal overlay.
+- Forge editor overtype detection now handles closing `}`, `]`, and `)` when the same character follows the cursor.
+- Query drafts are preserved when switching tabs, and preview collection tabs are promoted/persisted correctly after user interaction and app restart.
+
 ## [0.1.7] - 2026-02-12
 
 ### Added
