@@ -132,6 +132,7 @@ impl Render for AppRoot {
                 }
             }
             View::Database => key_context.push_str(" Database"),
+            View::JsonEditor => key_context.push_str(" JsonEditor"),
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => key_context.push_str(" Transfer"),

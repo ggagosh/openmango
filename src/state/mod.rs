@@ -12,9 +12,9 @@ pub mod workspace;
 pub use app_state::{
     ActiveTab, AppState, BsonOutputFormat, CollectionOverview, CollectionStats, CollectionSubview,
     CompressionMode, CopiedTreeItem, DatabaseKey, DatabaseSessionData, DatabaseSessionState,
-    DatabaseStats, Encoding, ExtendedJsonMode, InsertMode, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    DatabaseStats, Encoding, ExtendedJsonMode, InsertMode, JsonEditorTabKey, JsonEditorTabState,
+    JsonEditorTarget, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
+    TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;

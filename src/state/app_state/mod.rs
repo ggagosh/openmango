@@ -4,6 +4,7 @@ mod aggregation;
 mod connection;
 mod database_sessions;
 mod forge;
+mod json_editor;
 mod selection;
 mod sessions;
 mod status;
@@ -23,9 +24,9 @@ pub use types::{
     ActiveTab, BsonOutputFormat, CollectionOverview, CollectionProgress, CollectionStats,
     CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem, DatabaseKey,
     DatabaseSessionData, DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, Encoding,
-    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, TransferFormat, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, JsonEditorTabKey, JsonEditorTabState,
+    JsonEditorTarget, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
+    TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -70,6 +71,7 @@ pub struct AppState {
     tabs: TabState,
     sessions: SessionStore,
     db_sessions: DatabaseSessionStore,
+    json_editor_tabs: HashMap<uuid::Uuid, JsonEditorTabState>,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
     forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
@@ -132,6 +134,7 @@ impl AppState {
             tabs: TabState::default(),
             sessions: SessionStore::new(),
             db_sessions: DatabaseSessionStore::new(),
+            json_editor_tabs: HashMap::new(),
             transfer_tabs: HashMap::new(),
             forge_tabs: HashMap::new(),
             forge_schema: HashMap::new(),

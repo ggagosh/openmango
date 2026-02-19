@@ -61,6 +61,9 @@ impl AppState {
                     "Insert failed: {error}"
                 ))));
             }
+            AppEvent::DocumentSaved { .. } => {
+                self.set_status_message(Some(StatusMessage::info("Document saved")));
+            }
             AppEvent::DocumentsInserted { count } => {
                 self.set_status_message(Some(StatusMessage::info(format!(
                     "Inserted {} document(s)",

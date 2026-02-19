@@ -1,7 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
-use crate::bson::DocumentKey;
+use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
 use crate::state::{AppEvent, AppState, SessionKey, StatusMessage};
 
 use crate::state::AppCommands;
@@ -21,19 +21,35 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
-        let (database, collection, original_id, doc_index) = {
-            let state = state.read(cx);
-            let Some(index) = state.document_index(&session_key, &doc_key) else {
-                return;
-            };
-            let Some(original) = state.document_for_key(&session_key, &doc_key) else {
-                return;
-            };
-            let Some(id) = original.get("_id") else {
+        let (database, collection, original_id, doc_index, should_reload_after_save) = {
+            let state_ref = state.read(cx);
+            let doc_index = state_ref.document_index(&session_key, &doc_key).or_else(|| {
+                state_ref.session(&session_key).and_then(|session| {
+                    session.data.items.iter().position(|item| item.key == doc_key)
+                })
+            });
+            let original_id = state_ref
+                .document_for_key(&session_key, &doc_key)
+                .and_then(|original| original.get("_id").cloned())
+                .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok());
+
+            let Some(original_id) = original_id else {
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(StatusMessage::error(
+                        "Could not resolve original document ID for save.",
+                    )));
+                    cx.notify();
+                });
                 return;
             };
 
-            (session_key.database.clone(), session_key.collection.clone(), id.clone(), index)
+            (
+                session_key.database.clone(),
+                session_key.collection.clone(),
+                original_id,
+                doc_index,
+                doc_index.is_none(),
+            )
         };
         let manager = state.read(cx).connection_manager();
 
@@ -54,6 +70,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
+            let session_key = session_key.clone();
+            let doc_key = doc_key.clone();
+            let updated = updated.clone();
             async move |cx: &mut gpui::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
 
@@ -61,18 +80,33 @@ impl AppCommands {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
-                                if let Some(existing) = session.data.items.get_mut(doc_index) {
+                                let index = doc_index.or_else(|| {
+                                    session.data.items.iter().position(|item| item.key == doc_key)
+                                });
+                                if let Some(index) = index
+                                    && let Some(existing) = session.data.items.get_mut(index)
+                                {
                                     existing.doc = updated;
                                 }
                                 session.view.drafts.remove(&doc_key);
                                 session.view.dirty.remove(&doc_key);
                             }
-                            cx.emit(AppEvent::DocumentSaved {
+                            state.refresh_json_editor_baseline(&session_key, &doc_key);
+                            let event = AppEvent::DocumentSaved {
                                 session: session_key.clone(),
                                 document: doc_key.clone(),
-                            });
+                            };
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
                             cx.notify();
                         });
+                        if should_reload_after_save {
+                            AppCommands::load_documents_for_session(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                     }
                     Err(e) => {
                         log::error!("Failed to save document: {}", e);

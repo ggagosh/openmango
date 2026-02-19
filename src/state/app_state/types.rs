@@ -23,6 +23,7 @@ pub enum View {
     Collections,
     Documents,
     Database,
+    JsonEditor,
     Transfer,
     Forge,
     Settings,
@@ -91,10 +92,71 @@ impl DatabaseKey {
 pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
+    JsonEditor(JsonEditorTabKey),
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
     Settings,
     Changelog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonEditorTabKey {
+    pub id: Uuid,
+}
+
+#[derive(Debug, Clone)]
+pub enum JsonEditorTarget {
+    Document { doc_key: DocumentKey, baseline_document: Document },
+    Insert,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonEditorTabState {
+    pub session_key: SessionKey,
+    pub target: JsonEditorTarget,
+    pub content: String,
+}
+
+impl JsonEditorTabState {
+    pub fn tab_label(&self) -> String {
+        match &self.target {
+            JsonEditorTarget::Document { doc_key, .. } => {
+                format!(
+                    "Edit {} ({})",
+                    self.session_key.collection,
+                    short_document_key_label(doc_key)
+                )
+            }
+            JsonEditorTarget::Insert => format!("Insert {}", self.session_key.collection),
+        }
+    }
+}
+
+fn short_document_key_label(doc_key: &DocumentKey) -> String {
+    let raw = doc_key.as_str();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(oid) = value.get("$oid").and_then(|v| v.as_str()) {
+            let short = oid.chars().take(8).collect::<String>();
+            return format!("{short}...");
+        };
+        if let Some(string_value) = value.as_str() {
+            return truncate_label(string_value, 16);
+        }
+        if value.is_number() || value.is_boolean() || value.is_null() {
+            return value.to_string();
+        }
+    }
+
+    truncate_label(raw, 16)
+}
+
+fn truncate_label(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        value.to_string()
+    } else {
+        format!("{}...", value.chars().take(max_chars).collect::<String>())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
