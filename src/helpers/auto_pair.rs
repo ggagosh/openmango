@@ -59,7 +59,8 @@ impl AutoPairState {
                 // Undo the just-inserted char and move cursor past the existing closing char.
                 self.guard = true;
                 state.update(cx, |input, cx| {
-                    input.replace_text_in_range(Some(current_range.clone()), "", window, cx);
+                    let utf16_range = byte_range_to_utf16(input.text(), &current_range);
+                    input.replace_text_in_range(Some(utf16_range), "", window, cx);
                     let new_cursor = current_range.start + 1;
                     let position = input.text().offset_to_position(new_cursor);
                     input.set_cursor_position(position, window, cx);
@@ -74,7 +75,8 @@ impl AutoPairState {
                 let cursor_offset = current_range.start + 1 + selected_text.len();
                 self.guard = true;
                 state.update(cx, |input, cx| {
-                    input.replace_text_in_range(Some(current_range), &replacement, window, cx);
+                    let utf16_range = byte_range_to_utf16(input.text(), &current_range);
+                    input.replace_text_in_range(Some(utf16_range), &replacement, window, cx);
                     let position = input.text().offset_to_position(cursor_offset);
                     input.set_cursor_position(position, window, cx);
                 });
@@ -86,7 +88,8 @@ impl AutoPairState {
                 }
                 self.guard = true;
                 state.update(cx, |input, cx| {
-                    let range = cursor..cursor;
+                    let utf16_cursor = input.text().offset_to_offset_utf16(cursor);
+                    let range = utf16_cursor..utf16_cursor;
                     let text = close.to_string();
                     input.replace_text_in_range(Some(range), &text, window, cx);
                     let position = input.text().offset_to_position(cursor);
@@ -101,6 +104,11 @@ impl AutoPairState {
     pub fn sync(&mut self, text: &str) {
         self.previous_text = text.to_string();
     }
+}
+
+/// Convert a byte-offset range to a UTF-16 offset range for InputState methods.
+fn byte_range_to_utf16(text: &impl RopeExt, range: &Range<usize>) -> Range<usize> {
+    text.offset_to_offset_utf16(range.start)..text.offset_to_offset_utf16(range.end)
 }
 
 /// Find the first differing range between two strings.

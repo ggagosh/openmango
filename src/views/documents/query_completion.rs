@@ -140,6 +140,6 @@ impl CompletionProvider for QueryCompletionProvider {
         new_text: &str,
         _cx: &mut Context<InputState>,
     ) -> bool {
-        new_text.contains('$') || new_text.chars().any(|c| c.is_alphanumeric() || c == '_')
+        new_text.contains('$') || new_text.chars().any(|c| c.is_ascii_alphanumeric() || c == '_')
     }
 }

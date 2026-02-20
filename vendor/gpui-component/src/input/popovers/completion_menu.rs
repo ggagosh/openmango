@@ -191,11 +191,16 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
-        let matched_len = item
+        let mut matched_len = item
             .filter_text
             .as_ref()
             .map(|s| s.len())
-            .unwrap_or(self.highlight_prefix.len());
+            .unwrap_or(self.highlight_prefix.len())
+            .min(item.label.len());
+        // Ensure highlight doesn't split a multi-byte character.
+        while matched_len > 0 && !item.label.is_char_boundary(matched_len) {
+            matched_len -= 1;
+        }
 
         let highlights = vec![(
             0..matched_len,

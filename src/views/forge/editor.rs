@@ -313,7 +313,8 @@ fn apply_custom_indent(
             while ws_end < bytes.len() && matches!(bytes[ws_end], b' ' | b'\t') {
                 ws_end += 1;
             }
-            let range = cursor..ws_end;
+            let range = state.text().offset_to_offset_utf16(cursor)
+                ..state.text().offset_to_offset_utf16(ws_end);
             state.replace_text_in_range(Some(range), &indent, window, cx);
             let position = state.text().offset_to_position(cursor + indent.len());
             state.set_cursor_position(position, window, cx);
@@ -325,7 +326,8 @@ fn apply_custom_indent(
             debug_assert!(cursor >= 1, "between-braces indent requires newline at cursor - 1");
             let start = cursor - 1; // include the newline inserted by Enter
             let insertion = format!("\n{inner}\n{outer}");
-            let range = start..next_idx;
+            let range = state.text().offset_to_offset_utf16(start)
+                ..state.text().offset_to_offset_utf16(next_idx);
             state.replace_text_in_range(Some(range), &insertion, window, cx);
             let position = state.text().offset_to_position(start + 1 + inner.len());
             state.set_cursor_position(position, window, cx);
