@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Preview tabs now promote/restore more consistently, including after restart.
 - Inline field-edit save flow is more reliable.
 - Typing around auto-paired characters in Forge is smoother.
+- Format JSON no longer mangles non-English text (Georgian, Japanese, and other multi-byte characters come through intact now).
+- "Create as New" actually creates a new document instead of failing with a duplicate key error every time.
+- Typing non-English characters in query inputs no longer crashes the app.
 
 ### Changed
 - JSON editor window titles are now clearer and more descriptive.
