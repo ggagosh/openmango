@@ -847,23 +847,14 @@ fn open_detached_json_editor_window(
         .map(|session| session.title())
         .unwrap_or_else(|| "JSON Editor".to_string());
     let title: SharedString = format!("{title} - OpenMango").into();
-    let vibrancy = state.read(cx).startup_vibrancy;
     let bounds =
         Bounds::centered(None, size(px(DETACHED_WINDOW_WIDTH), px(DETACHED_WINDOW_HEIGHT)), cx);
 
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_background: if vibrancy {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Opaque
-            },
-            titlebar: Some(TitlebarOptions {
-                title: Some(title),
-                appears_transparent: vibrancy,
-                ..Default::default()
-            }),
+            window_background: WindowBackgroundAppearance::Opaque,
+            titlebar: Some(TitlebarOptions { title: Some(title), ..Default::default() }),
             ..Default::default()
         },
         move |window, cx| {
