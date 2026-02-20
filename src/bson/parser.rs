@@ -34,6 +34,18 @@ fn preprocess_shell_syntax(input: &str) -> String {
     while i < bytes.len() {
         let b = bytes[i];
 
+        // Non-ASCII bytes are always content (never delimiters or comment markers).
+        // Decode the full UTF-8 char to avoid corrupting multi-byte characters.
+        if !b.is_ascii() {
+            if let Some(ch) = input[i..].chars().next() {
+                out.push(ch);
+                i += ch.len_utf8();
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
         if in_line_comment {
             out.push(b as char);
             if b == b'\n' {
@@ -684,5 +696,21 @@ mod tests {
         let doc = parse_document_from_json("{ note: \"ObjectId(\\\"abc\\\")\" }").expect("parse");
         let note = doc.get_str("note").expect("note");
         assert_eq!(note, "ObjectId(\"abc\")");
+    }
+
+    #[test]
+    fn preserves_non_ascii_text() {
+        let input = r#"{ "name": "ატარებს" }"#;
+        let doc = parse_document_from_json(input).expect("parse");
+        assert_eq!(doc.get_str("name").expect("name"), "ატარებს");
+    }
+
+    #[test]
+    fn format_roundtrips_non_ascii_text() {
+        let input = r#"{ "name": "ატარებს", "city": "東京" }"#;
+        let value = parse_value_from_relaxed_json(input).expect("parse");
+        let formatted = format_relaxed_json_value(&value);
+        let reparsed = parse_value_from_relaxed_json(&formatted).expect("reparse");
+        assert_eq!(value, reparsed);
     }
 }
