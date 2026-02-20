@@ -5,7 +5,7 @@ use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::Root;
 use gpui_component::input::{Input, InputEvent, InputState};
-use mongodb::bson::{Bson, Document};
+use mongodb::bson::{Bson, Document, oid::ObjectId};
 
 use crate::bson::{
     DocumentKey, document_to_shell_string, format_relaxed_json_value, parse_bson_from_relaxed_json,
@@ -482,6 +482,9 @@ impl DetachedJsonEditorView {
             self.set_error("Create as new is only available when editing an existing document.");
             return;
         }
+
+        let mut document = document;
+        document.insert("_id", ObjectId::new());
 
         self.awaiting_create_as_new = true;
         self.set_notice(false, "Creating as new document...");
