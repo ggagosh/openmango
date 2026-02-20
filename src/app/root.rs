@@ -11,6 +11,7 @@ use crate::keyboard::{
     InstallUpdate, NewConnection, NextTab, OpenActionBar, OpenForge, OpenSettings, PrevTab,
     QuitApp, RefreshView,
 };
+use crate::state::app_state::updater::UpdateStatus;
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, spacing};
 
@@ -54,8 +55,42 @@ impl AppRoot {
 
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
 
-        // Check for updates in background on startup
-        AppCommands::check_for_updates(state.clone(), cx);
+        // Delayed update check + periodic re-check (default 4h, override with
+        // OPENMANGO_UPDATE_INTERVAL_SECS=30 for testing)
+        cx.spawn({
+            let state = state.clone();
+            let startup_delay = std::env::var("OPENMANGO_UPDATE_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|s| s.min(5)) // use short startup delay when testing
+                .unwrap_or(10);
+            let recheck_secs = std::env::var("OPENMANGO_UPDATE_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(4 * 60 * 60);
+            async move |_this: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                gpui::Timer::after(std::time::Duration::from_secs(startup_delay)).await;
+                let _ = cx.update(|cx| {
+                    AppCommands::check_for_updates(state.clone(), cx);
+                });
+                // Periodic re-check
+                loop {
+                    gpui::Timer::after(std::time::Duration::from_secs(recheck_secs)).await;
+                    let should_check = cx
+                        .update(|cx| {
+                            let s = state.read(cx);
+                            s.settings.auto_update && matches!(s.update_status, UpdateStatus::Idle)
+                        })
+                        .unwrap_or(false);
+                    if should_check {
+                        let _ = cx.update(|cx| {
+                            AppCommands::check_for_updates(state.clone(), cx);
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
 
         // Show "What's New" dialog if build changed since last launch
         {

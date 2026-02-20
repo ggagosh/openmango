@@ -127,6 +127,9 @@ impl Render for SettingsView {
         // Appearance section
         let appearance_section = render_appearance_section(state.clone(), &settings, cx);
 
+        // Updates section
+        let updates_section = render_updates_section(state.clone(), &settings, cx);
+
         // Transfer section
         let transfer_section = render_transfer_section(
             state.clone(),
@@ -145,6 +148,7 @@ impl Render for SettingsView {
                 .p(spacing::lg())
                 .overflow_y_scrollbar()
                 .child(appearance_section)
+                .child(updates_section)
                 .child(transfer_section),
         )
     }
@@ -266,6 +270,38 @@ fn render_appearance_section(
                 vibrancy_checkbox,
                 cx,
             )),
+        cx,
+    )
+}
+
+fn render_updates_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
+    let auto_update = settings.auto_update;
+
+    let auto_update_checkbox = {
+        let state = state.clone();
+        gpui_component::checkbox::Checkbox::new("auto-update").checked(auto_update).on_click(
+            move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.auto_update = !auto_update;
+                    state.save_settings();
+                    cx.notify();
+                });
+            },
+        )
+    };
+
+    section(
+        "Updates",
+        div().flex().flex_col().gap(spacing::md()).child(setting_row_with_description(
+            "Automatic updates",
+            "Automatically download and install updates in the background",
+            auto_update_checkbox,
+            cx,
+        )),
         cx,
     )
 }

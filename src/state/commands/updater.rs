@@ -149,6 +149,10 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
+                        // Auto-download if enabled
+                        if state.read(cx).settings.auto_update {
+                            AppCommands::download_update(state.clone(), cx);
+                        }
                     }
                     Ok(None) => {
                         state.update(cx, |state, cx| {

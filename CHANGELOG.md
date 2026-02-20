@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Automatic background updates — new versions download silently and are ready to install on restart, VS Code style. Disable in Settings > Updates.
+- Periodic update re-checks every 4 hours for long-running sessions.
 - Multi-document selection in document lists.
 - JSON editing now opens in a dedicated editor window, so you can browse and copy data while editing.
 - JSON editor productivity shortcuts: move line, duplicate line, delete line, join lines, toggle comment, and format document.

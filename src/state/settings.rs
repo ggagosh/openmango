@@ -13,6 +13,8 @@ pub struct AppSettings {
     pub transfer: TransferSettings,
     #[serde(default = "default_current_version")]
     pub last_seen_version: String,
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
 }
 
 fn default_current_version() -> String {
