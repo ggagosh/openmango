@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Format JSON no longer mangles non-English text (Georgian, Japanese, and other multi-byte characters come through intact now).
 - "Create as New" actually creates a new document instead of failing with a duplicate key error every time.
 - Typing non-English characters in query inputs no longer crashes the app.
+- BSON export/import no longer fails when the connection URI contains a database name (e.g. `/admin` for auth) that differs from the target database.
 
 ### Changed
 - JSON editor window titles are now clearer and more descriptive.

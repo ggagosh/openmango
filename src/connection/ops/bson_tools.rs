@@ -8,6 +8,39 @@ use crate::connection::tools::{mongodump_path, mongorestore_path};
 use crate::connection::types::{BsonOutputFormat, BsonToolProgress};
 use crate::error::{Error, Result};
 
+/// Strip the database name from a MongoDB connection URI so it doesn't
+/// conflict with the explicit `--db` flag passed to mongodump/mongorestore.
+///
+/// `mongodb://user:pass@host:27017/admin?authSource=admin`
+/// becomes `mongodb://user:pass@host:27017/?authSource=admin`
+fn strip_uri_database(uri: &str) -> String {
+    // Find the scheme separator
+    let authority_start = match uri.find("://") {
+        Some(i) => i + 3,
+        None => return uri.to_string(),
+    };
+
+    // Find the first '/' after the authority (host:port) section.
+    // The database name sits between this '/' and the next '?' (or end).
+    let rest = &uri[authority_start..];
+    let slash_pos = match rest.find('/') {
+        Some(i) => authority_start + i,
+        None => return uri.to_string(), // no database component
+    };
+
+    // Everything after the slash up to '?' is the database name — remove it.
+    let after_slash = &uri[slash_pos + 1..];
+    let query_start = after_slash.find('?');
+
+    match query_start {
+        Some(qi) => format!("{}/{}", &uri[..slash_pos], &after_slash[qi..]),
+        None => {
+            // No query params; just keep the trailing slash
+            format!("{}/", &uri[..slash_pos])
+        }
+    }
+}
+
 impl ConnectionManager {
     /// Export a database to BSON format using mongodump (runs synchronously).
     /// Prefer `export_database_bson_with_progress` for progress tracking.
@@ -29,7 +62,8 @@ impl ConnectionManager {
         })?;
 
         let mut cmd = Command::new(&mongodump);
-        cmd.arg("--uri").arg(connection_string).arg("--db").arg(database);
+        let uri = strip_uri_database(connection_string);
+        cmd.arg("--uri").arg(&uri).arg("--db").arg(database);
 
         if gzip {
             cmd.arg("--gzip");
@@ -83,7 +117,8 @@ impl ConnectionManager {
         })?;
 
         let mut cmd = Command::new(&mongorestore);
-        cmd.arg("--uri").arg(connection_string).arg("--db").arg(database);
+        let uri = strip_uri_database(connection_string);
+        cmd.arg("--uri").arg(&uri).arg("--db").arg(database);
 
         if drop_before {
             cmd.arg("--drop");
@@ -139,8 +174,9 @@ impl ConnectionManager {
         })?;
 
         let mut cmd = Command::new(&mongodump);
+        let uri = strip_uri_database(connection_string);
         cmd.arg("--uri")
-            .arg(connection_string)
+            .arg(&uri)
             .arg("--db")
             .arg(database)
             .arg("-v") // Enable verbose output for progress
@@ -232,8 +268,9 @@ impl ConnectionManager {
         })?;
 
         let mut cmd = Command::new(&mongorestore);
+        let uri = strip_uri_database(connection_string);
         cmd.arg("--uri")
-            .arg(connection_string)
+            .arg(&uri)
             .arg("--db")
             .arg(database)
             .arg("-v") // Enable verbose output for progress
@@ -497,5 +534,30 @@ mod tests {
         assert_eq!(parse_size_to_bytes("1GB"), 1024 * 1024 * 1024);
         assert_eq!(parse_size_to_bytes("6.46MB"), (6.46 * 1024.0 * 1024.0) as u64);
         assert_eq!(parse_size_to_bytes("455KB"), (455.0 * 1024.0) as u64);
+    }
+
+    #[test]
+    fn test_strip_uri_database() {
+        // URI with database and query params
+        assert_eq!(
+            strip_uri_database("mongodb://user:pass@host:27017/admin?authSource=admin"),
+            "mongodb://user:pass@host:27017/?authSource=admin"
+        );
+        // URI with database, no query params
+        assert_eq!(strip_uri_database("mongodb://host:27017/mydb"), "mongodb://host:27017/");
+        // URI without database
+        assert_eq!(strip_uri_database("mongodb://host:27017"), "mongodb://host:27017");
+        // SRV URI with database
+        assert_eq!(
+            strip_uri_database(
+                "mongodb+srv://user:pass@cluster.example.com/admin?retryWrites=true"
+            ),
+            "mongodb+srv://user:pass@cluster.example.com/?retryWrites=true"
+        );
+        // URI with empty database (just slash)
+        assert_eq!(
+            strip_uri_database("mongodb://host:27017/?authSource=admin"),
+            "mongodb://host:27017/?authSource=admin"
+        );
     }
 }
