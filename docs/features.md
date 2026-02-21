@@ -1,129 +1,65 @@
-# OpenMango Features
+# OpenMango Features & Roadmap
 
-GPU-accelerated MongoDB Desktop Client (macOS)
+Snapshot date: 2026-02-21
+Audience: power users and small engineering teams
 
 ## Priority Legend
 
-| Level | Target | Description |
-|-------|--------|-------------|
-| P0 | MVP | Core functionality - app unusable without |
-| P1 | v1.0 | Expected for first public release |
-| P2 | v1.x | Enhanced experience |
-| P3 | Future | Nice to have, power user features |
+- P0: Must-have for everyday reliability and speed
+- P1: Core v1 capabilities expected by advanced users
+- P2: Productivity and quality-of-life multipliers
+- P3: Strategic/long-tail
 
----
+## Already Strong
 
-## Known gaps (current build)
+- Connection manager (add/edit/test/connect/disconnect)
+- Database/collection CRUD + stats
+- Document browse/edit (inline + detached JSON editor)
+- Sort/projection/pagination/filter
+- Bulk document ops
+- Index create/list/drop
+- Transfer workflows (import/export/copy JSON/CSV/BSON, progress)
+- Aggregation pipeline editor (stage flow, preview, results)
+- Forge query shell with completion/schema sampling
+- Tabbed workspace restore + keyboard-heavy navigation
 
-Non-exhaustive highlights; see each section below for full status.
+## Missing / Needs Implementation
 
-- No import/export flows (data or connections)
-- No aggregation pipeline editor, query history, or saved queries
-- Bulk ops limited (paste insert + delete + update/replace)
-- No multi-window/split views
+### Query & Performance
 
----
+- [ ] P0: Explain plan UI (winning plan, scanned docs, stage costs)
+- [ ] P0: Index hinting and "why query is slow" diagnostics
+- [ ] P1: Query history (per tab/session) with restore
+- [ ] P1: Saved query snippets/templates
 
-## 1. Connections & Sessions
+### Schema & Data Quality
 
-- [x] P0: Add connection (URI input with validation)
-- [x] P0: Test connection (verify before save)
-- [x] P0: Connect / Disconnect
-- [x] P0: List databases on connect
-- [x] P0: Connection status indicator
-- [x] P0: Connection error feedback
-- [x] P1: Edit connection
-- [x] P1: Remove connection
-- [x] P1: Connection profiles (auth, TLS, timeouts)
-- [x] P1: Read-only mode / safe mode
-- [ ] P2: Favorites / Tags
-- [ ] P2: Import/Export connections
-- [ ] P2: Health ping / latency
-- [ ] P3: Connection groups / workspaces
-- [ ] P3: SSH tunnel support
+- [ ] P0: Schema explorer (field cardinality, type drift, outliers)
+- [ ] P1: Validation rule editor (JSON Schema / validator)
+- [ ] P2: Data profiling reports (null %, distinct count, min/max)
 
-## 2. Databases
+### Operations & Automation
 
-- [x] P0: List collections
-- [x] P0: Create database
-- [x] P0: Drop database (with confirmation)
-- [x] P0: Refresh databases
-- [x] P0: Database stats
-- [ ] P1: Rename database
-- [ ] P1: Copy database
-- [ ] P2: User/Role management
+- [ ] P1: Task presets for transfer operations
+- [ ] P1: Scheduler for recurring import/export/copy
+- [ ] P2: Compare & sync between collections/query results
+- [ ] P2: Dry-run mode with impact summary before write
 
-## 3. Collections
+### Connectivity & Security
 
-- [x] P0: List with document counts
-- [x] P0: Create collection
-- [x] P0: Drop collection (with confirmation)
-- [x] P0: Rename collection
-- [x] P0: Collection stats
-- [x] P0: Open document browser
-- [x] P0: Refresh documents
-- [ ] P1: Collection stats (extended)
-- [x] P1: Index management (list/drop)
-- [x] P1: Index management (create)
-- [x] P1: Import (JSON/CSV)
-- [x] P1: Export (JSON/CSV/BSON)
-- [ ] P2: Schema analysis / explorer
-- [ ] P2: Validation rules editor
+- [ ] P0: Connection import/export (redacted + encrypted options)
+- [ ] P1: SSH tunneling and proxy-aware connection flow
+- [ ] P1: Secrets integration (Keychain-backed storage policy)
+- [ ] P2: Field-level masking workflows for export/share
 
-## 4. Documents
+### Observability
 
-- [x] P0: Find with filter
-- [x] P0: View document (JSON)
-- [x] P0: Edit document (inline + JSON editor)
-- [x] P0: Delete document (with confirmation)
-- [x] P0: Pagination
-- [x] P0: Insert document
-- [x] P1: Sort
-- [x] P1: Projection (field selection)
-- [x] P1: Duplicate document
-- [x] P1: Paste document(s) from clipboard (JSON array / NDJSON)
-- [x] P1: Bulk delete (filtered/all)
-- [x] P2: Bulk update/replace
-- [x] P2: Client-side find in results (Cmd/Ctrl+F)
+- [ ] P1: Live server health panel (ops/sec, connections, network)
+- [ ] P1: Per-operation timeline/log for long-running jobs
+- [ ] P2: Change stream viewer (watch collection changes)
 
-## 5. Query & Aggregation
+### UX / Workflow
 
-- [x] P0: JSON filter input
-- [x] P1: Aggregation pipeline editor (three-panel builder, stage preview, reorder, counts/timing)
-- [ ] P1: Explain plan / analysis badges
-- [ ] P1: Query history
-- [ ] P1: Saved queries
-- [ ] P2: Visual query builder
-- [ ] P3: AI query assistant
-
-## 6. Workspace & UI
-
-- [x] P0: Tabs with preview/permanent behavior
-- [x] P0: Per-tab session state
-- [x] P0: Restore last session (auto-connect, tabs, selection)
-- [x] P0: Restore filters and expanded nodes
-- [x] P0: Restore window size/position
-- [x] P0: Context menus (connection/db/collection/document)
-- [x] P0: Destructive action confirmations
-- [x] P0: Status bar
-- [x] P0: Error display (banner)
-- [x] P3: Keyboard navigation
-- [ ] P2: Split views / side-by-side tabs
-- [ ] P2: Theming
-- [ ] P2: Keymap customization
-- [ ] P3: Plugin system
-
-## 7. Admin & Security
-
-- [ ] P1: Connection-level permissions view
-- [ ] P1: Audit log / operation log
-- [ ] P2: Field-level masking
-- [ ] P2: Secrets vault integration (Keychain)
-
-## 8. Automation & Collaboration
-
-- [ ] P1: Import/Export presets
-- [ ] P1: Task scheduler (recurring imports/exports)
-- [ ] P2: Shareable workspaces / team settings
-- [ ] P3: Data compare & sync
-- [ ] P3: SQL-to-Mongo query mode
+- [ ] P1: Split view (side-by-side tabs/collections)
+- [ ] P1: Tab pinning/grouping and better large-workspace ergonomics
+- [ ] P2: Keymap customization and command palette expansion
