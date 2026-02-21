@@ -56,6 +56,7 @@ impl AppState {
             let len = session.data.aggregation.stages.len();
             session.data.aggregation.selected_stage = len.checked_sub(1);
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -73,6 +74,7 @@ impl AppState {
             session.data.aggregation.selected_stage = len.checked_sub(1);
             session.data.aggregation.loading = false;
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -90,6 +92,7 @@ impl AppState {
             session.data.aggregation.stages.insert(insert_index, PipelineStage::new(operator));
             session.data.aggregation.selected_stage = Some(insert_index);
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -117,6 +120,7 @@ impl AppState {
                 _ => None,
             };
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -131,6 +135,7 @@ impl AppState {
             session.data.aggregation.selected_stage = selected.filter(|idx| *idx <= max_index);
             session.data.aggregation.results_page = 0;
             Self::invalidate_aggregation_run(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -146,6 +151,7 @@ impl AppState {
         {
             stage.body = body;
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -164,6 +170,7 @@ impl AppState {
                 stage.body = template.to_string();
             }
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -174,6 +181,7 @@ impl AppState {
         {
             stage.enabled = !stage.enabled;
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }
@@ -217,6 +225,7 @@ impl AppState {
             session.data.aggregation.stages.insert(insert_index, stage);
             session.data.aggregation.selected_stage = Some(insert_index);
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
             new_index = session.data.aggregation.selected_stage;
         }
         self.update_workspace_session_view(session_key);
@@ -241,6 +250,7 @@ impl AppState {
             };
 
             Self::reset_aggregation_after_edit(&mut session.data.aggregation);
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_view(session_key);
     }

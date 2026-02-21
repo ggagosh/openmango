@@ -66,6 +66,7 @@ impl Render for CollectionView {
             indexes_loading,
             indexes_error,
             aggregation,
+            explain,
         ) = if let Some(snapshot) = snapshot {
             (
                 snapshot.items,
@@ -89,6 +90,7 @@ impl Render for CollectionView {
                 snapshot.indexes_loading,
                 snapshot.indexes_error,
                 snapshot.aggregation,
+                snapshot.explain,
             )
         } else {
             (
@@ -112,6 +114,7 @@ impl Render for CollectionView {
                 None,
                 false,
                 None,
+                Default::default(),
                 Default::default(),
             )
         };
@@ -414,51 +417,46 @@ impl Render for CollectionView {
                 subview,
                 stats_loading,
                 aggregation.loading,
+                explain.loading,
                 window,
                 cx,
             ),
         );
 
-        match subview {
-            CollectionSubview::Documents => {
-                root = root.child(self.render_documents_subview(
-                    &documents,
-                    total,
-                    display_page,
-                    total_pages,
-                    range_start,
-                    range_end,
-                    is_loading,
-                    session_key,
-                    selected_docs,
-                    state_for_prev,
-                    state_for_next,
-                    cx,
-                ));
-            }
-            CollectionSubview::Indexes => {
-                root = root.child(self.render_indexes_view(
-                    indexes,
-                    indexes_loading,
-                    indexes_error,
-                    session_key,
-                    cx,
-                ));
-            }
+        let content = match subview {
+            CollectionSubview::Documents => self.render_documents_subview(
+                &documents,
+                total,
+                display_page,
+                total_pages,
+                range_start,
+                range_end,
+                is_loading,
+                session_key.clone(),
+                selected_docs,
+                state_for_prev,
+                state_for_next,
+                cx,
+            ),
+            CollectionSubview::Indexes => self.render_indexes_view(
+                indexes,
+                indexes_loading,
+                indexes_error,
+                session_key.clone(),
+                cx,
+            ),
             CollectionSubview::Stats => {
-                root = root.child(self.render_stats_view(
-                    stats,
-                    stats_loading,
-                    stats_error,
-                    session_key,
-                    cx,
-                ));
+                self.render_stats_view(stats, stats_loading, stats_error, session_key.clone(), cx)
             }
             CollectionSubview::Aggregation => {
-                root =
-                    root.child(self.render_aggregation_view(aggregation, session_key, window, cx));
+                self.render_aggregation_view(aggregation, session_key.clone(), window, cx)
             }
-        }
+        };
+
+        let explain_layer =
+            self.render_explain_modal_layer(&explain, session_key.clone(), subview, cx);
+
+        root = root.relative().child(content).child(explain_layer);
 
         root
     }

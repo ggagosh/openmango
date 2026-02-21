@@ -1,6 +1,7 @@
 //! Document/Collection view component.
 
 mod actions;
+mod explain;
 mod header;
 mod node_meta;
 mod pagination;

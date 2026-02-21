@@ -6,7 +6,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::Button;
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 
@@ -39,6 +39,7 @@ pub fn render_filter_row(
     sort_active: bool,
     projection_active: bool,
     query_options_open: bool,
+    explain_loading: bool,
     cx: &App,
 ) -> Div {
     let state_for_filter = state.clone();
@@ -97,6 +98,22 @@ pub fn render_filter_row(
                             window,
                             cx,
                         );
+                    }
+                }),
+        )
+        .child(
+            Button::new("run-explain")
+                .compact()
+                .label("Explain")
+                .disabled(session_key.is_none() || explain_loading)
+                .on_click({
+                    let session_key = session_key.clone();
+                    let state = state.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(session_key) = session_key.clone() else {
+                            return;
+                        };
+                        AppCommands::run_explain_for_session(state.clone(), session_key, cx);
                     }
                 }),
         )

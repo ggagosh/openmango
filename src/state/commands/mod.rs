@@ -49,6 +49,7 @@ mod collections;
 mod connections;
 mod databases;
 mod documents;
+mod explain;
 mod indexes;
 mod stats;
 mod transfer;

@@ -16,6 +16,7 @@ impl AppState {
             session.data.filter_raw = raw;
             session.data.filter = filter;
             session.data.page = 0;
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_filters(session_key);
     }
@@ -26,6 +27,7 @@ impl AppState {
             session.data.filter_raw.clear();
             session.data.filter = None;
             session.data.page = 0;
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_filters(session_key);
     }
@@ -45,6 +47,7 @@ impl AppState {
             session.data.projection_raw = projection_raw;
             session.data.projection = projection;
             session.data.page = 0;
+            session.data.explain.mark_stale();
         }
         self.update_workspace_session_filters(session_key);
     }
@@ -55,6 +58,7 @@ impl AppState {
         self.promote_preview_collection_tab(session_key);
         if let Some(session) = self.session_mut(session_key) {
             session.data.filter_raw = raw;
+            session.data.explain.mark_stale();
         }
     }
 
@@ -68,6 +72,7 @@ impl AppState {
         if let Some(session) = self.session_mut(session_key) {
             session.data.sort_raw = sort_raw;
             session.data.projection_raw = projection_raw;
+            session.data.explain.mark_stale();
         }
     }
 

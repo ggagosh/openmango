@@ -578,6 +578,7 @@ pub fn render_aggregation_actions(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     aggregation_loading: bool,
+    explain_loading: bool,
 ) -> Div {
     div()
         .flex()
@@ -605,5 +606,20 @@ pub fn render_aggregation_actions(
                     }
                 }),
         )
-        .child(Button::new("agg-analyze").compact().label("Analyze").disabled(true))
+        .child(
+            Button::new("agg-explain")
+                .compact()
+                .label("Explain")
+                .disabled(session_key.is_none() || explain_loading)
+                .on_click({
+                    let session_key = session_key.clone();
+                    let state = state.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(session_key) = session_key.clone() else {
+                            return;
+                        };
+                        AppCommands::run_explain_for_aggregation(state.clone(), session_key, cx);
+                    }
+                }),
+        )
 }

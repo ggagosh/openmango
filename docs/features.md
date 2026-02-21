@@ -27,7 +27,7 @@ Audience: power users and small engineering teams
 
 ### Query & Performance
 
-- [ ] P0: Explain plan UI (winning plan, scanned docs, stage costs)
+- [x] P0: Explain plan UI (winning plan, scanned docs, stage costs)
 - [ ] P0: Index hinting and "why query is slow" diagnostics
 - [ ] P1: Query history (per tab/session) with restore
 - [ ] P1: Saved query snippets/templates

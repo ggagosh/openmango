@@ -123,6 +123,9 @@ impl Sidebar {
             | AppEvent::DocumentsUpdateFailed { .. }
             | AppEvent::AggregationCompleted { .. }
             | AppEvent::AggregationFailed { .. }
+            | AppEvent::ExplainStarted { .. }
+            | AppEvent::ExplainCompleted { .. }
+            | AppEvent::ExplainFailed { .. }
             | AppEvent::TransferPreviewLoaded { .. }
             | AppEvent::TransferStarted { .. }
             | AppEvent::TransferCompleted { .. }

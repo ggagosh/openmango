@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - JSON editing now opens in a dedicated editor window, so you can browse and copy data while editing.
 - JSON editor productivity shortcuts: move line, duplicate line, delete line, join lines, toggle comment, and format document.
 - Clear inline status messages in the JSON editor for format/save/insert actions.
+- Explain for queries and aggregation pipelines — click "Explain" next to Run to see the execution plan as a visual tree or raw JSON, with stage-level stats, index usage, cost indicators, and optimization suggestions.
 
 ### Fixed
 - Re-opening Edit/Insert now focuses the existing editor window instead of creating duplicates.
@@ -29,6 +30,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - BSON export/import no longer fails when the connection URI contains a database name (e.g. `/admin` for auth) that differs from the target database.
 
 ### Changed
+- Tab switching is noticeably snappier — workspace state now saves with a debounce instead of blocking the UI on every switch
+- Switching back to a previously-visited collection tab restores the document tree instantly from cache instead of rebuilding it from scratch
+- Fewer unnecessary re-renders when switching tabs
 - JSON editor window titles are now clearer and more descriptive.
 - Clear shortcut for Forge output and aggregation stage is now `Cmd/Ctrl+Alt+K`.
 

@@ -103,6 +103,19 @@ pub enum AppEvent {
         session: SessionKey,
         error: String,
     },
+    ExplainStarted {
+        session: SessionKey,
+        scope: crate::state::ExplainScope,
+    },
+    ExplainCompleted {
+        session: SessionKey,
+        scope: crate::state::ExplainScope,
+    },
+    ExplainFailed {
+        session: SessionKey,
+        scope: crate::state::ExplainScope,
+        error: String,
+    },
 
     // Transfer events
     TransferPreviewLoaded {

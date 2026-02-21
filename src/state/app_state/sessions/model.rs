@@ -120,6 +120,7 @@ impl AppState {
             indexes_loading: session.data.indexes_loading,
             indexes_error: session.data.indexes_error.clone(),
             aggregation: session.data.aggregation.clone(),
+            explain: session.data.explain.clone(),
         })
     }
 

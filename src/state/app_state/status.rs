@@ -169,6 +169,27 @@ impl AppState {
                     "Aggregation failed: {error}"
                 ))));
             }
+            AppEvent::ExplainStarted { session, scope } => {
+                let _ = session;
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "Running {} explain...",
+                    scope.label()
+                ))));
+            }
+            AppEvent::ExplainCompleted { session, scope } => {
+                let _ = session;
+                self.set_status_message(Some(StatusMessage::info(format!(
+                    "{} explain completed",
+                    scope.label()
+                ))));
+            }
+            AppEvent::ExplainFailed { session, scope, error } => {
+                let _ = session;
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "{} explain failed: {error}",
+                    scope.label()
+                ))));
+            }
             AppEvent::DatabaseTransferStarted { transfer_id, collections } => {
                 // Initialize database progress tracking
                 if let Some(tab) = self.transfer_tab_mut(*transfer_id) {

@@ -478,6 +478,504 @@ pub enum ActiveTab {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainScope {
+    #[default]
+    Find,
+    Aggregation,
+}
+
+impl ExplainScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExplainScope::Find => "Find",
+            ExplainScope::Aggregation => "Aggregation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainViewMode {
+    #[default]
+    Tree,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainPanelTab {
+    #[default]
+    Inspector,
+    RejectedPlans,
+    Diff,
+}
+
+impl ExplainPanelTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExplainPanelTab::Inspector => "Inspector",
+            ExplainPanelTab::RejectedPlans => "Rejected Plans",
+            ExplainPanelTab::Diff => "Diff",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainOpenMode {
+    #[default]
+    Closed,
+    Modal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainSeverity {
+    Low,
+    #[default]
+    Medium,
+    High,
+    Critical,
+}
+
+impl ExplainSeverity {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExplainSeverity::Low => "Low",
+            ExplainSeverity::Medium => "Medium",
+            ExplainSeverity::High => "High",
+            ExplainSeverity::Critical => "Critical",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplainCostBand {
+    #[default]
+    Low,
+    Medium,
+    High,
+    VeryHigh,
+}
+
+impl ExplainCostBand {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExplainCostBand::Low => "Low",
+            ExplainCostBand::Medium => "Medium",
+            ExplainCostBand::High => "High",
+            ExplainCostBand::VeryHigh => "Very High",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainNode {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub label: String,
+    pub depth: usize,
+    pub n_returned: Option<u64>,
+    pub docs_examined: Option<u64>,
+    pub keys_examined: Option<u64>,
+    pub time_ms: Option<u64>,
+    pub index_name: Option<String>,
+    pub is_multi_key: Option<bool>,
+    pub is_covered: Option<bool>,
+    pub extra_metrics: Vec<(String, String)>,
+    pub cost_band: ExplainCostBand,
+    pub severity: ExplainSeverity,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainSummary {
+    pub n_returned: Option<u64>,
+    pub docs_examined: Option<u64>,
+    pub keys_examined: Option<u64>,
+    pub execution_time_ms: Option<u64>,
+    pub has_sort_stage: bool,
+    pub has_collscan: bool,
+    pub covered_indexes: Vec<String>,
+    pub is_covered_query: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainRejectedPlan {
+    pub plan_id: String,
+    pub root_stage: String,
+    pub reason_hint: String,
+    pub nodes: Vec<ExplainNode>,
+    pub docs_examined: Option<u64>,
+    pub keys_examined: Option<u64>,
+    pub execution_time_ms: Option<u64>,
+    pub index_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainBottleneck {
+    pub rank: usize,
+    pub node_id: String,
+    pub stage: String,
+    pub impact_score: u64,
+    pub docs_examined: Option<u64>,
+    pub keys_examined: Option<u64>,
+    pub execution_time_ms: Option<u64>,
+    pub recommendation: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainStageDelta {
+    pub stage: String,
+    pub node_id: String,
+    pub docs_examined_delta: Option<i64>,
+    pub keys_examined_delta: Option<i64>,
+    pub execution_time_delta_ms: Option<i64>,
+    pub impact_score_delta: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainDiff {
+    pub from_run_id: String,
+    pub to_run_id: String,
+    pub from_generated_at_unix_ms: u64,
+    pub to_generated_at_unix_ms: u64,
+    pub plan_shape_changed: bool,
+    pub n_returned_delta: Option<i64>,
+    pub docs_examined_delta: Option<i64>,
+    pub keys_examined_delta: Option<i64>,
+    pub execution_time_delta_ms: Option<i64>,
+    pub stage_deltas: Vec<ExplainStageDelta>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplainRun {
+    pub id: String,
+    pub generated_at_unix_ms: u64,
+    pub signature: Option<u64>,
+    pub scope: ExplainScope,
+    pub raw_json: String,
+    pub nodes: Vec<ExplainNode>,
+    pub summary: ExplainSummary,
+    pub rejected_plans: Vec<ExplainRejectedPlan>,
+    pub bottlenecks: Vec<ExplainBottleneck>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExplainState {
+    pub loading: bool,
+    pub error: Option<String>,
+    pub open_mode: ExplainOpenMode,
+    pub stale: bool,
+    pub scope: ExplainScope,
+    pub view_mode: ExplainViewMode,
+    pub panel_tab: ExplainPanelTab,
+    pub raw_json: Option<String>,
+    pub nodes: Vec<ExplainNode>,
+    pub selected_node_id: Option<String>,
+    pub summary: Option<ExplainSummary>,
+    pub rejected_plans: Vec<ExplainRejectedPlan>,
+    pub bottlenecks: Vec<ExplainBottleneck>,
+    pub history: Vec<ExplainRun>,
+    pub current_run_id: Option<String>,
+    pub compare_run_id: Option<String>,
+    pub diff: Option<ExplainDiff>,
+    pub signature: Option<u64>,
+    pub generated_at_unix_ms: Option<u64>,
+}
+
+impl ExplainState {
+    pub fn mark_stale(&mut self) {
+        if self.raw_json.is_some() {
+            self.stale = true;
+        }
+        self.signature = None;
+    }
+
+    pub fn push_run_with_limit(&mut self, run: ExplainRun, max_history: usize) {
+        self.history.push(run);
+        if max_history > 0 && self.history.len() > max_history {
+            let overflow = self.history.len() - max_history;
+            self.history.drain(0..overflow);
+        }
+        self.current_run_id = self.history.last().map(|item| item.id.clone());
+        self.compare_run_id = if self.history.len() > 1 {
+            self.history.get(self.history.len() - 2).map(|item| item.id.clone())
+        } else {
+            None
+        };
+        self.sync_from_selected_runs();
+    }
+
+    pub fn set_current_run(&mut self, run_id: Option<String>) {
+        if let Some(run_id) = run_id {
+            if self.history.iter().any(|run| run.id == run_id) {
+                self.current_run_id = Some(run_id);
+            }
+        } else {
+            self.current_run_id = None;
+        }
+        self.sync_from_selected_runs();
+    }
+
+    pub fn set_compare_run(&mut self, run_id: Option<String>) {
+        if let Some(run_id) = run_id {
+            if self.history.iter().any(|run| run.id == run_id) {
+                self.compare_run_id = Some(run_id);
+            }
+        } else {
+            self.compare_run_id = None;
+        }
+        self.sync_from_selected_runs();
+    }
+
+    pub fn cycle_current_run(&mut self, step: isize) {
+        let len = self.history.len() as isize;
+        if len == 0 {
+            return;
+        }
+        let has_compare = self.compare_run_id.is_some();
+        let current = self.current_run_index().unwrap_or((len - 1) as usize) as isize;
+        let next = (current + step).clamp(0, len - 1) as usize;
+        self.current_run_id = self.history.get(next).map(|run| run.id.clone());
+        if has_compare {
+            self.compare_with_previous_run();
+        } else {
+            self.sync_from_selected_runs();
+        }
+    }
+
+    pub fn current_run_index(&self) -> Option<usize> {
+        self.current_run_id
+            .as_ref()
+            .and_then(|run_id| self.history.iter().position(|run| run.id == *run_id))
+    }
+
+    pub fn compare_with_previous_run(&mut self) {
+        let Some(current_idx) = self.current_run_index() else {
+            return;
+        };
+        if current_idx == 0 {
+            self.compare_run_id = None;
+        } else {
+            self.compare_run_id = self.history.get(current_idx - 1).map(|run| run.id.clone());
+        }
+        self.sync_from_selected_runs();
+    }
+
+    pub fn clear_compare_run(&mut self) {
+        self.compare_run_id = None;
+        if self.panel_tab == ExplainPanelTab::Diff {
+            self.panel_tab = ExplainPanelTab::Inspector;
+        }
+        self.sync_from_selected_runs();
+    }
+
+    pub fn has_history_to_clear(&self) -> bool {
+        self.history.len() > 1
+    }
+
+    pub fn clear_previous_runs_keep_current(&mut self) {
+        if self.history.is_empty() {
+            self.current_run_id = None;
+            self.compare_run_id = None;
+            self.diff = None;
+            if self.panel_tab == ExplainPanelTab::Diff {
+                self.panel_tab = ExplainPanelTab::Inspector;
+            }
+            return;
+        }
+
+        let run_to_keep = self
+            .current_run_id
+            .as_ref()
+            .and_then(|run_id| self.history.iter().find(|run| run.id == *run_id))
+            .cloned()
+            .or_else(|| self.history.last().cloned());
+
+        let Some(run_to_keep) = run_to_keep else {
+            self.current_run_id = None;
+            self.compare_run_id = None;
+            self.diff = None;
+            if self.panel_tab == ExplainPanelTab::Diff {
+                self.panel_tab = ExplainPanelTab::Inspector;
+            }
+            return;
+        };
+
+        self.history.clear();
+        self.current_run_id = Some(run_to_keep.id.clone());
+        self.history.push(run_to_keep);
+        self.compare_run_id = None;
+        self.diff = None;
+        if self.panel_tab == ExplainPanelTab::Diff {
+            self.panel_tab = ExplainPanelTab::Inspector;
+        }
+        self.sync_from_selected_runs();
+    }
+
+    pub fn sync_from_selected_runs(&mut self) {
+        if self.history.is_empty() {
+            self.current_run_id = None;
+            self.compare_run_id = None;
+            self.diff = None;
+            return;
+        }
+
+        let current_index = self
+            .current_run_id
+            .as_ref()
+            .and_then(|run_id| self.history.iter().position(|run| run.id == *run_id))
+            .unwrap_or_else(|| self.history.len() - 1);
+        let current = &self.history[current_index];
+        self.current_run_id = Some(current.id.clone());
+
+        self.scope = current.scope;
+        self.raw_json = Some(current.raw_json.clone());
+        self.nodes = current.nodes.clone();
+        self.summary = Some(current.summary.clone());
+        self.rejected_plans = current.rejected_plans.clone();
+        self.bottlenecks = current.bottlenecks.clone();
+        self.signature = current.signature;
+        self.generated_at_unix_ms = Some(current.generated_at_unix_ms);
+
+        if !self
+            .selected_node_id
+            .as_ref()
+            .is_some_and(|id| self.nodes.iter().any(|node| node.id == *id))
+        {
+            self.selected_node_id = self.nodes.first().map(|node| node.id.clone());
+        }
+
+        let compare_index = self.compare_run_id.as_ref().and_then(|run_id| {
+            self.history
+                .iter()
+                .position(|run| run.id == *run_id)
+                .filter(|index| *index != current_index)
+        });
+
+        if let Some(compare_index) = compare_index {
+            let compare = &self.history[compare_index];
+            self.compare_run_id = Some(compare.id.clone());
+            self.diff = Some(build_explain_diff(compare, current));
+        } else {
+            self.compare_run_id = None;
+            self.diff = None;
+        }
+    }
+}
+
+impl Default for ExplainState {
+    fn default() -> Self {
+        Self {
+            loading: false,
+            error: None,
+            open_mode: ExplainOpenMode::Closed,
+            stale: false,
+            scope: ExplainScope::Find,
+            view_mode: ExplainViewMode::Tree,
+            panel_tab: ExplainPanelTab::Inspector,
+            raw_json: None,
+            nodes: Vec::new(),
+            selected_node_id: None,
+            summary: None,
+            rejected_plans: Vec::new(),
+            bottlenecks: Vec::new(),
+            history: Vec::new(),
+            current_run_id: None,
+            compare_run_id: None,
+            diff: None,
+            signature: None,
+            generated_at_unix_ms: None,
+        }
+    }
+}
+
+fn build_explain_diff(from: &ExplainRun, to: &ExplainRun) -> ExplainDiff {
+    let mut stage_deltas = build_stage_deltas(&from.nodes, &to.nodes);
+    stage_deltas
+        .sort_by(|left, right| right.impact_score_delta.abs().cmp(&left.impact_score_delta.abs()));
+    stage_deltas.truncate(16);
+
+    ExplainDiff {
+        from_run_id: from.id.clone(),
+        to_run_id: to.id.clone(),
+        from_generated_at_unix_ms: from.generated_at_unix_ms,
+        to_generated_at_unix_ms: to.generated_at_unix_ms,
+        plan_shape_changed: normalized_stage_chain(&from.nodes)
+            != normalized_stage_chain(&to.nodes),
+        n_returned_delta: delta_u64(to.summary.n_returned, from.summary.n_returned),
+        docs_examined_delta: delta_u64(to.summary.docs_examined, from.summary.docs_examined),
+        keys_examined_delta: delta_u64(to.summary.keys_examined, from.summary.keys_examined),
+        execution_time_delta_ms: delta_u64(
+            to.summary.execution_time_ms,
+            from.summary.execution_time_ms,
+        ),
+        stage_deltas,
+    }
+}
+
+fn build_stage_deltas(
+    from_nodes: &[ExplainNode],
+    to_nodes: &[ExplainNode],
+) -> Vec<ExplainStageDelta> {
+    let mut by_key: HashMap<String, (Option<&ExplainNode>, Option<&ExplainNode>)> = HashMap::new();
+    for node in from_nodes {
+        by_key.insert(stage_delta_key(node), (Some(node), None));
+    }
+    for node in to_nodes {
+        let key = stage_delta_key(node);
+        if let Some((_, to)) = by_key.get_mut(&key) {
+            *to = Some(node);
+        } else {
+            by_key.insert(key, (None, Some(node)));
+        }
+    }
+
+    by_key
+        .into_values()
+        .filter_map(|(from, to)| {
+            let to = to?;
+            let from_score = from.map(explain_node_impact_score).unwrap_or(0);
+            let to_score = explain_node_impact_score(to);
+            Some(ExplainStageDelta {
+                stage: to.label.clone(),
+                node_id: to.id.clone(),
+                docs_examined_delta: delta_u64(
+                    to.docs_examined,
+                    from.and_then(|node| node.docs_examined),
+                ),
+                keys_examined_delta: delta_u64(
+                    to.keys_examined,
+                    from.and_then(|node| node.keys_examined),
+                ),
+                execution_time_delta_ms: delta_u64(to.time_ms, from.and_then(|node| node.time_ms)),
+                impact_score_delta: to_score as i64 - from_score as i64,
+            })
+        })
+        .collect()
+}
+
+fn stage_delta_key(node: &ExplainNode) -> String {
+    format!("{}:{}", node.id, node.label.to_ascii_uppercase())
+}
+
+fn normalized_stage_chain(nodes: &[ExplainNode]) -> Vec<String> {
+    nodes.iter().map(|node| node.label.trim_start_matches('$').to_ascii_uppercase()).collect()
+}
+
+fn explain_node_impact_score(node: &ExplainNode) -> u64 {
+    node.docs_examined.unwrap_or(0)
+        + node.keys_examined.unwrap_or(0)
+        + node.time_ms.unwrap_or(0) * 120
+        + node.n_returned.unwrap_or(0)
+}
+
+fn delta_u64(next: Option<u64>, prev: Option<u64>) -> Option<i64> {
+    match (next, prev) {
+        (Some(next), Some(prev)) => Some(next as i64 - prev as i64),
+        (Some(next), None) => Some(next as i64),
+        (None, Some(prev)) => Some(-(prev as i64)),
+        (None, None) => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionDocument {
     pub key: DocumentKey,
@@ -507,6 +1005,7 @@ pub struct SessionData {
     pub indexes_loading: bool,
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
+    pub explain: ExplainState,
 }
 
 impl Default for SessionData {
@@ -533,6 +1032,7 @@ impl Default for SessionData {
             indexes_loading: false,
             indexes_error: None,
             aggregation: PipelineState::default(),
+            explain: ExplainState::default(),
         }
     }
 }
@@ -584,6 +1084,7 @@ pub struct SessionSnapshot {
     pub indexes_loading: bool,
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
+    pub explain: ExplainState,
 }
 
 #[derive(Debug, Clone)]
@@ -792,5 +1293,101 @@ impl DatabaseTransferProgress {
             .iter()
             .filter(|c| matches!(c.status, CollectionTransferStatus::Completed))
             .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn explain_node(
+        id: &str,
+        label: &str,
+        docs: Option<u64>,
+        keys: Option<u64>,
+        time_ms: Option<u64>,
+    ) -> ExplainNode {
+        ExplainNode {
+            id: id.to_string(),
+            parent_id: None,
+            label: label.to_string(),
+            depth: 0,
+            n_returned: Some(10),
+            docs_examined: docs,
+            keys_examined: keys,
+            time_ms,
+            index_name: Some("status_1".to_string()),
+            is_multi_key: Some(false),
+            is_covered: Some(true),
+            extra_metrics: Vec::new(),
+            cost_band: ExplainCostBand::Medium,
+            severity: ExplainSeverity::Medium,
+        }
+    }
+
+    #[test]
+    fn explain_state_tracks_history_and_builds_diff() {
+        let mut state = ExplainState::default();
+        let run1 = ExplainRun {
+            id: "run-1".to_string(),
+            generated_at_unix_ms: 1,
+            signature: Some(1),
+            scope: ExplainScope::Find,
+            raw_json: "{}".to_string(),
+            nodes: vec![explain_node("1", "IXSCAN", Some(120), Some(240), Some(5))],
+            summary: ExplainSummary {
+                n_returned: Some(10),
+                docs_examined: Some(120),
+                keys_examined: Some(240),
+                execution_time_ms: Some(5),
+                has_sort_stage: false,
+                has_collscan: false,
+                covered_indexes: vec!["status_1".to_string()],
+                is_covered_query: true,
+            },
+            rejected_plans: Vec::new(),
+            bottlenecks: Vec::new(),
+        };
+        state.push_run_with_limit(run1, 20);
+        assert_eq!(state.history.len(), 1);
+        assert!(state.diff.is_none());
+
+        let run2 = ExplainRun {
+            id: "run-2".to_string(),
+            generated_at_unix_ms: 2,
+            signature: Some(2),
+            scope: ExplainScope::Find,
+            raw_json: "{}".to_string(),
+            nodes: vec![explain_node("1", "IXSCAN", Some(200), Some(500), Some(12))],
+            summary: ExplainSummary {
+                n_returned: Some(10),
+                docs_examined: Some(200),
+                keys_examined: Some(500),
+                execution_time_ms: Some(12),
+                has_sort_stage: false,
+                has_collscan: false,
+                covered_indexes: vec!["status_1".to_string()],
+                is_covered_query: true,
+            },
+            rejected_plans: Vec::new(),
+            bottlenecks: Vec::new(),
+        };
+        state.push_run_with_limit(run2, 20);
+        assert_eq!(state.history.len(), 2);
+        assert!(state.diff.is_some());
+        let diff = state.diff.as_ref().expect("diff expected");
+        assert_eq!(diff.execution_time_delta_ms, Some(7));
+        assert_eq!(diff.docs_examined_delta, Some(80));
+
+        state.cycle_current_run(-1);
+        assert_eq!(state.current_run_id.as_deref(), Some("run-1"));
+        assert!(state.has_history_to_clear());
+
+        state.clear_previous_runs_keep_current();
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(state.current_run_id.as_deref(), Some("run-1"));
+        assert!(state.compare_run_id.is_none());
+        assert!(state.diff.is_none());
+        assert!(!state.has_history_to_clear());
     }
 }

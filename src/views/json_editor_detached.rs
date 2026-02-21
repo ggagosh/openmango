@@ -490,6 +490,29 @@ impl DetachedJsonEditorView {
         self.set_notice(false, "Creating as new document...");
         AppCommands::insert_document(self.state.clone(), session.session_key, document, cx);
     }
+
+    fn copy_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor_state) = self.editor_state.clone() else {
+            return;
+        };
+
+        let text = editor_state.update(cx, |state, cx| {
+            if let Some(selection) = state.selected_text_range(true, window, cx)
+                && selection.range.start != selection.range.end
+            {
+                let mut adjusted = None;
+                if let Some(selected) =
+                    state.text_for_range(selection.range.clone(), &mut adjusted, window, cx)
+                {
+                    return selected.to_string();
+                }
+            }
+            state.value().to_string()
+        });
+
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.set_notice(false, "Copied JSON to clipboard.");
+    }
 }
 
 impl Render for DetachedJsonEditorView {
@@ -566,6 +589,9 @@ impl Render for DetachedJsonEditorView {
                     } else if cmd_or_ctrl && key == "s" {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.save_or_insert(cx));
+                    } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "c" {
+                        cx.stop_propagation();
+                        view.update(cx, |this, cx| this.copy_json(window, cx));
                     } else if cmd_or_ctrl && modifiers.shift && key == "f" {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.format_json(window, cx));
@@ -602,6 +628,17 @@ impl Render for DetachedJsonEditorView {
                             .flex()
                             .items_center()
                             .gap(spacing::xs())
+                            .child(
+                                Button::new("json-editor-window-copy")
+                                    .compact()
+                                    .label("Copy JSON")
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| this.copy_json(window, cx));
+                                        }
+                                    }),
+                            )
                             .child(
                                 Button::new("json-editor-window-format")
                                     .compact()

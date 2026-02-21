@@ -58,6 +58,7 @@ impl CollectionView {
         active_subview: CollectionSubview,
         stats_loading: bool,
         aggregation_loading: bool,
+        explain_loading: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -94,7 +95,12 @@ impl CollectionView {
         } else if is_stats {
             render_stats_actions(self.state.clone(), session_key.clone(), stats_loading)
         } else if is_aggregation {
-            render_aggregation_actions(self.state.clone(), session_key.clone(), aggregation_loading)
+            render_aggregation_actions(
+                self.state.clone(),
+                session_key.clone(),
+                aggregation_loading,
+                explain_loading,
+            )
         } else {
             div().flex().items_center().gap(spacing::sm())
         };
@@ -130,6 +136,7 @@ impl CollectionView {
                 sort_active,
                 projection_active,
                 query_options_open,
+                explain_loading,
                 cx,
             ));
 
