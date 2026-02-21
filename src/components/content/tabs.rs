@@ -379,13 +379,11 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 .bg(cx.theme().tab_bar.opacity(0.4))
                 .on_scroll_wheel({
                     let scroll_handle = scroll_handle.clone();
-                    let state = host.state.clone();
-                    move |event, _window, cx| {
+                    move |event, _window, _cx| {
                         let delta = event.delta.pixel_delta(px(1.0));
                         let axis = if delta.x.is_zero() { delta.y } else { delta.x };
                         if !axis.is_zero() {
                             scroll_tabs_by(&scroll_handle, axis);
-                            state.update(cx, |_state, cx| cx.notify());
                         }
                     }
                 })

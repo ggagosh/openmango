@@ -556,6 +556,9 @@ pub struct SessionViewState {
 pub struct SessionState {
     pub data: SessionData,
     pub view: SessionViewState,
+    /// Monotonically increasing counter bumped on document load, save, or delete.
+    /// Used by the tree cache to detect stale entries.
+    pub generation: u64,
 }
 
 #[derive(Debug, Clone)]

@@ -1,10 +1,12 @@
 //! Tab management for AppState.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use gpui::Context;
 use uuid::Uuid;
 
+use crate::perf::log_tabs_duration;
 use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
@@ -55,7 +57,7 @@ impl AppState {
             self.set_active_index(index);
         }
 
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         true
     }
 
@@ -97,6 +99,8 @@ impl AppState {
     }
 
     fn apply_tab_selection(&mut self, tab: TabKey) {
+        let start = Instant::now();
+        let tab_kind = tab_kind_label(&tab);
         match tab {
             TabKey::Collection(tab) => {
                 self.set_selected_connection_internal(tab.connection_id);
@@ -140,6 +144,7 @@ impl AppState {
                 self.current_view = View::Changelog;
             }
         }
+        log_tabs_duration("apply_tab_selection", start, || format!("kind={tab_kind}"));
     }
 
     pub(super) fn cleanup_session(&mut self, key: &SessionKey) {
@@ -200,7 +205,7 @@ impl AppState {
                 self.conn.selected_collection = Some(collection);
                 self.current_view = View::Documents;
                 self.ensure_session_loaded(new_tab);
-                self.update_workspace_from_state();
+                self.update_workspace_from_state_debounced();
             }
             TabOpenMode::Preview => {
                 if let Some(index) = existing_index {
@@ -314,7 +319,7 @@ impl AppState {
         self.conn.selected_collection = None;
         self.current_view = View::Database;
         self.ensure_database_session(key);
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
 
         if selection_changed || tab_changed {
             self.clear_error_status();
@@ -442,7 +447,7 @@ impl AppState {
         self.conn.selected_database = selected_database;
         self.conn.selected_collection = selected_collection;
         self.current_view = View::Transfer;
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
@@ -543,7 +548,7 @@ impl AppState {
         self.conn.selected_database = Some(database);
         self.conn.selected_collection = None;
         self.current_view = View::Forge;
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
@@ -585,15 +590,26 @@ impl AppState {
     }
 
     pub fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let start = Instant::now();
         let Some(tab) = self.tabs.open.get(index).cloned() else {
             return;
         };
+        let tab_kind = tab_kind_label(&tab);
+
+        if matches!(self.tabs.active, ActiveTab::Index(active) if active == index) {
+            log_tabs_duration("select_tab.noop", start, || {
+                format!("index={index} kind={tab_kind}")
+            });
+            return;
+        }
+
         self.set_active_index(index);
         self.apply_tab_selection(tab);
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
+        log_tabs_duration("select_tab", start, || format!("index={index} kind={tab_kind}"));
     }
 
     pub fn select_next_tab(&mut self, cx: &mut Context<Self>) {
@@ -661,7 +677,7 @@ impl AppState {
         }
 
         self.tabs.drag_over = None;
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         cx.notify();
     }
 
@@ -704,7 +720,7 @@ impl AppState {
             } else {
                 View::Databases
             };
-            self.update_workspace_from_state();
+            self.update_workspace_from_state_debounced();
             cx.emit(AppEvent::ViewChanged);
             cx.notify();
             return;
@@ -729,7 +745,7 @@ impl AppState {
             }
         }
 
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         cx.notify();
     }
 
@@ -767,7 +783,7 @@ impl AppState {
             }
         }
 
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
         cx.notify();
     }
 
@@ -886,7 +902,7 @@ impl AppState {
         }
 
         self.sessions.rename_collection(connection_id, database, from, to);
-        self.update_workspace_from_state();
+        self.update_workspace_from_state_debounced();
     }
 
     pub fn set_collection_dirty(
@@ -937,6 +953,17 @@ impl AppState {
 
 fn matches_collection(tab: &TabKey, key: &SessionKey) -> bool {
     matches!(tab, TabKey::Collection(tab) if tab == key)
+}
+
+fn tab_kind_label(tab: &TabKey) -> &'static str {
+    match tab {
+        TabKey::Collection(_) => "collection",
+        TabKey::Database(_) => "database",
+        TabKey::Transfer(_) => "transfer",
+        TabKey::Forge(_) => "forge",
+        TabKey::Settings => "settings",
+        TabKey::Changelog => "changelog",
+    }
 }
 
 fn remap_active_index_after_tab_move(active: usize, from: usize, to: usize) -> usize {

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState, NumberInputEvent, StepAction};
@@ -9,6 +10,7 @@ use gpui_component::tree::{TreeItem, TreeState};
 use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
+use crate::perf::log_tabs_duration;
 use crate::state::{AppState, SessionKey};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
@@ -17,12 +19,23 @@ use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;
 
+struct CachedTreeState {
+    generation: u64,
+    items: Vec<TreeItem>,
+    meta: Arc<HashMap<String, NodeMeta>>,
+    order: Vec<String>,
+    order_all: Vec<String>,
+    selected_index: Option<usize>,
+}
+
 pub struct DocumentViewModel {
     tree_state: Entity<TreeState>,
     current_session: Option<SessionKey>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
+    tree_items: Vec<TreeItem>,
     tree_order: Vec<String>,
     tree_order_all: Vec<String>,
+    tree_cache: HashMap<SessionKey, CachedTreeState>,
     inline_editor_state: Option<InlineEditor>,
     inline_editor_subscription: Option<Subscription>,
     inline_blur_subscription: Option<Subscription>,
@@ -38,8 +51,10 @@ impl DocumentViewModel {
             tree_state: cx.new(|cx| TreeState::new(cx)),
             current_session: None,
             node_meta: Arc::new(HashMap::new()),
+            tree_items: Vec::new(),
             tree_order: Vec::new(),
             tree_order_all: Vec::new(),
+            tree_cache: HashMap::new(),
             inline_editor_state: None,
             inline_editor_subscription: None,
             inline_blur_subscription: None,
@@ -96,17 +111,69 @@ impl DocumentViewModel {
         state: &Entity<AppState>,
         cx: &mut Context<CollectionView>,
     ) -> bool {
+        let start = Instant::now();
+        let prev = self.current_session.clone();
         if self.current_session == next {
+            log_tabs_duration("documents.set_current_session.noop", start, || {
+                "unchanged=true".to_string()
+            });
             return false;
         }
+
+        let next_loaded = next
+            .as_ref()
+            .and_then(|key| state.read(cx).session_data(key).map(|data| data.loaded))
+            .unwrap_or(false);
+
+        // Save current tree state to cache before switching away.
+        if let Some(prev_key) = self.current_session.clone() {
+            let generation = state.read(cx).session(&prev_key).map(|s| s.generation).unwrap_or(0);
+            let selected_index = self.tree_state.read(cx).selected_index();
+            self.tree_cache.insert(
+                prev_key,
+                CachedTreeState {
+                    generation,
+                    items: std::mem::take(&mut self.tree_items),
+                    meta: self.node_meta.clone(),
+                    order: std::mem::take(&mut self.tree_order),
+                    order_all: std::mem::take(&mut self.tree_order_all),
+                    selected_index,
+                },
+            );
+        }
         self.current_session = next;
-        self.reset_view_state(cx);
+
+        // For loaded sessions, avoid rendering an intermediate empty tree during tab switches.
+        if next_loaded {
+            self.node_meta = Arc::new(HashMap::new());
+            self.tree_items.clear();
+            self.tree_order.clear();
+            self.tree_order_all.clear();
+            self.inline_editor_state = None;
+            self.inline_editor_subscription = None;
+            self.clear_inline_edit();
+        } else {
+            self.reset_view_state(cx);
+        }
         self.sync_dirty_state(state, cx);
+        log_tabs_duration("documents.set_current_session", start, || {
+            let from = prev
+                .as_ref()
+                .map(|s| format!("{}/{}", s.database, s.collection))
+                .unwrap_or_else(|| "-".to_string());
+            let to = self
+                .current_session
+                .as_ref()
+                .map(|s| format!("{}/{}", s.database, s.collection))
+                .unwrap_or_else(|| "-".to_string());
+            format!("from={from} to={to} next_loaded={next_loaded}")
+        });
         true
     }
 
     pub fn reset_view_state(&mut self, cx: &mut Context<CollectionView>) {
         self.node_meta = Arc::new(HashMap::new());
+        self.tree_items.clear();
         self.tree_order.clear();
         self.tree_order_all.clear();
         self.inline_editor_state = None;
@@ -120,16 +187,41 @@ impl DocumentViewModel {
     }
 
     pub fn rebuild_tree(&mut self, state: &Entity<AppState>, cx: &mut Context<CollectionView>) {
+        let start = Instant::now();
         let Some(session_key) = self.current_session.clone() else {
             return;
         };
         let state_ref = state.read(cx);
-        let Some(data) = state_ref.session_data(&session_key) else {
+        let Some(session) = state_ref.session(&session_key) else {
             return;
         };
-        let Some(view) = state_ref.session_view(&session_key) else {
+
+        // Try to restore from cache if the underlying data hasn't changed.
+        let generation = session.generation;
+        if let Some(cached) = self.tree_cache.remove(&session_key)
+            && cached.generation == generation
+        {
+            self.node_meta = cached.meta;
+            self.tree_items = cached.items.clone();
+            self.tree_order = cached.order;
+            self.tree_order_all = cached.order_all;
+
+            self.tree_state.update(cx, |tree, cx| {
+                tree.set_items(cached.items, cx);
+                tree.set_selected_index(cached.selected_index, cx);
+            });
+            let items = self.tree_order_all.len();
+            log_tabs_duration("documents.rebuild_tree", start, || {
+                format!(
+                    "cache=hit generation={generation} items={items} session={}/{}",
+                    session_key.database, session_key.collection
+                )
+            });
             return;
-        };
+        }
+
+        let data = &session.data;
+        let view = &session.view;
 
         let (items, meta, order) =
             build_documents_tree(&data.items, &view.drafts, &view.expanded_nodes, cx);
@@ -144,12 +236,20 @@ impl DocumentViewModel {
             .and_then(|id| order.iter().position(|entry| entry == id));
 
         self.node_meta = Arc::new(meta);
+        self.tree_items = items.clone();
         self.tree_order = order;
         self.tree_order_all = full_order;
 
         self.tree_state.update(cx, |tree, cx| {
             tree.set_items(items, cx);
             tree.set_selected_index(selected_index, cx);
+        });
+        let items = self.tree_order_all.len();
+        log_tabs_duration("documents.rebuild_tree", start, || {
+            format!(
+                "cache=miss generation={generation} items={items} session={}/{}",
+                session_key.database, session_key.collection
+            )
         });
     }
 

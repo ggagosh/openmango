@@ -90,6 +90,7 @@ impl AppCommands {
                                 }
                                 session.view.drafts.remove(&doc_key);
                                 session.view.dirty.remove(&doc_key);
+                                session.generation = session.generation.wrapping_add(1);
                             }
                             let event = AppEvent::DocumentSaved {
                                 session: session_key.clone(),

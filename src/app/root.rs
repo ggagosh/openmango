@@ -134,6 +134,12 @@ impl AppRoot {
             _subscriptions: subscriptions,
         }
     }
+
+    pub fn flush_workspace_on_shutdown(&mut self, cx: &mut App) {
+        self.state.update(cx, |state, _cx| {
+            state.flush_workspace_now();
+        });
+    }
 }
 
 impl Render for AppRoot {

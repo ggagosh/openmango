@@ -8,6 +8,7 @@ pub mod error;
 pub mod helpers;
 pub mod keyboard;
 pub mod models;
+pub mod perf;
 pub mod state;
 pub mod theme;
 pub mod views;

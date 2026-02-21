@@ -119,6 +119,7 @@ impl AppCommands {
                                 session.view.selected_node_id = None;
                             }
 
+                            session.generation = session.generation.wrapping_add(1);
                             let event =
                                 AppEvent::DocumentsLoaded { session: session_key.clone(), total };
                             state.update_status_from_event(&event);

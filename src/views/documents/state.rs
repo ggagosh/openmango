@@ -6,9 +6,11 @@ use mongodb::bson::Document;
 use regex::RegexBuilder;
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use crate::bson::DocumentKey;
 use crate::helpers::auto_pair::AutoPairState;
+use crate::perf::log_tabs_duration;
 use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
 
 use super::node_meta::NodeMeta;
@@ -334,6 +336,7 @@ impl CollectionView {
 
         subscriptions.push(cx.subscribe(&state, |this, state, event, cx| match event {
             AppEvent::ViewChanged | AppEvent::Connected(_) => {
+                let start = Instant::now();
                 let next_session = state.read(cx).current_session_key();
                 if this.input_session != next_session {
                     this.persist_query_input_drafts(cx);
@@ -362,6 +365,15 @@ impl CollectionView {
                     }
                     cx.notify();
                 }
+                log_tabs_duration("documents.view_changed", start, || {
+                    let target = next_session
+                        .as_ref()
+                        .map(|s| format!("{}/{}", s.database, s.collection))
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        "session_changed={session_changed} should_load={should_load} target={target}"
+                    )
+                });
                 // Ensure subview-specific data is loaded (indexes/stats)
                 if let Some(session_key) = next_session {
                     this.ensure_subview_data_loaded(&session_key, &state, cx);

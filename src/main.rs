@@ -69,15 +69,20 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                // Quit only when the last window is closed.
-                window.on_window_should_close(cx, |_window, cx| {
+                let app_view = cx.new(|cx| AppRoot::new(window, cx));
+                let app_view_for_close = app_view.clone();
+
+                // Flush debounced workspace state, then quit only when the last window closes.
+                window.on_window_should_close(cx, move |_window, cx| {
+                    app_view_for_close.update(cx, |view, cx| {
+                        view.flush_workspace_on_shutdown(cx);
+                    });
                     if cx.windows().len() == 1 {
                         cx.quit();
                     }
                     true
                 });
 
-                let app_view = cx.new(|cx| AppRoot::new(window, cx));
                 cx.new(|cx| Root::new(app_view, window, cx))
             },
         )

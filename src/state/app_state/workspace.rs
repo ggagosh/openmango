@@ -147,6 +147,11 @@ impl AppState {
         self.update_workspace_tabs();
     }
 
+    pub fn flush_workspace_now(&self) {
+        self.bump_workspace_generation();
+        self.save_workspace();
+    }
+
     fn bump_workspace_generation(&self) -> u64 {
         self.aggregation_workspace_save_gen.fetch_add(1, Ordering::SeqCst) + 1
     }
