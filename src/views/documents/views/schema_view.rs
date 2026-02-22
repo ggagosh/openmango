@@ -170,30 +170,37 @@ pub fn render_schema_panel(
 
     let row_count = flat_fields.len();
     let sampled = schema.sampled;
-    let tree_list = uniform_list("schema-tree-list", row_count, {
-        let flat_fields = flat_fields.clone();
-        let selected_field = selected_field.clone();
-        let session_key = session_key.clone();
-        let state = state.clone();
-        cx.processor(
-            move |_view: &mut CollectionView, range: std::ops::Range<usize>, _window, _cx| {
-                let mut items = Vec::with_capacity(range.len());
-                for ix in range {
-                    let row = &flat_fields[ix];
-                    items.push(render_tree_row_owned(
-                        row,
-                        &selected_field,
-                        sampled,
-                        session_key.clone(),
-                        state.clone(),
-                        palette,
-                    ));
-                }
-                items
-            },
-        )
-    })
-    .flex_1();
+    let tree_list =
+        div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
+            uniform_list("schema-tree-list", row_count, {
+                let flat_fields = flat_fields.clone();
+                let selected_field = selected_field.clone();
+                let session_key = session_key.clone();
+                let state = state.clone();
+                cx.processor(
+                    move |_view: &mut CollectionView,
+                          range: std::ops::Range<usize>,
+                          _window,
+                          _cx| {
+                        let mut items = Vec::with_capacity(range.len());
+                        for ix in range {
+                            let row = &flat_fields[ix];
+                            items.push(render_tree_row_owned(
+                                row,
+                                &selected_field,
+                                sampled,
+                                session_key.clone(),
+                                state.clone(),
+                                palette,
+                            ));
+                        }
+                        items
+                    },
+                )
+            })
+            .flex_1()
+            .pb(spacing::sm()),
+        );
 
     let toolbar = render_tree_toolbar(
         &filter_plan,
@@ -210,6 +217,7 @@ pub fn render_schema_panel(
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
+        .overflow_hidden()
         .child(toolbar)
         .child(tree_header)
         .child(tree_list);
@@ -218,10 +226,14 @@ pub fn render_schema_panel(
         .flex()
         .flex_col()
         .flex_1()
+        .min_w(px(0.0))
         .min_h(px(0.0))
+        .overflow_hidden()
         .child(render_summary_bar(&schema, app))
-        .child(h_resizable("schema-split-panel").child(resizable_panel().child(tree_panel)).child(
-            resizable_panel().size(px(390.0)).size_range(px(300.0)..px(620.0)).child(inspector),
+        .child(div().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
+            h_resizable("schema-split-panel").child(resizable_panel().child(tree_panel)).child(
+                resizable_panel().size(px(390.0)).size_range(px(300.0)..px(620.0)).child(inspector),
+            ),
         ))
         .into_any_element()
 }
@@ -901,7 +913,8 @@ fn render_inspector(
         .min_h(px(0.0))
         .overflow_y_scrollbar()
         .px(spacing::md())
-        .py(spacing::sm())
+        .pt(spacing::sm())
+        .pb(px(24.0))
         .gap(px(0.0));
 
     let Some(selected_path) = selected_field else {
@@ -1148,7 +1161,6 @@ fn render_sample_values_card(samples: &[(String, String)], cx: &App) -> AnyEleme
                 .py(px(2.0))
                 .rounded(px(4.0))
                 .bg(cx.theme().background)
-                .truncate()
                 .child(value.clone()),
         );
     }
