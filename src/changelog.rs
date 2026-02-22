@@ -110,8 +110,6 @@ fn category_tag(entry: &ChangelogEntry, _cx: &App) -> AnyElement {
 
 /// Render a single changelog section (tag header + bullet items).
 fn render_section(entry: &ChangelogEntry, cx: &App) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-
     div()
         .flex()
         .flex_col()
@@ -120,16 +118,8 @@ fn render_section(entry: &ChangelogEntry, cx: &App) -> AnyElement {
         .child(div().flex().child(category_tag(entry, cx)))
         .child(div().flex().flex_col().gap(spacing::xs()).pl(spacing::sm()).children(
             entry.items.iter().map(|item| {
-                let text: SharedString = item.clone().into();
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(spacing::sm())
-                    .min_w_0()
-                    .child(
-                        div().flex_shrink_0().mt(px(7.0)).size(px(5.0)).rounded(px(2.5)).bg(muted),
-                    )
-                    .child(div().flex_1().min_w_0().text_sm().whitespace_normal().child(text))
+                let text: SharedString = format!("\u{2022} {item}").into();
+                div().text_sm().child(text)
             }),
         ))
         .into_any_element()
@@ -226,6 +216,7 @@ impl Render for ChangelogView {
                     div()
                         .flex()
                         .flex_col()
+                        .min_w_0()
                         .gap(spacing::sm())
                         .text_color(cx.theme().secondary_foreground)
                         .children(section_elements),
