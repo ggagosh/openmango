@@ -6,6 +6,8 @@ use crate::state::AppState;
 
 mod actions;
 mod connection_list;
+pub(crate) mod export_dialog;
+pub(crate) mod import;
 mod state;
 mod tabs;
 mod uri;

@@ -51,6 +51,11 @@ impl FileFilter {
         Self::new("All Supported", vec!["json", "jsonl", "ndjson", "csv"])
     }
 
+    /// OpenMango Connections (.json)
+    pub fn connections_json() -> Self {
+        Self::new("OpenMango Connections", vec!["json"])
+    }
+
     /// All files
     pub fn all() -> Self {
         Self::new("All Files", vec!["*"])

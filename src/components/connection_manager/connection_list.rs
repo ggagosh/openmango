@@ -14,6 +14,8 @@ use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
 use crate::theme::{borders, sizing, spacing};
 
+use super::export_dialog::open_export_dialog;
+use super::import::open_import_flow;
 use super::{ConnectionManager, ManagerTab};
 
 impl ConnectionManager {
@@ -52,6 +54,7 @@ impl ConnectionManager {
     fn render_list_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let selected_id = self.selected_id;
+        let state = self.state.clone();
 
         div()
             .flex()
@@ -67,6 +70,30 @@ impl ConnectionManager {
                     .flex()
                     .items_center()
                     .gap(spacing::xs())
+                    .child(
+                        Button::new("import-connections")
+                            .compact()
+                            .tooltip("Import Connections")
+                            .icon(Icon::new(IconName::Download).xsmall())
+                            .on_click({
+                                let state = state.clone();
+                                move |_, window, cx| {
+                                    open_import_flow(state.clone(), window, cx);
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("export-connections")
+                            .compact()
+                            .tooltip("Export Connections")
+                            .icon(Icon::new(IconName::Upload).xsmall())
+                            .on_click({
+                                let state = state.clone();
+                                move |_, window, cx| {
+                                    open_export_dialog(state.clone(), window, cx);
+                                }
+                            }),
+                    )
                     .child(
                         Button::new("new-connection")
                             .compact()

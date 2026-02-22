@@ -1,0 +1,274 @@
+//! Connection import/export types and logic.
+
+use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::helpers::{extract_uri_password, inject_uri_password, redact_uri_password};
+use crate::models::SavedConnection;
+
+use super::crypto;
+
+const CURRENT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportMode {
+    Redacted,
+    Encrypted,
+    Plaintext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedConnection {
+    pub name: String,
+    pub uri: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionExportFile {
+    pub version: u32,
+    pub app: String,
+    pub exported_at: DateTime<Utc>,
+    pub mode: ExportMode,
+    pub connections: Vec<ExportedConnection>,
+}
+
+/// Build an export file from a list of saved connections.
+pub fn build_export(
+    connections: &[SavedConnection],
+    mode: ExportMode,
+    passphrase: Option<&str>,
+) -> Result<ConnectionExportFile> {
+    let mut exported = Vec::with_capacity(connections.len());
+
+    for conn in connections {
+        let entry = match mode {
+            ExportMode::Redacted => ExportedConnection {
+                name: conn.name.clone(),
+                uri: redact_uri_password(&conn.uri),
+                read_only: conn.read_only,
+                encrypted_password: None,
+            },
+            ExportMode::Encrypted => {
+                let passphrase = passphrase
+                    .ok_or_else(|| anyhow::anyhow!("passphrase required for encrypted export"))?;
+                let password = extract_uri_password(&conn.uri);
+                let encrypted = match &password {
+                    Some(pw) => Some(crypto::encrypt_password(pw, passphrase)?),
+                    None => None,
+                };
+                ExportedConnection {
+                    name: conn.name.clone(),
+                    uri: redact_uri_password(&conn.uri),
+                    read_only: conn.read_only,
+                    encrypted_password: encrypted,
+                }
+            }
+            ExportMode::Plaintext => ExportedConnection {
+                name: conn.name.clone(),
+                uri: conn.uri.clone(),
+                read_only: conn.read_only,
+                encrypted_password: None,
+            },
+        };
+        exported.push(entry);
+    }
+
+    Ok(ConnectionExportFile {
+        version: CURRENT_VERSION,
+        app: "openmango".to_string(),
+        exported_at: Utc::now(),
+        mode,
+        connections: exported,
+    })
+}
+
+/// Parse an import file from JSON.
+pub fn parse_import(json: &str) -> Result<ConnectionExportFile> {
+    let file: ConnectionExportFile = serde_json::from_str(json)?;
+    if file.version > CURRENT_VERSION {
+        bail!("unsupported export version {} (max supported: {})", file.version, CURRENT_VERSION);
+    }
+    Ok(file)
+}
+
+/// Decrypt all encrypted passwords in an import file and inject them back into URIs.
+pub fn decrypt_import_file(file: &mut ConnectionExportFile, passphrase: &str) -> Result<()> {
+    for conn in &mut file.connections {
+        if let Some(encrypted) = &conn.encrypted_password {
+            let password = crypto::decrypt_password(encrypted, passphrase)?;
+            conn.uri = inject_uri_password(&conn.uri, Some(&password));
+            conn.encrypted_password = None;
+        }
+    }
+    file.mode = ExportMode::Plaintext;
+    Ok(())
+}
+
+/// Produce final SavedConnections from an import file, auto-renaming duplicates.
+pub fn resolve_import(
+    file: &ConnectionExportFile,
+    existing: &[SavedConnection],
+) -> Vec<SavedConnection> {
+    let existing_names: std::collections::HashSet<&str> =
+        existing.iter().map(|c| c.name.as_str()).collect();
+
+    file.connections
+        .iter()
+        .map(|ec| {
+            let name = if existing_names.contains(ec.name.as_str()) {
+                format!("{} (imported)", ec.name)
+            } else {
+                ec.name.clone()
+            };
+            let mut conn = SavedConnection::new(name, ec.uri.clone());
+            conn.read_only = ec.read_only;
+            conn
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn make_connections() -> Vec<SavedConnection> {
+        vec![
+            SavedConnection {
+                id: Uuid::new_v4(),
+                name: "Local".into(),
+                uri: "mongodb://admin:secret@localhost:27017".into(),
+                last_connected: None,
+                read_only: false,
+            },
+            SavedConnection {
+                id: Uuid::new_v4(),
+                name: "Atlas".into(),
+                uri: "mongodb+srv://user:pass@cluster0.abc.mongodb.net/mydb".into(),
+                last_connected: Some(Utc::now()),
+                read_only: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn export_redacted_hides_passwords() {
+        let conns = make_connections();
+        let file = build_export(&conns, ExportMode::Redacted, None).unwrap();
+        assert_eq!(file.mode, ExportMode::Redacted);
+        assert_eq!(file.connections.len(), 2);
+        for ec in &file.connections {
+            assert!(!ec.uri.contains("secret"));
+            assert!(!ec.uri.contains("pass"));
+            assert!(ec.encrypted_password.is_none());
+        }
+    }
+
+    #[test]
+    fn export_plaintext_keeps_passwords() {
+        let conns = make_connections();
+        let file = build_export(&conns, ExportMode::Plaintext, None).unwrap();
+        assert_eq!(file.mode, ExportMode::Plaintext);
+        assert!(file.connections[0].uri.contains("secret"));
+        assert!(file.connections[1].uri.contains("pass"));
+    }
+
+    #[test]
+    fn export_encrypted_round_trip() {
+        let conns = make_connections();
+        let passphrase = "test-passphrase";
+        let mut file = build_export(&conns, ExportMode::Encrypted, Some(passphrase)).unwrap();
+        assert_eq!(file.mode, ExportMode::Encrypted);
+        for ec in &file.connections {
+            assert!(ec.encrypted_password.is_some());
+            assert!(!ec.uri.contains("secret"));
+        }
+        decrypt_import_file(&mut file, passphrase).unwrap();
+        assert!(file.connections[0].uri.contains("secret"));
+        assert!(file.connections[1].uri.contains("pass"));
+    }
+
+    #[test]
+    fn encrypted_wrong_passphrase_fails() {
+        let conns = make_connections();
+        let mut file = build_export(&conns, ExportMode::Encrypted, Some("correct")).unwrap();
+        let result = decrypt_import_file(&mut file, "wrong");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_and_version_validation() {
+        let conns = make_connections();
+        let file = build_export(&conns, ExportMode::Redacted, None).unwrap();
+        let json = serde_json::to_string_pretty(&file).unwrap();
+        let parsed = parse_import(&json).unwrap();
+        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.connections.len(), 2);
+
+        // Future version should fail
+        let bad = json.replace("\"version\": 1", "\"version\": 99");
+        assert!(parse_import(&bad).is_err());
+    }
+
+    #[test]
+    fn resolve_import_auto_renames_duplicates() {
+        let existing = vec![SavedConnection {
+            id: Uuid::new_v4(),
+            name: "Local".into(),
+            uri: "mongodb://localhost:27017".into(),
+            last_connected: None,
+            read_only: false,
+        }];
+
+        let file = ConnectionExportFile {
+            version: 1,
+            app: "openmango".into(),
+            exported_at: Utc::now(),
+            mode: ExportMode::Redacted,
+            connections: vec![
+                ExportedConnection {
+                    name: "Local".into(),
+                    uri: "mongodb://localhost:27017".into(),
+                    read_only: false,
+                    encrypted_password: None,
+                },
+                ExportedConnection {
+                    name: "Atlas".into(),
+                    uri: "mongodb+srv://cluster0.abc.mongodb.net".into(),
+                    read_only: true,
+                    encrypted_password: None,
+                },
+            ],
+        };
+
+        let resolved = resolve_import(&file, &existing);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].name, "Local (imported)");
+        assert_eq!(resolved[1].name, "Atlas");
+        // New UUIDs
+        assert_ne!(resolved[0].id, existing[0].id);
+    }
+
+    #[test]
+    fn no_password_uri_handles_gracefully() {
+        let conns = vec![SavedConnection {
+            id: Uuid::new_v4(),
+            name: "NoAuth".into(),
+            uri: "mongodb://localhost:27017".into(),
+            last_connected: None,
+            read_only: false,
+        }];
+
+        let file = build_export(&conns, ExportMode::Encrypted, Some("pass")).unwrap();
+        assert!(file.connections[0].encrypted_password.is_none());
+
+        let file = build_export(&conns, ExportMode::Redacted, None).unwrap();
+        assert_eq!(file.connections[0].uri, "mongodb://localhost:27017");
+    }
+}

@@ -1,4 +1,6 @@
 pub mod auto_pair;
+pub mod connection_io;
+pub mod crypto;
 pub mod format;
 pub mod validate;
 
