@@ -36,6 +36,7 @@ pub enum CollectionSubview {
     Indexes,
     Stats,
     Aggregation,
+    Schema,
 }
 
 impl CollectionSubview {
@@ -44,6 +45,7 @@ impl CollectionSubview {
             1 => Self::Indexes,
             2 => Self::Stats,
             3 => Self::Aggregation,
+            4 => Self::Schema,
             _ => Self::Documents,
         }
     }
@@ -54,6 +56,7 @@ impl CollectionSubview {
             Self::Indexes => 1,
             Self::Stats => 2,
             Self::Aggregation => 3,
+            Self::Schema => 4,
         }
     }
 }
@@ -976,6 +979,70 @@ fn delta_u64(next: Option<u64>, prev: Option<u64>) -> Option<i64> {
     }
 }
 
+// ============================================================================
+// Schema Analysis Types
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct SchemaField {
+    pub path: String,
+    pub name: String,
+    pub depth: usize,
+    pub types: Vec<SchemaFieldType>,
+    pub presence: u64,
+    pub null_count: u64,
+    pub is_polymorphic: bool,
+    pub children: Vec<SchemaField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaFieldType {
+    pub bson_type: String,
+    pub count: u64,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardinalityBand {
+    Low,
+    Medium,
+    High,
+}
+
+impl CardinalityBand {
+    pub fn label(self) -> &'static str {
+        match self {
+            CardinalityBand::Low => "Low",
+            CardinalityBand::Medium => "Medium",
+            CardinalityBand::High => "High",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaCardinality {
+    pub distinct_estimate: u64,
+    pub band: CardinalityBand,
+    pub min_value: Option<String>,
+    pub max_value: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaAnalysis {
+    pub fields: Vec<SchemaField>,
+    pub total_fields: usize,
+    pub total_types: usize,
+    pub max_depth: usize,
+    pub sampled: u64,
+    pub total_documents: u64,
+    pub polymorphic_count: usize,
+    pub sparse_count: usize,
+    pub complete_count: usize,
+    /// (display_value, bson_type) tuples for BSON-aware coloring.
+    pub sample_values: HashMap<String, Vec<(String, String)>>,
+    pub cardinality: HashMap<String, SchemaCardinality>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionDocument {
     pub key: DocumentKey,
@@ -1006,6 +1073,9 @@ pub struct SessionData {
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
+    pub schema: Option<SchemaAnalysis>,
+    pub schema_loading: bool,
+    pub schema_error: Option<String>,
 }
 
 impl Default for SessionData {
@@ -1033,6 +1103,9 @@ impl Default for SessionData {
             indexes_error: None,
             aggregation: PipelineState::default(),
             explain: ExplainState::default(),
+            schema: None,
+            schema_loading: false,
+            schema_error: None,
         }
     }
 }
@@ -1049,6 +1122,9 @@ pub struct SessionViewState {
     pub subview: CollectionSubview,
     pub stats_open: bool,
     pub query_options_open: bool,
+    pub schema_selected_field: Option<String>,
+    pub schema_expanded_fields: HashSet<String>,
+    pub schema_filter: String,
 }
 
 /// Per-collection session state (one per tab).
@@ -1085,6 +1161,12 @@ pub struct SessionSnapshot {
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
+    pub schema: Option<SchemaAnalysis>,
+    pub schema_loading: bool,
+    pub schema_error: Option<String>,
+    pub schema_selected_field: Option<String>,
+    pub schema_expanded_fields: HashSet<String>,
+    pub schema_filter: String,
 }
 
 #[derive(Debug, Clone)]

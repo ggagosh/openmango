@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::state::{CollectionStats, CollectionSubview, SessionKey};
+use crate::state::{CollectionStats, CollectionSubview, SchemaAnalysis, SessionKey};
 use crate::theme::spacing;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
@@ -11,6 +11,7 @@ use super::CollectionView;
 use super::header::render_stats_row;
 use super::query::is_valid_query;
 use super::query_completion::QueryCompletionProvider;
+use super::schema_filter_completion::SchemaFilterCompletionProvider;
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search_state.is_none() {
@@ -67,6 +68,12 @@ impl Render for CollectionView {
             indexes_error,
             aggregation,
             explain,
+            schema,
+            schema_loading,
+            schema_error,
+            schema_selected_field,
+            schema_expanded_fields,
+            schema_filter,
         ) = if let Some(snapshot) = snapshot {
             (
                 snapshot.items,
@@ -91,6 +98,12 @@ impl Render for CollectionView {
                 snapshot.indexes_error,
                 snapshot.aggregation,
                 snapshot.explain,
+                snapshot.schema,
+                snapshot.schema_loading,
+                snapshot.schema_error,
+                snapshot.schema_selected_field,
+                snapshot.schema_expanded_fields,
+                snapshot.schema_filter,
             )
         } else {
             (
@@ -116,6 +129,12 @@ impl Render for CollectionView {
                 None,
                 Default::default(),
                 Default::default(),
+                None::<SchemaAnalysis>,
+                false,
+                None::<String>,
+                None::<String>,
+                std::collections::HashSet::new(),
+                String::new(),
             )
         };
         let filter_active = !matches!(filter_raw.trim(), "" | "{}");
@@ -343,6 +362,51 @@ impl Render for CollectionView {
             self.projection_subscription = Some(subscription);
         }
 
+        if self.schema_filter_state.is_none() {
+            let schema_filter_state = cx.new(|cx| {
+                let mut state = InputState::new(window, cx)
+                    .code_editor("text")
+                    .line_number(false)
+                    .auto_indent(false)
+                    .submit_on_enter(true)
+                    .placeholder("Filter fields...")
+                    .clean_on_escape();
+                state.lsp.completion_provider =
+                    Some(Rc::new(SchemaFilterCompletionProvider::new(self.state.clone())));
+                state
+            });
+            let subscription = cx.subscribe_in(
+                &schema_filter_state,
+                window,
+                move |view, state, event, _window, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+
+                    let Some(session_key) = view.view_model.current_session() else {
+                        return;
+                    };
+                    if view.state.read(cx).session_subview(&session_key)
+                        != Some(CollectionSubview::Schema)
+                    {
+                        return;
+                    }
+
+                    let raw = state.read(cx).value().to_string();
+                    view.state.update(cx, |state, cx| {
+                        state.set_schema_filter(&session_key, raw.clone());
+                        if state.promote_preview_collection_tab(&session_key) {
+                            cx.notify();
+                            return;
+                        }
+                        cx.notify();
+                    });
+                },
+            );
+            self.schema_filter_state = Some(schema_filter_state);
+            self.schema_filter_subscription = Some(subscription);
+        }
+
         if self.input_session != session_key {
             self.input_session = session_key.clone();
             if let Some(filter_state) = self.filter_state.clone() {
@@ -377,9 +441,28 @@ impl Render for CollectionView {
             }
         }
 
+        if self.schema_filter_session != session_key {
+            self.schema_filter_session = session_key.clone();
+            if let Some(schema_filter_state) = self.schema_filter_state.clone() {
+                let val = schema_filter.clone();
+                schema_filter_state.update(cx, |state, cx| {
+                    state.set_value(val, window, cx);
+                });
+            }
+        } else if let Some(schema_filter_state) = self.schema_filter_state.clone() {
+            let current = schema_filter_state.read(cx).value().to_string();
+            if current != schema_filter {
+                let val = schema_filter.clone();
+                schema_filter_state.update(cx, |state, cx| {
+                    state.set_value(val, window, cx);
+                });
+            }
+        }
+
         let filter_state = self.filter_state.clone();
         let sort_state = self.sort_state.clone();
         let projection_state = self.projection_state.clone();
+        let schema_filter_state = self.schema_filter_state.clone();
 
         let state_for_prev = self.state.clone();
         let state_for_next = self.state.clone();
@@ -389,6 +472,7 @@ impl Render for CollectionView {
             CollectionSubview::Indexes => key_context.push_str(" Indexes"),
             CollectionSubview::Stats => key_context.push_str(" Stats"),
             CollectionSubview::Aggregation => key_context.push_str(" Aggregation"),
+            CollectionSubview::Schema => key_context.push_str(" Schema"),
             CollectionSubview::Documents => {}
         }
 
@@ -418,6 +502,7 @@ impl Render for CollectionView {
                 stats_loading,
                 aggregation.loading,
                 explain.loading,
+                schema_loading,
                 window,
                 cx,
             ),
@@ -451,6 +536,17 @@ impl Render for CollectionView {
             CollectionSubview::Aggregation => {
                 self.render_aggregation_view(aggregation, session_key.clone(), window, cx)
             }
+            CollectionSubview::Schema => self.render_schema_view(
+                schema,
+                schema_loading,
+                schema_error,
+                schema_selected_field,
+                schema_expanded_fields,
+                schema_filter,
+                schema_filter_state,
+                session_key.clone(),
+                cx,
+            ),
         };
 
         let explain_layer =
@@ -463,6 +559,41 @@ impl Render for CollectionView {
 }
 
 impl CollectionView {
+    #[allow(clippy::too_many_arguments)]
+    fn render_schema_view(
+        &mut self,
+        schema: Option<SchemaAnalysis>,
+        schema_loading: bool,
+        schema_error: Option<String>,
+        selected_field: Option<String>,
+        expanded_fields: std::collections::HashSet<String>,
+        schema_filter: String,
+        schema_filter_state: Option<Entity<InputState>>,
+        session_key: Option<SessionKey>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::views::schema_view::render_schema_panel;
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .child(render_schema_panel(
+                schema,
+                schema_loading,
+                schema_error,
+                selected_field,
+                expanded_fields,
+                schema_filter,
+                schema_filter_state,
+                session_key,
+                self.state.clone(),
+                cx,
+            ))
+            .into_any_element()
+    }
+
     fn render_stats_view(
         &self,
         stats: Option<CollectionStats>,

@@ -7,6 +7,8 @@ mod node_meta;
 mod pagination;
 mod query;
 mod query_completion;
+mod schema_filter;
+mod schema_filter_completion;
 mod state;
 mod types;
 mod view;

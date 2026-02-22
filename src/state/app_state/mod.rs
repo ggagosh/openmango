@@ -20,14 +20,16 @@ pub(crate) use aggregation::{
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{
-    ActiveTab, BsonOutputFormat, CollectionOverview, CollectionProgress, CollectionStats,
-    CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem, DatabaseKey,
-    DatabaseSessionData, DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, Encoding,
-    ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
-    ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
-    ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,
+    CollectionStats, CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem,
+    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats,
+    DatabaseTransferProgress, Encoding, ExplainBottleneck, ExplainCostBand, ExplainDiff,
+    ExplainNode, ExplainOpenMode, ExplainPanelTab, ExplainRejectedPlan, ExplainRun, ExplainScope,
+    ExplainSeverity, ExplainStageDelta, ExplainState, ExplainSummary, ExplainViewMode,
+    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SchemaAnalysis, SchemaCardinality,
+    SchemaField, SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState,
+    SessionViewState, TabKey, TransferFormat, TransferMode, TransferScope, TransferTabKey,
+    TransferTabState, View,
 };
 
 use std::collections::{HashMap, HashSet};

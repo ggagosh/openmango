@@ -121,6 +121,12 @@ impl AppState {
             indexes_error: session.data.indexes_error.clone(),
             aggregation: session.data.aggregation.clone(),
             explain: session.data.explain.clone(),
+            schema: session.data.schema.clone(),
+            schema_loading: session.data.schema_loading,
+            schema_error: session.data.schema_error.clone(),
+            schema_selected_field: session.view.schema_selected_field.clone(),
+            schema_expanded_fields: session.view.schema_expanded_fields.clone(),
+            schema_filter: session.view.schema_filter.clone(),
         })
     }
 

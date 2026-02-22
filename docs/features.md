@@ -34,7 +34,7 @@ Audience: power users and small engineering teams
 
 ### Schema & Data Quality
 
-- [ ] P0: Schema explorer (field cardinality, type drift, outliers)
+- [x] P0: Schema explorer (field cardinality, type drift, outliers)
 - [ ] P1: Validation rule editor (JSON Schema / validator)
 - [ ] P2: Data profiling reports (null %, distinct count, min/max)
 

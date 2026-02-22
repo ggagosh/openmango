@@ -244,6 +244,14 @@ impl AppState {
                     }
                 }
             }
+            AppEvent::SchemaAnalyzed { .. } => {
+                self.set_status_message(Some(StatusMessage::info("Schema analysis complete")));
+            }
+            AppEvent::SchemaFailed { error, .. } => {
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Schema analysis failed: {error}"
+                ))));
+            }
             AppEvent::UpdateAvailable { version } => {
                 self.set_status_message(Some(StatusMessage::info(format!(
                     "Update available: v{version}"

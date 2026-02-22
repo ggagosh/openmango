@@ -573,6 +573,108 @@ pub fn render_stats_actions(
     )
 }
 
+/// Render action buttons for the Schema subview.
+pub fn render_schema_actions(
+    state: Entity<AppState>,
+    session_key: Option<SessionKey>,
+    schema_loading: bool,
+) -> Div {
+    let state_for_refresh = state.clone();
+    let state_for_copy = state.clone();
+
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::sm())
+        .child(
+            MenuButton::new("copy-schema")
+                .ghost()
+                .compact()
+                .label("Copy Schema")
+                .dropdown_caret(true)
+                .rounded(borders::radius_sm())
+                .with_size(Size::XSmall)
+                .disabled(session_key.is_none() || schema_loading)
+                .dropdown_menu_with_anchor(Corner::BottomLeft, {
+                    let session_key = session_key.clone();
+                    let state_for_copy = state_for_copy.clone();
+                    move |menu: PopupMenu, _window, _cx| {
+                        menu.item(PopupMenuItem::new("JSON Schema").on_click({
+                            let session_key = session_key.clone();
+                            let state = state_for_copy.clone();
+                            move |_, _window, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                let state_ref = state.read(cx);
+                                let schema = state_ref
+                                    .session_data(&session_key)
+                                    .and_then(|d| d.schema.as_ref());
+                                if let Some(schema) = schema {
+                                    let json =
+                                        crate::state::commands::schema_to_json_schema(schema);
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+                                }
+                            }
+                        }))
+                        .item(PopupMenuItem::new("Compass Format").on_click({
+                            let session_key = session_key.clone();
+                            let state = state_for_copy.clone();
+                            move |_, _window, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                let state_ref = state.read(cx);
+                                let schema = state_ref
+                                    .session_data(&session_key)
+                                    .and_then(|d| d.schema.as_ref());
+                                if let Some(schema) = schema {
+                                    let json = crate::state::commands::schema_to_compass(schema);
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+                                }
+                            }
+                        }))
+                        .item(PopupMenuItem::new("Summary").on_click({
+                            let session_key = session_key.clone();
+                            let state = state_for_copy.clone();
+                            move |_, _window, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                let state_ref = state.read(cx);
+                                let schema = state_ref
+                                    .session_data(&session_key)
+                                    .and_then(|d| d.schema.as_ref());
+                                if let Some(schema) = schema {
+                                    let json = crate::state::commands::schema_to_summary(schema);
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+                                }
+                            }
+                        }))
+                    }
+                }),
+        )
+        .child(
+            Button::new("refresh-schema")
+                .ghost()
+                .icon(Icon::new(IconName::Redo).xsmall())
+                .disabled(session_key.is_none() || schema_loading)
+                .on_click({
+                    let session_key = session_key.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(session_key) = session_key.clone() else {
+                            return;
+                        };
+                        AppCommands::analyze_collection_schema(
+                            state_for_refresh.clone(),
+                            session_key,
+                            cx,
+                        );
+                    }
+                }),
+        )
+}
+
 /// Render action buttons for the Aggregation subview.
 pub fn render_aggregation_actions(
     state: Entity<AppState>,

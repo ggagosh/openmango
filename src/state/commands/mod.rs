@@ -51,6 +51,8 @@ mod databases;
 mod documents;
 mod explain;
 mod indexes;
+mod schema;
+pub use schema::{schema_to_compass, schema_to_json_schema, schema_to_summary};
 mod stats;
 mod transfer;
 mod updater;

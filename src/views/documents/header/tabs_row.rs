@@ -36,8 +36,14 @@ pub fn render_subview_tabs(
                         false,
                         cx,
                     );
-                } else if should_load {
+                } else if should_load && next == CollectionSubview::Stats {
                     AppCommands::load_collection_stats(state_for_subview.clone(), session_key, cx);
+                } else if should_load && next == CollectionSubview::Schema {
+                    AppCommands::analyze_collection_schema(
+                        state_for_subview.clone(),
+                        session_key,
+                        cx,
+                    );
                 }
             }
         })
@@ -46,5 +52,6 @@ pub fn render_subview_tabs(
             Tab::new().label("Indexes"),
             Tab::new().label("Stats"),
             Tab::new().label("Aggregation"),
+            Tab::new().label("Schema"),
         ])
 }

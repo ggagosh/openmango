@@ -13,7 +13,7 @@ mod tabs_row;
 
 pub use actions::{
     render_aggregation_actions, render_documents_actions, render_indexes_actions,
-    render_stats_actions,
+    render_schema_actions, render_stats_actions,
 };
 pub use filter_bar::{render_filter_row, render_query_options};
 pub use stats_panel::render_stats_row;
@@ -59,6 +59,7 @@ impl CollectionView {
         stats_loading: bool,
         aggregation_loading: bool,
         explain_loading: bool,
+        schema_loading: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -75,6 +76,7 @@ impl CollectionView {
         let is_indexes = active_subview == CollectionSubview::Indexes;
         let is_stats = active_subview == CollectionSubview::Stats;
         let is_aggregation = active_subview == CollectionSubview::Aggregation;
+        let is_schema = active_subview == CollectionSubview::Schema;
         let breadcrumb = format!("{connection_name} / {db_name} / {collection_name}");
 
         // Build action row based on active subview
@@ -101,6 +103,8 @@ impl CollectionView {
                 aggregation_loading,
                 explain_loading,
             )
+        } else if is_schema {
+            render_schema_actions(self.state.clone(), session_key.clone(), schema_loading)
         } else {
             div().flex().items_center().gap(spacing::sm())
         };

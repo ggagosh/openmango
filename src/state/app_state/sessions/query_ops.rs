@@ -91,9 +91,17 @@ impl AppState {
             }
             session.view.subview = subview;
             session.view.stats_open = matches!(subview, CollectionSubview::Stats);
-            should_load = subview == CollectionSubview::Stats
-                && !session.data.stats_loading
-                && (session.data.stats.is_none() || session.data.stats_error.is_some());
+            should_load = match subview {
+                CollectionSubview::Stats => {
+                    !session.data.stats_loading
+                        && (session.data.stats.is_none() || session.data.stats_error.is_some())
+                }
+                CollectionSubview::Schema => {
+                    !session.data.schema_loading
+                        && (session.data.schema.is_none() || session.data.schema_error.is_some())
+                }
+                _ => false,
+            };
             changed = true;
         }
 

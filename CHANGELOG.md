@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Schema Explorer tab — analyzes your collection's structure by sampling documents, showing a searchable field tree with types, presence rates, cardinality, polymorphism detection, and an inspector panel with charts and sample values
 - Automatic background updates — new versions download silently and are ready to install on restart, VS Code style. Disable in Settings > Updates.
 - Periodic update re-checks every 4 hours for long-running sessions.
 - Multi-document selection in document lists.

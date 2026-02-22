@@ -151,6 +151,15 @@ pub enum AppEvent {
         documents_total: Option<u64>,
     },
 
+    // Schema analysis
+    SchemaAnalyzed {
+        session: SessionKey,
+    },
+    SchemaFailed {
+        session: SessionKey,
+        error: String,
+    },
+
     // View navigation
     ViewChanged,
 

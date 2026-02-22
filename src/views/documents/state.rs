@@ -26,6 +26,7 @@ pub struct CollectionView {
     pub(crate) filter_state: Option<Entity<InputState>>,
     pub(crate) sort_state: Option<Entity<InputState>>,
     pub(crate) projection_state: Option<Entity<InputState>>,
+    pub(crate) schema_filter_state: Option<Entity<InputState>>,
     pub(crate) filter_auto_pair: AutoPairState,
     pub(crate) sort_auto_pair: AutoPairState,
     pub(crate) projection_auto_pair: AutoPairState,
@@ -41,6 +42,7 @@ pub struct CollectionView {
     pub(crate) search_regex: bool,
     pub(crate) search_values_only: bool,
     pub(crate) input_session: Option<SessionKey>,
+    pub(crate) schema_filter_session: Option<SessionKey>,
     pub(crate) aggregation_input_session: Option<SessionKey>,
     pub(crate) aggregation_selected_stage: Option<usize>,
     pub(crate) aggregation_stage_count: usize,
@@ -49,6 +51,7 @@ pub struct CollectionView {
     pub(crate) filter_subscription: Option<Subscription>,
     pub(crate) sort_subscription: Option<Subscription>,
     pub(crate) projection_subscription: Option<Subscription>,
+    pub(crate) schema_filter_subscription: Option<Subscription>,
     pub(crate) search_subscription: Option<Subscription>,
     pub(crate) aggregation_stage_body_state: Option<Entity<InputState>>,
     pub(crate) aggregation_results_tree_state: Option<Entity<TreeState>>,
@@ -435,6 +438,7 @@ impl CollectionView {
             filter_state: None,
             sort_state: None,
             projection_state: None,
+            schema_filter_state: None,
             filter_auto_pair: AutoPairState::new("{}"),
             sort_auto_pair: AutoPairState::new("{}"),
             projection_auto_pair: AutoPairState::new("{}"),
@@ -450,6 +454,7 @@ impl CollectionView {
             search_regex: false,
             search_values_only: false,
             input_session: None,
+            schema_filter_session: None,
             aggregation_input_session: None,
             aggregation_selected_stage: None,
             aggregation_stage_count: 0,
@@ -458,6 +463,7 @@ impl CollectionView {
             filter_subscription: None,
             sort_subscription: None,
             projection_subscription: None,
+            schema_filter_subscription: None,
             search_subscription: None,
             aggregation_stage_body_state: None,
             aggregation_results_tree_state: None,
@@ -507,6 +513,17 @@ impl CollectionView {
             && stats_error.is_none()
         {
             AppCommands::load_collection_stats(state.clone(), session_key.clone(), cx);
+        }
+
+        let schema = snapshot.schema;
+        let schema_loading = snapshot.schema_loading;
+        let schema_error = snapshot.schema_error;
+        if subview == CollectionSubview::Schema
+            && schema.is_none()
+            && !schema_loading
+            && schema_error.is_none()
+        {
+            AppCommands::analyze_collection_schema(state.clone(), session_key.clone(), cx);
         }
     }
 

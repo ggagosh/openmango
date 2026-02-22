@@ -353,6 +353,9 @@ impl AppRoot {
                     CollectionSubview::Aggregation => {
                         AppCommands::run_aggregation(self.state.clone(), session_key, false, cx);
                     }
+                    CollectionSubview::Schema => {
+                        AppCommands::analyze_collection_schema(self.state.clone(), session_key, cx);
+                    }
                 }
             }
             View::Database => {
