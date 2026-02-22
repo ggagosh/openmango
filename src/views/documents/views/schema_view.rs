@@ -689,105 +689,123 @@ fn render_tree_toolbar(
 ) -> Div {
     let has_filter = filter_plan.parsed.has_active_filter();
 
+    let input_control = match schema_filter_state {
+        Some(filter_state) => div()
+            .flex_1()
+            .min_w(px(220.0))
+            .child(
+                Input::new(&filter_state)
+                    .appearance(true)
+                    .bordered(true)
+                    .focus_bordered(true)
+                    .small()
+                    .w_full(),
+            )
+            .into_any_element(),
+        None => div()
+            .flex_1()
+            .min_w(px(220.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .px(spacing::xs())
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                gpui_component::Icon::new(gpui_component::IconName::Search)
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .ml(spacing::xs())
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Filter fields..."),
+            )
+            .into_any_element(),
+    };
+
     let controls = div()
         .flex()
+        .w_full()
+        .min_w(px(0.0))
         .items_center()
         .gap(spacing::xs())
-        .child(match schema_filter_state {
-            Some(filter_state) => div()
-                .flex_1()
-                .child(
-                    Input::new(&filter_state)
-                        .appearance(true)
-                        .bordered(true)
-                        .focus_bordered(true)
-                        .small()
-                        .w_full(),
-                )
-                .into_any_element(),
-            None => div()
-                .flex_1()
-                .h(px(22.0))
+        .child(input_control)
+        .child(
+            div()
                 .flex()
                 .items_center()
-                .px(spacing::xs())
-                .rounded(px(4.0))
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().background)
+                .gap(spacing::xs())
+                .flex_shrink_0()
                 .child(
-                    gpui_component::Icon::new(gpui_component::IconName::Search)
-                        .xsmall()
-                        .text_color(cx.theme().muted_foreground),
+                    Button::new("clear-schema-filter")
+                        .ghost()
+                        .compact()
+                        .icon(gpui_component::Icon::new(gpui_component::IconName::Close).xsmall())
+                        .tooltip("Clear filter")
+                        .disabled(session_key.is_none() || !has_filter)
+                        .on_click({
+                            let state = state.clone();
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                if let Some(session_key) = session_key.clone() {
+                                    state.update(cx, |state, cx| {
+                                        state.set_schema_filter(&session_key, String::new());
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }),
                 )
                 .child(
-                    div()
-                        .ml(spacing::xs())
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Filter fields..."),
+                    Button::new("expand-all-schema")
+                        .ghost()
+                        .compact()
+                        .icon(
+                            gpui_component::Icon::new(gpui_component::IconName::ChevronDown)
+                                .xsmall(),
+                        )
+                        .tooltip("Expand all")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let state = state.clone();
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                if let Some(session_key) = session_key.clone() {
+                                    state.update(cx, |state, cx| {
+                                        state.expand_all_schema_fields(&session_key);
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }),
                 )
-                .into_any_element(),
-        })
-        .child(
-            Button::new("clear-schema-filter")
-                .ghost()
-                .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::Close).xsmall())
-                .tooltip("Clear filter")
-                .disabled(session_key.is_none() || !has_filter)
-                .on_click({
-                    let state = state.clone();
-                    let session_key = session_key.clone();
-                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        if let Some(session_key) = session_key.clone() {
-                            state.update(cx, |state, cx| {
-                                state.set_schema_filter(&session_key, String::new());
-                                cx.notify();
-                            });
-                        }
-                    }
-                }),
-        )
-        .child(
-            Button::new("expand-all-schema")
-                .ghost()
-                .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::ChevronDown).xsmall())
-                .tooltip("Expand all")
-                .disabled(session_key.is_none())
-                .on_click({
-                    let state = state.clone();
-                    let session_key = session_key.clone();
-                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        if let Some(session_key) = session_key.clone() {
-                            state.update(cx, |state, cx| {
-                                state.expand_all_schema_fields(&session_key);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }),
-        )
-        .child(
-            Button::new("collapse-all-schema")
-                .ghost()
-                .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::ChevronUp).xsmall())
-                .tooltip("Collapse all")
-                .disabled(session_key.is_none())
-                .on_click({
-                    let state = state.clone();
-                    let session_key = session_key.clone();
-                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        if let Some(session_key) = session_key.clone() {
-                            state.update(cx, |state, cx| {
-                                state.collapse_all_schema_fields(&session_key);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }),
+                .child(
+                    Button::new("collapse-all-schema")
+                        .ghost()
+                        .compact()
+                        .icon(
+                            gpui_component::Icon::new(gpui_component::IconName::ChevronUp).xsmall(),
+                        )
+                        .tooltip("Collapse all")
+                        .disabled(session_key.is_none())
+                        .on_click({
+                            let state = state.clone();
+                            let session_key = session_key.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                if let Some(session_key) = session_key.clone() {
+                                    state.update(cx, |state, cx| {
+                                        state.collapse_all_schema_fields(&session_key);
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }),
+                ),
         );
 
     let mut toolbar = div()
