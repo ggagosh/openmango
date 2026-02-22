@@ -1142,7 +1142,7 @@ fn render_sample_values_card(samples: &[(String, String)], cx: &App) -> AnyEleme
         body = body.child(
             div()
                 .text_xs()
-                .font_family("Berkeley Mono")
+                .font_family(crate::theme::fonts::mono())
                 .text_color(color)
                 .px(spacing::xs())
                 .py(px(2.0))

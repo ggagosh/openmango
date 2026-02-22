@@ -174,7 +174,12 @@ pub(super) fn render_query_field_row(
         "(none)".to_string()
     } else {
         // Truncate if longer than ~40 chars
-        if value.len() > 40 { format!("{}...", &value[..37]) } else { value.to_string() }
+        if value.len() > 40 {
+            let end = value.floor_char_boundary(37);
+            format!("{}...", &value[..end])
+        } else {
+            value.to_string()
+        }
     };
 
     let is_empty = value.is_empty();

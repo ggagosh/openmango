@@ -397,7 +397,8 @@ fn bson_display_value(value: &Bson) -> String {
         Bson::Double(v) => format!("{v}"),
         Bson::String(v) => {
             if v.len() > 60 {
-                format!("{}...", &v[..60])
+                let end = v.floor_char_boundary(60);
+                format!("{}...", &v[..end])
             } else {
                 v.clone()
             }
