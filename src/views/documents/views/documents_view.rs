@@ -336,7 +336,7 @@ impl CollectionView {
                             ))
                             .child(search_toggle_button(
                                 "search-word",
-                                Icon::default().path("icons/whole-word.svg").xsmall(),
+                                Icon::new(IconName::WholeWord).xsmall(),
                                 word_active,
                                 "Whole Word",
                                 active_bg,
@@ -354,7 +354,7 @@ impl CollectionView {
                             ))
                             .child(search_toggle_button(
                                 "search-regex",
-                                Icon::default().path("icons/regex.svg").xsmall(),
+                                Icon::new(IconName::Regex).xsmall(),
                                 regex_active,
                                 "Regex",
                                 active_bg,
@@ -374,7 +374,7 @@ impl CollectionView {
                             .child(search_divider(divider_color))
                             .child(search_toggle_button(
                                 "search-values",
-                                Icon::default().path("icons/braces.svg").xsmall(),
+                                Icon::new(IconName::Braces).xsmall(),
                                 values_active,
                                 "Values Only",
                                 active_bg,

@@ -741,7 +741,7 @@ fn render_tree_toolbar(
             Button::new("expand-all-schema")
                 .ghost()
                 .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::Plus).xsmall())
+                .icon(gpui_component::Icon::new(gpui_component::IconName::ChevronDown).xsmall())
                 .tooltip("Expand all")
                 .disabled(session_key.is_none())
                 .on_click({
@@ -761,7 +761,7 @@ fn render_tree_toolbar(
             Button::new("collapse-all-schema")
                 .ghost()
                 .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::Minus).xsmall())
+                .icon(gpui_component::Icon::new(gpui_component::IconName::ChevronUp).xsmall())
                 .tooltip("Collapse all")
                 .disabled(session_key.is_none())
                 .on_click({

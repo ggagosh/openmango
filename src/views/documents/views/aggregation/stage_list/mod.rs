@@ -11,7 +11,7 @@ mod stage_row;
 
 use gpui::Styled as _;
 use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::components::Button;
 use crate::state::app_state::PipelineState;
@@ -72,7 +72,8 @@ impl CollectionView {
                     .child(
                         Button::new("agg-add-stage")
                             .compact()
-                            .label("+ Add Stage")
+                            .icon(Icon::new(IconName::Plus).xsmall())
+                            .label("Add Stage")
                             .tooltip("Add a pipeline stage")
                             .disabled(session_key.is_none())
                             .on_click({
@@ -286,7 +287,8 @@ fn render_empty_state(
         )
         .child(
             Button::new("agg-add-first-stage")
-                .label("+ Add your first stage")
+                .icon(Icon::new(IconName::Plus).xsmall())
+                .label("Add your first stage")
                 .disabled(session_key.is_none())
                 .on_click({
                     let session_key = session_key.clone();

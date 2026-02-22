@@ -4,7 +4,7 @@ use gpui::*;
 use gpui_component::button::Button as MenuButton;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::select::{SearchableVec, Select, SelectState};
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::state::{
     AppState, BsonOutputFormat, Encoding, ExtendedJsonMode, InsertMode, TransferFormat,
@@ -234,7 +234,7 @@ pub(super) fn render_export_options(
                                         }
                                     });
                                 })
-                                .child("×"),
+                                .child(Icon::new(IconName::Close).xsmall()),
                         )
                 }),
             )
@@ -702,7 +702,7 @@ pub(super) fn render_copy_options(
                                         }
                                     });
                                 })
-                                .child("×"),
+                                .child(Icon::new(IconName::Close).xsmall()),
                         )
                 }),
             )
