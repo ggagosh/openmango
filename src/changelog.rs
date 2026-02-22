@@ -197,6 +197,7 @@ impl Render for ChangelogView {
 
         div().flex().flex_col().flex_1().size_full().overflow_y_scrollbar().child(
             div()
+                .w_full()
                 .max_w(px(860.0))
                 .mx_auto()
                 .px(px(32.0))
