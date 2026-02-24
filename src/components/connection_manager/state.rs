@@ -7,24 +7,15 @@ use crate::state::AppState;
 use super::{ConnectionDraft, ConnectionManager, ManagerTab, TestStatus};
 
 impl ManagerTab {
-    pub(super) fn all() -> [ManagerTab; 6] {
-        [
-            ManagerTab::General,
-            ManagerTab::Auth,
-            ManagerTab::Options,
-            ManagerTab::Tls,
-            ManagerTab::Pool,
-            ManagerTab::Advanced,
-        ]
+    pub(super) fn all() -> [ManagerTab; 4] {
+        [ManagerTab::General, ManagerTab::Tls, ManagerTab::Network, ManagerTab::Advanced]
     }
 
     pub(super) fn label(self) -> &'static str {
         match self {
             ManagerTab::General => "General",
-            ManagerTab::Auth => "Auth",
-            ManagerTab::Options => "Options",
             ManagerTab::Tls => "TLS",
-            ManagerTab::Pool => "Pool & Timeouts",
+            ManagerTab::Network => "Network",
             ManagerTab::Advanced => "Advanced",
         }
     }
@@ -72,10 +63,32 @@ impl ConnectionDraft {
                 .new(|cx| InputState::new(window, cx).placeholder("/path/cert.pem")),
             tls_cert_key_password_state: cx
                 .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
+            ssh_host_state: cx.new(|cx| InputState::new(window, cx).placeholder("ssh.example.com")),
+            ssh_port_state: cx.new(|cx| InputState::new(window, cx).placeholder("22")),
+            ssh_username_state: cx.new(|cx| InputState::new(window, cx).placeholder("ubuntu")),
+            ssh_password_state: cx
+                .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
+            ssh_identity_file_state: cx
+                .new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_ed25519")),
+            ssh_identity_passphrase_state: cx
+                .new(|cx| InputState::new(window, cx).placeholder("passphrase").masked(true)),
+            ssh_local_bind_host_state: cx
+                .new(|cx| InputState::new(window, cx).default_value("127.0.0.1")),
+            proxy_host_state: cx.new(|cx| InputState::new(window, cx).placeholder("127.0.0.1")),
+            proxy_port_state: cx.new(|cx| InputState::new(window, cx).placeholder("1080")),
+            proxy_username_state: cx.new(|cx| InputState::new(window, cx).placeholder("username")),
+            proxy_password_state: cx
+                .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
             read_only: false,
             direct_connection: false,
             tls: false,
             tls_insecure: false,
+            ssh_enabled: false,
+            ssh_use_identity_file: false,
+            ssh_strict_host_key_checking: true,
+            proxy_enabled: false,
+            pool_expanded: false,
+            compression_expanded: false,
         }
     }
 
@@ -112,10 +125,32 @@ impl ConnectionDraft {
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.tls_cert_key_password_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_host_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_port_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_username_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_password_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_identity_file_state
+            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_identity_passphrase_state
+            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.ssh_local_bind_host_state
+            .update(cx, |state, cx| state.set_value("127.0.0.1".to_string(), window, cx));
+        self.proxy_host_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.proxy_port_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.proxy_username_state
+            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.proxy_password_state
+            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.read_only = false;
         self.direct_connection = false;
         self.tls = false;
         self.tls_insecure = false;
+        self.ssh_enabled = false;
+        self.ssh_use_identity_file = false;
+        self.ssh_strict_host_key_checking = true;
+        self.proxy_enabled = false;
+        self.pool_expanded = false;
+        self.compression_expanded = false;
     }
 }
 
@@ -138,6 +173,7 @@ impl ConnectionManager {
                     view.status = TestStatus::Idle;
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;
+                    view.testing_step = None;
                     view.parse_error = None;
                     cx.notify();
                 }
@@ -148,6 +184,7 @@ impl ConnectionManager {
             state,
             selected_id,
             draft,
+            testing_step: None,
             active_tab: ManagerTab::General,
             creating_new: false,
             status: TestStatus::Idle,

@@ -16,10 +16,8 @@ mod view;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManagerTab {
     General,
-    Auth,
-    Options,
     Tls,
-    Pool,
+    Network,
     Advanced,
 }
 
@@ -54,16 +52,34 @@ struct ConnectionDraft {
     tls_ca_file_state: Entity<InputState>,
     tls_cert_key_file_state: Entity<InputState>,
     tls_cert_key_password_state: Entity<InputState>,
+    ssh_host_state: Entity<InputState>,
+    ssh_port_state: Entity<InputState>,
+    ssh_username_state: Entity<InputState>,
+    ssh_password_state: Entity<InputState>,
+    ssh_identity_file_state: Entity<InputState>,
+    ssh_identity_passphrase_state: Entity<InputState>,
+    ssh_local_bind_host_state: Entity<InputState>,
+    proxy_host_state: Entity<InputState>,
+    proxy_port_state: Entity<InputState>,
+    proxy_username_state: Entity<InputState>,
+    proxy_password_state: Entity<InputState>,
     read_only: bool,
     direct_connection: bool,
     tls: bool,
     tls_insecure: bool,
+    ssh_enabled: bool,
+    ssh_use_identity_file: bool,
+    ssh_strict_host_key_checking: bool,
+    proxy_enabled: bool,
+    pool_expanded: bool,
+    compression_expanded: bool,
 }
 
 pub struct ConnectionManager {
     state: Entity<AppState>,
     selected_id: Option<Uuid>,
     draft: ConnectionDraft,
+    testing_step: Option<String>,
     active_tab: ManagerTab,
     creating_new: bool,
     status: TestStatus,

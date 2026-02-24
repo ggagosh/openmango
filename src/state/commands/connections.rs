@@ -36,12 +36,12 @@ impl AppCommands {
             let saved = saved.clone();
             async move {
                 // Connect (blocking, runs in Tokio runtime internally)
-                let client = manager.connect(&saved)?;
+                let (client, runtime_meta) = manager.connect_managed(connection_id, &saved)?;
 
                 // List databases (blocking, runs in Tokio runtime internally)
                 let databases = manager.list_databases(&client)?;
 
-                Ok::<_, crate::error::Error>((client, databases))
+                Ok::<_, crate::error::Error>((client, databases, runtime_meta))
             }
         });
 
@@ -49,11 +49,13 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<(mongodb::Client, Vec<String>), crate::error::Error> =
-                    task.await;
+                let result: Result<
+                    (mongodb::Client, Vec<String>, crate::models::ConnectionRuntimeMeta),
+                    crate::error::Error,
+                > = task.await;
 
                 let _ = cx.update(|cx| match result {
-                    Ok((client, databases)) => {
+                    Ok((client, databases, runtime_meta)) => {
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
                             saved.last_connected = Some(Utc::now());
@@ -64,6 +66,7 @@ impl AppCommands {
                                     client,
                                     databases: databases.clone(),
                                     collections: std::collections::HashMap::new(),
+                                    runtime_meta,
                                 },
                             );
                             state.update_connection(saved, cx);
@@ -98,6 +101,9 @@ impl AppCommands {
         if !state.read(cx).is_connected(connection_id) {
             return;
         }
+
+        let manager = state.read(cx).connection_manager();
+        manager.disconnect(connection_id);
 
         state.update(cx, |state, cx| {
             state.remove_active_connection(connection_id);

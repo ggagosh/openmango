@@ -11,6 +11,7 @@ pub mod csv_utils;
 pub mod manager;
 pub mod ops;
 pub mod tools;
+pub mod tunnel;
 pub mod types;
 
 // Re-export commonly used items at the crate level

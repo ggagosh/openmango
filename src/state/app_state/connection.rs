@@ -238,6 +238,7 @@ impl AppState {
         if let Some(active) = self.conn.active.get_mut(&connection.id) {
             active.config = connection.clone();
             if uri_changed {
+                self.connection_manager().disconnect(connection.id);
                 self.conn.active.remove(&connection.id);
                 self.reset_connection_runtime_state(connection.id, cx);
                 if self.conn.selected_connection == Some(connection.id) {
@@ -277,6 +278,7 @@ impl AppState {
         self.set_workspace_expanded_nodes(expanded);
 
         if was_active {
+            self.connection_manager().disconnect(connection_id);
             self.conn.active.remove(&connection_id);
             self.reset_connection_runtime_state(connection_id, cx);
             if self.conn.selected_connection == Some(connection_id) {

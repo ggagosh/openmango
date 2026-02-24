@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- SSH tunnel support — connect to MongoDB through a bastion host with password or identity file auth, strict host key checking, and configurable local bind address
+- SOCKS5 proxy support — route connections through a SOCKS5 proxy with optional credentials
 - Connection import/export — back up, share, or migrate your saved connections as JSON. Three modes: Redacted (passwords stripped, safe to share), Encrypted (passwords locked with a passphrase via AES-256-GCM), or Plaintext. Import auto-renames duplicates and prompts for the passphrase when opening encrypted files.
 - Schema Explorer tab — analyzes your collection's structure by sampling documents, showing a searchable field tree with types, presence rates, cardinality, polymorphism detection, and an inspector panel with charts and sample values
 - Automatic background updates — new versions download silently and are ready to install on restart, VS Code style. Disable in Settings > Updates.
@@ -32,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - BSON export/import no longer fails when the connection URI contains a database name (e.g. `/admin` for auth) that differs from the target database.
 
 ### Changed
+- Connection manager redesigned — 8 tabs consolidated to 4 (General, TLS, Network, Advanced), with a wider near-fullscreen dialog that gives fields more breathing room
+- Pool & Timeouts and Compression settings are now tucked behind collapsible sections in the Advanced tab, keeping things clean until you need them
+- Connection test now shows live progress steps instead of a generic spinner
 - Tab switching is noticeably snappier — workspace state now saves with a debounce instead of blocking the UI on every switch
 - Switching back to a previously-visited collection tab restores the document tree instantly from cache instead of rebuilding it from scratch
 - Fewer unnecessary re-renders when switching tabs

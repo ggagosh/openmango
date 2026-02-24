@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 pub mod fixtures;
+pub mod transport;
 
 use mongodb::bson::{Document, doc};
 use mongodb::{Client, options::ClientOptions};

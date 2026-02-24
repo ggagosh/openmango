@@ -48,7 +48,7 @@ Audience: power users and small engineering teams
 ### Connectivity & Security
 
 - [x] P0: Connection import/export (redacted + encrypted options)
-- [ ] P1: SSH tunneling and proxy-aware connection flow
+- [x] P1: SSH tunneling and proxy-aware connection flow
 - [ ] P1: Secrets integration (Keychain-backed storage policy)
 - [ ] P2: Field-level masking workflows for export/share
 

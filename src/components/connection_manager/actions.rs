@@ -6,6 +6,7 @@ use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState, Position};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::components::{Button, cancel_button, open_confirm_dialog};
@@ -13,12 +14,14 @@ use crate::helpers::{
     REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
     redact_uri_password, validate_mongodb_uri,
 };
-use crate::models::SavedConnection;
+use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
 use crate::state::AppState;
 use crate::theme::spacing;
 
 use super::uri::{bool_to_query, parse_bool, parse_uri, value_or_none};
 use super::{ConnectionManager, TestStatus};
+
+const TEST_CONNECTION_TIMEOUT_SECS: u64 = 30;
 
 impl ConnectionManager {
     pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
@@ -42,12 +45,15 @@ impl ConnectionManager {
     ) {
         let dialog_view =
             cx.new(|cx| ConnectionManager::new(state.clone(), selected_id, window, cx));
-        window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
+        window.open_dialog(cx, move |dialog: Dialog, window: &mut Window, _cx: &mut App| {
+            let vp = window.viewport_size();
+            let w = (vp.width - px(200.0)).max(px(800.0)).min(px(1200.0));
             dialog
                 .title("Connection Manager")
-                .w(px(1040.0))
-                .margin_top(px(20.0))
-                .min_h(px(620.0))
+                .overlay_closable(false)
+                .w(w)
+                .margin_top(px(40.0))
+                .h(vp.height - px(200.0))
                 .child(dialog_view.clone())
         });
     }
@@ -61,6 +67,7 @@ impl ConnectionManager {
         self.status = TestStatus::Idle;
         self.last_tested_uri = None;
         self.pending_test_uri = None;
+        self.testing_step = None;
         self.parse_error = None;
         self.creating_new = connection.is_none();
 
@@ -74,11 +81,192 @@ impl ConnectionManager {
                 state.set_cursor_position(Position::new(0, 0), window, cx);
             });
             self.draft.read_only = connection.read_only;
+            self.load_transport_settings(&connection, window, cx);
             self.import_from_uri(window, cx);
         } else {
             self.selected_id = None;
             self.draft.reset(window, cx);
         }
+    }
+
+    fn load_transport_settings(
+        &mut self,
+        connection: &SavedConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ssh) = &connection.ssh {
+            self.draft.ssh_enabled = ssh.enabled;
+            self.draft.ssh_use_identity_file = matches!(ssh.auth, SshAuth::IdentityFile);
+            self.draft.ssh_strict_host_key_checking = ssh.strict_host_key_checking;
+            self.draft
+                .ssh_host_state
+                .update(cx, |state, cx| state.set_value(ssh.host.clone(), window, cx));
+            self.draft
+                .ssh_port_state
+                .update(cx, |state, cx| state.set_value(ssh.port.to_string(), window, cx));
+            self.draft
+                .ssh_username_state
+                .update(cx, |state, cx| state.set_value(ssh.username.clone(), window, cx));
+            self.draft.ssh_password_state.update(cx, |state, cx| {
+                state.set_value(ssh.password.clone().unwrap_or_default(), window, cx)
+            });
+            self.draft.ssh_identity_file_state.update(cx, |state, cx| {
+                state.set_value(ssh.identity_file.clone().unwrap_or_default(), window, cx)
+            });
+            self.draft.ssh_identity_passphrase_state.update(cx, |state, cx| {
+                state.set_value(ssh.identity_passphrase.clone().unwrap_or_default(), window, cx)
+            });
+            self.draft
+                .ssh_local_bind_host_state
+                .update(cx, |state, cx| state.set_value(ssh.local_bind_host.clone(), window, cx));
+        } else {
+            self.draft.ssh_enabled = false;
+            self.draft.ssh_use_identity_file = false;
+            self.draft.ssh_strict_host_key_checking = true;
+            self.draft
+                .ssh_host_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_port_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_username_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_password_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_identity_file_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_identity_passphrase_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .ssh_local_bind_host_state
+                .update(cx, |state, cx| state.set_value("127.0.0.1".to_string(), window, cx));
+        }
+
+        if let Some(proxy) = &connection.proxy {
+            self.draft.proxy_enabled = proxy.enabled;
+            self.draft
+                .proxy_host_state
+                .update(cx, |state, cx| state.set_value(proxy.host.clone(), window, cx));
+            self.draft
+                .proxy_port_state
+                .update(cx, |state, cx| state.set_value(proxy.port.to_string(), window, cx));
+            self.draft.proxy_username_state.update(cx, |state, cx| {
+                state.set_value(proxy.username.clone().unwrap_or_default(), window, cx)
+            });
+            self.draft.proxy_password_state.update(cx, |state, cx| {
+                state.set_value(proxy.password.clone().unwrap_or_default(), window, cx)
+            });
+        } else {
+            self.draft.proxy_enabled = false;
+            self.draft
+                .proxy_host_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .proxy_port_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .proxy_username_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+            self.draft
+                .proxy_password_state
+                .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        }
+    }
+
+    fn build_transport_settings(
+        &self,
+        cx: &App,
+    ) -> std::result::Result<(Option<SshConfig>, Option<ProxyConfig>), String> {
+        let read_trim = |state: &Entity<InputState>| state.read(cx).value().trim().to_string();
+        let read_opt = |state: &Entity<InputState>| {
+            let value = state.read(cx).value().trim().to_string();
+            if value.is_empty() { None } else { Some(value) }
+        };
+
+        let ssh = if self.draft.ssh_enabled {
+            let host = read_trim(&self.draft.ssh_host_state);
+            if host.is_empty() {
+                return Err("SSH host is required".to_string());
+            }
+            let username = read_trim(&self.draft.ssh_username_state);
+            if username.is_empty() {
+                return Err("SSH username is required".to_string());
+            }
+
+            let port = parse_u16_or_default(read_trim(&self.draft.ssh_port_state), 22, "SSH port")?;
+            let local_bind_host = {
+                let value = read_trim(&self.draft.ssh_local_bind_host_state);
+                if value.is_empty() { "127.0.0.1".to_string() } else { value }
+            };
+
+            let auth = if self.draft.ssh_use_identity_file {
+                SshAuth::IdentityFile
+            } else {
+                SshAuth::Password
+            };
+
+            let password = read_opt(&self.draft.ssh_password_state);
+            let identity_file = read_opt(&self.draft.ssh_identity_file_state);
+            let identity_passphrase = read_opt(&self.draft.ssh_identity_passphrase_state);
+
+            match auth {
+                SshAuth::Password if password.is_none() => {
+                    return Err("SSH password is required for password auth".to_string());
+                }
+                SshAuth::IdentityFile if identity_file.is_none() => {
+                    return Err("SSH identity file is required for identity-file auth".to_string());
+                }
+                _ => {}
+            }
+
+            Some(SshConfig {
+                enabled: true,
+                host,
+                port,
+                username,
+                auth,
+                password,
+                identity_file,
+                identity_passphrase,
+                strict_host_key_checking: self.draft.ssh_strict_host_key_checking,
+                local_bind_host,
+            })
+        } else {
+            None
+        };
+
+        let proxy = if self.draft.proxy_enabled {
+            let host = read_trim(&self.draft.proxy_host_state);
+            if host.is_empty() {
+                return Err("SOCKS5 proxy host is required".to_string());
+            }
+            let port =
+                parse_u16_or_default(read_trim(&self.draft.proxy_port_state), 1080, "Proxy port")?;
+
+            Some(ProxyConfig {
+                enabled: true,
+                kind: ProxyKind::Socks5,
+                host,
+                port,
+                username: read_opt(&self.draft.proxy_username_state),
+                password: read_opt(&self.draft.proxy_password_state),
+            })
+        } else {
+            None
+        };
+
+        if ssh.as_ref().is_some_and(|cfg| cfg.enabled)
+            && proxy.as_ref().is_some_and(|cfg| cfg.enabled)
+        {
+            return Err("SSH tunnel and SOCKS5 proxy cannot be enabled together yet".to_string());
+        }
+
+        Ok((ssh, proxy))
     }
 
     pub(super) fn real_uri(&self, cx: &App) -> String {
@@ -243,11 +431,28 @@ impl ConnectionManager {
     pub(super) fn start_test(view: Entity<ConnectionManager>, cx: &mut App) {
         let display_uri = view.read(cx).draft.uri_state.read(cx).value().to_string();
         let real_uri = view.read(cx).real_uri(cx);
+        let (ssh, proxy) = match view.read(cx).build_transport_settings(cx) {
+            Ok(settings) => settings,
+            Err(err) => {
+                view.update(cx, |this, cx| {
+                    this.parse_error = Some(err.clone());
+                    this.status = TestStatus::Error(err);
+                    this.last_tested_uri = None;
+                    this.pending_test_uri = None;
+                    this.testing_step = None;
+                    cx.notify();
+                });
+                return;
+            }
+        };
         if let Err(err) = validate_mongodb_uri(&real_uri) {
             view.update(cx, |this, cx| {
-                this.status = TestStatus::Error(err.to_string());
+                let message = err.to_string();
+                this.parse_error = Some(message.clone());
+                this.status = TestStatus::Error(message);
                 this.last_tested_uri = None;
                 this.pending_test_uri = None;
+                this.testing_step = None;
                 cx.notify();
             });
             return;
@@ -259,13 +464,24 @@ impl ConnectionManager {
             this.status = TestStatus::Testing;
             this.pending_test_uri = Some(display_uri.clone());
             this.last_tested_uri = None;
+            this.parse_error = None;
+            this.testing_step = Some("Preparing transport settings".to_string());
             cx.notify();
         });
 
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
         let task = cx.background_spawn({
             async move {
-                let temp = SavedConnection::new("Test".to_string(), real_uri);
-                manager.test_connection(&temp, std::time::Duration::from_secs(5))?;
+                let mut temp = SavedConnection::new("Test".to_string(), real_uri);
+                temp.ssh = ssh;
+                temp.proxy = proxy;
+                manager.test_connection_with_progress(
+                    &temp,
+                    std::time::Duration::from_secs(TEST_CONNECTION_TIMEOUT_SECS),
+                    move |step| {
+                        let _ = progress_tx.send(step);
+                    },
+                )?;
                 Ok::<(), crate::error::Error>(())
             }
         });
@@ -273,33 +489,58 @@ impl ConnectionManager {
         cx.spawn({
             let view = view.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| {
-                    view.update(cx, |this, cx| {
-                        let current_uri = this.draft.uri_state.read(cx).value().to_string();
-                        let pending = this.pending_test_uri.clone();
-                        if pending.as_deref() != Some(current_uri.trim()) {
-                            this.status = TestStatus::Idle;
-                            this.pending_test_uri = None;
-                            this.last_tested_uri = None;
-                            cx.notify();
-                            return;
+                let mut task = std::pin::pin!(task);
+                let mut progress_closed = false;
+                loop {
+                    tokio::select! {
+                        maybe_step = progress_rx.recv(), if !progress_closed => {
+                            let Some(step) = maybe_step else {
+                                progress_closed = true;
+                                continue;
+                            };
+                            let _ = cx.update(|cx| {
+                                view.update(cx, |this, cx| {
+                                    if matches!(this.status, TestStatus::Testing) {
+                                        this.testing_step = Some(step.clone());
+                                        cx.notify();
+                                    }
+                                });
+                            });
                         }
+                        result = &mut task => {
+                            let result: Result<(), crate::error::Error> = result;
+                            let _ = cx.update(|cx| {
+                                view.update(cx, |this, cx| {
+                                    let current_uri = this.draft.uri_state.read(cx).value().to_string();
+                                    let pending = this.pending_test_uri.clone();
+                                    if pending.as_deref() != Some(current_uri.trim()) {
+                                        this.status = TestStatus::Idle;
+                                        this.pending_test_uri = None;
+                                        this.last_tested_uri = None;
+                                        this.testing_step = None;
+                                        cx.notify();
+                                        return;
+                                    }
 
-                        match result {
-                            Ok(()) => {
-                                this.status = TestStatus::Success;
-                                this.last_tested_uri = Some(current_uri);
-                            }
-                            Err(err) => {
-                                this.status = TestStatus::Error(err.to_string());
-                                this.last_tested_uri = None;
-                            }
+                                    match result {
+                                        Ok(()) => {
+                                            this.status = TestStatus::Success;
+                                            this.last_tested_uri = Some(current_uri);
+                                        }
+                                        Err(err) => {
+                                            this.status = TestStatus::Error(err.to_string());
+                                            this.last_tested_uri = None;
+                                        }
+                                    }
+                                    this.pending_test_uri = None;
+                                    this.testing_step = None;
+                                    cx.notify();
+                                });
+                            });
+                            break;
                         }
-                        this.pending_test_uri = None;
-                        cx.notify();
-                    });
-                });
+                    }
+                }
             }
         })
         .detach();
@@ -311,11 +552,16 @@ impl ConnectionManager {
         cx: &mut Context<Self>,
     ) -> Option<Uuid> {
         if !self.update_uri_from_fields(window, cx) {
+            if let Some(err) = self.parse_error.clone() {
+                self.status = TestStatus::Error(err);
+            }
             return None;
         }
         let uri = self.real_uri(cx);
         if validate_mongodb_uri(&uri).is_err() {
-            self.parse_error = Some("Invalid MongoDB URI".to_string());
+            let message = "Invalid MongoDB URI".to_string();
+            self.parse_error = Some(message.clone());
+            self.status = TestStatus::Error(message);
             return None;
         }
 
@@ -327,6 +573,14 @@ impl ConnectionManager {
         };
 
         let read_only = self.draft.read_only;
+        let (ssh, proxy) = match self.build_transport_settings(cx) {
+            Ok(settings) => settings,
+            Err(err) => {
+                self.parse_error = Some(err.clone());
+                self.status = TestStatus::Error(err);
+                return None;
+            }
+        };
         let selected_id = self.selected_id;
         let mut saved_connection: Option<SavedConnection> = None;
         self.state.update(cx, |state, cx| {
@@ -335,17 +589,21 @@ impl ConnectionManager {
                 {
                     let connection = SavedConnection {
                         id: existing_id,
-                        name,
-                        uri,
+                        name: name.clone(),
+                        uri: uri.clone(),
                         last_connected: existing.last_connected,
                         read_only,
+                        ssh: ssh.clone(),
+                        proxy: proxy.clone(),
                     };
                     state.update_connection(connection.clone(), cx);
                     saved_connection = Some(connection);
                 }
             } else {
-                let mut connection = SavedConnection::new(name, uri);
+                let mut connection = SavedConnection::new(name.clone(), uri.clone());
                 connection.read_only = read_only;
+                connection.ssh = ssh.clone();
+                connection.proxy = proxy.clone();
                 state.add_connection(connection.clone(), cx);
                 saved_connection = Some(connection);
             }
@@ -525,4 +783,22 @@ impl ConnectionManager {
                 })
         });
     }
+}
+
+fn parse_u16_or_default(
+    raw: String,
+    default: u16,
+    label: &str,
+) -> std::result::Result<u16, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(default);
+    }
+    let parsed = trimmed
+        .parse::<u16>()
+        .map_err(|_| format!("{label} must be a number between 1 and 65535"))?;
+    if parsed == 0 {
+        return Err(format!("{label} must be greater than 0"));
+    }
+    Ok(parsed)
 }

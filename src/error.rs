@@ -18,6 +18,9 @@ pub enum Error {
     #[error("CSV error: {0}")]
     Csv(#[from] csv::Error),
 
+    #[error("SSH error: {0}")]
+    Ssh(#[from] ssh2::Error),
+
     #[error("Parse error: {0}")]
     #[allow(dead_code)]
     Parse(String),

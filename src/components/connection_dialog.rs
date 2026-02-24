@@ -433,6 +433,8 @@ impl Render for ConnectionDialog {
                                                 uri,
                                                 last_connected: existing.last_connected,
                                                 read_only,
+                                                ssh: existing.ssh.clone(),
+                                                proxy: existing.proxy.clone(),
                                             };
                                             state.update_connection(connection, cx);
                                         } else {

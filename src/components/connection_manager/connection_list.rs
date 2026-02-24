@@ -33,17 +33,16 @@ impl ConnectionManager {
         div()
             .flex()
             .flex_col()
-            .w(px(320.0))
-            .min_w(px(320.0))
+            .w(px(260.0))
+            .min_w(px(260.0))
             .h_full()
             .border_r_1()
             .border_color(cx.theme().border)
-            .child(header)
+            .child(div().flex_shrink_0().child(header))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
                     .flex_1()
+                    .min_h(px(0.0))
                     .overflow_y_scrollbar()
                     .child(Self::render_list_content(view, connections, selected_id, cx)),
             )
@@ -147,9 +146,9 @@ impl ConnectionManager {
                 .flex_col()
                 .gap(spacing::xs())
                 .p(spacing::xs())
-                .child(div().flex().flex_col().children(connections.into_iter().map(move |conn| {
-                    Self::render_connection_item(view.clone(), conn, selected_id, cx)
-                })))
+                .child(div().flex().flex_col().gap(px(2.0)).children(connections.into_iter().map(
+                    move |conn| Self::render_connection_item(view.clone(), conn, selected_id, cx),
+                )))
                 .into_any_element()
         }
     }
@@ -172,14 +171,14 @@ impl ConnectionManager {
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
-            .px(spacing::md())
-            .py(spacing::sm())
+            .gap(px(2.0))
+            .px(spacing::sm())
+            .py(spacing::xs())
             .cursor_pointer()
             .rounded(borders::radius_sm())
-            .when(is_selected, |s| {
-                s.bg(cx.theme().list_hover).border_1().border_color(cx.theme().border)
-            })
+            .border_1()
+            .when(is_selected, |s| s.bg(cx.theme().list_hover).border_color(cx.theme().border))
+            .when(!is_selected, |s| s.border_color(gpui::transparent_black()))
             .hover(|s| s.bg(cx.theme().list_hover))
             .child(
                 div()
