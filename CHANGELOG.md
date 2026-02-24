@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-02-25
+
 ### Added
 - SSH tunnel support — connect to MongoDB through a bastion host with password or identity file auth, strict host key checking, and configurable local bind address
 - SOCKS5 proxy support — route connections through a SOCKS5 proxy with optional credentials
@@ -42,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fewer unnecessary re-renders when switching tabs
 - JSON editor window titles are now clearer and more descriptive.
 - Clear shortcut for Forge output and aggregation stage is now `Cmd/Ctrl+Alt+K`.
+- New app icons
 
 ## [0.1.7] - 2026-02-12
 
