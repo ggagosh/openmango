@@ -1,0 +1,92 @@
+name: Bug Report
+description: Report a bug in OpenMango
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the details below so we can reproduce and fix it.
+
+  - type: input
+    id: version
+    attributes:
+      label: OpenMango version
+      description: Check **OpenMango > About** or your download version
+      placeholder: "0.1.7"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Architecture
+      options:
+        - Apple Silicon (M1/M2/M3/M4)
+        - Intel
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "15.3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: A clear description of what the bug is
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue
+      placeholder: |
+        1. Connect to ...
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste any relevant log output or attach screenshots
+    validations:
+      required: false
+
+  - type: input
+    id: mongodb-version
+    attributes:
+      label: MongoDB version
+      placeholder: "8.0"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: connection-type
+    attributes:
+      label: Connection type
+      options:
+        - Direct
+        - SRV
+        - SSH tunnel
+        - SOCKS5 proxy
+        - Atlas
+    validations:
+      required: false
