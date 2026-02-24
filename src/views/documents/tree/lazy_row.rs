@@ -107,15 +107,19 @@ pub fn render_lazy_readonly_row(
     let value_color = meta.value_color;
     let type_label = meta.type_label.clone();
 
+    let lazy_chevron_hover = cx.theme().foreground.opacity(0.1);
     let leading = if is_folder {
         let toggle_node_id = node_id.clone();
         let toggle_view = view_entity.clone();
         div()
             .id(("agg-row-chevron", ix))
-            .w(px(14.0))
+            .size(px(18.0))
             .flex()
             .items_center()
+            .justify_center()
+            .rounded(px(4.0))
             .cursor_pointer()
+            .hover(|s| s.bg(lazy_chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                 if event.click_count == 1 {
                     cx.stop_propagation();
@@ -136,7 +140,7 @@ pub fn render_lazy_readonly_row(
             )
             .into_any_element()
     } else {
-        div().w(px(14.0)).into_any_element()
+        div().w(px(18.0)).into_any_element()
     };
 
     div()

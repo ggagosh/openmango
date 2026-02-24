@@ -83,11 +83,17 @@ pub fn render_tree_row(
     let toggle_view = view.clone();
     let toggle_item_id = item_id.clone();
 
+    let chevron_hover = cx.theme().foreground.opacity(0.1);
     let leading = if is_folder {
         div()
-            .w(px(14.0))
+            .id(("doc-chevron", ix))
+            .size(px(18.0))
             .flex()
             .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .hover(|s| s.bg(chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                 if event.click_count != 1 {
                     return;
@@ -111,7 +117,7 @@ pub fn render_tree_row(
             )
             .into_any_element()
     } else {
-        div().w(px(14.0)).into_any_element()
+        div().w(px(18.0)).into_any_element()
     };
 
     let row = div()
@@ -292,14 +298,20 @@ pub fn render_readonly_tree_row(
     let is_folder = entry.is_folder();
     let is_expanded = entry.is_expanded();
 
+    let agg_chevron_hover = cx.theme().foreground.opacity(0.1);
     let leading = if is_folder {
         let toggle_item_id = item_id.clone();
         let toggle_view = view.clone();
         let toggle_tree = tree_state.clone();
         div()
-            .w(px(14.0))
+            .id(("agg-chevron", ix))
+            .size(px(18.0))
             .flex()
             .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .hover(|s| s.bg(agg_chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                 if event.click_count != 1 {
                     return;
@@ -324,7 +336,7 @@ pub fn render_readonly_tree_row(
             )
             .into_any_element()
     } else {
-        div().w(px(14.0)).into_any_element()
+        div().w(px(18.0)).into_any_element()
     };
 
     let row = div()

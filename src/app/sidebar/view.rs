@@ -406,6 +406,9 @@ impl Render for Sidebar {
                         let theme_muted_foreground = cx.theme().muted_foreground;
                         let theme_foreground = cx.theme().foreground;
                         let theme_secondary_foreground = cx.theme().secondary_foreground;
+                        let theme_primary = cx.theme().primary;
+                        let theme_info = cx.theme().info;
+                        let theme_warning = cx.theme().warning;
                         uniform_list("sidebar-rows", self.model.entries.len(), {
                             let state_clone = state_for_tree.clone();
                             let sidebar_entity = sidebar_entity.clone();
@@ -623,44 +626,119 @@ impl Render for Sidebar {
                                             .hover(|s| s.bg(theme_list_hover))
                                             .when(selected, |s| s.bg(theme_list_active))
                                             .cursor_pointer()
-                                            // Chevron for expandable items
+                                            // Chevron for expandable items — single-click to toggle
                                             .when(is_folder, |this| {
+                                                let chevron_node_id = node_id.clone();
+                                                let chevron_sidebar = sidebar_entity.clone();
+                                                let chevron_state = state_clone.clone();
+                                                let chevron_db = db_name.clone();
+                                                let chevron_connection_id = connection_id;
+                                                let chevron_is_connection = is_connection;
+                                                let chevron_is_database = is_database;
+                                                let chevron_is_loading = is_loading_db;
                                                 this.child(
-                                                    Icon::new(if is_expanded {
-                                                        IconName::ChevronDown
-                                                    } else {
-                                                        IconName::ChevronRight
-                                                    })
-                                                    .size(sizing::icon_sm())
-                                                    .text_color(theme_muted_foreground),
+                                                    div()
+                                                        .id(("chevron", ix))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .size(px(18.0))
+                                                        .rounded(px(4.0))
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(theme_foreground.opacity(0.1)))
+                                                        .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                                            cx.stop_propagation();
+
+                                                            let currently_expanded = chevron_sidebar
+                                                                .update(cx, |sidebar, _cx| {
+                                                                    sidebar.model.expanded_nodes.contains(&chevron_node_id)
+                                                                });
+                                                            let should_expand = !currently_expanded;
+                                                            chevron_sidebar.update(cx, |sidebar, cx| {
+                                                                if should_expand {
+                                                                    sidebar.model.expanded_nodes.insert(chevron_node_id.clone());
+                                                                } else {
+                                                                    sidebar.model.expanded_nodes.remove(&chevron_node_id);
+                                                                }
+                                                                sidebar.persist_expanded_nodes(cx);
+                                                                sidebar.refresh_tree(cx);
+                                                            });
+
+                                                            // For connections: connect if not connected
+                                                            if chevron_is_connection && should_expand {
+                                                                let is_connected = chevron_state.read(cx)
+                                                                    .active_connection_by_id(chevron_connection_id)
+                                                                    .is_some();
+                                                                if !is_connected {
+                                                                    AppCommands::connect(
+                                                                        chevron_state.clone(),
+                                                                        chevron_connection_id,
+                                                                        cx,
+                                                                    );
+                                                                }
+                                                            }
+
+                                                            // For databases: load collections if needed
+                                                            if chevron_is_database && should_expand && !chevron_is_loading
+                                                                && let Some(ref db) = chevron_db
+                                                            {
+                                                                let should_load = chevron_state
+                                                                    .read(cx)
+                                                                    .active_connection_by_id(chevron_connection_id)
+                                                                    .is_some_and(|conn| {
+                                                                        !conn.collections.contains_key(db)
+                                                                    });
+                                                                if should_load {
+                                                                    chevron_sidebar.update(cx, |sidebar, cx| {
+                                                                        sidebar.model.loading_databases.insert(chevron_node_id.clone());
+                                                                        cx.notify();
+                                                                    });
+                                                                    AppCommands::load_collections(
+                                                                        chevron_state.clone(),
+                                                                        chevron_connection_id,
+                                                                        db.clone(),
+                                                                        cx,
+                                                                    );
+                                                                }
+                                                            }
+                                                        })
+                                                        .child(
+                                                            Icon::new(if is_expanded {
+                                                                IconName::ChevronDown
+                                                            } else {
+                                                                IconName::ChevronRight
+                                                            })
+                                                            .size(sizing::icon_sm())
+                                                            .text_color(theme_muted_foreground),
+                                                        ),
                                                 )
                                             })
                                             // Spacer for non-folders (align with chevron)
                                             .when(!is_folder, |this| {
                                                 this.child(div().w(sizing::icon_sm()))
                                             })
-                                            // Connection: server icon
+                                            // Connection: server icon (green)
                                             .when(is_connection, |this| {
                                                 this.child(
                                                     Icon::new(IconName::Globe)
                                                         .size(sizing::icon_md())
-                                                        .text_color(theme_foreground),
+                                                        .text_color(theme_primary),
                                                 )
                                             })
-                                            // Database: folder icon
+                                            // Database: dashboard icon (blue)
                                             .when(is_database, |this| {
                                                 this.child(
-                                                    Icon::new(IconName::Folder)
+                                                    Icon::new(IconName::LayoutDashboard)
                                                         .size(sizing::icon_md())
-                                                        .text_color(theme_secondary_foreground),
+                                                        .text_color(theme_info),
                                                 )
                                             })
-                                            // Collection: file icon
+                                            // Collection: braces icon (amber)
                                             .when(is_collection, |this| {
                                                 this.child(
-                                                    Icon::new(IconName::File)
+                                                    Icon::new(IconName::Braces)
                                                         .size(sizing::icon_md())
-                                                        .text_color(theme_muted_foreground),
+                                                        .text_color(theme_warning),
                                                 )
                                             })
                                             // Label
