@@ -79,6 +79,18 @@ impl AppState {
         Some(SessionKey::new(conn_id, db, col))
     }
 
+    /// Build a runtime AI session key from current selection.
+    /// Database/collection can be empty to support metadata-only AI mode.
+    pub fn current_ai_session_key(&self) -> Option<SessionKey> {
+        let conn_id = self.conn.selected_connection?;
+        if !self.conn.active.contains_key(&conn_id) {
+            return None;
+        }
+        let db = self.conn.selected_database.clone().unwrap_or_default();
+        let col = self.conn.selected_collection.clone().unwrap_or_default();
+        Some(SessionKey::new(conn_id, db, col))
+    }
+
     /// Get an immutable reference to a session.
     pub fn session(&self, key: &SessionKey) -> Option<&SessionState> {
         self.sessions.get(key)
@@ -121,6 +133,7 @@ impl AppState {
             indexes_error: session.data.indexes_error.clone(),
             aggregation: session.data.aggregation.clone(),
             explain: session.data.explain.clone(),
+            ai_chat: session.data.ai_chat.clone(),
             schema: session.data.schema.clone(),
             schema_loading: session.data.schema_loading,
             schema_error: session.data.schema_error.clone(),

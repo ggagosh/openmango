@@ -38,6 +38,7 @@ use std::time::Instant;
 
 use gpui::{Context, EventEmitter};
 
+use crate::ai::AiChatState;
 use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::StatusMessage;
@@ -79,6 +80,7 @@ pub struct AppState {
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
     forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
     forge_schema_inflight: HashSet<SessionKey>,
+    pub ai_chat: AiChatState,
 
     // View state
     pub current_view: View,
@@ -144,6 +146,7 @@ impl AppState {
             forge_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
             forge_schema_inflight: std::collections::HashSet::new(),
+            ai_chat: AiChatState::default(),
             current_view: View::Welcome,
             status_message: None,
             copied_tree_item: None,

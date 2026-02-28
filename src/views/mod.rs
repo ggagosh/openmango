@@ -1,4 +1,5 @@
 // Screen/page components
+pub mod ai;
 pub mod collections;
 pub mod connections;
 pub mod databases;
@@ -10,6 +11,7 @@ pub mod settings;
 pub mod transfer;
 
 pub use crate::changelog::ChangelogView;
+pub use ai::AiView;
 pub use databases::DatabaseView;
 pub use documents::CollectionView;
 pub use forge::ForgeView;

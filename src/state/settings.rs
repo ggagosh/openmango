@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::app_state::{InsertMode, TransferFormat};
+use crate::ai::settings::AiSettings;
 
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -11,6 +12,8 @@ pub struct AppSettings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub transfer: TransferSettings,
+    #[serde(default)]
+    pub ai: AiSettings,
     #[serde(default = "default_current_version")]
     pub last_seen_version: String,
     #[serde(default = "default_true")]
@@ -208,5 +211,7 @@ mod tests {
         assert!(!settings.appearance.vibrancy);
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
+        assert!(!settings.ai.enabled);
+        assert_eq!(settings.ai.model, "gemini-2.5-flash");
     }
 }

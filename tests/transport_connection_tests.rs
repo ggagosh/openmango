@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(deprecated)]
 use fast_socks5::server::{self, Socks5Socket};
 use openmango::connection::ConnectionManager;
 use openmango::error::Error as AppError;
@@ -47,6 +48,7 @@ impl LocalSocksProxy {
 
                         let config = config.clone();
                         tokio::spawn(async move {
+                            #[allow(deprecated)]
                             let mut socket = Socks5Socket::new(stream, config);
                             socket.set_reply_ip(IpAddr::V4(Ipv4Addr::LOCALHOST));
                             let _ = socket.upgrade_to_socks5().await;

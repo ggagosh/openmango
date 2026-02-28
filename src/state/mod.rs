@@ -10,6 +10,7 @@ pub mod settings;
 pub mod status;
 pub mod workspace;
 
+pub use crate::ai::{AiProvider, AiSettings};
 pub use app_state::{
     ActiveTab, AppState, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionStats,
     CollectionSubview, CompressionMode, CopiedTreeItem, DatabaseKey, DatabaseSessionData,

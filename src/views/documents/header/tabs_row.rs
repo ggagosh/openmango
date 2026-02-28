@@ -6,7 +6,7 @@ use gpui_component::tab::{Tab, TabBar};
 
 use crate::state::{AppCommands, AppState, CollectionSubview, SessionKey};
 
-/// Render the subview tabs (Documents/Indexes/Stats/Aggregation).
+/// Render the subview tabs (Documents/Indexes/Stats/Aggregation/Schema).
 pub fn render_subview_tabs(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,

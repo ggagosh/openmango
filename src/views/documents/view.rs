@@ -521,6 +521,7 @@ impl Render for CollectionView {
                 selected_docs,
                 state_for_prev,
                 state_for_next,
+                window,
                 cx,
             ),
             CollectionSubview::Indexes => self.render_indexes_view(

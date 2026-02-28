@@ -75,6 +75,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (key.database.clone(), conn_name)
             }
+            TabKey::Ai => ("AI".to_string(), "Workspace assistant".to_string()),
             TabKey::Transfer(key) => {
                 let conn_name = key
                     .connection_id
@@ -180,6 +181,15 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             shortcut: Some(SharedString::from("Cmd+,")),
             available: true,
             priority: 100,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:ai"),
+            label: SharedString::from("AI Assistant"),
+            detail: Some(SharedString::from("Open workspace AI tab")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 95,
             ..Default::default()
         },
         ActionItem {

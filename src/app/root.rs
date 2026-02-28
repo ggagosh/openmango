@@ -169,10 +169,12 @@ impl Render for AppRoot {
                     Some(CollectionSubview::Indexes) => key_context.push_str(" Indexes"),
                     Some(CollectionSubview::Stats) => key_context.push_str(" Stats"),
                     Some(CollectionSubview::Aggregation) => key_context.push_str(" Aggregation"),
+                    Some(CollectionSubview::Schema) => key_context.push_str(" Schema"),
                     _ => {}
                 }
             }
             View::Database => key_context.push_str(" Database"),
+            View::Ai => key_context.push_str(" AI"),
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => key_context.push_str(" Transfer"),

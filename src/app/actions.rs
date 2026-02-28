@@ -271,6 +271,11 @@ impl AppRoot {
                     state.open_settings_tab(cx);
                 });
             }
+            "cmd:ai" => {
+                state.update(cx, |state, cx| {
+                    state.open_ai_tab(cx);
+                });
+            }
             "cmd:whats-new" => {
                 crate::changelog::open_changelog_tab(state.clone(), cx);
             }
@@ -364,7 +369,7 @@ impl AppRoot {
                 };
                 AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
             }
-            View::Transfer | View::Forge | View::Settings | View::Changelog => {}
+            View::Ai | View::Transfer | View::Forge | View::Settings | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

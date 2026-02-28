@@ -108,18 +108,6 @@ impl ConfigManager {
         Ok(Some(value))
     }
 
-    /// Save data to a binary (postcard) file (atomic via temp + rename).
-    fn save<T: Serialize + ?Sized>(&self, filename: &str, data: &T) -> Result<()> {
-        let path = self.file_path(filename);
-
-        let bytes = postcard::to_allocvec(data)
-            .with_context(|| format!("Failed to serialize {}", filename))?;
-
-        atomic_write(&path, &bytes).with_context(|| format!("Failed to write {}", filename))?;
-
-        Ok(())
-    }
-
     /// Load data from a JSON file
     fn load_json<T: DeserializeOwned>(&self, filename: &str) -> Result<Option<T>> {
         let path = self.file_path(filename);
@@ -156,7 +144,8 @@ impl ConfigManager {
 
     const CONNECTIONS_FILE: &'static str = "connections.json";
     const CONNECTIONS_FILE_LEGACY: &'static str = "connections.bin";
-    const WORKSPACE_FILE: &'static str = "workspace.bin";
+    const WORKSPACE_FILE: &'static str = "workspace.json";
+    const WORKSPACE_FILE_LEGACY: &'static str = "workspace.bin";
 
     /// Load saved connections from disk
     pub fn load_connections(&self) -> Result<Vec<SavedConnection>> {
@@ -208,14 +197,25 @@ impl ConfigManager {
     // Workspace
     // =========================================================================
 
-    /// Load workspace state from disk
+    /// Load workspace state from disk (JSON, with postcard migration)
     pub fn load_workspace(&self) -> Result<WorkspaceState> {
-        Ok(self.load(Self::WORKSPACE_FILE)?.unwrap_or_default())
+        if let Some(workspace) = self.load_json(Self::WORKSPACE_FILE)? {
+            return Ok(workspace);
+        }
+
+        // Migrate from legacy postcard format
+        if let Ok(Some(workspace)) = self.load::<WorkspaceState>(Self::WORKSPACE_FILE_LEGACY) {
+            self.save_json(Self::WORKSPACE_FILE, &workspace)?;
+            let _ = fs::remove_file(self.file_path(Self::WORKSPACE_FILE_LEGACY));
+            return Ok(workspace);
+        }
+
+        Ok(WorkspaceState::default())
     }
 
     /// Save workspace state to disk
     pub fn save_workspace(&self, workspace: &WorkspaceState) -> Result<()> {
-        self.save(Self::WORKSPACE_FILE, workspace)
+        self.save_json(Self::WORKSPACE_FILE, workspace)
     }
 
     // =========================================================================

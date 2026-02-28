@@ -1,0 +1,198 @@
+use serde::{Deserialize, Serialize};
+
+use crate::ai::errors::AiError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProvider {
+    #[default]
+    Gemini,
+    OpenAi,
+    Anthropic,
+    Ollama,
+}
+
+impl AiProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini",
+            Self::OpenAi => "OpenAI",
+            Self::Anthropic => "Anthropic",
+            Self::Ollama => "Ollama",
+        }
+    }
+
+    pub fn env_var(self) -> Option<&'static str> {
+        match self {
+            Self::Gemini => Some("GEMINI_API_KEY"),
+            Self::OpenAi => Some("OPENAI_API_KEY"),
+            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::Ollama => None,
+        }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini-2.5-flash",
+            Self::OpenAi => "gpt-4.1",
+            Self::Anthropic => "claude-sonnet-4-5",
+            Self::Ollama => "qwen3:32b",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: AiProvider,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_ollama_base_url")]
+    pub ollama_base_url: String,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        let provider = AiProvider::Gemini;
+        Self {
+            enabled: false,
+            provider,
+            model: provider.default_model().to_string(),
+            api_key: String::new(),
+            ollama_base_url: default_ollama_base_url(),
+        }
+    }
+}
+
+impl AiSettings {
+    pub fn set_provider(&mut self, provider: AiProvider) {
+        if self.provider == provider {
+            return;
+        }
+        self.provider = provider;
+        self.model = provider.default_model().to_string();
+        if provider == AiProvider::Ollama && self.ollama_base_url.trim().is_empty() {
+            self.ollama_base_url = default_ollama_base_url();
+        }
+    }
+
+    pub fn set_model(&mut self, value: String) {
+        self.model = value;
+    }
+
+    pub fn set_api_key(&mut self, value: String) {
+        self.api_key = value;
+    }
+
+    pub fn set_ollama_base_url(&mut self, value: String) {
+        self.ollama_base_url = value;
+    }
+
+    pub fn validate_panel_enabled(&self) -> Result<(), AiError> {
+        if !self.enabled {
+            return Err(AiError::Disabled);
+        }
+        Ok(())
+    }
+
+    pub fn configured_api_key(&self) -> Option<String> {
+        if !self.api_key.trim().is_empty() {
+            return Some(self.api_key.trim().to_string());
+        }
+        let env = self.provider.env_var()?;
+        std::env::var(env).ok().filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn validate_for_request(&self) -> Result<(), AiError> {
+        self.validate_panel_enabled()?;
+        if self.model.trim().is_empty() {
+            return Err(AiError::InvalidConfig {
+                field: "model".to_string(),
+                message: "value cannot be empty".to_string(),
+            });
+        }
+
+        match self.provider {
+            AiProvider::Ollama => {
+                if self.ollama_base_url.trim().is_empty() {
+                    return Err(AiError::InvalidConfig {
+                        field: "ollama_base_url".to_string(),
+                        message: "value cannot be empty".to_string(),
+                    });
+                }
+            }
+            _ => {
+                if self.configured_api_key().is_none() {
+                    return Err(AiError::MissingApiKey {
+                        provider: self.provider.label().to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn default_model() -> String {
+    AiProvider::Gemini.default_model().to_string()
+}
+
+fn default_ollama_base_url() -> String {
+    "http://localhost:11434".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_disabled_settings_fails() {
+        let settings = AiSettings::default();
+        let result = settings.validate_for_request();
+        assert!(matches!(result, Err(AiError::Disabled)));
+    }
+
+    #[test]
+    fn validate_requires_key_for_remote_providers() {
+        let settings = AiSettings {
+            enabled: true,
+            provider: AiProvider::Gemini,
+            model: "gemini-2.5-flash".to_string(),
+            api_key: String::new(),
+            ..AiSettings::default()
+        };
+        let result = settings.validate_for_request();
+        assert!(matches!(result, Err(AiError::MissingApiKey { .. })));
+    }
+
+    #[test]
+    fn validate_ollama_does_not_require_api_key() {
+        let settings = AiSettings {
+            enabled: true,
+            provider: AiProvider::Ollama,
+            model: "qwen3:32b".to_string(),
+            api_key: String::new(),
+            ollama_base_url: "http://localhost:11434".to_string(),
+        };
+        let result = settings.validate_for_request();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn switching_provider_sets_default_model() {
+        let mut settings = AiSettings { enabled: true, ..AiSettings::default() };
+        settings.set_model("custom".to_string());
+
+        settings.set_provider(AiProvider::OpenAi);
+        assert_eq!(settings.model, AiProvider::OpenAi.default_model());
+
+        settings.set_provider(AiProvider::Ollama);
+        assert_eq!(settings.model, AiProvider::Ollama.default_model());
+        assert!(!settings.ollama_base_url.is_empty());
+    }
+}

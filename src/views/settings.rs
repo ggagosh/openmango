@@ -5,20 +5,61 @@ use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Sizable as _, Size};
 
+use crate::ai::bridge::AiBridge;
+use crate::ai::provider::{AiGenerationRequest, generate_text};
+use crate::components::Button;
 use crate::state::{
-    AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, InsertMode,
-    TransferFormat,
+    AiProvider, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS,
+    InsertMode, TransferFormat,
 };
 use crate::theme::{borders, sizing, spacing};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsSubtab {
+    #[default]
+    General,
+    Transfer,
+    Ai,
+}
+
+impl SettingsSubtab {
+    fn to_index(self) -> usize {
+        match self {
+            Self::General => 0,
+            Self::Transfer => 1,
+            Self::Ai => 2,
+        }
+    }
+
+    fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::Transfer,
+            2 => Self::Ai,
+            _ => Self::General,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AiTestResult {
+    Success(String),
+    Error(String),
+}
 
 pub struct SettingsView {
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
+    active_subtab: SettingsSubtab,
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
     batch_size_input_state: Option<Entity<InputState>>,
+    ai_api_key_input_state: Option<Entity<InputState>>,
+    ai_ollama_base_url_input_state: Option<Entity<InputState>>,
+    ai_test_in_flight: bool,
+    ai_test_result: Option<AiTestResult>,
 }
 
 impl SettingsView {
@@ -28,19 +69,30 @@ impl SettingsView {
         Self {
             state,
             _subscriptions: subscriptions,
+            active_subtab: SettingsSubtab::default(),
             template_input_state: None,
             batch_size_input_state: None,
+            ai_api_key_input_state: None,
+            ai_ollama_base_url_input_state: None,
+            ai_test_in_flight: false,
+            ai_test_result: None,
         }
     }
 
     /// Initialize input states on first render (when window is available)
     fn ensure_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.template_input_state.is_some() {
+        if self.template_input_state.is_some()
+            && self.batch_size_input_state.is_some()
+            && self.ai_api_key_input_state.is_some()
+            && self.ai_ollama_base_url_input_state.is_some()
+        {
             return; // Already initialized
         }
 
         let template = self.state.read(cx).settings.transfer.export_filename_template.clone();
         let batch_size = self.state.read(cx).settings.transfer.default_batch_size;
+        let ai_api_key = self.state.read(cx).settings.ai.api_key.clone();
+        let ai_ollama_base_url = self.state.read(cx).settings.ai.ollama_base_url.clone();
 
         let template_input_state = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
@@ -94,8 +146,107 @@ impl SettingsView {
         );
         self._subscriptions.push(batch_sub);
 
+        let ai_api_key_input_state = cx.new(|cx| {
+            let mut state =
+                InputState::new(window, cx).placeholder("API key (or use env var)").masked(true);
+            state.set_value(ai_api_key, window, cx);
+            state
+        });
+        let state_for_key_sub = self.state.clone();
+        let ai_key_sub = cx.subscribe_in(
+            &ai_api_key_input_state,
+            window,
+            move |_view, state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let value = state.read(cx).value().to_string();
+                    state_for_key_sub.update(cx, |app_state, cx| {
+                        app_state.settings.ai.set_api_key(value);
+                        app_state.save_settings();
+                        cx.notify();
+                    });
+                }
+            },
+        );
+        self._subscriptions.push(ai_key_sub);
+
+        let ai_ollama_base_url_input_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("http://localhost:11434");
+            state.set_value(ai_ollama_base_url, window, cx);
+            state
+        });
+        let state_for_ollama_sub = self.state.clone();
+        let ai_ollama_sub = cx.subscribe_in(
+            &ai_ollama_base_url_input_state,
+            window,
+            move |_view, state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let value = state.read(cx).value().to_string();
+                    state_for_ollama_sub.update(cx, |app_state, cx| {
+                        app_state.settings.ai.set_ollama_base_url(value);
+                        app_state.save_settings();
+                        cx.notify();
+                    });
+                }
+            },
+        );
+        self._subscriptions.push(ai_ollama_sub);
+
         self.template_input_state = Some(template_input_state);
         self.batch_size_input_state = Some(batch_size_input_state);
+        self.ai_api_key_input_state = Some(ai_api_key_input_state);
+        self.ai_ollama_base_url_input_state = Some(ai_ollama_base_url_input_state);
+    }
+
+    fn sync_ai_inputs_from_settings(&self, window: &mut Window, cx: &mut App) {
+        let ai_settings = self.state.read(cx).settings.ai.clone();
+
+        if let Some(api_key_state) = self.ai_api_key_input_state.clone() {
+            api_key_state.update(cx, |state, cx| {
+                state.set_value(ai_settings.api_key.clone(), window, cx);
+            });
+        }
+        if let Some(base_url_state) = self.ai_ollama_base_url_input_state.clone() {
+            base_url_state.update(cx, |state, cx| {
+                state.set_value(ai_settings.ollama_base_url.clone(), window, cx);
+            });
+        }
+    }
+
+    fn start_ai_test(&mut self, cx: &mut Context<Self>) {
+        if self.ai_test_in_flight {
+            return;
+        }
+
+        self.ai_test_in_flight = true;
+        self.ai_test_result = None;
+
+        let settings = self.state.read(cx).settings.ai.clone();
+        let view = cx.entity();
+        let task = cx.background_spawn(async move {
+            AiBridge::block_on(async move {
+                let request = AiGenerationRequest {
+                    system_prompt: "You are a health-check assistant. Respond briefly.".to_string(),
+                    history: Vec::new(),
+                    user_prompt: "Return exactly: AI test passed.".to_string(),
+                };
+                generate_text(&settings, request).await
+            })
+        });
+
+        cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = cx.update(|cx| {
+                view.update(cx, |this, cx| {
+                    this.ai_test_in_flight = false;
+                    this.ai_test_result = Some(match result {
+                        Ok(message) => AiTestResult::Success(message),
+                        Err(error) => AiTestResult::Error(error.user_message()),
+                    });
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 }
 
@@ -103,6 +254,7 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_input_states(window, cx);
 
+        let view = cx.entity();
         let state = self.state.clone();
         let settings = self.state.read(cx).settings.clone();
 
@@ -124,33 +276,83 @@ impl Render for SettingsView {
                     .child("Settings"),
             );
 
-        // Appearance section
-        let appearance_section = render_appearance_section(state.clone(), &settings, cx);
+        let subtab_bar = TabBar::new("settings-subtabs")
+            .underline()
+            .xsmall()
+            .selected_index(self.active_subtab.to_index())
+            .on_click({
+                let view = view.clone();
+                move |index, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.active_subtab = SettingsSubtab::from_index(*index);
+                        cx.notify();
+                    });
+                }
+            })
+            .children(vec![
+                Tab::new().label("General"),
+                Tab::new().label("Transfer"),
+                Tab::new().label("AI"),
+            ]);
 
-        // Updates section
-        let updates_section = render_updates_section(state.clone(), &settings, cx);
-
-        // Transfer section
-        let transfer_section = render_transfer_section(
-            state.clone(),
-            &settings,
-            self.template_input_state.clone().unwrap(),
-            self.batch_size_input_state.clone().unwrap(),
-            cx,
-        );
-
-        div().flex().flex_col().flex_1().min_w(px(0.0)).child(header).child(
-            div()
+        let tab_content = match self.active_subtab {
+            SettingsSubtab::General => div()
                 .flex()
                 .flex_col()
-                .flex_1()
                 .gap(spacing::lg())
-                .p(spacing::lg())
-                .overflow_y_scrollbar()
-                .child(appearance_section)
-                .child(updates_section)
-                .child(transfer_section),
-        )
+                .child(render_appearance_section(state.clone(), &settings, cx))
+                .child(render_updates_section(state.clone(), &settings, cx))
+                .into_any_element(),
+            SettingsSubtab::Transfer => div()
+                .flex()
+                .flex_col()
+                .gap(spacing::lg())
+                .child(render_transfer_section(
+                    state.clone(),
+                    &settings,
+                    self.template_input_state.clone().unwrap(),
+                    self.batch_size_input_state.clone().unwrap(),
+                    cx,
+                ))
+                .into_any_element(),
+            SettingsSubtab::Ai => div()
+                .flex()
+                .flex_col()
+                .gap(spacing::lg())
+                .child(render_ai_section(
+                    view.clone(),
+                    state.clone(),
+                    &settings,
+                    AiSectionUiState {
+                        api_key_input_state: self.ai_api_key_input_state.clone().unwrap(),
+                        ollama_base_url_input_state: self
+                            .ai_ollama_base_url_input_state
+                            .clone()
+                            .unwrap(),
+                        ai_test_in_flight: self.ai_test_in_flight,
+                        ai_test_result: self.ai_test_result.clone(),
+                    },
+                    cx,
+                ))
+                .into_any_element(),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(header)
+            .child(div().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .p(spacing::lg())
+                    .overflow_y_scrollbar()
+                    .child(tab_content),
+            )
     }
 }
 
@@ -558,7 +760,223 @@ fn render_transfer_section(
     )
 }
 
+struct AiSectionUiState {
+    api_key_input_state: Entity<InputState>,
+    ollama_base_url_input_state: Entity<InputState>,
+    ai_test_in_flight: bool,
+    ai_test_result: Option<AiTestResult>,
+}
+
+fn render_ai_section(
+    view: Entity<SettingsView>,
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    ai_ui: AiSectionUiState,
+    cx: &App,
+) -> impl IntoElement {
+    let AiSectionUiState {
+        api_key_input_state,
+        ollama_base_url_input_state,
+        ai_test_in_flight,
+        ai_test_result,
+    } = ai_ui;
+
+    let ai_enabled = settings.ai.enabled;
+    let current_provider = settings.ai.provider;
+    let model_options = provider_model_options(current_provider, settings.ai.model.clone());
+
+    let enabled_checkbox = {
+        let state = state.clone();
+        gpui_component::checkbox::Checkbox::new("ai-enabled").checked(ai_enabled).on_click(
+            move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.ai.enabled = !ai_enabled;
+                    state.save_settings();
+                    cx.notify();
+                });
+            },
+        )
+    };
+
+    let provider_dropdown = {
+        let state = state.clone();
+        let view = view.clone();
+        gpui_component::button::Button::new("ai-provider-dropdown")
+            .compact()
+            .label(current_provider.label())
+            .dropdown_caret(true)
+            .rounded(borders::radius_sm())
+            .with_size(Size::Small)
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                let providers = [
+                    AiProvider::Gemini,
+                    AiProvider::OpenAi,
+                    AiProvider::Anthropic,
+                    AiProvider::Ollama,
+                ];
+                let mut menu = menu;
+                for provider in providers {
+                    let state = state.clone();
+                    let view = view.clone();
+                    menu = menu.item(PopupMenuItem::new(provider.label()).on_click(
+                        move |_, window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.settings.ai.set_provider(provider);
+                                state.save_settings();
+                                cx.notify();
+                            });
+                            view.update(cx, |this, cx| {
+                                this.ai_test_result = None;
+                                this.sync_ai_inputs_from_settings(window, cx);
+                                cx.notify();
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
+    };
+
+    let model_dropdown = {
+        let state = state.clone();
+        let current_model = settings.ai.model.clone();
+        let models = model_options.clone();
+        gpui_component::button::Button::new("ai-model-dropdown")
+            .compact()
+            .label(current_model)
+            .dropdown_caret(true)
+            .rounded(borders::radius_sm())
+            .with_size(Size::Small)
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                let mut menu = menu;
+                for model in &models {
+                    let state = state.clone();
+                    let model = model.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new(model.clone()).on_click(move |_, _, cx| {
+                            state.update(cx, |app_state, cx| {
+                                app_state.settings.ai.set_model(model.clone());
+                                app_state.save_settings();
+                                cx.notify();
+                            });
+                        }));
+                }
+                menu
+            })
+    };
+
+    let test_button = {
+        let view = view.clone();
+        Button::new("ai-test-provider")
+            .compact()
+            .label(if ai_test_in_flight { "Testing..." } else { "Test provider" })
+            .disabled(ai_test_in_flight || !ai_enabled)
+            .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                view.update(cx, |this, cx| {
+                    this.start_ai_test(cx);
+                });
+            })
+    };
+
+    let test_status = ai_test_result.as_ref().map(|result| match result {
+        AiTestResult::Success(message) => {
+            (format!("Provider test succeeded: {}", message.trim()), cx.theme().primary)
+        }
+        AiTestResult::Error(message) => {
+            (format!("Provider test failed: {}", message.trim()), cx.theme().danger_foreground)
+        }
+    });
+
+    section(
+        "AI Assistant",
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Enable AI",
+                "When disabled, AI chat and AI-driven actions are unavailable.",
+                enabled_checkbox,
+                cx,
+            ))
+            .child(setting_row("Provider", provider_dropdown, cx))
+            .child(setting_row("Model", model_dropdown, cx))
+            .children((current_provider != AiProvider::Ollama).then(|| {
+                setting_row(
+                    "API key",
+                    Input::new(&api_key_input_state).small().w(px(260.0)),
+                    cx,
+                )
+            }))
+            .children((current_provider == AiProvider::Ollama).then(|| {
+                setting_row_with_description(
+                    "Ollama base URL",
+                    "Used only for Ollama provider.",
+                    Input::new(&ollama_base_url_input_state).small().w(px(260.0)),
+                    cx,
+                )
+            }))
+            .child(setting_row_with_description(
+                "Provider test",
+                "Sends a short request with current provider/model configuration.",
+                test_button,
+                cx,
+            ))
+            .children(test_status.map(|(status, color)| {
+                setting_row(
+                    "Test result",
+                    div().w(px(360.0)).text_xs().text_color(color).child(status),
+                    cx,
+                )
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if current_provider == AiProvider::Ollama {
+                        "Tip: Ollama does not require an API key. Ensure Ollama is running and the model is pulled locally."
+                    } else {
+                        "Tip: if API key is empty, provider env vars are used when available."
+                    }),
+            )
+            .children((!ai_enabled).then(|| {
+                div().text_xs().text_color(cx.theme().warning).child(
+                    "AI is disabled. AI chat and AI-assisted actions are unavailable.",
+                )
+            })),
+        cx,
+    )
+}
+
 // Helper functions for building UI
+
+fn provider_model_options(provider: AiProvider, current_model: String) -> Vec<String> {
+    let mut options: Vec<String> = match provider {
+        AiProvider::Gemini => vec![
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.5-pro".to_string(),
+            "gemini-2.5-flash-lite".to_string(),
+        ],
+        AiProvider::OpenAi => vec![
+            "gpt-4.1".to_string(),
+            "gpt-4.1-mini".to_string(),
+            "gpt-4o-mini".to_string(),
+            "o3-mini".to_string(),
+        ],
+        AiProvider::Anthropic => vec![
+            "claude-sonnet-4-5".to_string(),
+            "claude-opus-4-1".to_string(),
+            "claude-haiku-4".to_string(),
+        ],
+        AiProvider::Ollama => vec!["qwen3:32b".to_string(), "llama3.1:8b".to_string()],
+    };
+    if !current_model.trim().is_empty() {
+        options.push(current_model);
+    }
+    options.sort();
+    options.dedup();
+    options
+}
 
 fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()

@@ -2,6 +2,7 @@ use gpui::{Bounds, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::ai::{AiChatEntry, ChatMessage};
 use crate::state::CollectionSubview;
 use crate::state::app_state::{PipelineStage, TransferTabState};
 
@@ -10,6 +11,7 @@ pub enum WorkspaceTabKind {
     #[default]
     Collection,
     Database,
+    Ai,
     Transfer,
     Forge,
 }
@@ -47,6 +49,31 @@ pub struct WorkspaceTab {
     pub subview: CollectionSubview,
     #[serde(default)]
     pub forge_content: String,
+    #[serde(default)]
+    pub ai_panel_open: bool,
+    #[serde(default)]
+    pub ai_draft_input: String,
+    /// Unified timeline entries.
+    #[serde(default)]
+    pub ai_entries: Vec<AiChatEntry>,
+    /// Legacy: kept for backwards-compatible deserialization of old workspaces.
+    #[serde(default)]
+    pub ai_messages: Vec<ChatMessage>,
+}
+
+impl WorkspaceTab {
+    /// Returns the unified timeline entries, migrating from legacy fields if needed.
+    pub fn resolved_ai_entries(&self) -> Vec<AiChatEntry> {
+        if !self.ai_entries.is_empty() {
+            return self.ai_entries.clone();
+        }
+        // Legacy: convert old separate messages.
+        let mut result = Vec::new();
+        for msg in &self.ai_messages {
+            result.push(AiChatEntry::LegacyMessage(msg.clone()));
+        }
+        result
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,6 +141,10 @@ mod tests {
         let tab: WorkspaceTab =
             serde_json::from_str(raw).expect("workspace tab should deserialize");
         assert!(tab.forge_content.is_empty());
+        assert!(!tab.ai_panel_open);
+        assert!(tab.ai_draft_input.is_empty());
+        assert!(tab.ai_entries.is_empty());
+        assert!(tab.ai_messages.is_empty());
     }
 
     #[test]
@@ -130,6 +161,10 @@ mod tests {
             stats_open: false,
             subview: CollectionSubview::Documents,
             forge_content: "db.getCollection(\"users\").find({})".to_string(),
+            ai_panel_open: false,
+            ai_draft_input: String::new(),
+            ai_entries: Vec::new(),
+            ai_messages: Vec::new(),
         };
 
         let encoded = serde_json::to_string(&tab).expect("workspace tab should serialize");

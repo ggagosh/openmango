@@ -14,6 +14,7 @@ impl AppState {
         let persists_for_selected_connection = |tab: &TabKey| match (selected_connection, tab) {
             (Some(conn_id), TabKey::Collection(key)) => key.connection_id == conn_id,
             (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
+            (Some(_), TabKey::Ai) => true,
             (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
             (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
             (_, TabKey::Settings | TabKey::Changelog) => false,
@@ -87,6 +88,18 @@ impl AppState {
                         restored_tabs.push(TabKey::Database(key));
                     }
                 }
+                WorkspaceTabKind::Ai => {
+                    restored_tabs.push(TabKey::Ai);
+                    self.ai_chat.panel_open = true;
+                    self.ai_chat.draft_input = tab.ai_draft_input.replace(['\n', '\r'], " ");
+                    self.ai_chat.entries = tab.resolved_ai_entries();
+                    self.ai_chat.is_loading = false;
+                    self.ai_chat.last_error = None;
+                    if self.ai_chat.entries.len() > 200 {
+                        let extra = self.ai_chat.entries.len().saturating_sub(200);
+                        self.ai_chat.entries.drain(0..extra);
+                    }
+                }
                 WorkspaceTabKind::Transfer => {
                     let mut transfer_state = tab.transfer.clone().unwrap_or_default();
                     if transfer_state.config.source_connection_id.is_none() {
@@ -139,6 +152,7 @@ impl AppState {
                     (WorkspaceTabKind::Database, TabKey::Database(database)) => {
                         database.database == tab.database
                     }
+                    (WorkspaceTabKind::Ai, TabKey::Ai) => true,
                     (WorkspaceTabKind::Transfer, TabKey::Transfer(transfer)) => {
                         let Some(state) = self.transfer_tabs.get(&transfer.id) else {
                             return false;
@@ -237,6 +251,10 @@ impl AppState {
                     stats_open,
                     subview,
                     forge_content: String::new(),
+                    ai_panel_open: false,
+                    ai_draft_input: String::new(),
+                    ai_entries: Vec::new(),
+                    ai_messages: Vec::new(),
                 }
             }
             TabKey::Database(key) => WorkspaceTab {
@@ -251,6 +269,27 @@ impl AppState {
                 stats_open: false,
                 subview: CollectionSubview::Documents,
                 forge_content: String::new(),
+                ai_panel_open: false,
+                ai_draft_input: String::new(),
+                ai_entries: Vec::new(),
+                ai_messages: Vec::new(),
+            },
+            TabKey::Ai => WorkspaceTab {
+                database: self.conn.selected_database.clone().unwrap_or_default(),
+                collection: self.conn.selected_collection.clone().unwrap_or_default(),
+                kind: WorkspaceTabKind::Ai,
+                transfer: None,
+                filter_raw: String::new(),
+                sort_raw: String::new(),
+                projection_raw: String::new(),
+                aggregation_pipeline: Vec::new(),
+                stats_open: false,
+                subview: CollectionSubview::Documents,
+                forge_content: String::new(),
+                ai_panel_open: true,
+                ai_draft_input: self.ai_chat.draft_input.replace(['\n', '\r'], " "),
+                ai_entries: self.ai_chat.entries.clone(),
+                ai_messages: Vec::new(),
             },
             TabKey::Transfer(key) => {
                 let transfer = self.transfer_tabs.get(&key.id).cloned().unwrap_or_default();
@@ -266,6 +305,10 @@ impl AppState {
                     stats_open: false,
                     subview: CollectionSubview::Documents,
                     forge_content: String::new(),
+                    ai_panel_open: false,
+                    ai_draft_input: String::new(),
+                    ai_entries: Vec::new(),
+                    ai_messages: Vec::new(),
                 }
             }
             TabKey::Forge(key) => {
@@ -286,6 +329,10 @@ impl AppState {
                     stats_open: false,
                     subview: CollectionSubview::Documents,
                     forge_content: content,
+                    ai_panel_open: false,
+                    ai_draft_input: String::new(),
+                    ai_entries: Vec::new(),
+                    ai_messages: Vec::new(),
                 }
             }
             TabKey::Settings | TabKey::Changelog => {
@@ -302,6 +349,10 @@ impl AppState {
                     stats_open: false,
                     subview: CollectionSubview::Documents,
                     forge_content: String::new(),
+                    ai_panel_open: false,
+                    ai_draft_input: String::new(),
+                    ai_entries: Vec::new(),
+                    ai_messages: Vec::new(),
                 }
             }
         }
@@ -319,6 +370,9 @@ impl AppState {
                 TabKey::Database(key) => {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
+                }
+                TabKey::Ai => {
+                    // Keep current selection unchanged for workspace AI tab.
                 }
                 TabKey::Transfer(key) => {
                     if let Some(transfer) = self.transfer_tabs.get(&key.id) {
@@ -407,5 +461,39 @@ mod tests {
         assert_eq!(state.workspace.open_tabs.len(), 2);
         assert_eq!(state.workspace.active_tab, Some(1));
         assert_eq!(state.workspace.open_tabs[1].collection, "preview");
+    }
+
+    #[test]
+    fn workspace_tab_roundtrips_ai_chat_state() {
+        use crate::ai::AiChatEntry;
+
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+
+        state.conn.selected_connection = Some(conn_id);
+        state.conn.selected_database = Some("db".to_string());
+        state.conn.selected_collection = Some("col".to_string());
+        state.tabs.open.push(TabKey::Ai);
+        state.tabs.active = ActiveTab::Index(0);
+
+        state.ai_chat.panel_open = true;
+        state.ai_chat.draft_input = "draft question".to_string();
+        state.ai_chat.begin_turn("hello");
+
+        state.update_workspace_tabs();
+        let persisted = state.workspace.open_tabs.first().expect("workspace tab persisted");
+        assert_eq!(persisted.kind, WorkspaceTabKind::Ai);
+        assert_eq!(persisted.ai_draft_input, "draft question");
+
+        let mut restored = AppState::new();
+        restored.workspace.open_tabs = state.workspace.open_tabs.clone();
+        restored.workspace.active_tab = Some(0);
+        let active = restored.restore_tabs_from_workspace(conn_id, &["db".to_string()]);
+        assert_eq!(active, Some(0));
+        assert!(matches!(restored.tabs.open.first(), Some(TabKey::Ai)));
+        assert!(restored.ai_chat.panel_open);
+        assert_eq!(restored.ai_chat.draft_input, "draft question");
+        // Turn has user_message "hello" → 1 user message in messages()
+        assert_eq!(restored.ai_chat.messages().len(), 1);
     }
 }
