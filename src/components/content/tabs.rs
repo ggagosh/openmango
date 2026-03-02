@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use gpui::*;
+use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
@@ -139,7 +140,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                             dirty_tabs.contains(tab),
                         ),
                         TabKey::Database(tab) => (tab.database.clone(), false),
-                        TabKey::Ai => ("AI".to_string(), false),
                         TabKey::Transfer(tab) => {
                             (host.state.read(cx).transfer_tab_label(tab.id), false)
                         }
@@ -329,10 +329,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .database_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
-        View::Ai => host
-            .ai_view
-            .map(|view| view.clone().into_any_element())
-            .unwrap_or_else(|| div().into_any_element()),
         View::Transfer => host
             .transfer_view
             .map(|view| view.clone().into_any_element())
@@ -368,6 +364,23 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         }
     };
 
+    // Determine if AI panel should show alongside current content
+    let show_ai_panel = matches!(host.current_view, View::Documents) && host.ai_view.is_some();
+
+    let main_content: AnyElement = if show_ai_panel {
+        let ai_view = host.ai_view.unwrap().clone();
+        h_resizable("content-ai-split-v3")
+            .child(
+                resizable_panel().size(px(2000.0)).size_range(px(400.0)..px(9999.0)).child(content),
+            )
+            .child(
+                resizable_panel().size(px(1000.0)).size_range(px(280.0)..px(9999.0)).child(ai_view),
+            )
+            .into_any_element()
+    } else {
+        content
+    };
+
     div()
         .flex()
         .flex_col()
@@ -395,6 +408,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 })
                 .child(div().min_w(px(0.0)).child(tab_bar)),
         )
-        .child(content)
+        .child(main_content)
         .into_any_element()
 }

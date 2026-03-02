@@ -25,6 +25,15 @@ pub struct WorkspaceState {
     pub active_tab: Option<usize>,
     pub expanded_nodes: Vec<String>,
     pub window_state: Option<WindowState>,
+    /// Whether the AI side panel was open.
+    #[serde(default)]
+    pub ai_panel_open: bool,
+    /// Draft input text in the AI panel.
+    #[serde(default)]
+    pub ai_draft_input: String,
+    /// Persisted AI chat entries.
+    #[serde(default)]
+    pub ai_entries: Vec<AiChatEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

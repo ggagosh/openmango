@@ -301,8 +301,7 @@ pub fn render_documents_actions(
                             return;
                         }
                         state.update(cx, |state, cx| {
-                            state.open_ai_tab(cx);
-                            cx.notify();
+                            state.toggle_ai_panel(cx);
                         });
                     }
                 });

@@ -203,6 +203,8 @@ impl AppCommands {
 
                         cx.notify();
                     });
+
+                    Self::prefetch_sibling_schemas(state, cx);
                 });
             }
         })

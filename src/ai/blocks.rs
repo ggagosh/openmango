@@ -45,8 +45,25 @@ pub struct AiTurn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToolActivityStatus {
+    Running,
+    Completed,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolActivity {
+    pub id: Uuid,
+    pub tool_name: String,
+    pub status: ToolActivityStatus,
+    pub args_preview: String,
+    pub result_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AiChatEntry {
     Turn(AiTurn),
+    ToolActivity(ToolActivity),
     SystemMessage(ChatMessage),
     // Legacy variant for backwards-compatible deserialization of old workspaces.
     #[serde(alias = "Message")]
@@ -156,6 +173,7 @@ impl AiChatState {
                 AiChatEntry::SystemMessage(msg) | AiChatEntry::LegacyMessage(msg) => {
                     msgs.push(msg.clone());
                 }
+                AiChatEntry::ToolActivity(_) => {}
             }
         }
         msgs
@@ -166,6 +184,33 @@ impl AiChatState {
             AiChatEntry::Turn(turn) => Some(turn.user_message.content.clone()),
             _ => None,
         })
+    }
+
+    pub fn push_tool_start(&mut self, name: String, args: String) -> Uuid {
+        let id = Uuid::new_v4();
+        self.entries.push(AiChatEntry::ToolActivity(ToolActivity {
+            id,
+            tool_name: name,
+            status: ToolActivityStatus::Running,
+            args_preview: args,
+            result_preview: None,
+        }));
+        self.trim_entries();
+        id
+    }
+
+    pub fn complete_tool(&mut self, name: &str, result: String) {
+        // Find the most recent Running tool activity with matching name
+        for entry in self.entries.iter_mut().rev() {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && activity.tool_name == name
+                && matches!(activity.status, ToolActivityStatus::Running)
+            {
+                activity.status = ToolActivityStatus::Completed;
+                activity.result_preview = Some(result);
+                return;
+            }
+        }
     }
 
     pub fn trim_entries(&mut self) {

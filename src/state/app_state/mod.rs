@@ -59,6 +59,14 @@ pub(crate) struct ForgeSchemaCache {
 
 const FORGE_SCHEMA_TTL_SECS: u64 = 300; // 5 minutes
 
+/// Cached schema analysis for a sibling collection.
+pub(crate) struct CollectionMetaCache {
+    pub schema: SchemaAnalysis,
+    pub fetched_at: Instant,
+}
+
+const COLLECTION_META_TTL_SECS: u64 = 600; // 10 minutes
+
 /// Global application state
 pub struct AppState {
     // Persisted state
@@ -80,6 +88,8 @@ pub struct AppState {
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
     forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
     forge_schema_inflight: HashSet<SessionKey>,
+    collection_meta: HashMap<SessionKey, CollectionMetaCache>,
+    collection_meta_inflight: HashSet<SessionKey>,
     pub ai_chat: AiChatState,
 
     // View state
@@ -146,6 +156,8 @@ impl AppState {
             forge_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
             forge_schema_inflight: std::collections::HashSet::new(),
+            collection_meta: HashMap::new(),
+            collection_meta_inflight: HashSet::new(),
             ai_chat: AiChatState::default(),
             current_view: View::Welcome,
             status_message: None,
@@ -186,6 +198,39 @@ impl AppState {
         if let Err(e) = self.config.save_settings(&self.settings) {
             log::error!("Failed to save settings: {}", e);
         }
+    }
+
+    pub(crate) fn collection_meta(&self, key: &SessionKey) -> Option<&CollectionMetaCache> {
+        self.collection_meta.get(key)
+    }
+
+    pub(crate) fn collection_meta_stale(&self, key: &SessionKey) -> bool {
+        match self.collection_meta.get(key) {
+            Some(cache) => cache.fetched_at.elapsed().as_secs() > COLLECTION_META_TTL_SECS,
+            None => true,
+        }
+    }
+
+    pub(crate) fn set_collection_meta(&mut self, key: SessionKey, schema: SchemaAnalysis) {
+        self.collection_meta
+            .insert(key, CollectionMetaCache { schema, fetched_at: Instant::now() });
+    }
+
+    pub(crate) fn mark_collection_meta_inflight(&mut self, key: &SessionKey) -> bool {
+        self.collection_meta_inflight.insert(key.clone())
+    }
+
+    pub(crate) fn is_collection_meta_inflight(&self, key: &SessionKey) -> bool {
+        self.collection_meta_inflight.contains(key)
+    }
+
+    pub(crate) fn clear_collection_meta_inflight(&mut self, key: &SessionKey) {
+        self.collection_meta_inflight.remove(key);
+    }
+
+    pub(crate) fn evict_collection_meta_for_connection(&mut self, connection_id: uuid::Uuid) {
+        self.collection_meta.retain(|k, _| k.connection_id != connection_id);
+        self.collection_meta_inflight.retain(|k| k.connection_id != connection_id);
     }
 }
 

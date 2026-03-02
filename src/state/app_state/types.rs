@@ -24,7 +24,6 @@ pub enum View {
     Collections,
     Documents,
     Database,
-    Ai,
     Transfer,
     Forge,
     Settings,
@@ -96,7 +95,6 @@ impl DatabaseKey {
 pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
-    Ai,
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
     Settings,

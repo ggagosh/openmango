@@ -75,7 +75,6 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (key.database.clone(), conn_name)
             }
-            TabKey::Ai => ("AI".to_string(), "Workspace assistant".to_string()),
             TabKey::Transfer(key) => {
                 let conn_name = key
                     .connection_id

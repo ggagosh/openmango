@@ -183,7 +183,6 @@ impl AppState {
             .filter(|(_, tab)| match tab {
                 super::types::TabKey::Collection(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
-                super::types::TabKey::Ai => false,
                 super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Settings | super::types::TabKey::Changelog => false,
@@ -204,6 +203,9 @@ impl AppState {
         self.tabs.dirty.retain(|key| key.connection_id != connection_id);
         self.sessions.remove_connection(connection_id);
         self.db_sessions.remove_connection(connection_id);
+        self.forge_schema.retain(|k, _| k.connection_id != connection_id);
+        self.forge_schema_inflight.retain(|k| k.connection_id != connection_id);
+        self.evict_collection_meta_for_connection(connection_id);
 
         if self.conn.selected_connection == Some(connection_id) {
             self.conn.selected_connection = None;

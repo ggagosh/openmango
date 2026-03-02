@@ -78,10 +78,6 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Database;
                     }
-                    TabKey::Ai => {
-                        self.conn.selected_connection = Some(connection_id);
-                        self.current_view = View::Ai;
-                    }
                     TabKey::Transfer(key) => {
                         self.conn.selected_connection = Some(connection_id);
                         if let Some(transfer) = self.transfer_tabs.get(&key.id) {

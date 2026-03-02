@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -8,18 +9,21 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_component::spinner::Spinner;
+use gpui_component::text::{TextView, TextViewStyle};
+
+use uuid::Uuid;
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::budget::trim_history_for_context;
+use crate::ai::context::build_ai_context;
 use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
 use crate::ai::telemetry::AiRequestSpan;
-use crate::ai::{AiChatEntry, AiTurn, ChatRole};
+use crate::ai::tools::{MongoContext, StreamEvent};
+use crate::ai::{AiChatEntry, AiTurn, ChatRole, ToolActivity, ToolActivityStatus};
 use crate::components::Button;
 use crate::state::AppState;
 use crate::theme::{borders, spacing};
-
-const SYSTEM_PROMPT: &str =
-    "You are a helpful general-purpose AI assistant. Answer concisely and accurately.";
+use gpui_component::{Icon, IconName};
 
 pub struct AiView {
     state: Entity<AppState>,
@@ -27,6 +31,11 @@ pub struct AiView {
     input_subscription: Option<Subscription>,
     scroll_handle: ScrollHandle,
     last_entry_count: usize,
+    was_loading: bool,
+    /// User's manual expand/collapse overrides for tool groups.
+    /// Key = id of the first ToolActivity in the group.
+    /// Absent = auto (expanded while running, collapsed when done).
+    tool_group_overrides: HashMap<Uuid, bool>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -39,6 +48,8 @@ impl AiView {
             input_subscription: None,
             scroll_handle: ScrollHandle::new(),
             last_entry_count: 0,
+            was_loading: false,
+            tool_group_overrides: HashMap::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -64,9 +75,13 @@ impl AiView {
                 cx.subscribe_in(&input_state, window, move |view, entity, event, window, cx| {
                     match event {
                         InputEvent::Change => {
+                            // Draft is synced to AppState on blur (not every keystroke)
+                            // to avoid triggering a full re-render via the observer.
+                        }
+                        InputEvent::Blur => {
                             let raw = entity.read(cx).value().to_string();
-                            state.update(cx, |state, _cx| {
-                                state.ai_chat.draft_input = raw;
+                            state.update(cx, |s, _| {
+                                s.ai_chat.draft_input = raw;
                             });
                         }
                         InputEvent::PressEnter { secondary: true } => {
@@ -147,27 +162,34 @@ impl AiView {
         {
             history.pop();
         }
-        trim_history_for_context(&mut history, SYSTEM_PROMPT.len(), None);
+        let system_prompt = build_ai_context(self.state.read(cx));
+        trim_history_for_context(&mut history, system_prompt.len(), None);
 
-        let request = AiGenerationRequest {
-            system_prompt: SYSTEM_PROMPT.to_string(),
-            history,
-            user_prompt: prompt,
+        let tool_ctx = {
+            let s = self.state.read(cx);
+            s.selected_connection_id().and_then(|id| {
+                let client = s.active_connection_client(id)?;
+                let db = s.selected_database_name()?;
+                let col = s.selected_collection_name();
+                Some(MongoContext { client, database: db, collection: col })
+            })
         };
+
+        let request = AiGenerationRequest { system_prompt, history, user_prompt: prompt };
 
         let provider_label = ai_settings.provider.label().to_string();
         let model_label = ai_settings.model.clone();
         let session_label = turn_id.to_string();
 
         // Channel for streaming deltas
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
 
         let cancel_for_task = cancel_flag.clone();
         let task = cx.background_spawn(async move {
             AiBridge::block_on(async move {
-                generate_text_streaming(&ai_settings, request, move |delta| {
+                generate_text_streaming(&ai_settings, request, tool_ctx, move |event| {
                     if !cancel_for_task.load(Ordering::Relaxed) {
-                        let _ = tx.send(delta.to_string());
+                        let _ = tx.send(event);
                     }
                 })
                 .await
@@ -179,22 +201,21 @@ impl AiView {
         cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let span = AiRequestSpan::start(&provider_label, &model_label, &session_label);
 
-            // Poll channel for deltas while the background task runs
+            // Poll channel for events while the background task runs
             loop {
                 match rx.try_recv() {
-                    Ok(delta) => {
+                    Ok(event) => {
                         if cancel_for_poll.load(Ordering::Relaxed) {
                             break;
                         }
                         let _ = cx.update(|cx| {
                             state.update(cx, |s, cx| {
-                                s.ai_chat.append_turn_delta(message_id, &delta);
+                                handle_stream_event(s, message_id, event);
                                 cx.notify();
                             });
                         });
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        // Yield to let the background task produce more
                         gpui::Timer::after(std::time::Duration::from_millis(16)).await;
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
@@ -203,11 +224,11 @@ impl AiView {
                 }
             }
 
-            // Drain any remaining deltas
-            while let Ok(delta) = rx.try_recv() {
+            // Drain any remaining events
+            while let Ok(event) = rx.try_recv() {
                 let _ = cx.update(|cx| {
                     state.update(cx, |s, cx| {
-                        s.ai_chat.append_turn_delta(message_id, &delta);
+                        handle_stream_event(s, message_id, event);
                         cx.notify();
                     });
                 });
@@ -267,6 +288,7 @@ impl Render for AiView {
         // Header
         let header = {
             let clear_state = state.clone();
+            let close_state = state.clone();
             let header_buttons = div().flex().items_center().gap(spacing::sm());
 
             let header_buttons = if is_loading {
@@ -299,6 +321,24 @@ impl Render for AiView {
                 )
             };
 
+            let close_button = div()
+                .id("ai-panel-close")
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(20.0))
+                .h(px(20.0))
+                .rounded(borders::radius_sm())
+                .cursor_pointer()
+                .hover(|s| s.bg(cx.theme().list_hover))
+                .child(Icon::new(IconName::Close).xsmall().text_color(cx.theme().muted_foreground))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    close_state.update(cx, |state, cx| {
+                        state.toggle_ai_panel(cx);
+                    });
+                });
+
             div()
                 .flex()
                 .items_center()
@@ -315,7 +355,14 @@ impl Render for AiView {
                         .text_color(cx.theme().foreground)
                         .child("AI Chat"),
                 )
-                .child(header_buttons)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(header_buttons)
+                        .child(close_button),
+                )
         };
 
         // Error banner
@@ -342,8 +389,9 @@ impl Render for AiView {
         // Message list with manual scroll for auto-scroll-to-bottom
         let entries = ai_chat.entries.clone();
         let entry_count = entries.len();
-        let should_scroll = entry_count != self.last_entry_count || is_loading;
+        let should_scroll = entry_count != self.last_entry_count || is_loading || self.was_loading;
         self.last_entry_count = entry_count;
+        self.was_loading = is_loading;
 
         if should_scroll {
             // Use a large value; gpui clamps to actual max after layout.
@@ -363,11 +411,109 @@ impl Render for AiView {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&scroll_handle)
-                    .child(
-                        div().flex().flex_col().p(spacing::lg()).gap(spacing::md()).children(
-                            entries.iter().map(|entry| render_entry(entry, is_loading, cx)),
-                        ),
-                    ),
+                    .child({
+                        let blocks = group_entries(&entries);
+                        let view_entity = cx.entity();
+
+                        // Helper: compute expand state for a tool group
+                        let mut overrides_to_remove = Vec::new();
+                        let compute_expand =
+                            |tools: &[&ToolActivity],
+                             overrides: &HashMap<Uuid, bool>,
+                             removals: &mut Vec<Uuid>| {
+                                let key = tools[0].id;
+                                let any_running = tools
+                                    .iter()
+                                    .any(|t| matches!(t.status, ToolActivityStatus::Running));
+                                match overrides.get(&key) {
+                                    Some(&val) => {
+                                        if any_running && !val {
+                                            removals.push(key);
+                                            true
+                                        } else {
+                                            val
+                                        }
+                                    }
+                                    None => any_running,
+                                }
+                            };
+
+                        let rendered: Vec<AnyElement> = blocks
+                            .iter()
+                            .map(|block| match block {
+                                RenderBlock::Turn { turn, tools } => {
+                                    let tool_section = if !tools.is_empty() {
+                                        let group_key = tools[0].id;
+                                        let expanded = compute_expand(
+                                            tools,
+                                            &self.tool_group_overrides,
+                                            &mut overrides_to_remove,
+                                        );
+                                        Some(render_tool_group(
+                                            tools,
+                                            expanded,
+                                            group_key,
+                                            view_entity.clone(),
+                                            cx,
+                                        ))
+                                    } else {
+                                        None
+                                    };
+                                    render_turn(turn, tool_section, is_loading, window, cx)
+                                }
+                                RenderBlock::ToolGroup(tools) => {
+                                    let group_key = tools[0].id;
+                                    let expanded = compute_expand(
+                                        tools,
+                                        &self.tool_group_overrides,
+                                        &mut overrides_to_remove,
+                                    );
+                                    render_tool_group(
+                                        tools,
+                                        expanded,
+                                        group_key,
+                                        view_entity.clone(),
+                                        cx,
+                                    )
+                                }
+                                RenderBlock::Other(entry) => match entry {
+                                    AiChatEntry::SystemMessage(msg) => div()
+                                        .px(spacing::md())
+                                        .py(spacing::sm())
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(msg.content.clone())
+                                        .into_any_element(),
+                                    AiChatEntry::LegacyMessage(msg) => {
+                                        let color = match msg.role {
+                                            ChatRole::User => cx.theme().foreground,
+                                            ChatRole::Assistant => cx.theme().primary,
+                                            ChatRole::System => cx.theme().muted_foreground,
+                                        };
+                                        div()
+                                            .px(spacing::md())
+                                            .py(spacing::sm())
+                                            .text_sm()
+                                            .text_color(color)
+                                            .child(format!("{}: {}", msg.role.label(), msg.content))
+                                            .into_any_element()
+                                    }
+                                    _ => div().into_any_element(),
+                                },
+                            })
+                            .collect();
+
+                        for key in overrides_to_remove {
+                            self.tool_group_overrides.remove(&key);
+                        }
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .p(spacing::lg())
+                            .gap(spacing::md())
+                            .children(rendered)
+                    }),
             )
             .child(
                 div().absolute().top_0().left_0().right_0().bottom_0().child(
@@ -461,6 +607,10 @@ impl Render for AiView {
             .flex_1()
             .min_w(px(0.0))
             .min_h(px(0.0))
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .border_l_1()
+            .border_color(cx.theme().border)
             .child(header)
             .children(error_banner)
             .children(disabled_banner)
@@ -468,34 +618,62 @@ impl Render for AiView {
     }
 }
 
-fn render_entry(entry: &AiChatEntry, is_loading: bool, cx: &App) -> AnyElement {
-    match entry {
-        AiChatEntry::Turn(turn) => render_turn(turn, is_loading, cx),
-        AiChatEntry::SystemMessage(msg) => div()
-            .px(spacing::md())
-            .py(spacing::sm())
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(msg.content.clone())
-            .into_any_element(),
-        AiChatEntry::LegacyMessage(msg) => {
-            let color = match msg.role {
-                ChatRole::User => cx.theme().foreground,
-                ChatRole::Assistant => cx.theme().primary,
-                ChatRole::System => cx.theme().muted_foreground,
-            };
-            div()
-                .px(spacing::md())
-                .py(spacing::sm())
-                .text_sm()
-                .text_color(color)
-                .child(format!("{}: {}", msg.role.label(), msg.content))
-                .into_any_element()
-        }
-    }
+enum RenderBlock<'a> {
+    Turn { turn: &'a AiTurn, tools: Vec<&'a ToolActivity> },
+    ToolGroup(Vec<&'a ToolActivity>),
+    Other(&'a AiChatEntry),
 }
 
-fn render_turn(turn: &AiTurn, is_loading: bool, cx: &App) -> AnyElement {
+fn group_entries(entries: &[AiChatEntry]) -> Vec<RenderBlock<'_>> {
+    let mut blocks: Vec<RenderBlock<'_>> = Vec::new();
+    let mut tool_buf: Vec<&ToolActivity> = Vec::new();
+
+    for entry in entries {
+        if let AiChatEntry::ToolActivity(activity) = entry {
+            tool_buf.push(activity);
+            continue;
+        }
+
+        // Flush accumulated tools
+        if !tool_buf.is_empty() {
+            let tools = std::mem::take(&mut tool_buf);
+            // Attach to preceding Turn if possible, otherwise standalone group
+            if let Some(RenderBlock::Turn { tools: t, .. }) = blocks.last_mut() {
+                t.extend(tools);
+            } else {
+                blocks.push(RenderBlock::ToolGroup(tools));
+            }
+        }
+
+        match entry {
+            AiChatEntry::Turn(turn) => {
+                blocks.push(RenderBlock::Turn { turn, tools: Vec::new() });
+            }
+            _ => {
+                blocks.push(RenderBlock::Other(entry));
+            }
+        }
+    }
+
+    // Flush trailing tools
+    if !tool_buf.is_empty() {
+        if let Some(RenderBlock::Turn { tools: t, .. }) = blocks.last_mut() {
+            t.extend(tool_buf);
+        } else {
+            blocks.push(RenderBlock::ToolGroup(tool_buf));
+        }
+    }
+
+    blocks
+}
+
+fn render_turn(
+    turn: &AiTurn,
+    tool_section: Option<AnyElement>,
+    is_loading: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     // User message — bordered card
     let user_msg = div()
         .px(spacing::md())
@@ -518,27 +696,59 @@ fn render_turn(turn: &AiTurn, is_loading: bool, cx: &App) -> AnyElement {
                 .child(turn.user_message.content.clone()),
         );
 
-    // Assistant message — flat, no border
+    // Assistant message — rendered as markdown, with tool_section inside
     let assistant_section = match &turn.assistant_message {
-        Some(msg) if !msg.content.is_empty() => Some(
-            div()
-                .px(spacing::md())
-                .py(spacing::sm())
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().primary)
-                        .child("Assistant"),
-                )
-                .child(
-                    div().text_sm().text_color(cx.theme().foreground).child(msg.content.clone()),
-                ),
-        ),
-        Some(_) if is_loading => {
-            // Empty assistant message while loading — show spinner
+        Some(msg) if !msg.content.is_empty() => {
+            let code_block_style = gpui::StyleRefinement::default()
+                .mt(spacing::xs())
+                .mb(spacing::xs())
+                .border_1()
+                .border_color(cx.theme().border);
+
+            let md_style = TextViewStyle {
+                paragraph_gap: rems(1.0),
+                highlight_theme: cx.theme().highlight_theme.clone(),
+                is_dark: cx.theme().mode.is_dark(),
+                code_block: code_block_style,
+                ..TextViewStyle::default()
+            };
+
             Some(
-                div().px(spacing::md()).py(spacing::sm()).child(
+                div()
+                    .px(spacing::md())
+                    .py(spacing::sm())
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().primary)
+                            .mb(spacing::sm())
+                            .child("Assistant"),
+                    )
+                    .children(tool_section)
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(
+                                TextView::markdown(
+                                    ElementId::Name(format!("ai-md-{}", msg.id).into()),
+                                    msg.content.clone(),
+                                    window,
+                                    cx,
+                                )
+                                .selectable(true)
+                                .style(md_style),
+                            ),
+                    ),
+            )
+        }
+        Some(_) if is_loading => {
+            // Empty assistant message while loading — show running tools + spinner
+            Some(
+                div().px(spacing::md()).py(spacing::sm()).children(tool_section).child(
                     div()
                         .flex()
                         .items_center()
@@ -553,7 +763,10 @@ fn render_turn(turn: &AiTurn, is_loading: bool, cx: &App) -> AnyElement {
                 ),
             )
         }
-        _ => None,
+        _ => {
+            // No assistant message — show tool section if present
+            tool_section.map(|ts| div().px(spacing::md()).py(spacing::sm()).child(ts))
+        }
     };
 
     div()
@@ -563,4 +776,138 @@ fn render_turn(turn: &AiTurn, is_loading: bool, cx: &App) -> AnyElement {
         .child(user_msg)
         .children(assistant_section)
         .into_any_element()
+}
+
+fn render_tool_group(
+    tools: &[&ToolActivity],
+    expanded: bool,
+    group_key: Uuid,
+    view: Entity<AiView>,
+    cx: &App,
+) -> AnyElement {
+    let any_running = tools.iter().any(|t| matches!(t.status, ToolActivityStatus::Running));
+
+    // Header icon: spinner while running, chevron when done
+    let header_icon = if any_running {
+        Spinner::new().xsmall().into_any_element()
+    } else if expanded {
+        Icon::new(IconName::ChevronDown)
+            .xsmall()
+            .text_color(cx.theme().muted_foreground)
+            .into_any_element()
+    } else {
+        Icon::new(IconName::ChevronRight)
+            .xsmall()
+            .text_color(cx.theme().muted_foreground)
+            .into_any_element()
+    };
+
+    // Header label
+    let label = if any_running {
+        if tools.len() == 1 {
+            format!("Running {}...", display_tool_name(&tools[0].tool_name))
+        } else {
+            "Running tools...".to_string()
+        }
+    } else if tools.len() == 1 {
+        format!("Used {}", display_tool_name(&tools[0].tool_name))
+    } else {
+        format!("Used {} tools", tools.len())
+    };
+
+    let header = div()
+        .id(ElementId::Name(format!("tool-group-{group_key}").into()))
+        .flex()
+        .items_center()
+        .gap(spacing::sm())
+        .py(spacing::xs())
+        .rounded(borders::radius_sm())
+        .cursor_pointer()
+        .hover(|s| s.bg(cx.theme().list_hover))
+        .child(header_icon)
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label))
+        .on_mouse_down(MouseButton::Left, {
+            move |_, _, cx| {
+                cx.stop_propagation();
+                view.update(cx, |this, cx| {
+                    this.tool_group_overrides.insert(group_key, !expanded);
+                    cx.notify();
+                });
+            }
+        });
+
+    let content = if expanded {
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .pl(spacing::md())
+                .children(tools.iter().map(|t| render_tool_row(t, cx))),
+        )
+    } else {
+        None
+    };
+
+    div().flex().flex_col().child(header).children(content).into_any_element()
+}
+
+fn render_tool_row(activity: &ToolActivity, cx: &App) -> AnyElement {
+    let display_name = display_tool_name(&activity.tool_name);
+
+    let (icon_el, suffix) = match &activity.status {
+        ToolActivityStatus::Running => (Spinner::new().xsmall().into_any_element(), "running..."),
+        ToolActivityStatus::Completed => (
+            Icon::new(IconName::Check).xsmall().text_color(cx.theme().success).into_any_element(),
+            "completed",
+        ),
+        ToolActivityStatus::Failed(_) => (
+            Icon::new(IconName::Close).xsmall().text_color(cx.theme().danger).into_any_element(),
+            "failed",
+        ),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::sm())
+        .py(spacing::xs())
+        .child(icon_el)
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{display_name} {suffix}")),
+        )
+        .into_any_element()
+}
+
+fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEvent) {
+    match event {
+        StreamEvent::TextDelta(delta) => {
+            state.ai_chat.append_turn_delta(message_id, &delta);
+        }
+        StreamEvent::ToolCallStart { name, args_preview } => {
+            state.ai_chat.push_tool_start(name, args_preview);
+        }
+        StreamEvent::ToolCallEnd { name, result_preview } => {
+            state.ai_chat.complete_tool(&name, result_preview);
+        }
+    }
+}
+
+fn display_tool_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => {
+                    let mut s = c.to_uppercase().to_string();
+                    s.push_str(chars.as_str());
+                    s
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

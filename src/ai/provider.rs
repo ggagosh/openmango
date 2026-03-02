@@ -1,20 +1,24 @@
+use std::collections::BTreeSet;
+use std::time::Duration;
+
 use futures::StreamExt;
 use rig::agent::MultiTurnStreamItem;
 use rig::client::CompletionClient as _;
 use rig::client::Nothing;
 use rig::completion::{Chat as _, Message as RigMessage, Prompt as _, PromptError};
 use rig::providers::{anthropic, gemini, ollama, openai};
-use rig::streaming::{StreamedAssistantContent, StreamingChat as _, StreamingPrompt as _};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat as _};
+use rig::tool::ToolDyn;
 use serde::Deserialize;
-use std::collections::BTreeSet;
-use std::time::Duration;
 
 use crate::ai::blocks::{ChatMessage, ChatRole};
 use crate::ai::errors::AiError;
 use crate::ai::settings::{AiProvider, AiSettings};
+use crate::ai::tools::{MongoContext, StreamEvent, build_tools, truncate_str};
 
 const HISTORY_LIMIT: usize = 18;
-const MAX_OUTPUT_TOKENS: u32 = 2048;
+const MAX_OUTPUT_TOKENS: u32 = 4096;
+const MAX_TURNS: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct AiGenerationRequest {
@@ -39,16 +43,24 @@ pub async fn generate_text(
 pub async fn generate_text_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    mut on_delta: impl FnMut(&str) + Send,
+    tool_ctx: Option<MongoContext>,
+    mut on_event: impl FnMut(StreamEvent) + Send,
 ) -> Result<String, AiError> {
     settings.validate_for_request()?;
+    let tools: Vec<Box<dyn ToolDyn>> = tool_ctx.map(build_tools).unwrap_or_default();
     match settings.provider {
-        AiProvider::Gemini => call_gemini_streaming(settings, request, &mut on_delta).await,
-        AiProvider::OpenAi => call_openai_streaming(settings, request, &mut on_delta).await,
-        AiProvider::Anthropic => call_anthropic_streaming(settings, request, &mut on_delta).await,
-        AiProvider::Ollama => call_ollama_streaming(settings, request, &mut on_delta).await,
+        AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &mut on_event).await,
+        AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &mut on_event).await,
+        AiProvider::Anthropic => {
+            call_anthropic_streaming(settings, request, tools, &mut on_event).await
+        }
+        AiProvider::Ollama => call_ollama_streaming(settings, request, tools, &mut on_event).await,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Non-streaming providers (unchanged)
+// ---------------------------------------------------------------------------
 
 async fn call_gemini(
     settings: &AiSettings,
@@ -194,10 +206,15 @@ async fn call_ollama(
     response.map_err(|error| map_rig_error(AiProvider::Ollama, error))
 }
 
+// ---------------------------------------------------------------------------
+// Streaming providers
+// ---------------------------------------------------------------------------
+
 async fn call_gemini_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    on_delta: &mut (impl FnMut(&str) + Send),
+    tools: Vec<Box<dyn ToolDyn>>,
+    on_event: &mut (impl FnMut(StreamEvent) + Send),
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -215,43 +232,20 @@ async fn call_gemini_streaming(
         .preamble(&request.system_prompt)
         .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .tools(tools)
         .build();
 
     let history = to_rig_history(&request.history);
-    let mut stream = if history.is_empty() {
-        agent.stream_prompt(request.user_prompt).await
-    } else {
-        agent.stream_chat(request.user_prompt, history).await
-    };
+    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    let mut full_text = String::new();
-    let mut final_text = String::new();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
-                full_text.push_str(&text.text);
-                on_delta(&text.text);
-            }
-            Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = final_response.response().to_string();
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Err(map_provider_error(AiProvider::Gemini, error.to_string()));
-            }
-        }
-    }
-
-    if full_text.trim().is_empty() {
-        full_text = final_text;
-    }
-    Ok(full_text)
+    consume_stream(&mut stream, AiProvider::Gemini, on_event).await
 }
 
 async fn call_openai_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    on_delta: &mut (impl FnMut(&str) + Send),
+    tools: Vec<Box<dyn ToolDyn>>,
+    on_event: &mut (impl FnMut(StreamEvent) + Send),
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -269,43 +263,20 @@ async fn call_openai_streaming(
         .preamble(&request.system_prompt)
         .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .tools(tools)
         .build();
 
     let history = to_rig_history(&request.history);
-    let mut stream = if history.is_empty() {
-        agent.stream_prompt(request.user_prompt).await
-    } else {
-        agent.stream_chat(request.user_prompt, history).await
-    };
+    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    let mut full_text = String::new();
-    let mut final_text = String::new();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
-                full_text.push_str(&text.text);
-                on_delta(&text.text);
-            }
-            Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = final_response.response().to_string();
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Err(map_provider_error(AiProvider::OpenAi, error.to_string()));
-            }
-        }
-    }
-
-    if full_text.trim().is_empty() {
-        full_text = final_text;
-    }
-    Ok(full_text)
+    consume_stream(&mut stream, AiProvider::OpenAi, on_event).await
 }
 
 async fn call_anthropic_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    on_delta: &mut (impl FnMut(&str) + Send),
+    tools: Vec<Box<dyn ToolDyn>>,
+    on_event: &mut (impl FnMut(StreamEvent) + Send),
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -323,43 +294,20 @@ async fn call_anthropic_streaming(
         .preamble(&request.system_prompt)
         .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .tools(tools)
         .build();
 
     let history = to_rig_history(&request.history);
-    let mut stream = if history.is_empty() {
-        agent.stream_prompt(request.user_prompt).await
-    } else {
-        agent.stream_chat(request.user_prompt, history).await
-    };
+    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    let mut full_text = String::new();
-    let mut final_text = String::new();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
-                full_text.push_str(&text.text);
-                on_delta(&text.text);
-            }
-            Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = final_response.response().to_string();
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Err(map_provider_error(AiProvider::Anthropic, error.to_string()));
-            }
-        }
-    }
-
-    if full_text.trim().is_empty() {
-        full_text = final_text;
-    }
-    Ok(full_text)
+    consume_stream(&mut stream, AiProvider::Anthropic, on_event).await
 }
 
 async fn call_ollama_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    on_delta: &mut (impl FnMut(&str) + Send),
+    tools: Vec<Box<dyn ToolDyn>>,
+    on_event: &mut (impl FnMut(StreamEvent) + Send),
 ) -> Result<String, AiError> {
     let model = settings.model.trim();
     if model.is_empty() {
@@ -397,29 +345,66 @@ async fn call_ollama_streaming(
         .preamble(&request.system_prompt)
         .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .tools(tools)
         .build();
 
     let history = to_rig_history(&request.history);
-    let mut stream = if history.is_empty() {
-        agent.stream_prompt(request.user_prompt).await
-    } else {
-        agent.stream_chat(request.user_prompt, history).await
-    };
+    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
+    consume_stream(&mut stream, AiProvider::Ollama, on_event).await
+}
+
+// ---------------------------------------------------------------------------
+// Shared streaming loop
+// ---------------------------------------------------------------------------
+
+async fn consume_stream<R: Clone + Unpin>(
+    stream: &mut (
+             impl futures::Stream<Item = Result<MultiTurnStreamItem<R>, rig::agent::StreamingError>>
+             + Unpin
+         ),
+    provider: AiProvider,
+    on_event: &mut (impl FnMut(StreamEvent) + Send),
+) -> Result<String, AiError> {
     let mut full_text = String::new();
     let mut final_text = String::new();
+    // Track tool call name by internal_call_id for correlating results
+    let mut tool_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
                 full_text.push_str(&text.text);
-                on_delta(&text.text);
+                on_event(StreamEvent::TextDelta(text.text));
+            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                tool_call,
+                internal_call_id,
+            })) => {
+                let name = tool_call.function.name.clone();
+                let args_preview =
+                    truncate_str(&tool_call.function.arguments.to_string(), 200).to_string();
+                tool_names.insert(internal_call_id, name.clone());
+                on_event(StreamEvent::ToolCallStart { name, args_preview });
+            }
+            Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                tool_result,
+                internal_call_id,
+            })) => {
+                let name = tool_names
+                    .get(&internal_call_id)
+                    .cloned()
+                    .unwrap_or_else(|| tool_result.id.clone());
+                let result_preview = extract_tool_result_text(&tool_result);
+                on_event(StreamEvent::ToolCallEnd { name, result_preview });
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.response().to_string();
             }
             Ok(_) => {}
             Err(error) => {
-                return Err(map_provider_error(AiProvider::Ollama, error.to_string()));
+                return Err(map_provider_error(provider, error.to_string()));
             }
         }
     }
@@ -429,6 +414,23 @@ async fn call_ollama_streaming(
     }
     Ok(full_text)
 }
+
+fn extract_tool_result_text(result: &rig::message::ToolResult) -> String {
+    let parts: Vec<String> = result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            rig::message::ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect();
+    let combined = parts.join("\n");
+    truncate_str(&combined, 200).to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn to_rig_history(history: &[ChatMessage]) -> Vec<RigMessage> {
     let mut out = Vec::new();

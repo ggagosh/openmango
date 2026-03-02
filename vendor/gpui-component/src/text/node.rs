@@ -648,7 +648,7 @@ impl Paragraph {
                         });
                     }
                     if style.code {
-                        highlight.background_color = Some(cx.theme().accent);
+                        highlight.background_color = Some(cx.theme().muted);
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
@@ -898,6 +898,7 @@ impl Node {
                 checked,
             } => v_flex()
                 .id("li")
+                .pb(rems(0.25))
                 .when(*spread, |this| this.child(div()))
                 .children({
                     let mut items: Vec<Div> = Vec::with_capacity(children.len());
@@ -1178,6 +1179,7 @@ impl Node {
 
                 h_flex()
                     .id(("h", *level as usize))
+                    .pt(mb)
                     .pb(rems(0.3))
                     .whitespace_normal()
                     .text_size(text_size)

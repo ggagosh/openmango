@@ -52,7 +52,7 @@ impl ContentArea {
                         state_ref.selected_collection().is_some(),
                         matches!(state_ref.current_view, View::Database)
                             && state_ref.selected_database().is_some(),
-                        matches!(state_ref.current_view, View::Ai),
+                        state_ref.ai_chat.panel_open && state_ref.settings.ai.enabled,
                         matches!(state_ref.current_view, View::Transfer),
                         matches!(state_ref.current_view, View::Forge),
                         matches!(state_ref.current_view, View::Settings),
@@ -101,7 +101,7 @@ impl ContentArea {
         } else {
             None
         };
-        let ai_view = if matches!(state.read(cx).current_view, View::Ai) {
+        let ai_view = if state.read(cx).ai_chat.panel_open && state.read(cx).settings.ai.enabled {
             Some(cx.new(|cx| AiView::new(state.clone(), cx)))
         } else {
             None
@@ -165,6 +165,8 @@ impl ContentArea {
         }
         if should_ai && self.ai_view.is_none() {
             self.ai_view = Some(cx.new(|cx| AiView::new(self.state.clone(), cx)));
+        } else if !should_ai {
+            self.ai_view = None;
         }
         if should_transfer && self.transfer_view.is_none() {
             self.transfer_view = Some(cx.new(|cx| TransferView::new(self.state.clone(), cx)));
@@ -216,7 +218,10 @@ impl Render for ContentArea {
 
         let should_collection_view = matches!(current_view, View::Documents);
         let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
-        let should_ai_view = matches!(current_view, View::Ai);
+        let should_ai_view = {
+            let state_ref = self.state.read(cx);
+            state_ref.ai_chat.panel_open && state_ref.settings.ai.enabled
+        };
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
@@ -288,13 +293,6 @@ impl Render for ContentArea {
         if matches!(current_view, View::Database) {
             self.ensure_views(false, should_database_view, false, false, false, false, false, cx);
             if let Some(view) = &self.database_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
-            }
-        }
-
-        if matches!(current_view, View::Ai) {
-            self.ensure_views(false, false, should_ai_view, false, false, false, false, cx);
-            if let Some(view) = &self.ai_view {
                 return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
             }
         }

@@ -13,7 +13,7 @@ use crate::state::{
 
 use super::AppCommands;
 
-const SCHEMA_SAMPLE_SIZE: u64 = 1000;
+pub(crate) const SCHEMA_SAMPLE_SIZE: u64 = 1000;
 const MAX_SAMPLE_VALUES: usize = 5;
 
 impl AppCommands {
@@ -106,7 +106,7 @@ struct FieldAccum {
     max_sortable: Option<String>,
 }
 
-fn build_schema_analysis(docs: &[Document], total_documents: u64) -> SchemaAnalysis {
+pub(crate) fn build_schema_analysis(docs: &[Document], total_documents: u64) -> SchemaAnalysis {
     let sampled = docs.len() as u64;
     if sampled == 0 {
         return SchemaAnalysis {

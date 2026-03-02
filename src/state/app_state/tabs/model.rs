@@ -116,9 +116,6 @@ impl AppState {
                 self.current_view = View::Database;
                 self.ensure_database_session(tab);
             }
-            TabKey::Ai => {
-                self.current_view = View::Ai;
-            }
             TabKey::Transfer(tab) => {
                 if let Some(conn_id) = tab.connection_id {
                     self.set_selected_connection_internal(conn_id);
@@ -485,25 +482,10 @@ impl AppState {
         cx.notify();
     }
 
-    /// Open AI tab (singleton - only one AI tab allowed)
-    pub fn open_ai_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(index) = self.tabs.open.iter().position(|tab| matches!(tab, TabKey::Ai)) {
-            if self.active_index() != Some(index) {
-                self.set_active_index(index);
-                self.current_view = View::Ai;
-                self.clear_error_status();
-                cx.emit(AppEvent::ViewChanged);
-                cx.notify();
-            }
-            return;
-        }
-
-        self.tabs.open.push(TabKey::Ai);
-        self.set_active_index(self.tabs.open.len() - 1);
-        self.current_view = View::Ai;
+    /// Toggle the AI chat side panel open/closed.
+    pub fn toggle_ai_panel(&mut self, cx: &mut Context<Self>) {
+        self.ai_chat.panel_open = !self.ai_chat.panel_open;
         self.update_workspace_from_state_debounced();
-        self.clear_error_status();
-        cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
 
@@ -725,9 +707,6 @@ impl AppState {
             TabKey::Database(key) => {
                 self.db_sessions.remove(key);
             }
-            TabKey::Ai => {
-                // No cleanup needed
-            }
             TabKey::Transfer(key) => {
                 self.transfer_tabs.remove(&key.id);
             }
@@ -876,7 +855,7 @@ impl AppState {
                 TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
-                TabKey::Ai | TabKey::Transfer(_) | TabKey::Settings | TabKey::Changelog => false,
+                TabKey::Transfer(_) | TabKey::Settings | TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -992,7 +971,6 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
     match tab {
         TabKey::Collection(_) => "collection",
         TabKey::Database(_) => "database",
-        TabKey::Ai => "ai",
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
         TabKey::Settings => "settings",

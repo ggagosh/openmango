@@ -3,11 +3,15 @@
 pub mod blocks;
 pub mod bridge;
 pub mod budget;
+pub mod context;
 pub mod errors;
 pub mod provider;
 pub mod settings;
 pub mod telemetry;
+pub mod tools;
 
-pub use blocks::{AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatRole};
+pub use blocks::{
+    AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatRole, ToolActivity, ToolActivityStatus,
+};
 pub use errors::{AiError, AiErrorKind};
 pub use settings::{AiProvider, AiSettings};
