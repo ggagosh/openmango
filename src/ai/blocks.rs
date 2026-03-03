@@ -4,6 +4,199 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
+// ---------------------------------------------------------------------------
+// Content blocks — structured rendering primitives
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentBlock {
+    /// Rendered as TextView::markdown
+    Markdown { text: String },
+    /// Rendered as native datatable (from tool result or LLM fenced block)
+    DataTable { json: String },
+    /// Rendered as native chart
+    Chart { chart_type: ChartType, json: String },
+    /// Rendered as native stats card
+    Stats { json: String },
+    /// Shown as spinner during streaming (not serialized to disk)
+    #[serde(skip)]
+    Pending { block_type: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartType {
+    Bar,
+    Pie,
+    Line,
+}
+
+const KNOWN_LANGS: &[&str] = &["datatable", "barchart", "piechart", "linechart", "stats"];
+
+/// Parse markdown content into structured content blocks.
+/// Splits at custom fenced code blocks (datatable, barchart, etc.).
+/// Unclosed fenced blocks become `ContentBlock::Pending`.
+pub fn parse_content_to_blocks(content: &str) -> Vec<ContentBlock> {
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    let mut md_buf = String::new();
+    let mut in_block = false;
+    let mut block_lang = String::new();
+    let mut block_code = String::new();
+
+    for line in content.lines() {
+        if in_block {
+            let trimmed = line.trim();
+            if is_closing_fence(trimmed) {
+                blocks.push(fenced_to_block(
+                    &std::mem::take(&mut block_lang),
+                    &std::mem::take(&mut block_code),
+                ));
+                in_block = false;
+            } else if let Some(last_content) = strip_trailing_fence(trimmed) {
+                if !block_code.is_empty() {
+                    block_code.push('\n');
+                }
+                block_code.push_str(last_content);
+                blocks.push(fenced_to_block(
+                    &std::mem::take(&mut block_lang),
+                    &std::mem::take(&mut block_code),
+                ));
+                in_block = false;
+            } else {
+                if !block_code.is_empty() {
+                    block_code.push('\n');
+                }
+                block_code.push_str(line);
+            }
+        } else {
+            let trimmed = line.trim();
+            let normalized = normalize_fences(trimmed);
+            if let Some(rest) = normalized.strip_prefix("```") {
+                let lang = rest.trim();
+                if KNOWN_LANGS.contains(&lang) {
+                    let text = std::mem::take(&mut md_buf);
+                    if !text.is_empty() {
+                        blocks.push(ContentBlock::Markdown { text });
+                    }
+                    block_lang = lang.to_string();
+                    block_code.clear();
+                    in_block = true;
+                } else {
+                    if !md_buf.is_empty() {
+                        md_buf.push('\n');
+                    }
+                    md_buf.push_str(line);
+                }
+            } else {
+                if !md_buf.is_empty() {
+                    md_buf.push('\n');
+                }
+                md_buf.push_str(line);
+            }
+        }
+    }
+
+    if in_block {
+        let text = std::mem::take(&mut md_buf);
+        if !text.is_empty() {
+            blocks.push(ContentBlock::Markdown { text });
+        }
+        blocks.push(ContentBlock::Pending { block_type: block_lang });
+    } else {
+        let text = std::mem::take(&mut md_buf);
+        if !text.is_empty() {
+            blocks.push(ContentBlock::Markdown { text });
+        }
+    }
+
+    blocks
+}
+
+/// Convert a fenced code block lang + code into the appropriate ContentBlock.
+fn fenced_to_block(lang: &str, code: &str) -> ContentBlock {
+    match lang {
+        "datatable" => ContentBlock::DataTable { json: code.to_string() },
+        "barchart" => ContentBlock::Chart { chart_type: ChartType::Bar, json: code.to_string() },
+        "piechart" => ContentBlock::Chart { chart_type: ChartType::Pie, json: code.to_string() },
+        "linechart" => ContentBlock::Chart { chart_type: ChartType::Line, json: code.to_string() },
+        "stats" => ContentBlock::Stats { json: code.to_string() },
+        _ => ContentBlock::Markdown { text: format!("```{lang}\n{code}\n```") },
+    }
+}
+
+/// Map a tool result JSON string to a ContentBlock for native rendering.
+pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock> {
+    let val: serde_json::Value = serde_json::from_str(json).ok()?;
+    match tool_name {
+        "find_documents" | "aggregate" => {
+            let docs = val.get("documents").or(val.get("results"))?;
+            Some(ContentBlock::DataTable { json: docs.to_string() })
+        }
+        "list_indexes" => {
+            let indexes = val.get("indexes")?;
+            Some(ContentBlock::DataTable { json: indexes.to_string() })
+        }
+        "collection_stats" => {
+            let obj = val.as_object()?;
+            let metrics: Vec<serde_json::Value> = obj
+                .iter()
+                .map(|(k, v)| serde_json::json!({"label": k, "value": format_stat_value(v)}))
+                .collect();
+            let stats = serde_json::json!({"title": "Collection Stats", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        "count_documents" => {
+            let count_val = val.get("count").map(|v| v.to_string()).unwrap_or_default();
+            let metrics = vec![serde_json::json!({"label": "Count", "value": count_val})];
+            let stats = serde_json::json!({"title": "Document Count", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        _ => None,
+    }
+}
+
+fn format_stat_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 && f.abs() < 1e15 {
+                    return format!("{}", f as i64);
+                }
+                return format!("{:.2}", f);
+            }
+            n.to_string()
+        }
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Normalize escaped backticks: `\`` → `` ` ``.
+fn normalize_fences(s: &str) -> String {
+    s.replace("\\`", "`")
+}
+
+/// Check if `trimmed` is a closing fence.
+fn is_closing_fence(trimmed: &str) -> bool {
+    trimmed == "```" || trimmed == "\\`\\`\\`"
+}
+
+/// Check if `trimmed` ends with a closing fence.
+fn strip_trailing_fence(trimmed: &str) -> Option<&str> {
+    if trimmed.len() > 3 {
+        if let Some(rest) = trimmed.strip_suffix("```") {
+            return Some(rest);
+        }
+        if let Some(rest) = trimmed.strip_suffix("\\`\\`\\`") {
+            return Some(rest);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatRole {
@@ -26,13 +219,21 @@ impl ChatRole {
 pub struct ChatMessage {
     pub id: Uuid,
     pub role: ChatRole,
+    /// Raw markdown content (kept for LLM history / backward compat)
     pub content: String,
+    /// Structured blocks for rendering. Derived from content + tool results.
+    /// If empty (e.g. old workspace data), falls back to parsing `content`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<ContentBlock>,
     pub created_at: DateTime<Utc>,
 }
 
 impl ChatMessage {
     pub fn new(role: ChatRole, content: impl Into<String>) -> Self {
-        Self { id: Uuid::new_v4(), role, content: content.into(), created_at: Utc::now() }
+        let content = content.into();
+        let blocks =
+            if content.is_empty() { Vec::new() } else { parse_content_to_blocks(&content) };
+        Self { id: Uuid::new_v4(), role, content, blocks, created_at: Utc::now() }
     }
 }
 
@@ -58,6 +259,9 @@ pub struct ToolActivity {
     pub status: ToolActivityStatus,
     pub args_preview: String,
     pub result_preview: Option<String>,
+    /// Full structured result for native rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_block: Option<ContentBlock>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +286,8 @@ pub struct AiChatState {
     pub current_turn_id: Option<Uuid>,
     #[serde(skip)]
     pub cancel_flag: Option<Arc<AtomicBool>>,
+    #[serde(skip)]
+    pub cached_models: crate::ai::model_registry::ModelCache,
 }
 
 impl AiChatState {
@@ -132,6 +338,7 @@ impl AiChatState {
             && msg.id == message_id
         {
             msg.content.push_str(delta);
+            msg.blocks = parse_content_to_blocks(&msg.content);
         }
     }
 
@@ -140,6 +347,7 @@ impl AiChatState {
             && let Some(msg) = &mut turn.assistant_message
             && msg.id == message_id
         {
+            msg.blocks = parse_content_to_blocks(&final_content);
             msg.content = final_content;
         }
     }
@@ -194,20 +402,28 @@ impl AiChatState {
             status: ToolActivityStatus::Running,
             args_preview: args,
             result_preview: None,
+            result_block: None,
         }));
         self.trim_entries();
         id
     }
 
-    pub fn complete_tool(&mut self, name: &str, result: String) {
+    pub fn complete_tool(
+        &mut self,
+        name: &str,
+        result_preview: String,
+        result_json: Option<String>,
+    ) {
         // Find the most recent Running tool activity with matching name
+        let block = result_json.as_deref().and_then(|json| tool_result_to_block(name, json));
         for entry in self.entries.iter_mut().rev() {
             if let AiChatEntry::ToolActivity(activity) = entry
                 && activity.tool_name == name
                 && matches!(activity.status, ToolActivityStatus::Running)
             {
                 activity.status = ToolActivityStatus::Completed;
-                activity.result_preview = Some(result);
+                activity.result_preview = Some(result_preview);
+                activity.result_block = block;
                 return;
             }
         }

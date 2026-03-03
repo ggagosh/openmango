@@ -33,11 +33,60 @@ impl AiProvider {
 
     pub fn default_model(self) -> &'static str {
         match self {
-            Self::Gemini => "gemini-2.5-flash",
-            Self::OpenAi => "gpt-4.1",
-            Self::Anthropic => "claude-sonnet-4-5",
+            Self::Gemini => "gemini-3-flash-preview",
+            Self::OpenAi => "gpt-5.2",
+            Self::Anthropic => "claude-sonnet-4-6",
             Self::Ollama => "qwen3:32b",
         }
+    }
+
+    pub const ALL: [Self; 4] = [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::Ollama];
+
+    pub fn model_options(self, current_model: &str) -> Vec<String> {
+        let mut options: Vec<String> = match self {
+            Self::Gemini => {
+                vec![
+                    "gemini-3-flash-preview",
+                    "gemini-3.1-pro-preview",
+                    "gemini-2.5-flash",
+                    "gemini-2.5-flash-lite",
+                ]
+            }
+            Self::OpenAi => vec!["gpt-5.2", "gpt-5-mini", "gpt-5-nano"],
+            Self::Anthropic => {
+                vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
+            }
+            Self::Ollama => vec![], // dynamic only
+        }
+        .into_iter()
+        .map(String::from)
+        .collect();
+        if !current_model.trim().is_empty() {
+            options.push(current_model.to_string());
+        }
+        options.sort();
+        options.dedup();
+        options
+    }
+
+    /// Short description for a known model, shown in dropdown menus.
+    pub fn model_note(model: &str) -> Option<&'static str> {
+        Some(match model {
+            // Gemini
+            "gemini-3-flash-preview" => "Fast flagship, pro-grade reasoning",
+            "gemini-3.1-pro-preview" => "Most capable, complex tasks",
+            "gemini-2.5-flash" => "Stable workhorse, low latency",
+            "gemini-2.5-flash-lite" => "Fastest, budget-friendly",
+            // OpenAI
+            "gpt-5.2" => "Flagship, strongest reasoning",
+            "gpt-5-mini" => "Balanced speed and quality",
+            "gpt-5-nano" => "Fastest, lightweight tasks",
+            // Anthropic
+            "claude-opus-4-6" => "Most capable, deep reasoning",
+            "claude-sonnet-4-6" => "Balanced, fast and smart",
+            "claude-haiku-4-5" => "Fastest, lightweight tasks",
+            _ => return None,
+        })
     }
 }
 
@@ -161,8 +210,8 @@ mod tests {
     fn validate_requires_key_for_remote_providers() {
         let settings = AiSettings {
             enabled: true,
-            provider: AiProvider::Gemini,
-            model: "gemini-2.5-flash".to_string(),
+            provider: AiProvider::OpenAi,
+            model: "gpt-5.2".to_string(),
             api_key: String::new(),
             ..AiSettings::default()
         };

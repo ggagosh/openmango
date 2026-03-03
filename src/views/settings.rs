@@ -9,6 +9,7 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Sizable as _, Size};
 
 use crate::ai::bridge::AiBridge;
+use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
 use crate::components::Button;
 use crate::state::{
@@ -60,11 +61,21 @@ pub struct SettingsView {
     ai_ollama_base_url_input_state: Option<Entity<InputState>>,
     ai_test_in_flight: bool,
     ai_test_result: Option<AiTestResult>,
+    last_seen_provider: AiProvider,
 }
 
 impl SettingsView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        let last_seen_provider = state.read(cx).settings.ai.provider;
+        model_registry::spawn_model_fetch(&state, cx);
+        let subscriptions = vec![cx.observe(&state, |this: &mut Self, _, cx| {
+            let current = this.state.read(cx).settings.ai.provider;
+            if current != this.last_seen_provider {
+                this.last_seen_provider = current;
+                model_registry::spawn_model_fetch(&this.state, cx);
+            }
+            cx.notify();
+        })];
 
         Self {
             state,
@@ -76,6 +87,7 @@ impl SettingsView {
             ai_ollama_base_url_input_state: None,
             ai_test_in_flight: false,
             ai_test_result: None,
+            last_seen_provider,
         }
     }
 
@@ -783,7 +795,7 @@ fn render_ai_section(
 
     let ai_enabled = settings.ai.enabled;
     let current_provider = settings.ai.provider;
-    let model_options = provider_model_options(current_provider, settings.ai.model.clone());
+    let cached = &state.read(cx).ai_chat.cached_models;
 
     let enabled_checkbox = {
         let state = state.clone();
@@ -840,7 +852,45 @@ fn render_ai_section(
     let model_dropdown = {
         let state = state.clone();
         let current_model = settings.ai.model.clone();
-        let models = model_options.clone();
+
+        let models: Vec<String> = match current_provider {
+            AiProvider::Ollama => match cached {
+                ModelCache::Loaded(list) => {
+                    let mut m = list.clone();
+                    if !current_model.trim().is_empty() && !m.contains(&current_model) {
+                        m.push(current_model.clone());
+                        m.sort();
+                    }
+                    m
+                }
+                _ => {
+                    if !current_model.trim().is_empty() {
+                        vec![current_model.clone()]
+                    } else {
+                        vec![]
+                    }
+                }
+            },
+            _ => current_provider.model_options(&current_model),
+        };
+
+        let cached_hint: Option<String> = if current_provider == AiProvider::Ollama {
+            match cached {
+                ModelCache::Loading => Some("Loading models...".to_string()),
+                ModelCache::Error(msg) => {
+                    let hint =
+                        if msg.len() > 60 { format!("{}...", &msg[..57]) } else { msg.clone() };
+                    Some(hint)
+                }
+                ModelCache::NotFetched => Some("Fetching models...".to_string()),
+                _ => None,
+            }
+        } else if matches!(cached, ModelCache::NoKey) {
+            Some("Add API key in Settings".to_string())
+        } else {
+            None
+        };
+
         gpui_component::button::Button::new("ai-model-dropdown")
             .compact()
             .label(current_model)
@@ -849,17 +899,43 @@ fn render_ai_section(
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
                 let mut menu = menu;
+                if let Some(hint) = &cached_hint {
+                    menu = menu.item(PopupMenuItem::new(hint.clone()).disabled(true));
+                }
                 for model in &models {
                     let state = state.clone();
-                    let model = model.clone();
-                    menu =
-                        menu.item(PopupMenuItem::new(model.clone()).on_click(move |_, _, cx| {
-                            state.update(cx, |app_state, cx| {
-                                app_state.settings.ai.set_model(model.clone());
-                                app_state.save_settings();
-                                cx.notify();
-                            });
-                        }));
+                    let m = model.clone();
+                    let note = AiProvider::model_note(model);
+                    let item = if let Some(note) = note {
+                        let model_label = model.clone();
+                        let note = note.to_string();
+                        PopupMenuItem::element(move |_window, cx| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .child(model_label.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(note.clone()),
+                                )
+                        })
+                    } else {
+                        PopupMenuItem::new(model.clone())
+                    };
+                    menu = menu.item(item.on_click(move |_, _, cx| {
+                        state.update(cx, |app_state, cx| {
+                            app_state.settings.ai.set_model(m.clone());
+                            app_state.save_settings();
+                            cx.notify();
+                        });
+                    }));
                 }
                 menu
             })
@@ -949,34 +1025,6 @@ fn render_ai_section(
 }
 
 // Helper functions for building UI
-
-fn provider_model_options(provider: AiProvider, current_model: String) -> Vec<String> {
-    let mut options: Vec<String> = match provider {
-        AiProvider::Gemini => vec![
-            "gemini-2.5-flash".to_string(),
-            "gemini-2.5-pro".to_string(),
-            "gemini-2.5-flash-lite".to_string(),
-        ],
-        AiProvider::OpenAi => vec![
-            "gpt-4.1".to_string(),
-            "gpt-4.1-mini".to_string(),
-            "gpt-4o-mini".to_string(),
-            "o3-mini".to_string(),
-        ],
-        AiProvider::Anthropic => vec![
-            "claude-sonnet-4-5".to_string(),
-            "claude-opus-4-1".to_string(),
-            "claude-haiku-4".to_string(),
-        ],
-        AiProvider::Ollama => vec!["qwen3:32b".to_string(), "llama3.1:8b".to_string()],
-    };
-    if !current_model.trim().is_empty() {
-        options.push(current_model);
-    }
-    options.sort();
-    options.dedup();
-    options
-}
 
 fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()

@@ -34,7 +34,7 @@ pub enum ToolError {
 pub enum StreamEvent {
     TextDelta(String),
     ToolCallStart { name: String, args_preview: String },
-    ToolCallEnd { name: String, result_preview: String },
+    ToolCallEnd { name: String, result_preview: String, result_json: Option<String> },
 }
 
 /// Build all available MongoDB tools for the given context.

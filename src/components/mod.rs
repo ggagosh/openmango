@@ -1,6 +1,7 @@
 // Reusable UI components
 
 pub mod action_bar;
+pub mod ai_blocks;
 pub mod button;
 pub mod confirm;
 pub mod connection_dialog;

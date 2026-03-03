@@ -118,7 +118,36 @@ pub fn build_ai_context(state: &AppState) -> String {
          it before calling introspection tools redundantly.\n\
          - If you need schema or structure for a collection not shown in the context below, \
          call `collection_schema` with the `collection` parameter to fetch it.\n\
-         - When the user asks about data, always use tools — never guess or fabricate data.",
+         - When the user asks about data, always use tools — never guess or fabricate data.\n\n\
+         ### Auto-Rendered Tool Results\n\
+         Tool results from find_documents, aggregate, list_indexes, collection_stats, \
+         and count_documents are automatically rendered as native tables and stats cards \
+         in the UI. Do NOT repeat tool result data in your response — just provide \
+         commentary, insights, and analysis.\n\n\
+         ### Rich Response Blocks\n\
+         You can embed custom visualizations using fenced code blocks when you want to \
+         present *transformed* or *curated* data (e.g. a chart from aggregation results).\n\n\
+         **barchart** — for distributions and comparisons:\n\
+         ```barchart\n\
+         {\"title\": \"Actions\", \"data\": [{\"label\": \"insert\", \"value\": 42}, \
+         {\"label\": \"update\", \"value\": 18}]}\n\
+         ```\n\n\
+         **piechart** — for proportional data:\n\
+         ```piechart\n\
+         {\"title\": \"By Type\", \"data\": [{\"label\": \"A\", \"value\": 60}, \
+         {\"label\": \"B\", \"value\": 40}]}\n\
+         ```\n\n\
+         **linechart** — for trends and time series:\n\
+         ```linechart\n\
+         {\"title\": \"Growth\", \"data\": [{\"label\": \"Jan\", \"value\": 10}, \
+         {\"label\": \"Feb\", \"value\": 25}]}\n\
+         ```\n\n\
+         Guidelines:\n\
+         - Data inside blocks must be valid JSON\n\
+         - Use charts for distributions, trends, or comparisons derived from tool results\n\
+         - Do NOT use datatable or stats blocks — those are auto-rendered from tool results\n\
+         - Place blocks naturally in your response — they render inline\n\
+         - You can mix rich blocks with normal markdown text",
     );
 
     let conn_name = state.connection_name(conn_id).unwrap_or_default();

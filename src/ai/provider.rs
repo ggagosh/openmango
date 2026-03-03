@@ -396,8 +396,8 @@ async fn consume_stream<R: Clone + Unpin>(
                     .get(&internal_call_id)
                     .cloned()
                     .unwrap_or_else(|| tool_result.id.clone());
-                let result_preview = extract_tool_result_text(&tool_result);
-                on_event(StreamEvent::ToolCallEnd { name, result_preview });
+                let (result_preview, result_json) = extract_tool_result(&tool_result);
+                on_event(StreamEvent::ToolCallEnd { name, result_preview, result_json });
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.response().to_string();
@@ -415,7 +415,8 @@ async fn consume_stream<R: Clone + Unpin>(
     Ok(full_text)
 }
 
-fn extract_tool_result_text(result: &rig::message::ToolResult) -> String {
+/// Extract both a truncated preview and the full text from a tool result.
+fn extract_tool_result(result: &rig::message::ToolResult) -> (String, Option<String>) {
     let parts: Vec<String> = result
         .content
         .iter()
@@ -425,7 +426,9 @@ fn extract_tool_result_text(result: &rig::message::ToolResult) -> String {
         })
         .collect();
     let combined = parts.join("\n");
-    truncate_str(&combined, 200).to_string()
+    let preview = truncate_str(&combined, 200).to_string();
+    let full = Some(combined);
+    (preview, full)
 }
 
 // ---------------------------------------------------------------------------

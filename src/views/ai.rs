@@ -4,26 +4,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
+use gpui_component::button::ButtonVariants as _;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_component::spinner::Spinner;
-use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::text::TextViewStyle;
 
 use uuid::Uuid;
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::budget::trim_history_for_context;
 use crate::ai::context::build_ai_context;
+use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
 use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
 use crate::ai::{AiChatEntry, AiTurn, ChatRole, ToolActivity, ToolActivityStatus};
 use crate::components::Button;
-use crate::state::AppState;
+use crate::state::{AiProvider, AppState};
 use crate::theme::{borders, spacing};
-use gpui_component::{Icon, IconName};
+use gpui_component::{Icon, IconName, Size};
 
 pub struct AiView {
     state: Entity<AppState>,
@@ -36,12 +40,22 @@ pub struct AiView {
     /// Key = id of the first ToolActivity in the group.
     /// Absent = auto (expanded while running, collapsed when done).
     tool_group_overrides: HashMap<Uuid, bool>,
+    last_seen_provider: AiProvider,
     _subscriptions: Vec<Subscription>,
 }
 
 impl AiView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        let last_seen_provider = state.read(cx).settings.ai.provider;
+        model_registry::spawn_model_fetch(&state, cx);
+        let subscriptions = vec![cx.observe(&state, |this: &mut Self, _, cx| {
+            let current = this.state.read(cx).settings.ai.provider;
+            if current != this.last_seen_provider {
+                this.last_seen_provider = current;
+                model_registry::spawn_model_fetch(&this.state, cx);
+            }
+            cx.notify();
+        })];
         Self {
             state,
             input_state: None,
@@ -50,6 +64,7 @@ impl AiView {
             last_entry_count: 0,
             was_loading: false,
             tool_group_overrides: HashMap::new(),
+            last_seen_provider,
             _subscriptions: subscriptions,
         }
     }
@@ -284,6 +299,8 @@ impl Render for AiView {
         let is_loading = ai_chat.is_loading;
         let last_error = ai_chat.last_error.clone();
         let session_key = app_state.current_ai_session_key();
+        let current_provider = app_state.settings.ai.provider;
+        let current_model = app_state.settings.ai.model.clone();
 
         // Header
         let header = {
@@ -438,9 +455,9 @@ impl Render for AiView {
                                 }
                             };
 
-                        let rendered: Vec<AnyElement> = blocks
-                            .iter()
-                            .map(|block| match block {
+                        let mut rendered: Vec<AnyElement> = Vec::with_capacity(blocks.len());
+                        for block in &blocks {
+                            let el = match block {
                                 RenderBlock::Turn { turn, tools } => {
                                     let tool_section = if !tools.is_empty() {
                                         let group_key = tools[0].id;
@@ -454,6 +471,7 @@ impl Render for AiView {
                                             expanded,
                                             group_key,
                                             view_entity.clone(),
+                                            window,
                                             cx,
                                         ))
                                     } else {
@@ -473,6 +491,7 @@ impl Render for AiView {
                                         expanded,
                                         group_key,
                                         view_entity.clone(),
+                                        window,
                                         cx,
                                     )
                                 }
@@ -495,13 +514,16 @@ impl Render for AiView {
                                             .py(spacing::sm())
                                             .text_sm()
                                             .text_color(color)
-                                            .child(format!("{}: {}", msg.role.label(), msg.content))
+                                            .child(
+                                                format!("{}: {}", msg.role.label(), msg.content,),
+                                            )
                                             .into_any_element()
                                     }
                                     _ => div().into_any_element(),
                                 },
-                            })
-                            .collect();
+                            };
+                            rendered.push(el);
+                        }
 
                         for key in overrides_to_remove {
                             self.tool_group_overrides.remove(&key);
@@ -523,20 +545,149 @@ impl Render for AiView {
                 ),
             );
 
-        // Send/Stop button
+        // Model selector dropdown — shows only current provider's models
+        let model_selector = {
+            let selector_label = format!("{} \u{00B7} {}", current_provider.label(), current_model);
+            let state_for_menu = state.clone();
+            gpui_component::button::Button::new("ai-model-selector")
+                .ghost()
+                .compact()
+                .label(selector_label)
+                .dropdown_caret(true)
+                .rounded(borders::radius_sm())
+                .with_size(Size::Small)
+                .disabled(is_loading)
+                .dropdown_menu_with_anchor(
+                    Corner::TopLeft,
+                    move |mut menu: PopupMenu, _window, _cx| {
+                        let state_read = state_for_menu.read(_cx);
+                        let provider = state_read.settings.ai.provider;
+                        let active_model = state_read.settings.ai.model.clone();
+                        let cached = &state_read.ai_chat.cached_models;
+
+                        menu = menu.label(provider.label());
+
+                        let models: Vec<String> = match provider {
+                            AiProvider::Ollama => match cached {
+                                ModelCache::Loaded(list) => {
+                                    let mut m = list.clone();
+                                    if !active_model.trim().is_empty() && !m.contains(&active_model)
+                                    {
+                                        m.push(active_model.clone());
+                                        m.sort();
+                                    }
+                                    m
+                                }
+                                _ => {
+                                    if !active_model.trim().is_empty() {
+                                        vec![active_model.clone()]
+                                    } else {
+                                        vec![]
+                                    }
+                                }
+                            },
+                            _ => provider.model_options(&active_model),
+                        };
+
+                        // Show status hints for Ollama non-Loaded states
+                        if provider == AiProvider::Ollama {
+                            match cached {
+                                ModelCache::Loading => {
+                                    menu = menu.item(
+                                        PopupMenuItem::new("Loading models...").disabled(true),
+                                    );
+                                }
+                                ModelCache::Error(msg) => {
+                                    let hint = if msg.len() > 60 {
+                                        format!("{}...", &msg[..57])
+                                    } else {
+                                        msg.clone()
+                                    };
+                                    menu = menu.item(PopupMenuItem::new(hint).disabled(true));
+                                }
+                                ModelCache::NotFetched => {
+                                    menu = menu.item(
+                                        PopupMenuItem::new("Fetching models...").disabled(true),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Show NoKey hint for cloud providers
+                        if !matches!(provider, AiProvider::Ollama)
+                            && matches!(cached, ModelCache::NoKey)
+                        {
+                            menu = menu
+                                .item(PopupMenuItem::new("Add API key in Settings").disabled(true));
+                        }
+
+                        for model in models {
+                            let is_current = model == active_model;
+                            let s = state_for_menu.clone();
+                            let m = model.clone();
+                            let note = AiProvider::model_note(&model);
+                            let item = if let Some(note) = note {
+                                let model_label = model.clone();
+                                let note = note.to_string();
+                                PopupMenuItem::element(move |_window, cx| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().foreground)
+                                                .child(model_label.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(note.clone()),
+                                        )
+                                })
+                                .checked(is_current)
+                            } else {
+                                PopupMenuItem::new(model).checked(is_current)
+                            };
+                            menu = menu.item(item.on_click(move |_, _, cx| {
+                                s.update(cx, |state, cx| {
+                                    state.settings.ai.set_model(m.clone());
+                                    state.save_settings();
+                                    cx.notify();
+                                });
+                            }));
+                        }
+                        menu
+                    },
+                )
+        };
+
+        // Send/Stop icon button
         let send_or_stop_button = if is_loading {
             let stop_view = cx.entity();
-            Button::new("send-stop").compact().label("Stop").on_click(move |_, _, cx| {
-                stop_view.update(cx, |this, cx| {
-                    this.stop_generation(cx);
-                });
-            })
+            Button::new("send-stop")
+                .ghost()
+                .compact()
+                .icon(Icon::new(IconName::CircleX).xsmall())
+                .tooltip("Stop generation")
+                .on_click(move |_, _, cx| {
+                    stop_view.update(cx, |this, cx| {
+                        this.stop_generation(cx);
+                    });
+                })
         } else {
             let view = cx.entity();
             let input_state_for_submit = input_state.clone();
             let can_submit = ai_enabled && !is_loading && session_key.is_some();
-            Button::new("send-message").compact().label("Send").disabled(!can_submit).on_click(
-                move |_, window, cx| {
+            Button::new("send-message")
+                .primary()
+                .compact()
+                .icon(Icon::new(IconName::ArrowUp).xsmall())
+                .tooltip("Send (Cmd+Enter)")
+                .disabled(!can_submit)
+                .on_click(move |_, window, cx| {
                     let prompt = input_state_for_submit.read(cx).value().to_string();
                     let prompt = prompt.trim().to_string();
                     if prompt.is_empty() {
@@ -551,8 +702,7 @@ impl Render for AiView {
                         });
                         this.send_message(prompt, cx);
                     });
-                },
-            )
+                })
         };
 
         // Input area panel
@@ -570,10 +720,18 @@ impl Render for AiView {
                 div()
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_between()
                     .px(spacing::md())
                     .py(spacing::xs())
-                    .child(send_or_stop_button),
+                    .child(div())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::sm())
+                            .child(model_selector)
+                            .child(send_or_stop_button),
+                    ),
             );
 
         // Resizable split between messages and input
@@ -732,15 +890,14 @@ fn render_turn(
                             .text_color(cx.theme().foreground)
                             .min_w(px(0.0))
                             .overflow_hidden()
-                            .child(
-                                TextView::markdown(
-                                    ElementId::Name(format!("ai-md-{}", msg.id).into()),
-                                    msg.content.clone(),
+                            .children(
+                                crate::components::ai_blocks::render_content_blocks_or_fallback(
+                                    &format!("ai-md-{}", msg.id),
+                                    msg,
+                                    md_style,
                                     window,
                                     cx,
-                                )
-                                .selectable(true)
-                                .style(md_style),
+                                ),
                             ),
                     ),
             )
@@ -783,7 +940,8 @@ fn render_tool_group(
     expanded: bool,
     group_key: Uuid,
     view: Entity<AiView>,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
     let any_running = tools.iter().any(|t| matches!(t.status, ToolActivityStatus::Running));
 
@@ -848,7 +1006,48 @@ fn render_tool_group(
         None
     };
 
-    div().flex().flex_col().child(header).children(content).into_any_element()
+    // Result blocks are always visible (the primary tool output) regardless
+    // of expand/collapse state — only tool status rows toggle.
+    let result_blocks: Vec<AnyElement> = tools
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let block = t.result_block.as_ref()?;
+            let style = tool_result_text_style(cx);
+            Some(crate::components::ai_blocks::render_single_block(
+                &format!("tool-result-{group_key}"),
+                i,
+                block,
+                &style,
+                window,
+                cx,
+            ))
+        })
+        .collect();
+
+    div()
+        .flex()
+        .flex_col()
+        .child(header)
+        .children(content)
+        .children(result_blocks)
+        .into_any_element()
+}
+
+fn tool_result_text_style(cx: &App) -> gpui_component::text::TextViewStyle {
+    let code_block_style = gpui::StyleRefinement::default()
+        .mt(spacing::xs())
+        .mb(spacing::xs())
+        .border_1()
+        .border_color(cx.theme().border);
+
+    gpui_component::text::TextViewStyle {
+        paragraph_gap: gpui::rems(1.0),
+        highlight_theme: cx.theme().highlight_theme.clone(),
+        is_dark: cx.theme().mode.is_dark(),
+        code_block: code_block_style,
+        ..gpui_component::text::TextViewStyle::default()
+    }
 }
 
 fn render_tool_row(activity: &ToolActivity, cx: &App) -> AnyElement {
@@ -889,8 +1088,8 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
         StreamEvent::ToolCallStart { name, args_preview } => {
             state.ai_chat.push_tool_start(name, args_preview);
         }
-        StreamEvent::ToolCallEnd { name, result_preview } => {
-            state.ai_chat.complete_tool(&name, result_preview);
+        StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
+            state.ai_chat.complete_tool(&name, result_preview, result_json);
         }
     }
 }
