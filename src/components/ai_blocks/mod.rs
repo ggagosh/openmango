@@ -1,5 +1,6 @@
 mod chart;
 mod datatable;
+pub mod query_preview;
 mod stats;
 
 use gpui::*;
@@ -71,6 +72,9 @@ pub fn render_single_block(
                     .child(format!("Generating {}...", block_label(block_type))),
             )
             .into_any_element(),
+        // QueryPreview is rendered via its own dedicated card in the tool group,
+        // not through this generic block renderer.
+        ContentBlock::QueryPreview { .. } => div().into_any_element(),
     }
 }
 

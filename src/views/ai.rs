@@ -24,7 +24,7 @@ use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
 use crate::ai::safety::SafetyTier;
 use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
-use crate::ai::{AiChatEntry, AiTurn, ChatRole, ToolActivity, ToolActivityStatus};
+use crate::ai::{AiChatEntry, AiTurn, ChatRole, ContentBlock, ToolActivity, ToolActivityStatus};
 use crate::components::Button;
 use crate::state::{AiProvider, AppState};
 use crate::theme::{borders, spacing};
@@ -1041,6 +1041,18 @@ fn render_tool_group(
         if expanded {
             tool_elements.push(render_tool_row(t, state.clone(), cx));
         }
+        // Query preview (always visible when present)
+        if let Some(ContentBlock::QueryPreview { ref query, ref collection }) = t.query_block {
+            tool_elements.push(
+                crate::components::ai_blocks::query_preview::render_query_preview_card(
+                    query,
+                    collection,
+                    state.clone(),
+                    window,
+                    cx,
+                ),
+            );
+        }
         // Result block is always visible (primary tool output)
         if let Some(block) = t.result_block.as_ref() {
             let style = tool_result_text_style(cx);
@@ -1144,8 +1156,8 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
         StreamEvent::TextDelta(delta) => {
             state.ai_chat.append_turn_delta(message_id, &delta);
         }
-        StreamEvent::ToolCallStart { name, args_preview } => {
-            state.ai_chat.push_tool_start(name, args_preview);
+        StreamEvent::ToolCallStart { name, args_preview, args_full } => {
+            state.ai_chat.push_tool_start(name, args_preview, args_full);
         }
         StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
             state.ai_chat.complete_tool(&name, result_preview, result_json);

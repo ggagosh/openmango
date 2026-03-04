@@ -45,6 +45,7 @@ pub enum StreamEvent {
     ToolCallStart {
         name: String,
         args_preview: String,
+        args_full: String,
     },
     ToolCallEnd {
         name: String,

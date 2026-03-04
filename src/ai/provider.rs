@@ -389,10 +389,10 @@ async fn consume_stream<R: Clone + Unpin>(
                 internal_call_id,
             })) => {
                 let name = tool_call.function.name.clone();
-                let args_preview =
-                    truncate_str(&tool_call.function.arguments.to_string(), 200).to_string();
+                let args_full = tool_call.function.arguments.to_string();
+                let args_preview = truncate_str(&args_full, 200).to_string();
                 tool_names.insert(internal_call_id, name.clone());
-                let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview });
+                let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview, args_full });
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
