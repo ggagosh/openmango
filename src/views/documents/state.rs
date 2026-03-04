@@ -397,6 +397,9 @@ impl CollectionView {
                 this.view_model.rebuild_tree(&state, cx);
                 this.view_model.sync_dirty_state(&state, cx);
                 this.update_search_results(cx);
+                // Force re-sync of filter/sort/projection inputs from session data.
+                // This handles external changes (e.g. AI "Open Collection" clearing filters).
+                this.input_session = None;
                 cx.notify();
             }
             AppEvent::DocumentSaved { session, document } => {

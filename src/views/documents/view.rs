@@ -439,6 +439,19 @@ impl Render for CollectionView {
                 });
                 self.projection_auto_pair.sync(&val);
             }
+        } else if let Some(filter_state) = self.filter_state.clone() {
+            // Sync filter input when filter_raw was changed externally (e.g. AI "Open Collection").
+            // Only sync when the input is not focused to avoid overwriting the user's typing.
+            let expected =
+                if filter_raw.trim().is_empty() { "{}".to_string() } else { filter_raw.clone() };
+            let current = filter_state.read(cx).value().to_string();
+            let is_focused = filter_state.read(cx).focus_handle(cx).is_focused(window);
+            if !is_focused && current != expected {
+                filter_state.update(cx, |state, cx| {
+                    state.set_value(expected.clone(), window, cx);
+                });
+                self.filter_auto_pair.sync(&expected);
+            }
         }
 
         if self.schema_filter_session != session_key {

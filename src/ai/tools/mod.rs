@@ -122,11 +122,55 @@ pub async fn require_confirmation(
 }
 
 /// Truncate a JSON value's serialized form to `max_bytes`.
+///
+/// For objects containing a large array (e.g. `"documents"`, `"results"`),
+/// elements are removed from the end so the output stays valid JSON.
+/// Falls back to raw string truncation only for non-object values.
 pub fn truncate_output(value: serde_json::Value, max_bytes: usize) -> serde_json::Value {
     let serialized = serde_json::to_string(&value).unwrap_or_default();
     if serialized.len() <= max_bytes {
         return value;
     }
+
+    // For objects with a known array key, drop elements to fit.
+    if let serde_json::Value::Object(mut map) = value {
+        for key in ["documents", "results", "indexes"] {
+            if let Some(serde_json::Value::Array(arr)) = map.remove(key) {
+                let total = arr.len();
+                // Binary search: find max element count that fits.
+                let (mut lo, mut hi) = (0usize, arr.len());
+                while lo < hi {
+                    let mid = (lo + hi).div_ceil(2);
+                    let mut candidate = map.clone();
+                    candidate
+                        .insert(key.to_string(), serde_json::Value::Array(arr[..mid].to_vec()));
+                    let len = serde_json::to_string(&candidate).map_or(usize::MAX, |s| s.len());
+                    if len <= max_bytes {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                map.insert(key.to_string(), serde_json::Value::Array(arr[..lo].to_vec()));
+                if lo < total {
+                    map.insert(
+                        "truncated_from".to_string(),
+                        serde_json::Value::Number(total.into()),
+                    );
+                }
+                return serde_json::Value::Object(map);
+            }
+        }
+        // No known array key — fall through to string truncation.
+        let serialized = serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default();
+        let end = serialized.floor_char_boundary(max_bytes.saturating_sub(40));
+        return serde_json::Value::String(format!(
+            "{}... [truncated, {} bytes total]",
+            &serialized[..end],
+            serialized.len()
+        ));
+    }
+
     let end = serialized.floor_char_boundary(max_bytes.saturating_sub(40));
     serde_json::Value::String(format!(
         "{}... [truncated, {} bytes total]",
@@ -175,6 +219,6 @@ pub fn doc_to_json(doc: &bson::Document) -> serde_json::Value {
 }
 
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
-const MAX_FIND_LIMIT: i64 = 50;
+const MAX_FIND_LIMIT: i64 = 10;
 
 pub mod drop_index;

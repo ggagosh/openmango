@@ -36,7 +36,7 @@ impl Tool for FindDocumentsTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Query documents in a MongoDB collection with optional filter, \
-                projection, sort, and limit. Returns up to 50 documents."
+                projection, sort, and limit. Returns up to 10 documents."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -59,7 +59,7 @@ impl Tool for FindDocumentsTool {
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max documents to return (capped at 50)"
+                        "description": "Max documents to return (capped at 10)"
                     }
                 }
             }),
@@ -72,7 +72,7 @@ impl Tool for FindDocumentsTool {
             Some(f) if !f.is_empty() => parse_json_to_doc(f)?,
             _ => bson::Document::new(),
         };
-        let limit = args.limit.unwrap_or(20).min(MAX_FIND_LIMIT);
+        let limit = args.limit.unwrap_or(MAX_FIND_LIMIT).min(MAX_FIND_LIMIT);
 
         let collection =
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col);

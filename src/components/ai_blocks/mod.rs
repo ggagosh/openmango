@@ -1,6 +1,5 @@
 mod chart;
 mod datatable;
-pub mod query_preview;
 mod stats;
 
 use gpui::*;
@@ -40,7 +39,11 @@ pub fn render_single_block(
                 .style(style.clone())
                 .into_any_element()
         }
-        ContentBlock::DataTable { json } => match datatable::render_datatable(json, cx) {
+        ContentBlock::DataTable { json } => match datatable::render_datatable(
+            json,
+            ElementId::Name(format!("{id_prefix}-dt-{index}").into()),
+            cx,
+        ) {
             Some(el) => el,
             None => render_code_fallback(id_prefix, index, "datatable", json, style, window, cx),
         },
@@ -72,9 +75,6 @@ pub fn render_single_block(
                     .child(format!("Generating {}...", block_label(block_type))),
             )
             .into_any_element(),
-        // QueryPreview is rendered via its own dedicated card in the tool group,
-        // not through this generic block renderer.
-        ContentBlock::QueryPreview { .. } => div().into_any_element(),
     }
 }
 

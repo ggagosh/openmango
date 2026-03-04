@@ -408,6 +408,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 })
                 .child(div().min_w(px(0.0)).child(tab_bar)),
         )
-        .child(main_content)
+        .child(div().flex_1().min_h(px(0.0)).min_w(px(0.0)).overflow_hidden().child(main_content))
         .into_any_element()
 }

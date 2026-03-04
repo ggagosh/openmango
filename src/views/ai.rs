@@ -37,6 +37,9 @@ pub struct AiView {
     scroll_handle: ScrollHandle,
     last_entry_count: usize,
     was_loading: bool,
+    /// When true, the user is interacting with the chat (toggling tools, etc.)
+    /// and auto-scroll should be suppressed until new data arrives.
+    user_interacted: bool,
     /// User's manual expand/collapse overrides for tool groups.
     /// Key = id of the first ToolActivity in the group.
     /// Absent = auto (expanded while running, collapsed when done).
@@ -64,6 +67,7 @@ impl AiView {
             scroll_handle: ScrollHandle::new(),
             last_entry_count: 0,
             was_loading: false,
+            user_interacted: false,
             tool_group_overrides: HashMap::new(),
             last_seen_provider,
             _subscriptions: subscriptions,
@@ -424,7 +428,12 @@ impl Render for AiView {
         // Message list with manual scroll for auto-scroll-to-bottom
         let entries = ai_chat.entries.clone();
         let entry_count = entries.len();
-        let should_scroll = entry_count != self.last_entry_count || is_loading || self.was_loading;
+        // Reset user_interacted when new data arrives so auto-scroll resumes.
+        if entry_count != self.last_entry_count {
+            self.user_interacted = false;
+        }
+        let should_scroll = !self.user_interacted
+            && (entry_count != self.last_entry_count || is_loading || self.was_loading);
         self.last_entry_count = entry_count;
         self.was_loading = is_loading;
 
@@ -737,9 +746,12 @@ impl Render for AiView {
             .overflow_hidden()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(div().flex_1().p(spacing::sm()).child(
-                Input::new(&input_state).w_full().h_full().max_h(px(200.0)).disabled(is_loading),
-            ))
+            .child(
+                div()
+                    .flex_1()
+                    .p(spacing::sm())
+                    .child(Input::new(&input_state).w_full().h_full().disabled(is_loading)),
+            )
             .child(
                 div()
                     .flex()
@@ -768,7 +780,10 @@ impl Render for AiView {
                     .child(message_list),
             )
             .child(
-                resizable_panel().size(px(160.0)).size_range(px(80.0)..px(600.0)).child(input_area),
+                resizable_panel()
+                    .size(px(160.0))
+                    .size_range(px(120.0)..px(600.0))
+                    .child(input_area),
             );
 
         // Disabled banner
@@ -1029,6 +1044,7 @@ fn render_tool_group(
                 cx.stop_propagation();
                 view.update(cx, |this, cx| {
                     this.tool_group_overrides.insert(group_key, !expanded);
+                    this.user_interacted = true;
                     cx.notify();
                 });
             }
@@ -1041,18 +1057,6 @@ fn render_tool_group(
         if expanded {
             tool_elements.push(render_tool_row(t, state.clone(), cx));
         }
-        // Query preview (always visible when present)
-        if let Some(ContentBlock::QueryPreview { ref query, ref collection }) = t.query_block {
-            tool_elements.push(
-                crate::components::ai_blocks::query_preview::render_query_preview_card(
-                    query,
-                    collection,
-                    state.clone(),
-                    window,
-                    cx,
-                ),
-            );
-        }
         // Result block is always visible (primary tool output)
         if let Some(block) = t.result_block.as_ref() {
             let style = tool_result_text_style(cx);
@@ -1064,6 +1068,57 @@ fn render_tool_group(
                 window,
                 cx,
             ));
+            // "Open Collection" link for DataTable results
+            if matches!(block, ContentBlock::DataTable { .. }) {
+                // Try persisted field, fall back to parsing args_preview.
+                let col_name = t.collection.clone().or_else(|| {
+                    serde_json::from_str::<serde_json::Value>(&t.args_preview)
+                        .ok()
+                        .and_then(|v| v.get("collection")?.as_str().map(String::from))
+                });
+                if let Some(col) = col_name {
+                    let st = state.clone();
+                    tool_elements.push(
+                        div()
+                            .flex()
+                            .mb(spacing::sm())
+                            .child(
+                                Button::new(ElementId::Name(
+                                    format!("open-col-{group_key}-{i}").into(),
+                                ))
+                                .ghost()
+                                .compact()
+                                .icon(Icon::new(IconName::SquareTerminal).xsmall())
+                                .label("Open Collection")
+                                .on_click(move |_, _, cx| {
+                                    let col = col.clone();
+                                    let should_load = st.update(cx, |state, cx| {
+                                        if let Some(db) = state.selected_database_name() {
+                                            state.select_collection(db, col, cx);
+                                            if let Some(key) = state.current_session_key() {
+                                                state.clear_filter(&key);
+                                            }
+                                            cx.notify();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                    if should_load
+                                        && let Some(key) = st.read(cx).current_session_key()
+                                    {
+                                        crate::state::AppCommands::load_documents_for_session(
+                                            st.clone(),
+                                            key,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            )
+                            .into_any_element(),
+                    );
+                }
+            }
         }
     }
 

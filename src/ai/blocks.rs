@@ -24,9 +24,6 @@ pub enum ContentBlock {
     /// Shown as spinner during streaming (not serialized to disk)
     #[serde(skip)]
     Pending { block_type: String },
-    /// Syntax-highlighted mongosh query preview with Copy / Open in Forge actions.
-    #[serde(skip)]
-    QueryPreview { query: String, collection: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +130,13 @@ fn fenced_to_block(lang: &str, code: &str) -> ContentBlock {
 /// Map a tool result JSON string to a ContentBlock for native rendering.
 pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock> {
     let val: serde_json::Value = serde_json::from_str(json).ok()?;
+    // Rig may double-serialize tool output: the JSON object becomes a JSON string.
+    // Unwrap one layer if the parsed value is a string containing valid JSON.
+    let val = if let Some(inner) = val.as_str() {
+        serde_json::from_str(inner).unwrap_or(val)
+    } else {
+        val
+    };
     match tool_name {
         "find_documents" | "aggregate" => {
             let docs = val.get("documents").or(val.get("results"))?;
@@ -193,61 +197,6 @@ pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock>
         }
         _ => None,
     }
-}
-
-/// Build a mongosh-style query preview from tool arguments.
-/// Returns `None` for tools that don't need a query preview (write tools, schema, etc.).
-pub fn tool_args_to_query_block(tool_name: &str, args_json: &str) -> Option<ContentBlock> {
-    let val: serde_json::Value = serde_json::from_str(args_json).ok()?;
-    let obj = val.as_object()?;
-
-    let collection =
-        obj.get("collection").and_then(|v| v.as_str()).unwrap_or("collection").to_string();
-    let escaped_col = collection.replace('"', "\\\"");
-
-    let query = match tool_name {
-        "find_documents" => {
-            let filter = obj.get("filter").and_then(|v| v.as_str()).unwrap_or("{}");
-            let mut parts = format!("db.getCollection(\"{escaped_col}\").find({filter}");
-            if let Some(proj) = obj.get("projection").and_then(|v| v.as_str())
-                && !proj.is_empty()
-            {
-                parts.push_str(&format!(", {proj}"));
-            }
-            parts.push(')');
-            if let Some(sort) = obj.get("sort").and_then(|v| v.as_str())
-                && !sort.is_empty()
-            {
-                parts.push_str(&format!(".sort({sort})"));
-            }
-            if let Some(limit) = obj.get("limit").and_then(|v| v.as_i64()) {
-                parts.push_str(&format!(".limit({limit})"));
-            }
-            parts
-        }
-        "aggregate" => {
-            let pipeline = obj.get("pipeline").and_then(|v| v.as_str()).unwrap_or("[]");
-            format!("db.getCollection(\"{escaped_col}\").aggregate({pipeline})")
-        }
-        "count_documents" => {
-            let filter = obj.get("filter").and_then(|v| v.as_str()).unwrap_or("{}");
-            format!("db.getCollection(\"{escaped_col}\").countDocuments({filter})")
-        }
-        "explain_query" => {
-            let filter = obj.get("filter").and_then(|v| v.as_str()).unwrap_or("{}");
-            let mut parts = format!("db.getCollection(\"{escaped_col}\").find({filter})");
-            if let Some(sort) = obj.get("sort").and_then(|v| v.as_str())
-                && !sort.is_empty()
-            {
-                parts.push_str(&format!(".sort({sort})"));
-            }
-            parts.push_str(".explain()");
-            parts
-        }
-        _ => return None,
-    };
-
-    Some(ContentBlock::QueryPreview { query, collection })
 }
 
 fn format_stat_value(v: &serde_json::Value) -> String {
@@ -365,9 +314,9 @@ pub struct ToolActivity {
     /// Full structured result for native rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_block: Option<ContentBlock>,
-    /// Mongosh-style query preview (derived from tool args at call time).
-    #[serde(skip)]
-    pub query_block: Option<ContentBlock>,
+    /// Collection name extracted from tool args (persists across restarts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,7 +456,9 @@ impl AiChatState {
         args_full: String,
     ) -> Uuid {
         let id = Uuid::new_v4();
-        let query_block = tool_args_to_query_block(&name, &args_full);
+        let collection = serde_json::from_str::<serde_json::Value>(&args_full)
+            .ok()
+            .and_then(|v| v.get("collection")?.as_str().map(String::from));
         self.entries.push(AiChatEntry::ToolActivity(ToolActivity {
             id,
             tool_name: name,
@@ -515,7 +466,7 @@ impl AiChatState {
             args_preview,
             result_preview: None,
             result_block: None,
-            query_block,
+            collection,
         }));
         self.trim_entries();
         id
