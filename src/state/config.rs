@@ -185,9 +185,11 @@ impl ConfigManager {
         ))
     }
 
-    /// Save connections to disk
+    /// Save connections to disk with all secrets stripped.
     pub fn save_connections(&self, connections: &[SavedConnection]) -> Result<()> {
-        self.save_json(Self::CONNECTIONS_FILE, connections)?;
+        let sanitized: Vec<SavedConnection> =
+            connections.iter().map(|c| c.with_secrets_stripped()).collect();
+        self.save_json(Self::CONNECTIONS_FILE, &sanitized)?;
         let legacy_path = self.file_path(Self::CONNECTIONS_FILE_LEGACY);
         let _ = fs::remove_file(legacy_path);
         Ok(())
@@ -243,9 +245,12 @@ impl ConfigManager {
         Ok(AppSettings::default())
     }
 
-    /// Save application settings to disk
+    /// Save application settings to disk. The API key is never persisted —
+    /// it lives in the OS keychain (release) or dev credentials file (debug).
     pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
-        self.save_json(Self::SETTINGS_FILE, settings)
+        let mut to_save = settings.clone();
+        to_save.ai.api_key.clear();
+        self.save_json(Self::SETTINGS_FILE, &to_save)
     }
 
     fn migrate_legacy_connections(

@@ -17,6 +17,7 @@ pub(crate) use aggregation::{
     PipelineAnalysis, PipelineStage, PipelineState, StageDocCounts, StageStatsMode,
     default_stage_body,
 };
+pub(crate) use connection::write_conn_secrets;
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{

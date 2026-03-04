@@ -1,6 +1,8 @@
+use gpui::App;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::errors::AiError;
+use crate::helpers::keystore::KeyStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +39,15 @@ impl AiProvider {
             Self::OpenAi => "gpt-5.2",
             Self::Anthropic => "claude-sonnet-4-6",
             Self::Ollama => "qwen3:32b",
+        }
+    }
+
+    pub fn keystore_id(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini",
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Ollama => "ollama",
         }
     }
 
@@ -132,7 +143,13 @@ impl AiSettings {
         self.model = value;
     }
 
-    pub fn set_api_key(&mut self, value: String) {
+    pub fn set_api_key(&mut self, value: String, cx: &App) {
+        let provider = self.provider.keystore_id();
+        if value.trim().is_empty() {
+            KeyStore::delete(cx, provider).detach();
+        } else {
+            KeyStore::write(cx, provider, value.trim()).detach();
+        }
         self.api_key = value;
     }
 

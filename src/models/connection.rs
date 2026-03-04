@@ -141,6 +141,21 @@ impl SavedConnection {
             proxy: None,
         }
     }
+
+    /// Return a copy with all secrets removed (for disk persistence).
+    pub fn with_secrets_stripped(&self) -> Self {
+        use crate::helpers::validate::redact_uri_password;
+        let mut c = self.clone();
+        c.uri = redact_uri_password(&c.uri);
+        if let Some(ssh) = &mut c.ssh {
+            ssh.password = None;
+            ssh.identity_passphrase = None;
+        }
+        if let Some(proxy) = &mut c.proxy {
+            proxy.password = None;
+        }
+        c
+    }
 }
 
 /// An active connection (runtime only, not persisted)

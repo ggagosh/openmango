@@ -172,7 +172,7 @@ impl SettingsView {
                 if let InputEvent::Change = event {
                     let value = state.read(cx).value().to_string();
                     state_for_key_sub.update(cx, |app_state, cx| {
-                        app_state.settings.ai.set_api_key(value);
+                        app_state.settings.ai.set_api_key(value, cx);
                         app_state.save_settings();
                         cx.notify();
                     });

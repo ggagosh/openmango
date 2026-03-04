@@ -5,6 +5,8 @@ use gpui_component::ActiveTheme as _;
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
 use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_dialog};
+use crate::helpers::keystore::KeyStore;
+use crate::helpers::validate::{REDACTED_PASSWORD, extract_uri_password, inject_uri_password};
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
@@ -36,6 +38,108 @@ impl AppRoot {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Create the app state entity
         let state = cx.new(|_| AppState::new());
+
+        // Hydrate API key from keychain at startup
+        {
+            let provider = state.read(cx).settings.ai.provider.keystore_id();
+            let task = KeyStore::read(cx, provider);
+            let state_clone = state.clone();
+            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                if let Ok(Some(key)) = task.await {
+                    let _ = cx.update(|cx| {
+                        state_clone.update(cx, |s, _| {
+                            if s.settings.ai.api_key.is_empty() {
+                                s.settings.ai.api_key = key;
+                            }
+                        });
+                    });
+                }
+            })
+            .detach();
+        }
+
+        // Hydrate connection secrets from keychain (+ migrate legacy plaintext)
+        {
+            use crate::state::app_state::write_conn_secrets;
+
+            let conns: Vec<_> = state
+                .read(cx)
+                .connections
+                .iter()
+                .map(|c| (c.id, c.uri.clone(), c.ssh.clone(), c.proxy.clone()))
+                .collect();
+
+            // Check for legacy plaintext passwords still on disk
+            let has_legacy = conns.iter().any(|(_, uri, ssh, proxy)| {
+                extract_uri_password(uri).is_some_and(|p| p != REDACTED_PASSWORD)
+                    || ssh.as_ref().and_then(|s| s.password.as_ref()).is_some()
+                    || ssh.as_ref().and_then(|s| s.identity_passphrase.as_ref()).is_some()
+                    || proxy.as_ref().and_then(|p| p.password.as_ref()).is_some()
+            });
+
+            if has_legacy {
+                for conn in state.read(cx).connections.iter() {
+                    write_conn_secrets(cx, conn);
+                }
+                state.update(cx, |s, _| {
+                    s.save_connections();
+                });
+            }
+
+            // Hydrate: read secrets from keychain into in-memory state
+            let mut tasks = Vec::new();
+            for (id, _, _, _) in &conns {
+                for key in &["uri", "ssh", "ssh-passphrase", "proxy"] {
+                    tasks.push((*id, *key, KeyStore::read_conn(cx, *id, key)));
+                }
+            }
+
+            let state = state.clone();
+            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let mut secrets: Vec<(uuid::Uuid, &str, String)> = Vec::new();
+                for (id, kind, task) in tasks {
+                    if let Ok(Some(secret)) = task.await {
+                        secrets.push((id, kind, secret));
+                    }
+                }
+                if secrets.is_empty() {
+                    return;
+                }
+                let _ = cx.update(|cx| {
+                    state.update(cx, |s, _| {
+                        for conn in &mut s.connections {
+                            for (id, kind, secret) in &secrets {
+                                if conn.id != *id {
+                                    continue;
+                                }
+                                match *kind {
+                                    "uri" => {
+                                        conn.uri = inject_uri_password(&conn.uri, Some(secret));
+                                    }
+                                    "ssh" => {
+                                        if let Some(ssh) = &mut conn.ssh {
+                                            ssh.password = Some(secret.clone());
+                                        }
+                                    }
+                                    "ssh-passphrase" => {
+                                        if let Some(ssh) = &mut conn.ssh {
+                                            ssh.identity_passphrase = Some(secret.clone());
+                                        }
+                                    }
+                                    "proxy" => {
+                                        if let Some(proxy) = &mut conn.proxy {
+                                            proxy.password = Some(secret.clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    });
+                });
+            })
+            .detach();
+        }
 
         // Create sidebar with state reference
         let sidebar = cx.new(|cx| Sidebar::new(state.clone(), window, cx));
