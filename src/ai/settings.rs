@@ -48,11 +48,10 @@ impl AiProvider {
                 vec![
                     "gemini-3-flash-preview",
                     "gemini-3.1-pro-preview",
-                    "gemini-2.5-flash",
-                    "gemini-2.5-flash-lite",
+                    "gemini-3.1-flash-lite-preview",
                 ]
             }
-            Self::OpenAi => vec!["gpt-5.2", "gpt-5-mini", "gpt-5-nano"],
+            Self::OpenAi => vec!["gpt-5.2", "gpt-5.3-instant", "gpt-5-mini", "gpt-5-nano"],
             Self::Anthropic => {
                 vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
             }
@@ -75,10 +74,10 @@ impl AiProvider {
             // Gemini
             "gemini-3-flash-preview" => "Fast flagship, pro-grade reasoning",
             "gemini-3.1-pro-preview" => "Most capable, complex tasks",
-            "gemini-2.5-flash" => "Stable workhorse, low latency",
-            "gemini-2.5-flash-lite" => "Fastest, budget-friendly",
+            "gemini-3.1-flash-lite-preview" => "Fastest, budget-friendly",
             // OpenAI
             "gpt-5.2" => "Flagship, strongest reasoning",
+            "gpt-5.3-instant" => "Fast, cost-efficient coding",
             "gpt-5-mini" => "Balanced speed and quality",
             "gpt-5-nano" => "Fastest, lightweight tasks",
             // Anthropic

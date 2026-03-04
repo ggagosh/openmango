@@ -21,6 +21,7 @@ use crate::ai::budget::trim_history_for_context;
 use crate::ai::context::build_ai_context;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
+use crate::ai::safety::SafetyTier;
 use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
 use crate::ai::{AiChatEntry, AiTurn, ChatRole, ToolActivity, ToolActivityStatus};
@@ -186,7 +187,7 @@ impl AiView {
                 let client = s.active_connection_client(id)?;
                 let db = s.selected_database_name()?;
                 let col = s.selected_collection_name();
-                Some(MongoContext { client, database: db, collection: col })
+                Some(MongoContext { client, database: db, collection: col, event_tx: None })
             })
         };
 
@@ -199,15 +200,9 @@ impl AiView {
         // Channel for streaming deltas
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
 
-        let cancel_for_task = cancel_flag.clone();
         let task = cx.background_spawn(async move {
             AiBridge::block_on(async move {
-                generate_text_streaming(&ai_settings, request, tool_ctx, move |event| {
-                    if !cancel_for_task.load(Ordering::Relaxed) {
-                        let _ = tx.send(event);
-                    }
-                })
-                .await
+                generate_text_streaming(&ai_settings, request, tool_ctx, tx).await
             })
         });
 
@@ -216,11 +211,14 @@ impl AiView {
         cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let span = AiRequestSpan::start(&provider_label, &model_label, &session_label);
 
+            let mut cancelled = false;
+
             // Poll channel for events while the background task runs
             loop {
                 match rx.try_recv() {
                     Ok(event) => {
                         if cancel_for_poll.load(Ordering::Relaxed) {
+                            cancelled = true;
                             break;
                         }
                         let _ = cx.update(|cx| {
@@ -231,12 +229,32 @@ impl AiView {
                         });
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                        if cancel_for_poll.load(Ordering::Relaxed) {
+                            cancelled = true;
+                            break;
+                        }
                         gpui::Timer::after(std::time::Duration::from_millis(16)).await;
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                         break;
                     }
                 }
+            }
+
+            if cancelled {
+                // Drop the task without awaiting — it may be blocked on a
+                // confirmation oneshot that will never be answered.
+                drop(task);
+                span.finish_err(crate::ai::AiErrorKind::Cancelled);
+                let _ = cx.update(|cx| {
+                    state.update(cx, |s, cx| {
+                        s.ai_chat.is_loading = false;
+                        s.ai_chat.cancel_flag = None;
+                        s.ai_chat.current_turn_id = None;
+                        cx.notify();
+                    });
+                });
+                return;
             }
 
             // Drain any remaining events
@@ -439,9 +457,13 @@ impl Render for AiView {
                              overrides: &HashMap<Uuid, bool>,
                              removals: &mut Vec<Uuid>| {
                                 let key = tools[0].id;
-                                let any_running = tools
-                                    .iter()
-                                    .any(|t| matches!(t.status, ToolActivityStatus::Running));
+                                let any_running = tools.iter().any(|t| {
+                                    matches!(
+                                        t.status,
+                                        ToolActivityStatus::Running
+                                            | ToolActivityStatus::AwaitingConfirmation { .. }
+                                    )
+                                });
                                 match overrides.get(&key) {
                                     Some(&val) => {
                                         if any_running && !val {
@@ -471,6 +493,7 @@ impl Render for AiView {
                                             expanded,
                                             group_key,
                                             view_entity.clone(),
+                                            state.clone(),
                                             window,
                                             cx,
                                         ))
@@ -491,6 +514,7 @@ impl Render for AiView {
                                         expanded,
                                         group_key,
                                         view_entity.clone(),
+                                        state.clone(),
                                         window,
                                         cx,
                                     )
@@ -719,6 +743,7 @@ impl Render for AiView {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .justify_between()
                     .px(spacing::md())
@@ -940,14 +965,27 @@ fn render_tool_group(
     expanded: bool,
     group_key: Uuid,
     view: Entity<AiView>,
+    state: Entity<AppState>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let any_running = tools.iter().any(|t| matches!(t.status, ToolActivityStatus::Running));
+    let any_running = tools.iter().any(|t| {
+        matches!(
+            t.status,
+            ToolActivityStatus::Running | ToolActivityStatus::AwaitingConfirmation { .. }
+        )
+    });
+    let any_awaiting =
+        tools.iter().any(|t| matches!(t.status, ToolActivityStatus::AwaitingConfirmation { .. }));
 
     // Header icon: spinner while running, chevron when done
-    let header_icon = if any_running {
+    let header_icon = if any_running && !any_awaiting {
         Spinner::new().xsmall().into_any_element()
+    } else if any_awaiting {
+        Icon::new(IconName::TriangleAlert)
+            .xsmall()
+            .text_color(cx.theme().warning)
+            .into_any_element()
     } else if expanded {
         Icon::new(IconName::ChevronDown)
             .xsmall()
@@ -961,7 +999,9 @@ fn render_tool_group(
     };
 
     // Header label
-    let label = if any_running {
+    let label = if any_awaiting {
+        "Awaiting confirmation...".to_string()
+    } else if any_running {
         if tools.len() == 1 {
             format!("Running {}...", display_tool_name(&tools[0].tool_name))
         } else {
@@ -994,43 +1034,33 @@ fn render_tool_group(
             }
         });
 
-    let content = if expanded {
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .pl(spacing::md())
-                .children(tools.iter().map(|t| render_tool_row(t, cx))),
-        )
-    } else {
-        None
-    };
-
-    // Result blocks are always visible (the primary tool output) regardless
-    // of expand/collapse state — only tool status rows toggle.
-    let result_blocks: Vec<AnyElement> = tools
-        .iter()
-        .enumerate()
-        .filter_map(|(i, t)| {
-            let block = t.result_block.as_ref()?;
+    // Interleave each tool's status row with its result block so results
+    // appear directly under the tool that produced them.
+    let mut tool_elements: Vec<AnyElement> = Vec::new();
+    for (i, t) in tools.iter().enumerate() {
+        if expanded {
+            tool_elements.push(render_tool_row(t, state.clone(), cx));
+        }
+        // Result block is always visible (primary tool output)
+        if let Some(block) = t.result_block.as_ref() {
             let style = tool_result_text_style(cx);
-            Some(crate::components::ai_blocks::render_single_block(
+            tool_elements.push(crate::components::ai_blocks::render_single_block(
                 &format!("tool-result-{group_key}"),
                 i,
                 block,
                 &style,
                 window,
                 cx,
-            ))
-        })
-        .collect();
+            ));
+        }
+    }
 
     div()
         .flex()
         .flex_col()
+        .gap(spacing::sm())
         .child(header)
-        .children(content)
-        .children(result_blocks)
+        .children(tool_elements)
         .into_any_element()
 }
 
@@ -1050,34 +1080,63 @@ fn tool_result_text_style(cx: &App) -> gpui_component::text::TextViewStyle {
     }
 }
 
-fn render_tool_row(activity: &ToolActivity, cx: &App) -> AnyElement {
+fn render_tool_row(activity: &ToolActivity, state: Entity<AppState>, cx: &App) -> AnyElement {
     let display_name = display_tool_name(&activity.tool_name);
 
-    let (icon_el, suffix) = match &activity.status {
-        ToolActivityStatus::Running => (Spinner::new().xsmall().into_any_element(), "running..."),
-        ToolActivityStatus::Completed => (
-            Icon::new(IconName::Check).xsmall().text_color(cx.theme().success).into_any_element(),
-            "completed",
-        ),
-        ToolActivityStatus::Failed(_) => (
-            Icon::new(IconName::Close).xsmall().text_color(cx.theme().danger).into_any_element(),
-            "failed",
-        ),
-    };
+    match &activity.status {
+        ToolActivityStatus::AwaitingConfirmation { .. } => {
+            render_confirmation_card(activity, state, cx)
+        }
+        ToolActivityStatus::Rejected => div()
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .py(spacing::xs())
+            .child(Icon::new(IconName::Close).xsmall().text_color(cx.theme().warning))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .child(format!("{display_name} rejected")),
+            )
+            .into_any_element(),
+        status => {
+            let (icon_el, suffix) = match status {
+                ToolActivityStatus::Running => {
+                    (Spinner::new().xsmall().into_any_element(), "running...")
+                }
+                ToolActivityStatus::Completed => (
+                    Icon::new(IconName::Check)
+                        .xsmall()
+                        .text_color(cx.theme().success)
+                        .into_any_element(),
+                    "completed",
+                ),
+                ToolActivityStatus::Failed(_) => (
+                    Icon::new(IconName::Close)
+                        .xsmall()
+                        .text_color(cx.theme().danger)
+                        .into_any_element(),
+                    "failed",
+                ),
+                _ => unreachable!(),
+            };
 
-    div()
-        .flex()
-        .items_center()
-        .gap(spacing::sm())
-        .py(spacing::xs())
-        .child(icon_el)
-        .child(
             div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("{display_name} {suffix}")),
-        )
-        .into_any_element()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .py(spacing::xs())
+                .child(icon_el)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{display_name} {suffix}")),
+                )
+                .into_any_element()
+        }
+    }
 }
 
 fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEvent) {
@@ -1091,7 +1150,169 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
         StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
             state.ai_chat.complete_tool(&name, result_preview, result_json);
         }
+        StreamEvent::ConfirmationRequired {
+            tool_name,
+            description,
+            tier,
+            preview,
+            response_tx,
+        } => {
+            state.ai_chat.set_tool_awaiting_confirmation(
+                &tool_name,
+                description,
+                tier,
+                preview,
+                response_tx,
+            );
+        }
     }
+}
+
+fn confirmation_button_label(tool_name: &str) -> &'static str {
+    match tool_name {
+        "insert_documents" => "Insert",
+        "update_documents" => "Update",
+        "delete_documents" => "Delete",
+        "create_index" => "Create Index",
+        "drop_index" => "Drop Index",
+        _ => "Approve",
+    }
+}
+
+fn is_danger_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "update_documents" | "delete_documents" | "drop_index")
+}
+
+fn render_confirmation_card(
+    activity: &ToolActivity,
+    state: Entity<AppState>,
+    cx: &App,
+) -> AnyElement {
+    let ToolActivityStatus::AwaitingConfirmation {
+        ref description,
+        ref tier,
+        ref preview,
+        ref response_tx,
+    } = activity.status
+    else {
+        unreachable!();
+    };
+    let activity_id = activity.id;
+    let tool_name = &activity.tool_name;
+
+    let tier_icon = match tier {
+        SafetyTier::AlwaysConfirm => {
+            Icon::new(IconName::TriangleAlert).xsmall().text_color(cx.theme().warning)
+        }
+        _ => Icon::new(IconName::Info).xsmall().text_color(cx.theme().primary),
+    };
+
+    // Summary line
+    let summary = if preview.affected_count > 0 {
+        format!("{} {} documents in {}", description, preview.affected_count, preview.collection)
+    } else {
+        format!("{} on {}", description, preview.collection)
+    };
+
+    let confirm_label = confirmation_button_label(tool_name);
+    let danger = is_danger_tool(tool_name);
+
+    let approve_tx = response_tx.clone();
+    let reject_tx = response_tx.clone();
+    let approve_state = state.clone();
+    let reject_state = state;
+
+    let confirm_id: SharedString = format!("confirm-{activity_id}").into();
+    let cancel_id: SharedString = format!("cancel-{activity_id}").into();
+
+    let confirm_button = if danger {
+        Button::new(confirm_id).danger().compact().label(confirm_label).on_click(move |_, _, cx| {
+            approve_tx.respond(true);
+            approve_state.update(cx, |s, cx| {
+                s.ai_chat.approve_tool_confirmation(activity_id);
+                cx.notify();
+            });
+        })
+    } else {
+        Button::new(confirm_id).primary().compact().label(confirm_label).on_click(
+            move |_, _, cx| {
+                approve_tx.respond(true);
+                approve_state.update(cx, |s, cx| {
+                    s.ai_chat.approve_tool_confirmation(activity_id);
+                    cx.notify();
+                });
+            },
+        )
+    };
+
+    let cancel_button =
+        Button::new(cancel_id).ghost().compact().label("Cancel").on_click(move |_, _, cx| {
+            reject_tx.respond(false);
+            reject_state.update(cx, |s, cx| {
+                s.ai_chat.reject_tool_confirmation(activity_id);
+                cx.notify();
+            });
+        });
+
+    // Sample docs preview (truncated JSON)
+    let sample_preview = if !preview.sample_docs.is_empty() {
+        let sample_text = preview
+            .sample_docs
+            .iter()
+            .take(3)
+            .filter_map(|doc| serde_json::to_string_pretty(doc).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let truncated = if sample_text.len() > 500 {
+            format!("{}...", &sample_text[..sample_text.floor_char_boundary(500)])
+        } else {
+            sample_text
+        };
+        Some(
+            div()
+                .mt(spacing::sm())
+                .p(spacing::sm())
+                .bg(cx.theme().background)
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded(borders::radius_sm())
+                .max_h(px(150.0))
+                .overflow_hidden()
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(truncated)),
+        )
+    } else {
+        None
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .p(spacing::sm())
+        .border_1()
+        .border_color(if danger { cx.theme().danger } else { cx.theme().border })
+        .rounded(borders::radius_sm())
+        .bg(cx.theme().sidebar)
+        .child(
+            div().flex().items_center().gap(spacing::sm()).child(tier_icon).child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(cx.theme().foreground)
+                    .child(summary),
+            ),
+        )
+        .children(sample_preview)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(spacing::sm())
+                .mt(spacing::sm())
+                .child(cancel_button)
+                .child(confirm_button),
+        )
+        .into_any_element()
 }
 
 fn display_tool_name(name: &str) -> String {

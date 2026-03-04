@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
+use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier};
+
 // ---------------------------------------------------------------------------
 // Content blocks — structured rendering primitives
 // ---------------------------------------------------------------------------
@@ -152,6 +154,40 @@ pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock>
             let stats = serde_json::json!({"title": "Document Count", "metrics": metrics});
             Some(ContentBlock::Stats { json: stats.to_string() })
         }
+        "insert_documents" => {
+            let n = val.get("inserted_count").map(|v| v.to_string()).unwrap_or_default();
+            let metrics = vec![serde_json::json!({"label": "Inserted", "value": n})];
+            let stats = serde_json::json!({"title": "Insert Result", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        "update_documents" => {
+            let matched = val.get("matched_count").map(|v| v.to_string()).unwrap_or_default();
+            let modified = val.get("modified_count").map(|v| v.to_string()).unwrap_or_default();
+            let metrics = vec![
+                serde_json::json!({"label": "Matched", "value": matched}),
+                serde_json::json!({"label": "Modified", "value": modified}),
+            ];
+            let stats = serde_json::json!({"title": "Update Result", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        "delete_documents" => {
+            let n = val.get("deleted_count").map(|v| v.to_string()).unwrap_or_default();
+            let metrics = vec![serde_json::json!({"label": "Deleted", "value": n})];
+            let stats = serde_json::json!({"title": "Delete Result", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        "create_index" => {
+            let name = val.get("index_name").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+            let metrics = vec![serde_json::json!({"label": "Index Created", "value": name})];
+            let stats = serde_json::json!({"title": "Create Index Result", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
+        "drop_index" => {
+            let name = val.get("dropped").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+            let metrics = vec![serde_json::json!({"label": "Index Dropped", "value": name})];
+            let stats = serde_json::json!({"title": "Drop Index Result", "metrics": metrics});
+            Some(ContentBlock::Stats { json: stats.to_string() })
+        }
         _ => None,
     }
 }
@@ -248,8 +284,17 @@ pub struct AiTurn {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolActivityStatus {
     Running,
+    #[serde(skip)]
+    AwaitingConfirmation {
+        description: String,
+        tier: SafetyTier,
+        preview: OperationPreview,
+        response_tx: ConfirmationSender,
+    },
     Completed,
     Failed(String),
+    #[serde(skip)]
+    Rejected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -424,6 +469,56 @@ impl AiChatState {
                 activity.status = ToolActivityStatus::Completed;
                 activity.result_preview = Some(result_preview);
                 activity.result_block = block;
+                return;
+            }
+        }
+    }
+
+    /// Transition a tool from AwaitingConfirmation back to Running (approved).
+    pub fn approve_tool_confirmation(&mut self, activity_id: Uuid) {
+        for entry in self.entries.iter_mut().rev() {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && activity.id == activity_id
+                && matches!(activity.status, ToolActivityStatus::AwaitingConfirmation { .. })
+            {
+                activity.status = ToolActivityStatus::Running;
+                return;
+            }
+        }
+    }
+
+    /// Transition a tool from AwaitingConfirmation to Rejected.
+    pub fn reject_tool_confirmation(&mut self, activity_id: Uuid) {
+        for entry in self.entries.iter_mut().rev() {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && activity.id == activity_id
+                && matches!(activity.status, ToolActivityStatus::AwaitingConfirmation { .. })
+            {
+                activity.status = ToolActivityStatus::Rejected;
+                return;
+            }
+        }
+    }
+
+    pub fn set_tool_awaiting_confirmation(
+        &mut self,
+        tool_name: &str,
+        description: String,
+        tier: SafetyTier,
+        preview: OperationPreview,
+        response_tx: ConfirmationSender,
+    ) {
+        for entry in self.entries.iter_mut().rev() {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && activity.tool_name == tool_name
+                && matches!(activity.status, ToolActivityStatus::Running)
+            {
+                activity.status = ToolActivityStatus::AwaitingConfirmation {
+                    description,
+                    tier,
+                    preview,
+                    response_tx,
+                };
                 return;
             }
         }

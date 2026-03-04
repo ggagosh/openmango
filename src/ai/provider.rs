@@ -10,6 +10,7 @@ use rig::providers::{anthropic, gemini, ollama, openai};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat as _};
 use rig::tool::ToolDyn;
 use serde::Deserialize;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ai::blocks::{ChatMessage, ChatRole};
 use crate::ai::errors::AiError;
@@ -44,17 +45,22 @@ pub async fn generate_text_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tool_ctx: Option<MongoContext>,
-    mut on_event: impl FnMut(StreamEvent) + Send,
+    event_tx: UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     settings.validate_for_request()?;
-    let tools: Vec<Box<dyn ToolDyn>> = tool_ctx.map(build_tools).unwrap_or_default();
+    let tools: Vec<Box<dyn ToolDyn>> = tool_ctx
+        .map(|mut ctx| {
+            ctx.event_tx = Some(event_tx.clone());
+            build_tools(ctx)
+        })
+        .unwrap_or_default();
     match settings.provider {
-        AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &mut on_event).await,
-        AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &mut on_event).await,
+        AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &event_tx).await,
+        AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &event_tx).await,
         AiProvider::Anthropic => {
-            call_anthropic_streaming(settings, request, tools, &mut on_event).await
+            call_anthropic_streaming(settings, request, tools, &event_tx).await
         }
-        AiProvider::Ollama => call_ollama_streaming(settings, request, tools, &mut on_event).await,
+        AiProvider::Ollama => call_ollama_streaming(settings, request, tools, &event_tx).await,
     }
 }
 
@@ -214,7 +220,7 @@ async fn call_gemini_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tools: Vec<Box<dyn ToolDyn>>,
-    on_event: &mut (impl FnMut(StreamEvent) + Send),
+    event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -238,14 +244,14 @@ async fn call_gemini_streaming(
     let history = to_rig_history(&request.history);
     let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    consume_stream(&mut stream, AiProvider::Gemini, on_event).await
+    consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
 }
 
 async fn call_openai_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tools: Vec<Box<dyn ToolDyn>>,
-    on_event: &mut (impl FnMut(StreamEvent) + Send),
+    event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -269,14 +275,14 @@ async fn call_openai_streaming(
     let history = to_rig_history(&request.history);
     let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    consume_stream(&mut stream, AiProvider::OpenAi, on_event).await
+    consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
 }
 
 async fn call_anthropic_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tools: Vec<Box<dyn ToolDyn>>,
-    on_event: &mut (impl FnMut(StreamEvent) + Send),
+    event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
@@ -300,14 +306,14 @@ async fn call_anthropic_streaming(
     let history = to_rig_history(&request.history);
     let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    consume_stream(&mut stream, AiProvider::Anthropic, on_event).await
+    consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
 }
 
 async fn call_ollama_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tools: Vec<Box<dyn ToolDyn>>,
-    on_event: &mut (impl FnMut(StreamEvent) + Send),
+    event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let model = settings.model.trim();
     if model.is_empty() {
@@ -351,7 +357,7 @@ async fn call_ollama_streaming(
     let history = to_rig_history(&request.history);
     let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
 
-    consume_stream(&mut stream, AiProvider::Ollama, on_event).await
+    consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +370,7 @@ async fn consume_stream<R: Clone + Unpin>(
              + Unpin
          ),
     provider: AiProvider,
-    on_event: &mut (impl FnMut(StreamEvent) + Send),
+    event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let mut full_text = String::new();
     let mut final_text = String::new();
@@ -376,7 +382,7 @@ async fn consume_stream<R: Clone + Unpin>(
         match chunk {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
                 full_text.push_str(&text.text);
-                on_event(StreamEvent::TextDelta(text.text));
+                let _ = event_tx.send(StreamEvent::TextDelta(text.text));
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
@@ -386,7 +392,7 @@ async fn consume_stream<R: Clone + Unpin>(
                 let args_preview =
                     truncate_str(&tool_call.function.arguments.to_string(), 200).to_string();
                 tool_names.insert(internal_call_id, name.clone());
-                on_event(StreamEvent::ToolCallStart { name, args_preview });
+                let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview });
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
@@ -397,7 +403,8 @@ async fn consume_stream<R: Clone + Unpin>(
                     .cloned()
                     .unwrap_or_else(|| tool_result.id.clone());
                 let (result_preview, result_json) = extract_tool_result(&tool_result);
-                on_event(StreamEvent::ToolCallEnd { name, result_preview, result_json });
+                let _ =
+                    event_tx.send(StreamEvent::ToolCallEnd { name, result_preview, result_json });
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.response().to_string();

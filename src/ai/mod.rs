@@ -7,6 +7,7 @@ pub mod context;
 pub mod errors;
 pub mod model_registry;
 pub mod provider;
+pub mod safety;
 pub mod settings;
 pub mod telemetry;
 pub mod tools;

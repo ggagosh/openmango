@@ -84,7 +84,7 @@ pub fn build_ai_context(state: &AppState) -> String {
     // Tools section — when connected, the AI has MongoDB tools available.
     w.section(
         "## Tool Usage Guide",
-        "You have 8 MongoDB tools. Choose the minimal set needed — prefer one powerful call \
+        "You have 13 MongoDB tools. Choose the minimal set needed — prefer one powerful call \
          over many small ones.\n\n\
          ### Querying\n\
          - **aggregate**: Your most powerful tool. Use for any multi-step operation: filtering + \
@@ -103,6 +103,19 @@ pub fn build_ai_context(state: &AppState) -> String {
          - **list_indexes**: List all indexes with key definitions. Use for performance analysis.\n\
          - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
          - **list_collections**: List all collections in the database.\n\n\
+         ### Write Operations\n\
+         Write operations require user confirmation before executing. The user will see a preview \
+         of affected documents and must approve. Always use specific filters — empty filters are \
+         blocked. Never attempt to delete or update without a filter.\n\n\
+         - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
+         array string. Max 100 documents per call.\n\
+         - **update_documents**: Update documents matching a filter. Pass `filter` and `update` \
+         as JSON strings. Set `many: false` for update_one. Default is update_many.\n\
+         - **delete_documents**: Delete documents matching a filter. A non-empty filter is \
+         required — empty filters are blocked for safety.\n\
+         - **create_index**: Create an index on a collection. Pass `keys` as a JSON object. \
+         Optional: `unique` (boolean), `name` (string).\n\
+         - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
          ### Cross-Collection Access\n\
          All tools except list_collections accept an optional `collection` parameter. Pass it to \
          query or inspect any collection in the current database — not just the selected one. \
@@ -121,9 +134,9 @@ pub fn build_ai_context(state: &AppState) -> String {
          - When the user asks about data, always use tools — never guess or fabricate data.\n\n\
          ### Auto-Rendered Tool Results\n\
          Tool results from find_documents, aggregate, list_indexes, collection_stats, \
-         and count_documents are automatically rendered as native tables and stats cards \
-         in the UI. Do NOT repeat tool result data in your response — just provide \
-         commentary, insights, and analysis.\n\n\
+         count_documents, and all write tools are automatically rendered as native tables \
+         and stats cards in the UI. Do NOT repeat tool result data in your response — just \
+         provide commentary, insights, and analysis.\n\n\
          ### Rich Response Blocks\n\
          You can embed custom visualizations using fenced code blocks when you want to \
          present *transformed* or *curated* data (e.g. a chart from aggregation results).\n\n\

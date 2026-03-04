@@ -1,14 +1,20 @@
 pub mod aggregate;
 pub mod collection_stats;
 pub mod count;
+pub mod create_index;
+pub mod delete;
 pub mod explain;
 pub mod find;
 pub mod indexes;
+pub mod insert;
 pub mod list_collections;
 pub mod schema;
+pub mod update;
 
 use mongodb::bson;
 use rig::tool::ToolDyn;
+
+use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
 
 /// Shared context passed to all tools at construction time.
 #[derive(Clone)]
@@ -16,6 +22,7 @@ pub struct MongoContext {
     pub client: mongodb::Client,
     pub database: String,
     pub collection: Option<String>,
+    pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
 }
 
 /// Errors that tools can return — rig converts these into text for the LLM.
@@ -27,19 +34,36 @@ pub enum ToolError {
     InvalidInput(String),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    Rejected(String),
 }
 
 /// Stream events emitted by the provider during generation.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     TextDelta(String),
-    ToolCallStart { name: String, args_preview: String },
-    ToolCallEnd { name: String, result_preview: String, result_json: Option<String> },
+    ToolCallStart {
+        name: String,
+        args_preview: String,
+    },
+    ToolCallEnd {
+        name: String,
+        result_preview: String,
+        result_json: Option<String>,
+    },
+    ConfirmationRequired {
+        tool_name: String,
+        description: String,
+        tier: SafetyTier,
+        preview: OperationPreview,
+        response_tx: ConfirmationSender,
+    },
 }
 
 /// Build all available MongoDB tools for the given context.
 pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
     vec![
+        // Read tools
         Box::new(find::FindDocumentsTool::new(ctx.clone())),
         Box::new(aggregate::AggregateTool::new(ctx.clone())),
         Box::new(count::CountDocumentsTool::new(ctx.clone())),
@@ -47,8 +71,53 @@ pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
         Box::new(collection_stats::CollectionStatsTool::new(ctx.clone())),
         Box::new(schema::CollectionSchemaTool::new(ctx.clone())),
         Box::new(indexes::ListIndexesTool::new(ctx.clone())),
-        Box::new(explain::ExplainQueryTool::new(ctx)),
+        Box::new(explain::ExplainQueryTool::new(ctx.clone())),
+        // Write tools
+        Box::new(insert::InsertDocumentsTool::new(ctx.clone())),
+        Box::new(update::UpdateDocumentsTool::new(ctx.clone())),
+        Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
+        Box::new(create_index::CreateIndexTool::new(ctx.clone())),
+        Box::new(self::drop_index::DropIndexTool::new(ctx)),
     ]
+}
+
+/// Request user confirmation for a write operation via the event channel.
+///
+/// Returns `Ok(())` if the operation should proceed, or an appropriate error
+/// if it was blocked or rejected.
+pub async fn require_confirmation(
+    ctx: &MongoContext,
+    tool_name: &str,
+    args_json: &str,
+    preview: OperationPreview,
+) -> Result<(), ToolError> {
+    let classification = classify_tool_call(tool_name, args_json);
+    match classification.tier {
+        SafetyTier::Blocked => Err(ToolError::InvalidInput(
+            classification.reason.unwrap_or_else(|| "Operation blocked".to_string()),
+        )),
+        SafetyTier::AutoExecute => Ok(()),
+        SafetyTier::ConfirmFirst | SafetyTier::AlwaysConfirm => {
+            if let Some(tx) = &ctx.event_tx {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let _ = tx.send(StreamEvent::ConfirmationRequired {
+                    tool_name: tool_name.to_string(),
+                    description: classification.description,
+                    tier: classification.tier,
+                    preview,
+                    response_tx: ConfirmationSender::new(resp_tx),
+                });
+                match resp_rx.await {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(ToolError::Rejected("User rejected the operation".into())),
+                    Err(_) => Err(ToolError::Rejected("Operation cancelled".into())),
+                }
+            } else {
+                // No event channel (non-streaming path) — skip confirmation
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Truncate a JSON value's serialized form to `max_bytes`.
@@ -106,3 +175,5 @@ pub fn doc_to_json(doc: &bson::Document) -> serde_json::Value {
 
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_FIND_LIMIT: i64 = 50;
+
+pub mod drop_index;

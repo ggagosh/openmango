@@ -212,6 +212,6 @@ mod tests {
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
         assert!(!settings.ai.enabled);
-        assert_eq!(settings.ai.model, "gemini-2.5-flash");
+        assert_eq!(settings.ai.model, "gemini-3-flash-preview");
     }
 }
