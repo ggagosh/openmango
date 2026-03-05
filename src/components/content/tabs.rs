@@ -14,6 +14,9 @@ use crate::views::{
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
 const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
+const AI_PANEL_DEFAULT_WIDTH: f32 = 1100.0;
+const AI_PANEL_MIN_WIDTH: f32 = 320.0;
+const AI_PANEL_MAX_WIDTH: f32 = 2600.0;
 
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
@@ -368,13 +371,32 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let show_ai_panel = matches!(host.current_view, View::Documents) && host.ai_view.is_some();
 
     let main_content: AnyElement = if show_ai_panel {
+        let persisted_ai_panel_width = host
+            .state
+            .read(cx)
+            .workspace
+            .ai_panel_width
+            .unwrap_or(AI_PANEL_DEFAULT_WIDTH)
+            .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH);
         let ai_view = host.ai_view.unwrap().clone();
         h_resizable("content-ai-split-v3")
+            .on_resize({
+                let state = host.state.clone();
+                move |resizable_state, _window, cx| {
+                    let maybe_width = resizable_state.read(cx).sizes().get(1).copied();
+                    if let Some(width) = maybe_width {
+                        state.update(cx, |app_state, _| {
+                            app_state.set_workspace_ai_panel_width(f32::from(width));
+                        });
+                    }
+                }
+            })
+            .child(resizable_panel().size_range(px(480.0)..px(9999.0)).child(content))
             .child(
-                resizable_panel().size(px(2000.0)).size_range(px(400.0)..px(9999.0)).child(content),
-            )
-            .child(
-                resizable_panel().size(px(1000.0)).size_range(px(280.0)..px(9999.0)).child(ai_view),
+                resizable_panel()
+                    .size(px(persisted_ai_panel_width))
+                    .size_range(px(AI_PANEL_MIN_WIDTH)..px(9999.0))
+                    .child(ai_view),
             )
             .into_any_element()
     } else {

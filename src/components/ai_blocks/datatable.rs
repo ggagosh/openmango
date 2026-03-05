@@ -150,7 +150,6 @@ pub fn render_datatable(json: &str, id: ElementId, cx: &App) -> Option<AnyElemen
             .border_1()
             .border_color(border)
             .rounded(px(4.0))
-            .mt(spacing::sm())
             .overflow_scroll()
             .on_scroll_wheel(|_, _, cx| {
                 cx.stop_propagation();

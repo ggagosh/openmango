@@ -67,8 +67,12 @@ impl Tool for DeleteDocumentsTool {
         let sample_bson: Vec<bson::Document> = cursor.try_collect().await?;
         let sample_docs: Vec<serde_json::Value> = sample_bson.iter().map(doc_to_json).collect();
 
-        let preview =
-            OperationPreview { collection: col_name.clone(), affected_count: count, sample_docs };
+        let preview = OperationPreview {
+            collection: col_name.clone(),
+            affected_count: count,
+            sample_docs,
+            reason: None,
+        };
 
         let args_json = serde_json::to_string(&serde_json::json!({
             "filter": args.filter,

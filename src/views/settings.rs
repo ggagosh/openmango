@@ -941,6 +941,35 @@ fn render_ai_section(
             })
     };
 
+    let model_status_badge = {
+        let (label, accent) = match (current_provider, cached) {
+            (AiProvider::Ollama, ModelCache::Loaded(list)) => {
+                (format!("{} models", list.len()), cx.theme().primary)
+            }
+            (AiProvider::Ollama, ModelCache::Loading) => {
+                ("Loading models".to_string(), cx.theme().warning)
+            }
+            (AiProvider::Ollama, ModelCache::NotFetched) => {
+                ("Fetching models".to_string(), cx.theme().warning)
+            }
+            (AiProvider::Ollama, ModelCache::Error(_)) => {
+                ("Model fetch error".to_string(), cx.theme().danger)
+            }
+            (_, ModelCache::NoKey) => ("API key missing".to_string(), cx.theme().warning),
+            _ => ("Ready".to_string(), cx.theme().muted_foreground),
+        };
+        div()
+            .px(spacing::xs())
+            .py(px(2.0))
+            .rounded(px(5.0))
+            .bg(accent.opacity(0.1))
+            .border_1()
+            .border_color(accent.opacity(0.28))
+            .text_xs()
+            .text_color(accent)
+            .child(label)
+    };
+
     let test_button = {
         let view = view.clone();
         Button::new("ai-test-provider")
@@ -969,56 +998,92 @@ fn render_ai_section(
             .flex()
             .flex_col()
             .gap(spacing::md())
-            .child(setting_row_with_description(
-                "Enable AI",
-                "When disabled, AI chat and AI-driven actions are unavailable.",
-                enabled_checkbox,
+            .child(group(
+                "Provider",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .child(setting_row_with_description(
+                        "Enable AI",
+                        "Turn on AI chat and AI-assisted actions in collection views.",
+                        enabled_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row("Provider", provider_dropdown, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(spacing::sm())
+                            .child(setting_row("Model", model_dropdown, cx))
+                            .child(model_status_badge),
+                    ),
                 cx,
             ))
-            .child(setting_row("Provider", provider_dropdown, cx))
-            .child(setting_row("Model", model_dropdown, cx))
-            .children((current_provider != AiProvider::Ollama).then(|| {
-                setting_row(
-                    "API key",
-                    Input::new(&api_key_input_state).small().w(px(260.0)),
-                    cx,
-                )
-            }))
-            .children((current_provider == AiProvider::Ollama).then(|| {
-                setting_row_with_description(
-                    "Ollama base URL",
-                    "Used only for Ollama provider.",
-                    Input::new(&ollama_base_url_input_state).small().w(px(260.0)),
-                    cx,
-                )
-            }))
-            .child(setting_row_with_description(
-                "Provider test",
-                "Sends a short request with current provider/model configuration.",
-                test_button,
+            .child(group(
+                "Credentials",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .children((current_provider != AiProvider::Ollama).then(|| {
+                        setting_row(
+                            "API key",
+                            Input::new(&api_key_input_state).small().w(px(260.0)),
+                            cx,
+                        )
+                    }))
+                    .children((current_provider == AiProvider::Ollama).then(|| {
+                        setting_row_with_description(
+                            "Ollama base URL",
+                            "Used only for Ollama provider.",
+                            Input::new(&ollama_base_url_input_state).small().w(px(260.0)),
+                            cx,
+                        )
+                    }))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if current_provider == AiProvider::Ollama {
+                                "Ollama runs locally and does not need an API key. Keep the base URL pointed at your local server."
+                            } else {
+                                "If API key is empty, provider environment variables are used when available."
+                            }),
+                    ),
                 cx,
             ))
-            .children(test_status.map(|(status, color)| {
-                setting_row(
-                    "Test result",
-                    div().w(px(360.0)).text_xs().text_color(color).child(status),
-                    cx,
-                )
-            }))
-            .child(
+            .child(group(
+                "Diagnostics",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .child(setting_row_with_description(
+                        "Provider test",
+                        "Sends a short request using current provider and model.",
+                        test_button,
+                        cx,
+                    ))
+                    .children(test_status.map(|(status, color)| {
+                        div()
+                            .px(spacing::sm())
+                            .py(spacing::xs())
+                            .rounded(borders::radius_sm())
+                            .bg(color.opacity(0.1))
+                            .border_1()
+                            .border_color(color.opacity(0.3))
+                            .child(div().text_xs().text_color(color).child(status))
+                    })),
+                cx,
+            ))
+            .children((!ai_enabled).then(|| {
                 div()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if current_provider == AiProvider::Ollama {
-                        "Tip: Ollama does not require an API key. Ensure Ollama is running and the model is pulled locally."
-                    } else {
-                        "Tip: if API key is empty, provider env vars are used when available."
-                    }),
-            )
-            .children((!ai_enabled).then(|| {
-                div().text_xs().text_color(cx.theme().warning).child(
-                    "AI is disabled. AI chat and AI-assisted actions are unavailable.",
-                )
+                    .text_color(cx.theme().warning)
+                    .child("AI is currently disabled in this workspace.")
             })),
         cx,
     )

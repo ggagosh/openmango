@@ -99,6 +99,7 @@ impl Tool for InsertDocumentsTool {
             collection: col_name.clone(),
             affected_count: bson_docs.len() as u64,
             sample_docs,
+            reason: None,
         };
 
         // Serialize args for safety classification

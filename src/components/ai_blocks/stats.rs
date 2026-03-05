@@ -30,7 +30,7 @@ pub fn render_stats(json: &str, cx: &App) -> Option<AnyElement> {
             list.child(DescriptionItem::new(m.label).value(m.value))
         });
 
-    let mut container = div().w_full().my(spacing::sm()).overflow_hidden();
+    let mut container = div().w_full().overflow_hidden();
 
     if let Some(title) = stats.title {
         container = container.child(

@@ -34,6 +34,9 @@ pub struct WorkspaceState {
     /// Persisted AI chat entries.
     #[serde(default)]
     pub ai_entries: Vec<AiChatEntry>,
+    /// Persisted width of AI side panel (px), restored on reopen/restart.
+    #[serde(default)]
+    pub ai_panel_width: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +134,36 @@ impl WindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_state_ai_panel_width_defaults_to_none() {
+        let raw = r#"{
+            "last_connection_id": null,
+            "selected_database": null,
+            "selected_collection": null,
+            "open_tabs": [],
+            "active_tab": null,
+            "expanded_nodes": [],
+            "window_state": null,
+            "ai_panel_open": false,
+            "ai_draft_input": "",
+            "ai_entries": []
+        }"#;
+
+        let workspace: WorkspaceState =
+            serde_json::from_str(raw).expect("workspace should deserialize");
+        assert_eq!(workspace.ai_panel_width, None);
+    }
+
+    #[test]
+    fn workspace_state_roundtrips_ai_panel_width() {
+        let workspace =
+            WorkspaceState { ai_panel_width: Some(1234.5), ..WorkspaceState::default() };
+        let encoded = serde_json::to_string(&workspace).expect("workspace should serialize");
+        let decoded: WorkspaceState =
+            serde_json::from_str(&encoded).expect("workspace should deserialize");
+        assert_eq!(decoded.ai_panel_width, Some(1234.5));
+    }
 
     #[test]
     fn workspace_tab_defaults_forge_content_when_missing() {

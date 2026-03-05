@@ -185,7 +185,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:ai"),
             label: SharedString::from("AI Assistant"),
-            detail: Some(SharedString::from("Open workspace AI tab")),
+            detail: Some(SharedString::from("Toggle assistant side panel")),
             category: ActionCategory::Command,
             available: true,
             priority: 95,

@@ -94,12 +94,13 @@ pub async fn require_confirmation(
 ) -> Result<(), ToolError> {
     let classification = classify_tool_call(tool_name, args_json);
     match classification.tier {
-        SafetyTier::Blocked => Err(ToolError::InvalidInput(
-            classification.reason.unwrap_or_else(|| "Operation blocked".to_string()),
-        )),
         SafetyTier::AutoExecute => Ok(()),
-        SafetyTier::ConfirmFirst | SafetyTier::AlwaysConfirm => {
+        SafetyTier::Blocked | SafetyTier::ConfirmFirst | SafetyTier::AlwaysConfirm => {
             if let Some(tx) = &ctx.event_tx {
+                let mut preview = preview;
+                if classification.tier == SafetyTier::Blocked {
+                    preview.reason = classification.reason.clone();
+                }
                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                 let _ = tx.send(StreamEvent::ConfirmationRequired {
                     tool_name: tool_name.to_string(),

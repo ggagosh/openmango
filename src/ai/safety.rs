@@ -52,6 +52,9 @@ pub struct OperationPreview {
     pub collection: String,
     pub affected_count: u64,
     pub sample_docs: Vec<serde_json::Value>,
+    /// Safety reason shown when the operation is blocked but overridable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

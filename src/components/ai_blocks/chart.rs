@@ -53,8 +53,7 @@ fn chart_wrapper(
         .border_1()
         .border_color(cx.theme().border)
         .rounded(px(4.0))
-        .overflow_hidden()
-        .my(spacing::sm());
+        .overflow_hidden();
 
     if let Some(title) = title {
         container = container.child(

@@ -63,6 +63,7 @@ impl Tool for DropIndexTool {
             collection: col_name.clone(),
             affected_count: 0,
             sample_docs: vec![serde_json::json!({ "index_name": &args.index_name })],
+            reason: None,
         };
 
         let args_json = serde_json::to_string(&serde_json::json!({
