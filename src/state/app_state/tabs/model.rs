@@ -484,6 +484,12 @@ impl AppState {
 
     /// Toggle the AI chat side panel open/closed.
     pub fn toggle_ai_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.ai_assistant_available() {
+            self.ai_chat.panel_open = false;
+            self.update_workspace_from_state_debounced();
+            cx.notify();
+            return;
+        }
         self.ai_chat.panel_open = !self.ai_chat.panel_open;
         self.update_workspace_from_state_debounced();
         cx.notify();

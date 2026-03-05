@@ -201,6 +201,11 @@ impl AiSettings {
 
         Ok(())
     }
+
+    /// True when assistant requests can run with current settings.
+    pub fn assistant_available(&self) -> bool {
+        self.validate_for_request().is_ok()
+    }
 }
 
 fn default_model() -> String {
@@ -259,5 +264,29 @@ mod tests {
         settings.set_provider(AiProvider::Ollama);
         assert_eq!(settings.model, AiProvider::Ollama.default_model());
         assert!(!settings.ollama_base_url.is_empty());
+    }
+
+    #[test]
+    fn assistant_available_requires_valid_request_config() {
+        let disabled = AiSettings::default();
+        assert!(!disabled.assistant_available());
+
+        let missing_key = AiSettings {
+            enabled: true,
+            provider: AiProvider::OpenAi,
+            model: "gpt-5.2".to_string(),
+            api_key: String::new(),
+            ..AiSettings::default()
+        };
+        assert!(!missing_key.assistant_available());
+
+        let ollama = AiSettings {
+            enabled: true,
+            provider: AiProvider::Ollama,
+            model: "qwen3:32b".to_string(),
+            api_key: String::new(),
+            ollama_base_url: "http://localhost:11434".to_string(),
+        };
+        assert!(ollama.assistant_available());
     }
 }

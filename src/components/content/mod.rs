@@ -52,7 +52,7 @@ impl ContentArea {
                         state_ref.selected_collection().is_some(),
                         matches!(state_ref.current_view, View::Database)
                             && state_ref.selected_database().is_some(),
-                        state_ref.ai_chat.panel_open && state_ref.settings.ai.enabled,
+                        state_ref.ai_chat.panel_open && state_ref.ai_assistant_available(),
                         matches!(state_ref.current_view, View::Transfer),
                         matches!(state_ref.current_view, View::Forge),
                         matches!(state_ref.current_view, View::Settings),
@@ -101,11 +101,12 @@ impl ContentArea {
         } else {
             None
         };
-        let ai_view = if state.read(cx).ai_chat.panel_open && state.read(cx).settings.ai.enabled {
-            Some(cx.new(|cx| AiView::new(state.clone(), cx)))
-        } else {
-            None
-        };
+        let ai_view =
+            if state.read(cx).ai_chat.panel_open && state.read(cx).ai_assistant_available() {
+                Some(cx.new(|cx| AiView::new(state.clone(), cx)))
+            } else {
+                None
+            };
         let transfer_view = if matches!(state.read(cx).current_view, View::Transfer) {
             Some(cx.new(|cx| TransferView::new(state.clone(), cx)))
         } else {
@@ -220,7 +221,7 @@ impl Render for ContentArea {
         let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
         let should_ai_view = {
             let state_ref = self.state.read(cx);
-            state_ref.ai_chat.panel_open && state_ref.settings.ai.enabled
+            state_ref.ai_chat.panel_open && state_ref.ai_assistant_available()
         };
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);

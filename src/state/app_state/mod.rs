@@ -194,6 +194,10 @@ impl AppState {
         self.status_message = None;
     }
 
+    pub fn ai_assistant_available(&self) -> bool {
+        self.settings.ai.assistant_available()
+    }
+
     /// Save settings to disk
     pub fn save_settings(&self) {
         if let Err(e) = self.config.save_settings(&self.settings) {

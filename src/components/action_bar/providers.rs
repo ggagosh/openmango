@@ -187,7 +187,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from("AI Assistant"),
             detail: Some(SharedString::from("Toggle assistant side panel")),
             category: ActionCategory::Command,
-            available: true,
+            available: state.ai_assistant_available(),
             priority: 95,
             ..Default::default()
         },
