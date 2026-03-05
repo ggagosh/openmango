@@ -13,6 +13,7 @@ fn conn_credentials_url(id: Uuid, key: &str) -> String {
 }
 
 /// Whether to use the OS keychain even in debug builds.
+#[cfg(debug_assertions)]
 fn use_keychain_override() -> bool {
     std::env::var("OPENMANGO_DEV_USE_KEYCHAIN").ok().is_some_and(|v| v == "1")
 }
