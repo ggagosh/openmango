@@ -3,7 +3,7 @@
 //! This module provides the header UI for collection views, including:
 //! - Collection title and breadcrumb
 //! - Action buttons (varies by subview)
-//! - Subview tabs (Documents/Indexes/Stats/Aggregation)
+//! - Subview tabs (Documents/Indexes/Stats/Aggregation/Schema)
 //! - Filter bar and query options (Documents subview only)
 
 mod actions;

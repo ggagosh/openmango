@@ -203,6 +203,13 @@ impl CollectionView {
             }
             view.update(cx, |this, cx| {
                 let mut handled = false;
+
+                if handled {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+
                 let save_selected_document = |this: &mut CollectionView, cx: &mut Context<Self>| {
                     let Some(session_key) = this.view_model.current_session() else {
                         return false;
@@ -390,6 +397,9 @@ impl CollectionView {
                 this.view_model.rebuild_tree(&state, cx);
                 this.view_model.sync_dirty_state(&state, cx);
                 this.update_search_results(cx);
+                // Force re-sync of filter/sort/projection inputs from session data.
+                // This handles external changes (e.g. AI "Open Collection" clearing filters).
+                this.input_session = None;
                 cx.notify();
             }
             AppEvent::DocumentSaved { session, document } => {

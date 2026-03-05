@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    Action, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Empty, Entity,
-    EventEmitter, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels,
-    Point, Render, RenderOnce, SharedString, Styled, StyledText, Subscription, Window, canvas,
-    deferred, div, prelude::FluentBuilder, px, relative,
+    Action, AnchoredPositionMode, AnyElement, App, AppContext, Bounds, Context, DismissEvent,
+    Empty, Entity, EventEmitter, HighlightStyle, InteractiveElement as _, IntoElement,
+    ParentElement, Pixels, Point, Render, RenderOnce, SharedString, Styled, StyledText,
+    Subscription, Window, anchored, canvas, deferred, div, prelude::FluentBuilder, px, relative,
 };
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat};
 
@@ -564,67 +564,66 @@ impl Render for CompletionMenu {
             .selected_item()
             .and_then(|item| item.documentation.clone());
 
+        let viewport_size = window.viewport_size();
         let abs_pos = self.editor.read(cx).input_bounds.origin + pos;
-        let overflow_right =
-            (abs_pos.x + MAX_MENU_WIDTH) - window.bounds().size.width;
-        let shift_left = if overflow_right > px(0.) {
-            overflow_right.min(abs_pos.x)
+        let prefer_above = abs_pos.y > (viewport_size.height * 0.6);
+        let anchor_corner = if prefer_above {
+            gpui::Corner::BottomLeft
         } else {
-            px(0.)
+            gpui::Corner::TopLeft
         };
-        let adjusted_pos = Point::new(pos.x - shift_left, pos.y);
-        let adjusted_abs_x = abs_pos.x - shift_left;
-        let max_width =
-            MAX_MENU_WIDTH.min(window.bounds().size.width - adjusted_abs_x);
+        let max_width = MAX_MENU_WIDTH.min((viewport_size.width - px(16.)).max(px(200.)));
         let vertical_layout =
-            adjusted_abs_x + MAX_MENU_WIDTH + POPOVER_GAP + MAX_MENU_WIDTH + POPOVER_GAP
-                > window.bounds().size.width;
+            viewport_size.width < (MAX_MENU_WIDTH + POPOVER_GAP + MAX_MENU_WIDTH + px(24.));
 
         deferred(
-            div()
-                .absolute()
-                .left(adjusted_pos.x)
-                .top(adjusted_pos.y)
-                .flex()
-                .flex_row()
-                .gap(POPOVER_GAP)
-                .items_start()
-                .when(vertical_layout, |this| this.flex_col())
+            anchored()
+                .position_mode(AnchoredPositionMode::Local)
+                .anchor(anchor_corner)
+                .position(pos)
                 .child(
-                    editor_popover("completion-menu", cx)
-                        .min_w(max_width)
-                        .max_w(max_width)
-                        .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT))
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(POPOVER_GAP)
+                        .items_start()
+                        .when(vertical_layout, |this| this.flex_col())
                         .child(
-                            canvas(
-                                move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds),
-                                |_, _, _, _| {},
-                            )
-                            .absolute()
-                            .size_full(),
-                        ),
-                )
-                .when_some(selected_documentation, |this, documentation| {
-                    let mut doc = match documentation {
-                        lsp_types::Documentation::String(s) => s.clone(),
-                        lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
-                    };
-                    if vertical_layout {
-                        doc = doc.split("\n").next().unwrap_or_default().to_string();
-                    }
-
-                    this.child(
-                        div().child(
                             editor_popover("completion-menu", cx)
-                                .w(MAX_MENU_WIDTH)
-                                .px_2()
-                                .child(render_markdown("doc", doc, window, cx)),
-                        ),
-                    )
-                })
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.hide(cx);
-                })),
+                                .min_w(max_width)
+                                .max_w(max_width)
+                                .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT))
+                                .child(
+                                    canvas(
+                                        move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds),
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .size_full(),
+                                ),
+                        )
+                        .when_some(selected_documentation, |this, documentation| {
+                            let mut doc = match documentation {
+                                lsp_types::Documentation::String(s) => s.clone(),
+                                lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
+                            };
+                            if vertical_layout {
+                                doc = doc.split("\n").next().unwrap_or_default().to_string();
+                            }
+
+                            this.child(
+                                div().child(
+                                    editor_popover("completion-menu", cx)
+                                        .w(MAX_MENU_WIDTH)
+                                        .px_2()
+                                        .child(render_markdown("doc", doc, window, cx)),
+                                ),
+                            )
+                        })
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.hide(cx);
+                        })),
+                ),
         )
         .into_any_element()
     }

@@ -30,6 +30,7 @@ impl CollectionView {
         selected_docs: std::collections::HashSet<DocumentKey>,
         state_for_prev: Entity<AppState>,
         state_for_next: Entity<AppState>,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let show_search = self.search_visible || self.current_search_query(cx).is_some();
@@ -451,25 +452,23 @@ impl CollectionView {
                     }),
             );
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .child(documents_view)
-            .child(Self::render_pagination(
-                display_page,
-                total_pages,
-                range_start,
-                range_end,
-                total,
-                is_loading,
-                session_key,
-                state_for_prev,
-                state_for_next,
-                cx,
-            ))
-            .into_any_element()
+        let main_panel =
+            div().flex().flex_col().flex_1().min_w(px(0.0)).child(documents_view).child(
+                Self::render_pagination(
+                    display_page,
+                    total_pages,
+                    range_start,
+                    range_end,
+                    total,
+                    is_loading,
+                    session_key.clone(),
+                    state_for_prev,
+                    state_for_next,
+                    cx,
+                ),
+            );
+
+        main_panel.into_any_element()
     }
 }
 

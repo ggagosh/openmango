@@ -151,6 +151,11 @@ impl AppState {
         let still_referenced = self.tabs.open.iter().any(|tab| matches_collection(tab, key))
             || self.tabs.preview.as_ref() == Some(key);
         if !still_referenced {
+            // If a background AI stream is still active, signal cancellation before dropping
+            // session state so we do not keep orphaned provider streams alive.
+            if let Some(flag) = self.ai_chat.cancel_flag.as_ref() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             self.sessions.remove(key);
         }
     }
@@ -474,6 +479,19 @@ impl AppState {
         self.current_view = View::Settings;
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    /// Toggle the AI chat side panel open/closed.
+    pub fn toggle_ai_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.ai_assistant_available() {
+            self.ai_chat.panel_open = false;
+            self.update_workspace_from_state_debounced();
+            cx.notify();
+            return;
+        }
+        self.ai_chat.panel_open = !self.ai_chat.panel_open;
+        self.update_workspace_from_state_debounced();
         cx.notify();
     }
 

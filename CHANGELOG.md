@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-05
+
+### Added
+- AI chat assistant with multi-provider support (OpenAI, Anthropic, Google, Ollama)
+- MongoDB-aware tool calls: find, aggregate, insert, update, delete, explain, indexes, schema inference, collection stats, and more
+- Rich response blocks: data tables, charts, stats, and query previews
+- AI completion suggestions in the documents view
+- Secure API key storage via macOS Keychain
+- Token budget tracking and safety guardrails for AI operations
+- Model registry with per-provider model selection
+- AI provider settings UI in the settings view
+- Workspace and tab persistence for AI chat sessions
+- Collection metadata command for AI context enrichment
+
 ## [0.1.8] - 2026-02-25
 
 ### Added

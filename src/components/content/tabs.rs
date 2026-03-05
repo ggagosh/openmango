@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use gpui::*;
+use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
@@ -8,11 +9,14 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
 use crate::theme::{borders, spacing};
 use crate::views::{
-    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
+    AiView, ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
 };
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
 const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
+const AI_PANEL_DEFAULT_WIDTH: f32 = 1100.0;
+const AI_PANEL_MIN_WIDTH: f32 = 320.0;
+const AI_PANEL_MAX_WIDTH: f32 = 2600.0;
 
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
@@ -26,6 +30,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) has_collection: bool,
     pub(crate) collection_view: Option<&'a Entity<CollectionView>>,
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
+    pub(crate) ai_view: Option<&'a Entity<AiView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
@@ -362,6 +367,42 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         }
     };
 
+    // Determine if AI panel should show alongside current content
+    let show_ai_panel = matches!(host.current_view, View::Documents) && host.ai_view.is_some();
+
+    let main_content: AnyElement = if show_ai_panel {
+        let persisted_ai_panel_width = host
+            .state
+            .read(cx)
+            .workspace
+            .ai_panel_width
+            .unwrap_or(AI_PANEL_DEFAULT_WIDTH)
+            .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH);
+        let ai_view = host.ai_view.unwrap().clone();
+        h_resizable("content-ai-split-v3")
+            .on_resize({
+                let state = host.state.clone();
+                move |resizable_state, _window, cx| {
+                    let maybe_width = resizable_state.read(cx).sizes().get(1).copied();
+                    if let Some(width) = maybe_width {
+                        state.update(cx, |app_state, _| {
+                            app_state.set_workspace_ai_panel_width(f32::from(width));
+                        });
+                    }
+                }
+            })
+            .child(resizable_panel().size_range(px(480.0)..px(9999.0)).child(content))
+            .child(
+                resizable_panel()
+                    .size(px(persisted_ai_panel_width))
+                    .size_range(px(AI_PANEL_MIN_WIDTH)..px(9999.0))
+                    .child(ai_view),
+            )
+            .into_any_element()
+    } else {
+        content
+    };
+
     div()
         .flex()
         .flex_col()
@@ -389,6 +430,6 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 })
                 .child(div().min_w(px(0.0)).child(tab_bar)),
         )
-        .child(content)
+        .child(div().flex_1().min_h(px(0.0)).min_w(px(0.0)).overflow_hidden().child(main_content))
         .into_any_element()
 }

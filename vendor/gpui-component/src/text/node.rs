@@ -648,7 +648,7 @@ impl Paragraph {
                         });
                     }
                     if style.code {
-                        highlight.background_color = Some(cx.theme().accent);
+                        highlight.background_color = Some(cx.theme().muted);
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
@@ -898,6 +898,7 @@ impl Node {
                 checked,
             } => v_flex()
                 .id("li")
+                .pb(rems(0.25))
                 .when(*spread, |this| this.child(div()))
                 .children({
                     let mut items: Vec<Div> = Vec::with_capacity(children.len());
@@ -924,7 +925,7 @@ impl Node {
                                 if last_not_list {
                                     if let Some(item_item) = items.last_mut() {
                                         item_item.extend(vec![
-                                            div().overflow_hidden().child(text).into_any_element(),
+                                            div().flex_1().overflow_hidden().child(text).into_any_element(),
                                         ]);
                                         continue;
                                     }
@@ -966,7 +967,7 @@ impl Node {
                                                     }),
                                             )
                                         })
-                                        .child(div().overflow_hidden().child(text)),
+                                        .child(div().flex_1().overflow_hidden().child(text)),
                                 );
                             }
                             Node::List { .. } => {
@@ -1178,6 +1179,7 @@ impl Node {
 
                 h_flex()
                     .id(("h", *level as usize))
+                    .pt(mb)
                     .pb(rems(0.3))
                     .whitespace_normal()
                     .text_size(text_size)

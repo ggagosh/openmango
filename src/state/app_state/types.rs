@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
+use crate::ai::AiChatState;
 use crate::bson::DocumentKey;
 use crate::models::connection::ActiveConnection;
 use crate::state::app_state::PipelineState;
@@ -1073,6 +1074,7 @@ pub struct SessionData {
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
+    pub ai_chat: AiChatState,
     pub schema: Option<SchemaAnalysis>,
     pub schema_loading: bool,
     pub schema_error: Option<String>,
@@ -1103,6 +1105,7 @@ impl Default for SessionData {
             indexes_error: None,
             aggregation: PipelineState::default(),
             explain: ExplainState::default(),
+            ai_chat: AiChatState::default(),
             schema: None,
             schema_loading: false,
             schema_error: None,
@@ -1161,6 +1164,7 @@ pub struct SessionSnapshot {
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
+    pub ai_chat: AiChatState,
     pub schema: Option<SchemaAnalysis>,
     pub schema_loading: bool,
     pub schema_error: Option<String>,

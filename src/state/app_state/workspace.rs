@@ -23,6 +23,17 @@ impl AppState {
         }
     }
 
+    pub fn set_workspace_ai_panel_width(&mut self, width_px: f32) {
+        let width_px = width_px.clamp(320.0, 2600.0);
+        let changed =
+            self.workspace.ai_panel_width.is_none_or(|current| (current - width_px).abs() > 0.5);
+        if changed {
+            self.workspace.ai_panel_width = Some(width_px);
+            self.bump_workspace_generation();
+            self.save_workspace();
+        }
+    }
+
     pub fn set_workspace_window_bounds(&mut self, bounds: gpui::WindowBounds) {
         let window_state = WindowState::from_bounds(bounds);
         if self.workspace.window_state.as_ref() != Some(&window_state) {

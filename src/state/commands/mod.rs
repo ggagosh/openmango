@@ -45,6 +45,7 @@ impl AppCommands {
 }
 
 mod aggregation;
+mod collection_meta;
 mod collections;
 mod connections;
 mod databases;
@@ -52,6 +53,7 @@ mod documents;
 mod explain;
 mod indexes;
 mod schema;
+pub(crate) use schema::{SCHEMA_SAMPLE_SIZE, build_schema_analysis};
 pub use schema::{schema_to_compass, schema_to_json_schema, schema_to_summary};
 mod stats;
 mod transfer;

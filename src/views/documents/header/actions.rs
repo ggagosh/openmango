@@ -28,6 +28,10 @@ pub fn render_documents_actions(
     filter_active: bool,
     cx: &mut Context<CollectionView>,
 ) -> Div {
+    let (ai_available, ai_loading) = {
+        let state_ref = state.read(cx);
+        (state_ref.ai_assistant_available(), state_ref.ai_chat.is_loading)
+    };
     let state_for_refresh = state.clone();
     let state_for_apply = state.clone();
     let state_for_dialog = state.clone();
@@ -286,6 +290,28 @@ pub fn render_documents_actions(
                     }
                 }),
         )
+        .children(ai_available.then(|| {
+            let ai_button_label = if ai_loading { "AI running" } else { "AI Chat" };
+            let mut ai_button = Button::new("toggle-ai-assistant")
+                .compact()
+                .label(ai_button_label)
+                .disabled(session_key.is_none())
+                .on_click({
+                    let state = state.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        if session_key.is_none() {
+                            return;
+                        }
+                        state.update(cx, |state, cx| {
+                            state.toggle_ai_panel(cx);
+                        });
+                    }
+                });
+            if ai_loading {
+                ai_button = ai_button.active_style(cx.theme().secondary);
+            }
+            ai_button
+        }))
         .child(
             Button::new("refresh")
                 .ghost()

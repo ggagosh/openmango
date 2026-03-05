@@ -271,6 +271,11 @@ impl AppRoot {
                     state.open_settings_tab(cx);
                 });
             }
+            "cmd:ai" => {
+                state.update(cx, |state, cx| {
+                    state.toggle_ai_panel(cx);
+                });
+            }
             "cmd:whats-new" => {
                 crate::changelog::open_changelog_tab(state.clone(), cx);
             }

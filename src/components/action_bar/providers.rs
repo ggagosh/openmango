@@ -183,6 +183,15 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("cmd:ai"),
+            label: SharedString::from("AI Assistant"),
+            detail: Some(SharedString::from("Toggle assistant side panel")),
+            category: ActionCategory::Command,
+            available: state.ai_assistant_available(),
+            priority: 95,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:whats-new"),
             label: SharedString::from("What's New"),
             detail: Some(SharedString::from("View changelog")),

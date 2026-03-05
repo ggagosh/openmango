@@ -2,15 +2,46 @@
 
 use std::collections::HashMap;
 
-use gpui::Context;
+use gpui::{App, Context};
+use uuid::Uuid;
 
 use super::AppState;
+use crate::helpers::keystore::KeyStore;
+use crate::helpers::validate::{REDACTED_PASSWORD, extract_uri_password};
 use crate::models::TreeNodeId;
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::ActiveTab;
 use crate::state::View;
 use crate::state::events::AppEvent;
-use uuid::Uuid;
+
+pub(crate) fn write_conn_secrets(cx: &App, conn: &SavedConnection) {
+    if let Some(pwd) = extract_uri_password(&conn.uri)
+        && pwd != REDACTED_PASSWORD
+    {
+        KeyStore::write_conn(cx, conn.id, "uri", &pwd).detach();
+    }
+    if let Some(pwd) = conn.ssh.as_ref().and_then(|s| s.password.as_deref())
+        && !pwd.is_empty()
+    {
+        KeyStore::write_conn(cx, conn.id, "ssh", pwd).detach();
+    }
+    if let Some(pp) = conn.ssh.as_ref().and_then(|s| s.identity_passphrase.as_deref())
+        && !pp.is_empty()
+    {
+        KeyStore::write_conn(cx, conn.id, "ssh-passphrase", pp).detach();
+    }
+    if let Some(pwd) = conn.proxy.as_ref().and_then(|p| p.password.as_deref())
+        && !pwd.is_empty()
+    {
+        KeyStore::write_conn(cx, conn.id, "proxy", pwd).detach();
+    }
+}
+
+fn delete_conn_secrets(cx: &App, id: Uuid) {
+    for key in &["uri", "ssh", "ssh-passphrase", "proxy"] {
+        KeyStore::delete_conn(cx, id, key).detach();
+    }
+}
 
 impl AppState {
     pub fn connections_snapshot(&self) -> Vec<SavedConnection> {
@@ -203,6 +234,9 @@ impl AppState {
         self.tabs.dirty.retain(|key| key.connection_id != connection_id);
         self.sessions.remove_connection(connection_id);
         self.db_sessions.remove_connection(connection_id);
+        self.forge_schema.retain(|k, _| k.connection_id != connection_id);
+        self.forge_schema_inflight.retain(|k| k.connection_id != connection_id);
+        self.evict_collection_meta_for_connection(connection_id);
 
         if self.conn.selected_connection == Some(connection_id) {
             self.conn.selected_connection = None;
@@ -213,12 +247,15 @@ impl AppState {
 
     /// Add a new connection and persist to disk
     pub fn add_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
+        write_conn_secrets(cx, &connection);
         self.connections.push(connection);
         self.save_connections();
         cx.emit(AppEvent::ConnectionAdded);
     }
 
     pub fn update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
+        write_conn_secrets(cx, &connection);
+
         let mut updated = false;
         let mut uri_changed = false;
         for existing in &mut self.connections {
@@ -260,6 +297,8 @@ impl AppState {
     }
 
     pub fn remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
+        delete_conn_secrets(cx, connection_id);
+
         let was_active = self.conn.active.contains_key(&connection_id);
 
         self.connections.retain(|conn| conn.id != connection_id);
@@ -298,7 +337,7 @@ impl AppState {
     }
 
     /// Save connections to disk
-    pub(super) fn save_connections(&self) {
+    pub(crate) fn save_connections(&self) {
         if let Err(e) = self.config.save_connections(&self.connections) {
             log::error!("Failed to save connections: {}", e);
         }
