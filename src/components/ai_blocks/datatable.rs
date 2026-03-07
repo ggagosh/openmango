@@ -58,11 +58,11 @@ pub fn render_datatable(json: &str, id: ElementId, cx: &App) -> Option<AnyElemen
 
     let total_width: f32 = col_widths.iter().sum();
 
-    let border = cx.theme().border;
+    let border = cx.theme().border.opacity(0.78);
     let fg = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
-    let head_bg = cx.theme().table_head;
-    let stripe_bg = cx.theme().table_active;
+    let head_bg = cx.theme().table_head.opacity(0.86);
+    let stripe_bg = cx.theme().table_active.opacity(0.55);
 
     // Header row
     let header =
@@ -149,7 +149,8 @@ pub fn render_datatable(json: &str, id: ElementId, cx: &App) -> Option<AnyElemen
             .max_h(px(MAX_TABLE_H))
             .border_1()
             .border_color(border)
-            .rounded(px(4.0))
+            .rounded(px(8.0))
+            .bg(cx.theme().table.opacity(0.55))
             .overflow_scroll()
             .on_scroll_wheel(|_, _, cx| {
                 cx.stop_propagation();

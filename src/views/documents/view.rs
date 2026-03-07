@@ -4,6 +4,7 @@ use crate::state::{CollectionStats, CollectionSubview, SchemaAnalysis, SessionKe
 use crate::theme::spacing;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::RopeExt as _;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
@@ -12,6 +13,28 @@ use super::header::render_stats_row;
 use super::query::is_valid_query;
 use super::query_completion::QueryCompletionProvider;
 use super::schema_filter_completion::SchemaFilterCompletionProvider;
+
+fn set_query_object_default(
+    input: &mut InputState,
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+) {
+    input.set_value("{}".to_string(), window, cx);
+    let position = input.text().offset_to_position(1);
+    input.set_cursor_position(position, window, cx);
+}
+
+fn move_cursor_inside_query_object(
+    input: &mut InputState,
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+) {
+    if input.value().trim() == "{}" {
+        let position = input.text().offset_to_position(1);
+        input.set_cursor_position(position, window, cx);
+    }
+}
+
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search_state.is_none() {
@@ -153,15 +176,12 @@ impl Render for CollectionView {
         if self.filter_state.is_none() {
             let filter_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
-                    .line_number(false)
-                    .auto_indent(false)
                     .submit_on_enter(true)
-                    .placeholder("Filter (JSON)")
+                    .placeholder("find {}")
                     .clean_on_escape();
                 state.lsp.completion_provider =
                     Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
-                state.set_value("{}".to_string(), window, cx);
+                set_query_object_default(&mut state, window, cx);
                 state
             });
             let subscription =
@@ -207,12 +227,20 @@ impl Render for CollectionView {
                             let current = state.read(cx).value().to_string();
                             if current.trim().is_empty() {
                                 state.update(cx, |input, cx| {
-                                    input.set_value("{}".to_string(), window, cx);
+                                    set_query_object_default(input, window, cx);
                                 });
                                 view.filter_auto_pair.sync("{}");
                             }
                         }
-                        _ => {}
+                        InputEvent::Focus => {
+                            state.update(cx, |input, cx| {
+                                if input.value().trim().is_empty() {
+                                    set_query_object_default(input, window, cx);
+                                } else {
+                                    move_cursor_inside_query_object(input, window, cx);
+                                }
+                            });
+                        }
                     }
                 });
             self.filter_state = Some(filter_state);
@@ -222,15 +250,12 @@ impl Render for CollectionView {
         if self.sort_state.is_none() {
             let sort_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
-                    .line_number(false)
-                    .auto_indent(false)
                     .submit_on_enter(true)
-                    .placeholder("Sort (JSON)")
+                    .placeholder("sort")
                     .clean_on_escape();
                 state.lsp.completion_provider =
                     Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
-                state.set_value("{}".to_string(), window, cx);
+                set_query_object_default(&mut state, window, cx);
                 state
             });
             let subscription =
@@ -278,12 +303,20 @@ impl Render for CollectionView {
                             let current = state.read(cx).value().to_string();
                             if current.trim().is_empty() {
                                 state.update(cx, |input, cx| {
-                                    input.set_value("{}".to_string(), window, cx);
+                                    set_query_object_default(input, window, cx);
                                 });
                                 view.sort_auto_pair.sync("{}");
                             }
                         }
-                        _ => {}
+                        InputEvent::Focus => {
+                            state.update(cx, |input, cx| {
+                                if input.value().trim().is_empty() {
+                                    set_query_object_default(input, window, cx);
+                                } else {
+                                    move_cursor_inside_query_object(input, window, cx);
+                                }
+                            });
+                        }
                     }
                 });
             self.sort_state = Some(sort_state);
@@ -293,15 +326,12 @@ impl Render for CollectionView {
         if self.projection_state.is_none() {
             let projection_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
-                    .line_number(false)
-                    .auto_indent(false)
                     .submit_on_enter(true)
-                    .placeholder("Projection (JSON)")
+                    .placeholder("project {}")
                     .clean_on_escape();
                 state.lsp.completion_provider =
                     Some(Rc::new(QueryCompletionProvider::new(self.state.clone())));
-                state.set_value("{}".to_string(), window, cx);
+                set_query_object_default(&mut state, window, cx);
                 state
             });
             let subscription = cx.subscribe_in(
@@ -350,12 +380,20 @@ impl Render for CollectionView {
                         let current = state.read(cx).value().to_string();
                         if current.trim().is_empty() {
                             state.update(cx, |input, cx| {
-                                input.set_value("{}".to_string(), window, cx);
+                                set_query_object_default(input, window, cx);
                             });
                             view.projection_auto_pair.sync("{}");
                         }
                     }
-                    _ => {}
+                    InputEvent::Focus => {
+                        state.update(cx, |input, cx| {
+                            if input.value().trim().is_empty() {
+                                set_query_object_default(input, window, cx);
+                            } else {
+                                move_cursor_inside_query_object(input, window, cx);
+                            }
+                        });
+                    }
                 },
             );
             self.projection_state = Some(projection_state);
@@ -417,6 +455,10 @@ impl Render for CollectionView {
                 };
                 filter_state.update(cx, |state, cx| {
                     state.set_value(val.clone(), window, cx);
+                    if val.trim() == "{}" {
+                        let position = state.text().offset_to_position(1);
+                        state.set_cursor_position(position, window, cx);
+                    }
                 });
                 self.filter_auto_pair.sync(&val);
             }
@@ -425,6 +467,10 @@ impl Render for CollectionView {
                     if sort_raw.trim().is_empty() { "{}".to_string() } else { sort_raw.clone() };
                 sort_state.update(cx, |state, cx| {
                     state.set_value(val.clone(), window, cx);
+                    if val.trim() == "{}" {
+                        let position = state.text().offset_to_position(1);
+                        state.set_cursor_position(position, window, cx);
+                    }
                 });
                 self.sort_auto_pair.sync(&val);
             }
@@ -436,6 +482,10 @@ impl Render for CollectionView {
                 };
                 projection_state.update(cx, |state, cx| {
                     state.set_value(val.clone(), window, cx);
+                    if val.trim() == "{}" {
+                        let position = state.text().offset_to_position(1);
+                        state.set_cursor_position(position, window, cx);
+                    }
                 });
                 self.projection_auto_pair.sync(&val);
             }

@@ -258,10 +258,20 @@ impl ChatRole {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMessageTone {
+    #[default]
+    Normal,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: Uuid,
     pub role: ChatRole,
+    #[serde(default)]
+    pub tone: ChatMessageTone,
     /// Raw markdown content (kept for LLM history / backward compat)
     pub content: String,
     /// Structured blocks for rendering. Derived from content + tool results.
@@ -273,10 +283,21 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(role: ChatRole, content: impl Into<String>) -> Self {
+        Self::new_with_tone(role, ChatMessageTone::Normal, content)
+    }
+
+    pub fn error(role: ChatRole, content: impl Into<String>) -> Self {
+        Self::new_with_tone(role, ChatMessageTone::Error, content)
+    }
+
+    fn new_with_tone(role: ChatRole, tone: ChatMessageTone, content: impl Into<String>) -> Self {
         let content = content.into();
-        let blocks =
-            if content.is_empty() { Vec::new() } else { parse_content_to_blocks(&content) };
-        Self { id: Uuid::new_v4(), role, content, blocks, created_at: Utc::now() }
+        let blocks = if content.is_empty() || tone == ChatMessageTone::Error {
+            Vec::new()
+        } else {
+            parse_content_to_blocks(&content)
+        };
+        Self { id: Uuid::new_v4(), role, tone, content, blocks, created_at: Utc::now() }
     }
 }
 
@@ -343,6 +364,9 @@ pub struct AiChatState {
     pub cancel_flag: Option<Arc<AtomicBool>>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
+    /// Collections @-mentioned for additional context in the next message.
+    #[serde(skip)]
+    pub mentioned_collections: Vec<String>,
 }
 
 impl AiChatState {
@@ -368,7 +392,11 @@ impl AiChatState {
     pub fn set_turn_assistant_message(&mut self, turn_id: Uuid, content: String) {
         if let Some(turn) = self.find_turn_mut(turn_id) {
             match &mut turn.assistant_message {
-                Some(msg) => msg.content = content,
+                Some(msg) => {
+                    msg.content = content;
+                    msg.tone = ChatMessageTone::Normal;
+                    msg.blocks = parse_content_to_blocks(&msg.content);
+                }
                 None => {
                     turn.assistant_message = Some(ChatMessage::new(ChatRole::Assistant, content));
                 }
@@ -393,7 +421,7 @@ impl AiChatState {
             && msg.id == message_id
         {
             msg.content.push_str(delta);
-            msg.blocks = parse_content_to_blocks(&msg.content);
+            msg.tone = ChatMessageTone::Normal;
         }
     }
 
@@ -402,8 +430,20 @@ impl AiChatState {
             && let Some(msg) = &mut turn.assistant_message
             && msg.id == message_id
         {
-            msg.blocks = parse_content_to_blocks(&final_content);
+            msg.tone = ChatMessageTone::Normal;
             msg.content = final_content;
+            msg.blocks = parse_content_to_blocks(&msg.content);
+        }
+    }
+
+    pub fn fail_turn_response(&mut self, message_id: Uuid, error_text: String) {
+        if let Some(turn) = self.current_turn_mut()
+            && let Some(msg) = &mut turn.assistant_message
+            && msg.id == message_id
+        {
+            msg.tone = ChatMessageTone::Error;
+            msg.content = error_text;
+            msg.blocks.clear();
         }
     }
 
@@ -543,10 +583,67 @@ impl AiChatState {
         }
     }
 
+    pub fn add_mention(&mut self, collection: String) {
+        if !self.mentioned_collections.contains(&collection) {
+            self.mentioned_collections.push(collection);
+        }
+    }
+
+    pub fn remove_mention(&mut self, collection: &str) {
+        self.mentioned_collections.retain(|c| c != collection);
+    }
+
+    pub fn take_mentions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.mentioned_collections)
+    }
+
     pub fn trim_entries(&mut self) {
         if self.entries.len() > Self::TIMELINE_LIMIT {
             let extra = self.entries.len().saturating_sub(Self::TIMELINE_LIMIT);
             self.entries.drain(0..extra);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_turn_delta_does_not_parse_blocks_until_finalize() {
+        let mut chat = AiChatState::default();
+        let turn_id = chat.begin_turn("hello");
+        let message_id = chat.begin_turn_streaming_response().expect("message id");
+
+        chat.append_turn_delta(message_id, "# heading");
+
+        let turn = chat.find_turn_mut(turn_id).expect("turn");
+        let msg = turn.assistant_message.as_ref().expect("assistant message");
+        assert_eq!(msg.tone, ChatMessageTone::Normal);
+        assert_eq!(msg.content, "# heading");
+        assert!(msg.blocks.is_empty());
+
+        chat.finalize_turn_response(message_id, "# heading".to_string());
+
+        let turn = chat.find_turn_mut(turn_id).expect("turn");
+        let msg = turn.assistant_message.as_ref().expect("assistant message");
+        assert!(!msg.blocks.is_empty());
+    }
+
+    #[test]
+    fn fail_turn_response_marks_assistant_message_as_error() {
+        let mut chat = AiChatState::default();
+        chat.begin_turn("hello");
+        let message_id = chat.begin_turn_streaming_response().expect("message id");
+
+        chat.fail_turn_response(message_id, "provider failed".to_string());
+
+        let msg = chat
+            .current_turn_mut()
+            .and_then(|turn| turn.assistant_message.as_ref())
+            .expect("assistant message");
+        assert_eq!(msg.tone, ChatMessageTone::Error);
+        assert_eq!(msg.content, "provider failed");
+        assert!(msg.blocks.is_empty());
     }
 }

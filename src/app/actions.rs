@@ -207,8 +207,23 @@ impl AppRoot {
                     state.save_settings();
                     cx.notify();
                 });
-                let vibrancy = state.read(cx).startup_vibrancy;
-                crate::theme::apply_theme(theme, vibrancy, window, cx);
+                let (user_vibrancy, startup_vibrancy) = {
+                    let state_ref = state.read(cx);
+                    (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
+                };
+                let target_vibrancy = crate::theme::effective_vibrancy(theme, user_vibrancy);
+                crate::theme::apply_theme(theme, target_vibrancy, window, cx);
+                if crate::theme::requires_vibrancy_restart(startup_vibrancy, theme, user_vibrancy) {
+                    crate::components::open_confirm_dialog(
+                        window,
+                        cx,
+                        "Restart required",
+                        "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
+                        "Restart now",
+                        false,
+                        |_window, cx| cx.quit(),
+                    );
+                }
             }
             return;
         }

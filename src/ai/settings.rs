@@ -36,7 +36,7 @@ impl AiProvider {
     pub fn default_model(self) -> &'static str {
         match self {
             Self::Gemini => "gemini-3-flash-preview",
-            Self::OpenAi => "gpt-5.2",
+            Self::OpenAi => "gpt-5.4",
             Self::Anthropic => "claude-sonnet-4-6",
             Self::Ollama => "qwen3:32b",
         }
@@ -53,6 +53,21 @@ impl AiProvider {
 
     pub const ALL: [Self; 4] = [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::Ollama];
 
+    pub fn model_display_name(self, model: &str) -> String {
+        let label = match (self, model) {
+            (Self::Gemini, "gemini-3-flash-preview") => "3.1 Flash",
+            (Self::Gemini, "gemini-3.1-pro-preview") => "3.1 Pro",
+            (Self::Gemini, "gemini-3.1-flash-lite-preview") => "3.1 Flash Lite",
+            (Self::OpenAi, "gpt-5-mini") => "GPT-5 Mini",
+            (Self::OpenAi, "gpt-5.4") => "GPT-5.4",
+            (Self::Anthropic, "claude-opus-4-6") => "Opus 4.6",
+            (Self::Anthropic, "claude-sonnet-4-6") => "Sonnet 4.6",
+            (Self::Anthropic, "claude-haiku-4-5") => "Haiku 4.5",
+            _ => model,
+        };
+        format!("{}: {}", self.label(), label)
+    }
+
     pub fn model_options(self, current_model: &str) -> Vec<String> {
         let mut options: Vec<String> = match self {
             Self::Gemini => {
@@ -62,7 +77,7 @@ impl AiProvider {
                     "gemini-3.1-flash-lite-preview",
                 ]
             }
-            Self::OpenAi => vec!["gpt-5.2", "gpt-5.3-instant", "gpt-5-mini", "gpt-5-nano"],
+            Self::OpenAi => vec!["gpt-5-mini", "gpt-5.4"],
             Self::Anthropic => {
                 vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
             }
@@ -71,11 +86,13 @@ impl AiProvider {
         .into_iter()
         .map(String::from)
         .collect();
-        if !current_model.trim().is_empty() {
+
+        if self != Self::OpenAi
+            && !current_model.trim().is_empty()
+            && !options.iter().any(|model| model == current_model)
+        {
             options.push(current_model.to_string());
         }
-        options.sort();
-        options.dedup();
         options
     }
 
@@ -87,10 +104,8 @@ impl AiProvider {
             "gemini-3.1-pro-preview" => "Most capable, complex tasks",
             "gemini-3.1-flash-lite-preview" => "Fastest, budget-friendly",
             // OpenAI
-            "gpt-5.2" => "Flagship, strongest reasoning",
-            "gpt-5.3-instant" => "Fast, cost-efficient coding",
-            "gpt-5-mini" => "Balanced speed and quality",
-            "gpt-5-nano" => "Fastest, lightweight tasks",
+            "gpt-5-mini" => "Medium preset",
+            "gpt-5.4" => "Smart preset",
             // Anthropic
             "claude-opus-4-6" => "Most capable, deep reasoning",
             "claude-sonnet-4-6" => "Balanced, fast and smart",
@@ -288,5 +303,24 @@ mod tests {
             ollama_base_url: "http://localhost:11434".to_string(),
         };
         assert!(ollama.assistant_available());
+    }
+
+    #[test]
+    fn openai_model_options_are_curated_pair() {
+        let options = AiProvider::OpenAi.model_options("gpt-5.2");
+        assert_eq!(options, vec!["gpt-5-mini".to_string(), "gpt-5.4".to_string()]);
+    }
+
+    #[test]
+    fn model_display_names_are_human_readable() {
+        assert_eq!(
+            AiProvider::Gemini.model_display_name("gemini-3.1-flash-lite-preview"),
+            "Gemini: 3.1 Flash Lite"
+        );
+        assert_eq!(AiProvider::OpenAi.model_display_name("gpt-5-mini"), "OpenAI: GPT-5 Mini");
+        assert_eq!(
+            AiProvider::Anthropic.model_display_name("claude-sonnet-4-6"),
+            "Anthropic: Sonnet 4.6"
+        );
     }
 }

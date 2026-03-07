@@ -13,8 +13,8 @@ pub mod telemetry;
 pub mod tools;
 
 pub use blocks::{
-    AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatRole, ContentBlock, ToolActivity,
-    ToolActivityStatus,
+    AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock,
+    ToolActivity, ToolActivityStatus,
 };
 pub use errors::{AiError, AiErrorKind};
 pub use settings::{AiProvider, AiSettings};

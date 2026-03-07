@@ -66,7 +66,7 @@ impl BudgetWriter {
 // ---------------------------------------------------------------------------
 
 /// Build a dynamic system prompt from the current application state.
-pub fn build_ai_context(state: &AppState) -> String {
+pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> String {
     let mut w = BudgetWriter::new(BUDGET);
 
     // ── 1. Base prompt + identity ──────────────────────────────────────────
@@ -306,6 +306,33 @@ pub fn build_ai_context(state: &AppState) -> String {
             let cap = w.remaining().min(5000);
             let body = truncate_str(&buf, cap);
             w.section("## Sample Documents", body.trim_end());
+        }
+    }
+
+    // ── 7.5. @-Mentioned collection schemas ────────────────────────────────
+    if !mentioned_collections.is_empty()
+        && let Some(db) = &db_name
+    {
+        let mut buf = String::new();
+        let mention_budget = w.remaining().min(6 * 1024);
+        let per_mention = mention_budget / mentioned_collections.len().max(1);
+        for col in mentioned_collections {
+            let key = SessionKey::new(conn_id, db, col);
+            if let Some(meta) = state.collection_meta(&key) {
+                let summary = schema_to_summary(&meta.schema);
+                let cap = per_mention.min(summary.len());
+                let truncated = truncate_str(&summary, cap);
+                let _ = writeln!(
+                    buf,
+                    "### {} ({} fields)\n{}",
+                    col, meta.schema.total_fields, truncated
+                );
+            } else {
+                let _ = writeln!(buf, "### {}\nSchema not yet available.", col);
+            }
+        }
+        if !buf.is_empty() {
+            w.section("## @-Mentioned Collections", buf.trim_end());
         }
     }
 

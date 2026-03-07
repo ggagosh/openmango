@@ -16,7 +16,7 @@ use crate::keyboard::{
 };
 use crate::models::TreeNodeId;
 use crate::state::{AppCommands, TransferMode};
-use crate::theme::{borders, sizing, spacing};
+use crate::theme::{borders, islands, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
 use super::super::sidebar_model::SidebarModel;
@@ -25,6 +25,7 @@ use super::Sidebar;
 impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state_ref = self.state.read(cx);
+        let appearance = state_ref.settings.appearance.clone();
         let active_connections = state_ref.active_connections_snapshot();
         let connecting_id = self.model.connecting_connection;
 
@@ -71,9 +72,7 @@ impl Render for Sidebar {
             .flex_shrink_0()
             .h_full()
             .overflow_hidden()
-            .bg(cx.theme().sidebar)
-            .border_r_1()
-            .border_color(cx.theme().border)
+            .bg(islands::tool_bg(&appearance, cx))
             .track_focus(&self.focus_handle)
             .on_mouse_down(MouseButton::Left, {
                 let focus_handle = self.focus_handle.clone();
@@ -145,7 +144,7 @@ impl Render for Sidebar {
                     .px(spacing::md())
                     .h(sizing::header_height())
                     .border_b_1()
-                    .border_color(cx.theme().border)
+                    .border_color(islands::panel_border(&appearance, cx))
                     .child(
                         div()
                             .text_xs()
@@ -623,8 +622,13 @@ impl Render for Sidebar {
                                                     }
                                                 }
                                             })
-                                            .hover(|s| s.bg(theme_list_hover))
-                                            .when(selected, |s| s.bg(theme_list_active))
+                                            .when(!selected, |s| {
+                                                s.hover(|s| s.bg(theme_list_hover))
+                                            })
+                                            .when(selected, |s| {
+                                                s.bg(theme_list_active)
+                                                    .hover(|s| s.bg(theme_list_active))
+                                            })
                                             .cursor_pointer()
                                             // Chevron for expandable items — single-click to toggle
                                             .when(is_folder, |this| {

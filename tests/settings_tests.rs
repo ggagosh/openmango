@@ -4,7 +4,8 @@
 
 use openmango::state::CollectionSubview;
 use openmango::state::settings::{
-    AppSettings, AppTheme, DEFAULT_FILENAME_TEMPLATE, expand_filename_template,
+    AppSettings, AppTheme, DEFAULT_FILENAME_TEMPLATE, IslandsCornerSoftness, IslandsTabStyle,
+    expand_filename_template, migrate_islands_tab_style_to_islands,
 };
 use openmango::state::workspace::{WorkspaceTab, WorkspaceTabKind};
 
@@ -20,6 +21,10 @@ fn test_default_settings() {
     assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
     assert!(settings.appearance.show_status_bar);
     assert!(!settings.appearance.vibrancy);
+    assert!(settings.appearance.islands.different_tool_window_background);
+    assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+    assert_eq!(settings.appearance.islands.corner_softness, IslandsCornerSoftness::Medium);
+    assert!(settings.appearance.islands.tab_style_migrated_to_islands);
 
     // Transfer defaults
     assert_eq!(settings.transfer.default_batch_size, 1000);
@@ -144,4 +149,38 @@ fn test_app_theme_id_roundtrip() {
     // Unknown theme_id → None
     assert_eq!(AppTheme::from_theme_id("nonexistent-theme"), None);
     assert_eq!(AppTheme::from_theme_id(""), None);
+}
+
+#[test]
+fn test_islands_tab_style_migration_from_segmented() {
+    let mut settings = AppSettings::default();
+    settings.appearance.islands.tab_style = IslandsTabStyle::Segmented;
+    settings.appearance.islands.tab_style_migrated_to_islands = false;
+
+    assert!(migrate_islands_tab_style_to_islands(&mut settings));
+    assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+    assert!(settings.appearance.islands.tab_style_migrated_to_islands);
+}
+
+#[test]
+fn test_islands_tab_style_migration_keeps_underline() {
+    let mut settings = AppSettings::default();
+    settings.appearance.islands.tab_style = IslandsTabStyle::Underline;
+    settings.appearance.islands.tab_style_migrated_to_islands = false;
+
+    assert!(migrate_islands_tab_style_to_islands(&mut settings));
+    assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Underline);
+    assert!(settings.appearance.islands.tab_style_migrated_to_islands);
+}
+
+#[test]
+fn test_islands_tab_style_migration_applies_to_all_themes() {
+    let mut settings = AppSettings::default();
+    settings.appearance.theme = AppTheme::VercelDark;
+    settings.appearance.islands.tab_style = IslandsTabStyle::Segmented;
+    settings.appearance.islands.tab_style_migrated_to_islands = false;
+
+    assert!(migrate_islands_tab_style_to_islands(&mut settings));
+    assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+    assert!(settings.appearance.islands.tab_style_migrated_to_islands);
 }

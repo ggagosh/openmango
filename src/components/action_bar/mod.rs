@@ -10,7 +10,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use crate::app::search::fuzzy_match_score;
 use crate::state::AppState;
 use crate::state::settings::AppTheme;
-use crate::theme::{borders, fonts, spacing};
+use crate::theme::{borders, fonts, islands, spacing};
 
 use providers::{
     command_actions, connection_actions, disconnect_actions, navigation_actions, tab_actions,
@@ -177,8 +177,9 @@ impl ActionBar {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Revert to original theme if we were previewing
         if let Some(original) = self.original_theme.take() {
-            let vibrancy = self.state.read(cx).startup_vibrancy;
-            crate::theme::apply_theme(original, vibrancy, window, cx);
+            let user_vibrancy = self.state.read(cx).settings.appearance.vibrancy;
+            let target_vibrancy = crate::theme::effective_vibrancy(original, user_vibrancy);
+            crate::theme::apply_theme(original, target_vibrancy, window, cx);
         }
         self.open = false;
         self.mode = PaletteMode::All;
@@ -324,8 +325,9 @@ impl ActionBar {
             && let Some(theme_id) = item.item.id.as_ref().strip_prefix("theme:")
             && let Some(theme) = AppTheme::from_theme_id(theme_id)
         {
-            let vibrancy = self.state.read(cx).startup_vibrancy;
-            crate::theme::apply_theme(theme, vibrancy, window, cx);
+            let user_vibrancy = self.state.read(cx).settings.appearance.vibrancy;
+            let target_vibrancy = crate::theme::effective_vibrancy(theme, user_vibrancy);
+            crate::theme::apply_theme(theme, target_vibrancy, window, cx);
         }
 
         cx.notify();
@@ -338,6 +340,7 @@ impl Render for ActionBar {
             return div().into_any_element();
         }
 
+        let appearance = self.state.read(cx).settings.appearance.clone();
         let entity = cx.entity().clone();
         let dismiss_entity = entity.clone();
         let item_count = self.filtered.len();
@@ -370,10 +373,10 @@ impl Render for ActionBar {
                     .w(px(620.0))
                     .flex()
                     .flex_col()
-                    .bg(cx.theme().tab_bar)
+                    .bg(islands::card_bg(&appearance, cx))
                     .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(borders::radius_sm())
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .rounded(islands::radius_md(&appearance))
                     .shadow_lg()
                     .overflow_hidden()
                     .text_color(cx.theme().foreground)
@@ -383,7 +386,7 @@ impl Render for ActionBar {
                         div()
                             .p(spacing::md())
                             .border_b_1()
-                            .border_color(cx.theme().sidebar_border)
+                            .border_color(islands::panel_border(&appearance, cx))
                             .child(if let Some(input_state) = &self.input_state {
                                 Input::new(input_state)
                                     .appearance(false)

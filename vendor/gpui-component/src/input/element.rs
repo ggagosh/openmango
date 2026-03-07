@@ -743,6 +743,7 @@ impl TextElement {
         let state = self.state.read(cx);
         let text = &state.text;
         let is_multi_line = state.mode.is_multi_line();
+        let custom = &state.custom_highlights;
 
         let (highlighter, diagnostics) = match &state.mode {
             InputMode::CodeEditor {
@@ -750,7 +751,33 @@ impl TextElement {
                 diagnostics,
                 ..
             } => (highlighter.borrow(), diagnostics),
-            _ => return None,
+            _ => {
+                // No syntax highlighter — return custom highlights if any.
+                if custom.is_empty() {
+                    return None;
+                }
+                // Build a full-coverage range list: gaps get a default style,
+                // custom ranges get their highlight style.
+                let text_len = text.len();
+                let mut full: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+                let default_style = HighlightStyle::default();
+                let mut pos = 0;
+                for (range, style) in custom {
+                    let start = range.start.min(text_len);
+                    let end = range.end.min(text_len);
+                    if start > pos {
+                        full.push((pos..start, default_style));
+                    }
+                    if end > start {
+                        full.push((start..end, *style));
+                    }
+                    pos = end;
+                }
+                if pos < text_len {
+                    full.push((pos..text_len, default_style));
+                }
+                return Some(full);
+            }
         };
         let highlighter = highlighter.as_ref()?;
 
@@ -785,6 +812,11 @@ impl TextElement {
 
         // Combine marker styles
         styles = gpui::combine_highlights(diagnostic_styles, styles).collect();
+
+        // Merge custom highlights on top
+        if !custom.is_empty() {
+            styles = gpui::combine_highlights(styles, custom.clone()).collect();
+        }
 
         Some(styles)
     }

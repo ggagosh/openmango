@@ -19,6 +19,7 @@ pub use filter_bar::{render_filter_row, render_query_options};
 pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::InputState;
@@ -27,13 +28,12 @@ use gpui_component::{Icon, IconName, Sizable as _};
 use crate::bson::DocumentKey;
 use crate::helpers::format_number;
 use crate::state::{CollectionSubview, SessionKey};
-use crate::theme::spacing;
+use crate::theme::{islands, spacing};
 
 use super::CollectionView;
 
 /// Render the header bar with collection title and action buttons.
 impl CollectionView {
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::views::documents) fn render_header(
         &self,
@@ -64,12 +64,15 @@ impl CollectionView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
-        let connection_name = {
+        let (connection_name, appearance) = {
             let state_ref = self.state.read(cx);
-            state_ref
-                .selected_connection_id()
-                .and_then(|id| state_ref.connection_name(id))
-                .unwrap_or_else(|| "Connection".to_string())
+            (
+                state_ref
+                    .selected_connection_id()
+                    .and_then(|id| state_ref.connection_name(id))
+                    .unwrap_or_else(|| "Connection".to_string()),
+                state_ref.settings.appearance.clone(),
+            )
         };
 
         let is_documents = active_subview == CollectionSubview::Documents;
@@ -80,8 +83,9 @@ impl CollectionView {
         let breadcrumb = format!("{connection_name} / {db_name} / {collection_name}");
 
         // Build action row based on active subview
+        let mut documents_toolbar_row: Option<Div> = None;
         let action_row = if is_documents {
-            render_documents_actions(
+            let docs_actions = render_documents_actions(
                 view,
                 self.state.clone(),
                 session_key.clone(),
@@ -91,7 +95,9 @@ impl CollectionView {
                 is_loading,
                 filter_active,
                 cx,
-            )
+            );
+            documents_toolbar_row = Some(docs_actions);
+            div().flex().items_center()
         } else if is_indexes {
             render_indexes_actions(self.state.clone(), session_key.clone())
         } else if is_stats {
@@ -111,23 +117,33 @@ impl CollectionView {
 
         // Build subview tabs
         let subview_tabs =
-            render_subview_tabs(self.state.clone(), session_key.clone(), active_subview);
+            render_subview_tabs(self.state.clone(), session_key.clone(), active_subview, cx);
 
         // Build the root header container
         let mut root = div()
             .flex()
             .flex_col()
             .px(spacing::lg())
-            .py(spacing::md())
-            .gap(spacing::sm())
-            .bg(cx.theme().tab_bar)
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .py(spacing::sm())
+            .gap(px(2.0))
+            .bg(islands::tool_bg(&appearance, cx))
             .on_mouse_down(MouseButton::Left, |_, window, _| {
                 window.blur();
             })
             .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
-            .child(div().pl(spacing::xs()).child(subview_tabs));
+            .child(div().pl(px(0.0)).child(subview_tabs))
+            .when_some(documents_toolbar_row, |s, row| {
+                s.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_start()
+                        .w_full()
+                        .pt(px(1.0))
+                        .pb(px(1.0))
+                        .child(row),
+                )
+            });
 
         // Add filter bar for documents subview
         if is_documents {
@@ -135,7 +151,9 @@ impl CollectionView {
                 self.state.clone(),
                 session_key.clone(),
                 filter_state.clone(),
+                sort_state.clone(),
                 filter_valid,
+                sort_valid,
                 filter_active,
                 sort_active,
                 projection_active,

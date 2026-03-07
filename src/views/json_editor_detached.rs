@@ -17,7 +17,7 @@ use crate::state::{
     AppCommands, AppEvent, AppState, EditorSessionId, EditorSessionStore, EditorSessionTarget,
     SessionKey,
 };
-use crate::theme::{fonts, spacing};
+use crate::theme::{fonts, islands, spacing};
 
 const DETACHED_WINDOW_WIDTH: f32 = 980.0;
 const DETACHED_WINDOW_HEIGHT: f32 = 760.0;
@@ -546,6 +546,7 @@ impl Render for DetachedJsonEditorView {
         };
         let notice = self.inline_notice.clone();
         let sync_issue = self.sync_issue;
+        let appearance = self.state.read(cx).settings.appearance.clone();
 
         let Some(editor) = self.editor_state.clone() else {
             return div()
@@ -564,7 +565,7 @@ impl Render for DetachedJsonEditorView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(islands::content_bg(&appearance, cx))
             .text_color(cx.theme().foreground)
             .on_action(cx.listener(|this, _: &CloseEditorWindow, window, cx| {
                 cx.stop_propagation();
@@ -606,8 +607,8 @@ impl Render for DetachedJsonEditorView {
                     .px(spacing::md())
                     .py(spacing::sm())
                     .border_b_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().tab_bar.opacity(0.35))
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .bg(islands::tool_bg(&appearance, cx).opacity(0.75))
                     .child(
                         div()
                             .flex()

@@ -192,10 +192,7 @@ pub struct Button {
     dropdown_caret: bool,
     size: Size,
     compact: bool,
-    tooltip: Option<(
-        SharedString,
-        Option<(Rc<Box<dyn Action>>, Option<SharedString>)>,
-    )>,
+    tooltip: Option<(SharedString, Option<(Rc<Box<dyn Action>>, Option<SharedString>)>)>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     loading: bool,
@@ -295,10 +292,7 @@ impl Button {
     ) -> Self {
         self.tooltip = Some((
             tooltip.into(),
-            Some((
-                Rc::new(action.boxed_clone()),
-                context.map(|c| c.to_string().into()),
-            )),
+            Some((Rc::new(action.boxed_clone()), context.map(|c| c.to_string().into()))),
         ));
         self
     }
@@ -433,10 +427,8 @@ impl RenderOnce for Button {
             _ => self.size,
         };
 
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
+        let focus_handle =
+            window.use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle()).read(cx).clone();
         let is_focused = focus_handle.is_focused(window);
 
         let rounding = match self.rounded {
@@ -449,11 +441,7 @@ impl RenderOnce for Button {
 
         self.base
             .when(!self.disabled, |this| {
-                this.track_focus(
-                    &focus_handle
-                        .tab_index(self.tab_index)
-                        .tab_stop(self.tab_stop),
-                )
+                this.track_focus(&focus_handle.tab_index(self.tab_index).tab_stop(self.tab_stop))
             })
             .cursor_default()
             .flex()
@@ -462,9 +450,7 @@ impl RenderOnce for Button {
             .justify_center()
             .cursor_default()
             .when(self.variant.is_link(), |this| this.cursor_pointer())
-            .when(cx.theme().shadow && normal_style.shadow, |this| {
-                this.shadow_xs()
-            })
+            .when(cx.theme().shadow && normal_style.shadow, |this| this.shadow_xs())
             .when(!style.no_padding(), |this| {
                 if self.label.is_none() && self.children.is_empty() {
                     // Icon Button
@@ -484,18 +470,10 @@ impl RenderOnce for Button {
                     }
                 }
             })
-            .when(self.border_corners.top_left, |this| {
-                this.rounded_tl(rounding)
-            })
-            .when(self.border_corners.top_right, |this| {
-                this.rounded_tr(rounding)
-            })
-            .when(self.border_corners.bottom_left, |this| {
-                this.rounded_bl(rounding)
-            })
-            .when(self.border_corners.bottom_right, |this| {
-                this.rounded_br(rounding)
-            })
+            .when(self.border_corners.top_left, |this| this.rounded_tl(rounding))
+            .when(self.border_corners.top_right, |this| this.rounded_tr(rounding))
+            .when(self.border_corners.bottom_left, |this| this.rounded_bl(rounding))
+            .when(self.border_corners.bottom_right, |this| this.rounded_br(rounding))
             .when(self.border_edges.left, |this| this.border_l_1())
             .when(self.border_edges.right, |this| this.border_r_1())
             .when(self.border_edges.top, |this| this.border_t_1())
@@ -515,7 +493,7 @@ impl RenderOnce for Button {
                         let hover_style = style.hovered(self.outline, cx);
                         this.bg(hover_style.bg)
                             .border_color(hover_style.border)
-                            .text_color(crate::red_400())
+                            .text_color(hover_style.fg)
                     })
                     .active(|this| {
                         let active_style = style.active(self.outline, cx);
@@ -763,13 +741,7 @@ impl ButtonVariant {
         let underline = self.underline(cx);
         let shadow = self.shadow(outline, cx);
 
-        ButtonVariantStyle {
-            bg,
-            border,
-            fg,
-            underline,
-            shadow,
-        }
+        ButtonVariantStyle { bg, border, fg, underline, shadow }
     }
 
     fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -837,13 +809,7 @@ impl ButtonVariant {
         let underline = self.underline(cx);
         let shadow = self.shadow(outline, cx);
 
-        ButtonVariantStyle {
-            bg,
-            border,
-            fg,
-            underline,
-            shadow,
-        }
+        ButtonVariantStyle { bg, border, fg, underline, shadow }
     }
 
     fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -910,13 +876,7 @@ impl ButtonVariant {
         let underline = self.underline(cx);
         let shadow = self.shadow(outline, cx);
 
-        ButtonVariantStyle {
-            bg,
-            border,
-            fg,
-            underline,
-            shadow,
-        }
+        ButtonVariantStyle { bg, border, fg, underline, shadow }
     }
 
     fn selected(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -941,13 +901,7 @@ impl ButtonVariant {
         let underline = self.underline(cx);
         let shadow = self.shadow(outline, cx);
 
-        ButtonVariantStyle {
-            bg,
-            border,
-            fg,
-            underline,
-            shadow,
-        }
+        ButtonVariantStyle { bg, border, fg, underline, shadow }
     }
 
     fn disabled(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -973,12 +927,6 @@ impl ButtonVariant {
         let underline = self.underline(cx);
         let shadow = false;
 
-        ButtonVariantStyle {
-            bg,
-            border,
-            fg,
-            underline,
-            shadow,
-        }
+        ButtonVariantStyle { bg, border, fg, underline, shadow }
     }
 }

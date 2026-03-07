@@ -16,7 +16,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use crate::components::Button;
 use crate::state::app_state::PipelineState;
 use crate::state::{SessionKey, StatusMessage};
-use crate::theme::{borders, spacing};
+use crate::theme::{islands, spacing};
 use crate::views::CollectionView;
 
 use super::operators::QUICK_START_OPERATORS;
@@ -31,15 +31,18 @@ impl CollectionView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
+        let appearance = self.state.read(cx).settings.appearance.clone();
+        let panel_bg = islands::card_bg(&appearance, cx);
+        let panel_border = islands::panel_border(&appearance, cx).opacity(0.5);
+        let panel_radius = islands::radius_sm(&appearance);
+        let header_bg = cx.theme().transparent;
         let header = div()
             .flex()
             .items_center()
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(cx.theme().tab_bar)
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .bg(header_bg)
             .child(div().text_sm().text_color(cx.theme().foreground).child("Stages"))
             .child({
                 let state = self.state.clone();
@@ -122,10 +125,10 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(cx.theme().sidebar)
+            .bg(panel_bg)
             .border_1()
-            .border_color(cx.theme().sidebar_border)
-            .rounded(borders::radius_sm())
+            .border_color(panel_border)
+            .rounded(panel_radius)
             .track_focus(&self.aggregation_focus)
             .on_mouse_down(MouseButton::Left, {
                 let focus = self.aggregation_focus.clone();

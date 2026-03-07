@@ -15,7 +15,7 @@ use gpui_component::tab::{Tab, TabBar};
 
 use crate::components::Button;
 use crate::state::AppCommands;
-use crate::theme::{sizing, spacing};
+use crate::theme::{islands, sizing, spacing};
 
 use super::{ConnectionManager, ManagerTab, TestStatus};
 
@@ -52,6 +52,7 @@ impl ConnectionManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let appearance = self.state.read(cx).settings.appearance.clone();
         let active_tab = self.active_tab;
         let parse_error = self.parse_error.clone();
         let global_parse_error =
@@ -78,6 +79,7 @@ impl ConnectionManager {
                     .items_center()
                     .px(spacing::md())
                     .h(sizing::header_height())
+                    .bg(islands::tool_bg(&appearance, cx))
                     .child(div().flex_1().min_w(px(0.0)).child(tab_bar)),
             )
             // Tab content — scrollable
@@ -118,9 +120,9 @@ impl ConnectionManager {
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let active_tab = self.active_tab;
+        let appearance = self.state.read(cx).settings.appearance.clone();
 
-        TabBar::new("connection-manager-tabs")
-            .underline()
+        islands::tab_bar(TabBar::new("connection-manager-tabs"), &appearance)
             .small()
             .min_w(px(0.0))
             .menu(false)
@@ -140,6 +142,7 @@ impl ConnectionManager {
     fn render_status_bar(&self, is_active_selection: bool, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let state = self.state.clone();
+        let appearance = self.state.read(cx).settings.appearance.clone();
         let status = self.status.clone();
         let testing_step = self.testing_step.clone();
         let is_testing = matches!(status, TestStatus::Testing);
@@ -165,7 +168,8 @@ impl ConnectionManager {
             .px(spacing::md())
             .h(sizing::header_height())
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(islands::panel_border(&appearance, cx))
+            .bg(islands::tool_bg(&appearance, cx))
             .child(
                 div()
                     .flex_1()

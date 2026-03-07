@@ -9,7 +9,7 @@ use gpui_component::{Icon, IconName, Sizable as _};
 use crate::bson::DocumentKey;
 use crate::components::Button;
 use crate::state::{AppState, SessionDocument, SessionKey};
-use crate::theme::{borders, spacing};
+use crate::theme::spacing;
 
 use super::super::CollectionView;
 use super::super::tree::lazy_tree::collect_all_expandable_nodes;
@@ -51,7 +51,6 @@ impl CollectionView {
         let editing_node_id = self.view_model.editing_node_id();
         let tree_state = self.view_model.tree_state();
         let inline_state = self.view_model.inline_state();
-
         let documents_view = div()
             .flex()
             .flex_1()
@@ -81,10 +80,8 @@ impl CollectionView {
                             .flex()
                             .items_center()
                             .px(spacing::lg())
-                            .py(spacing::xs())
-                            .bg(cx.theme().tab_bar)
-                            .border_b_1()
-                            .border_color(cx.theme().border)
+                            .py(px(7.0))
+                            .bg(cx.theme().tab_bar.opacity(0.55))
                             .child(
                                 div()
                                     .flex()
@@ -213,6 +210,161 @@ impl CollectionView {
                                     )
                             }),
                     )
+                    .children(show_search.then(|| {
+                        let search_state = self.search_state.clone();
+                        let view = view.clone();
+                        let case_active = self.search_case_sensitive;
+                        let word_active = self.search_whole_word;
+                        let regex_active = self.search_regex;
+                        let values_active = self.search_values_only;
+                        let active_bg = cx.theme().secondary.opacity(0.5);
+                        let active_fg = cx.theme().foreground;
+                        let inactive_fg = cx.theme().muted_foreground;
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .px(spacing::lg())
+                            .py(px(3.0))
+                            .child(if let Some(search_state) = search_state {
+                                Input::new(&search_state)
+                                    .w(px(220.0))
+                                    .appearance(false)
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            })
+                            .child(search_toggle_button(
+                                "search-case",
+                                Icon::new(IconName::CaseSensitive).xsmall(),
+                                case_active,
+                                "Case Sensitive",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_case_sensitive(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(search_toggle_button(
+                                "search-word",
+                                Icon::new(IconName::WholeWord).xsmall(),
+                                word_active,
+                                "Whole Word",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_whole_word(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(search_toggle_button(
+                                "search-regex",
+                                Icon::new(IconName::Regex).xsmall(),
+                                regex_active,
+                                "Regex",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_regex(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(search_toggle_button(
+                                "search-values",
+                                Icon::new(IconName::Braces).xsmall(),
+                                values_active,
+                                "Values Only",
+                                active_bg,
+                                active_fg,
+                                inactive_fg,
+                                {
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.toggle_search_values_only(cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ))
+                            .child(
+                                Button::new("search-prev")
+                                    .ghost()
+                                    .compact()
+                                    .icon(Icon::new(IconName::ChevronLeft).xsmall())
+                                    .tooltip("Previous match")
+                                    .disabled(match_total == 0)
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.prev_match(cx);
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("search-next")
+                                    .ghost()
+                                    .compact()
+                                    .icon(Icon::new(IconName::ChevronRight).xsmall())
+                                    .tooltip("Next match")
+                                    .disabled(match_total == 0)
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.next_match(cx);
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(match_label.clone()),
+                            )
+                            .child(
+                                Button::new("search-close")
+                                    .ghost()
+                                    .compact()
+                                    .icon(Icon::new(IconName::Close).xsmall())
+                                    .tooltip("Close search")
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.close_search(window, cx);
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
+                            .into_any_element()
+                    }))
                     .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(
                         if is_loading {
                             div()
@@ -286,170 +438,7 @@ impl CollectionView {
                             })
                             .into_any_element()
                         },
-                    ))
-                    .child(if show_search {
-                        let search_state = self.search_state.clone();
-                        let view = view.clone();
-                        let case_active = self.search_case_sensitive;
-                        let word_active = self.search_whole_word;
-                        let regex_active = self.search_regex;
-                        let values_active = self.search_values_only;
-                        let active_bg = cx.theme().secondary;
-                        let active_fg = cx.theme().foreground;
-                        let inactive_fg = cx.theme().muted_foreground;
-                        let divider_color = cx.theme().border;
-                        div()
-                            .absolute()
-                            .top(px(8.0))
-                            .right(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .px(spacing::sm())
-                            .py(px(4.0))
-                            .rounded(borders::radius_sm())
-                            .bg(cx.theme().tab_bar)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .child(if let Some(search_state) = search_state {
-                                Input::new(&search_state).w(px(220.0)).into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
-                            // Match mode toggles
-                            .child(search_toggle_button(
-                                "search-case",
-                                Icon::new(IconName::CaseSensitive).xsmall(),
-                                case_active,
-                                "Case Sensitive",
-                                active_bg,
-                                active_fg,
-                                inactive_fg,
-                                {
-                                    let view = view.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        view.update(cx, |this, cx| {
-                                            this.toggle_search_case_sensitive(cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            ))
-                            .child(search_toggle_button(
-                                "search-word",
-                                Icon::new(IconName::WholeWord).xsmall(),
-                                word_active,
-                                "Whole Word",
-                                active_bg,
-                                active_fg,
-                                inactive_fg,
-                                {
-                                    let view = view.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        view.update(cx, |this, cx| {
-                                            this.toggle_search_whole_word(cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            ))
-                            .child(search_toggle_button(
-                                "search-regex",
-                                Icon::new(IconName::Regex).xsmall(),
-                                regex_active,
-                                "Regex",
-                                active_bg,
-                                active_fg,
-                                inactive_fg,
-                                {
-                                    let view = view.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        view.update(cx, |this, cx| {
-                                            this.toggle_search_regex(cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            ))
-                            // Divider between match mode and scope
-                            .child(search_divider(divider_color))
-                            .child(search_toggle_button(
-                                "search-values",
-                                Icon::new(IconName::Braces).xsmall(),
-                                values_active,
-                                "Values Only",
-                                active_bg,
-                                active_fg,
-                                inactive_fg,
-                                {
-                                    let view = view.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        view.update(cx, |this, cx| {
-                                            this.toggle_search_values_only(cx);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            ))
-                            // Divider between scope and navigation
-                            .child(search_divider(divider_color))
-                            .child(
-                                Button::new("search-prev")
-                                    .ghost()
-                                    .compact()
-                                    .icon(Icon::new(IconName::ChevronLeft).xsmall())
-                                    .disabled(match_total == 0)
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| {
-                                                this.prev_match(cx);
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("search-next")
-                                    .ghost()
-                                    .compact()
-                                    .icon(Icon::new(IconName::ChevronRight).xsmall())
-                                    .disabled(match_total == 0)
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| {
-                                                this.next_match(cx);
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(match_label.clone()),
-                            )
-                            .child(
-                                Button::new("search-close")
-                                    .ghost()
-                                    .compact()
-                                    .icon(Icon::new(IconName::Close).xsmall())
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| {
-                                                this.close_search(window, cx);
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                            )
-                            .into_any_element()
-                    } else {
-                        div().into_any_element()
-                    }),
+                    )),
             );
 
         let main_panel =
@@ -485,13 +474,9 @@ fn search_toggle_button(
 ) -> Button {
     let icon = if active { icon.text_color(active_fg) } else { icon.text_color(inactive_fg) };
     let mut btn =
-        Button::new(id).ghost().compact().icon(icon).tooltip(tooltip_text).on_click(on_click);
+        Button::new(id).compact().icon(icon).tooltip(tooltip_text).on_click(on_click).ghost();
     if active {
         btn = btn.active_style(active_bg);
     }
     btn
-}
-
-fn search_divider(color: Hsla) -> Div {
-    div().w(px(1.0)).h(px(16.0)).bg(color)
 }

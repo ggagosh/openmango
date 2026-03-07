@@ -96,4 +96,55 @@ impl AppCommands {
             .detach();
         }
     }
+
+    /// Fetch schema metadata for a single collection (used by @-mention).
+    pub fn fetch_single_collection_meta(state: Entity<AppState>, key: SessionKey, cx: &mut App) {
+        let (client, manager) = {
+            let s = state.read(cx);
+            let conn_id = key.connection_id;
+            let active = match s.active_connection_by_id(conn_id) {
+                Some(c) => c,
+                None => return,
+            };
+            (active.client.clone(), s.connection_manager())
+        };
+
+        state.update(cx, |s, _| {
+            s.mark_collection_meta_inflight(&key);
+        });
+
+        let database = key.database.clone();
+        let collection = key.collection.clone();
+
+        let task = cx.background_spawn({
+            let manager = manager.clone();
+            let client = client.clone();
+            async move {
+                let (docs, total) = manager.sample_for_schema(
+                    &client,
+                    &database,
+                    &collection,
+                    SCHEMA_SAMPLE_SIZE,
+                )?;
+                Ok::<_, crate::error::Error>(build_schema_analysis(&docs, total))
+            }
+        });
+
+        cx.spawn({
+            let key = key.clone();
+            async move |cx: &mut gpui::AsyncApp| {
+                let result = task.await;
+                let _ = cx.update(|cx| {
+                    state.update(cx, |s, cx| {
+                        s.clear_collection_meta_inflight(&key);
+                        if let Ok(schema) = result {
+                            s.set_collection_meta(key, schema);
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
+    }
 }

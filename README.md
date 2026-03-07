@@ -76,7 +76,7 @@ Standard connections, SRV records, SSH tunneling, and SOCKS5 proxy support. Conn
 
 ### Themes
 
-13 built-in themes — Vercel Dark, Darcula, Tokyo Night, Nord, One Dark, Catppuccin (Mocha & Latte), Solarized (Dark & Light), Ros&eacute; Pine (Dark & Dawn), and Gruvbox (Dark & Light).
+15 built-in themes — Vercel Dark, OpenMango Islands (Dark & Light), Darcula, Tokyo Night, Nord, One Dark, Catppuccin (Mocha & Latte), Solarized (Dark & Light), Ros&eacute; Pine (Dark & Dawn), and Gruvbox (Dark & Light).
 
 See [`docs/features.md`](docs/features.md) for the complete feature matrix.
 

@@ -48,12 +48,18 @@ pub async fn generate_text_streaming(
     event_tx: UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     settings.validate_for_request()?;
-    let tools: Vec<Box<dyn ToolDyn>> = tool_ctx
-        .map(|mut ctx| {
-            ctx.event_tx = Some(event_tx.clone());
-            build_tools(ctx)
-        })
-        .unwrap_or_default();
+    let tools: Vec<Box<dyn ToolDyn>> = match settings.provider {
+        // OpenAI GPT-5 models can reject tool-call replay in multi-turn streams
+        // with: function_call item missing required reasoning item.
+        // Keep OpenAI stable by running without attached tools.
+        AiProvider::OpenAi => Vec::new(),
+        _ => tool_ctx
+            .map(|mut ctx| {
+                ctx.event_tx = Some(event_tx.clone());
+                build_tools(ctx)
+            })
+            .unwrap_or_default(),
+    };
     match settings.provider {
         AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &event_tx).await,
         AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &event_tx).await,
@@ -86,7 +92,6 @@ async fn call_gemini(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
@@ -117,7 +122,6 @@ async fn call_openai(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
@@ -148,7 +152,6 @@ async fn call_anthropic(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
@@ -199,7 +202,6 @@ async fn call_ollama(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
@@ -236,7 +238,6 @@ async fn call_gemini_streaming(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .tools(tools)
         .build();
@@ -267,7 +268,6 @@ async fn call_openai_streaming(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .tools(tools)
         .build();
@@ -298,7 +298,6 @@ async fn call_anthropic_streaming(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .tools(tools)
         .build();
@@ -349,7 +348,6 @@ async fn call_ollama_streaming(
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
-        .temperature(0.2)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .tools(tools)
         .build();

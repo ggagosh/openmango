@@ -34,6 +34,7 @@ pub struct ResizablePanelGroup {
     axis: Axis,
     size: Option<Pixels>,
     children: Vec<ResizablePanel>,
+    handle_line_visible: bool,
     on_resize: Rc<dyn Fn(&Entity<ResizableState>, &mut Window, &mut App)>,
 }
 
@@ -46,6 +47,7 @@ impl ResizablePanelGroup {
             children: vec![],
             state: None,
             size: None,
+            handle_line_visible: true,
             on_resize: Rc::new(|_, _, _| {}),
         }
     }
@@ -89,6 +91,12 @@ impl ResizablePanelGroup {
     /// - When the axis is vertical, the size is the width of the group.
     pub fn size(mut self, size: Pixels) -> Self {
         self.size = Some(size);
+        self
+    }
+
+    /// Set whether the resize handle line is visible, default is true.
+    pub fn handle_line_visible(mut self, visible: bool) -> Self {
+        self.handle_line_visible = visible;
         self
     }
 
@@ -151,6 +159,7 @@ impl RenderOnce for ResizablePanelGroup {
                         panel.panel_ix = ix;
                         panel.axis = self.axis;
                         panel.state = Some(state.clone());
+                        panel.handle_line_visible = self.handle_line_visible;
                         panel
                     }),
             )
@@ -190,6 +199,7 @@ pub struct ResizablePanel {
     axis: Axis,
     panel_ix: usize,
     state: Option<Entity<ResizableState>>,
+    handle_line_visible: bool,
     /// Initial size is the size that the panel has when it is created.
     initial_size: Option<Pixels>,
     /// size range limit of this panel.
@@ -205,6 +215,7 @@ impl ResizablePanel {
             panel_ix: 0,
             initial_size: None,
             state: None,
+            handle_line_visible: true,
             size_range: (PANEL_MIN_SIZE..Pixels::MAX),
             axis: Axis::Horizontal,
             children: vec![],
@@ -302,17 +313,18 @@ impl RenderOnce for ResizablePanel {
             .children(self.children)
             .when(self.panel_ix > 0, |this| {
                 let ix = self.panel_ix - 1;
-                this.child(resize_handle(("resizable-handle", ix), self.axis).on_drag(
-                    DragPanel,
-                    move |drag_panel, _, _, cx| {
-                        cx.stop_propagation();
-                        // Set current resizing panel ix
-                        state.update(cx, |state, _| {
-                            state.resizing_panel_ix = Some(ix);
-                        });
-                        cx.new(|_| drag_panel.deref().clone())
-                    },
-                ))
+                this.child(
+                    resize_handle(("resizable-handle", ix), self.axis)
+                        .line_visible(self.handle_line_visible)
+                        .on_drag(DragPanel, move |drag_panel, _, _, cx| {
+                            cx.stop_propagation();
+                            // Set current resizing panel ix
+                            state.update(cx, |state, _| {
+                                state.resizing_panel_ix = Some(ix);
+                            });
+                            cx.new(|_| drag_panel.deref().clone())
+                        }),
+                )
             })
     }
 }

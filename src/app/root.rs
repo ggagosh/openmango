@@ -11,11 +11,16 @@ use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
     InstallUpdate, NewConnection, NextTab, OpenActionBar, OpenForge, OpenSettings, PrevTab,
-    QuitApp, RefreshView,
+    QuitApp, RefreshView, ToggleAiPanel,
 };
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
-use crate::theme::{borders, spacing};
+use crate::theme::{borders, islands, spacing};
+use crate::views::AiView;
+
+const AI_ISLAND_DEFAULT_WIDTH: f32 = 380.0;
+const AI_ISLAND_MIN_WIDTH: f32 = 320.0;
+const AI_ISLAND_MAX_WIDTH: f32 = 900.0;
 
 // =============================================================================
 // App Component
@@ -23,14 +28,19 @@ use crate::theme::{borders, spacing};
 
 pub struct AppRoot {
     pub(super) state: Entity<AppState>,
+    focus_handle: FocusHandle,
     sidebar: Entity<Sidebar>,
     content_area: Entity<ContentArea>,
+    ai_view: Entity<AiView>,
     pub(super) action_bar: Entity<ActionBar>,
     pub(super) key_debug: bool,
     pub(super) last_keystroke: Option<String>,
     sidebar_dragging: bool,
     sidebar_drag_start_x: Pixels,
     sidebar_drag_start_width: Pixels,
+    ai_dragging: bool,
+    ai_drag_start_x: Pixels,
+    ai_drag_start_width: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -146,6 +156,7 @@ impl AppRoot {
 
         // Create content area with state reference
         let content_area = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        let ai_view = cx.new(|cx| AiView::new(state.clone(), cx));
 
         // Create action bar with execution callback
         let action_bar = cx.new(|_cx| {
@@ -225,16 +236,23 @@ impl AppRoot {
         let subscription = Self::install_global_shortcuts(cx);
         subscriptions.push(subscription);
 
+        let focus_handle = cx.focus_handle();
+
         Self {
             state,
+            focus_handle,
             sidebar,
             content_area,
+            ai_view,
             action_bar,
             key_debug,
             last_keystroke: None,
             sidebar_dragging: false,
             sidebar_drag_start_x: px(0.0),
             sidebar_drag_start_width: px(0.0),
+            ai_dragging: false,
+            ai_drag_start_x: px(0.0),
+            ai_drag_start_width: AI_ISLAND_DEFAULT_WIDTH,
             _subscriptions: subscriptions,
         }
     }
@@ -256,6 +274,13 @@ impl Render for AppRoot {
         let status_message = state.status_message();
         let read_only = active_conn.map(|c| c.config.read_only).unwrap_or(false);
         let show_status_bar = state.settings.appearance.show_status_bar;
+        let appearance = state.settings.appearance.clone();
+        let show_ai_island = state.ai_chat.panel_open && state.ai_assistant_available();
+        let ai_panel_width = state
+            .workspace
+            .ai_panel_width
+            .unwrap_or(AI_ISLAND_DEFAULT_WIDTH)
+            .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
         let vibrancy = state.startup_vibrancy;
         let update_status = state.update_status.clone();
 
@@ -293,12 +318,16 @@ impl Render for AppRoot {
 
         let mut root = div()
             .key_context(key_context.as_str())
+            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .size_full()
             .relative()
             .when(vibrancy, |s| s.pt(px(28.0)))
-            .bg(cx.theme().background)
+            .bg(islands::canvas_bg(&appearance, cx))
+            .border_1()
+            .border_color(islands::panel_border(&appearance, cx))
+            .rounded(islands::radius_md(&appearance))
             .text_color(cx.theme().foreground)
             .font_family(crate::theme::fonts::ui())
             .line_height(crate::theme::fonts::ui_line_height())
@@ -420,6 +449,11 @@ impl Render for AppRoot {
                     state.open_settings_tab(cx);
                 });
             }))
+            .on_action(cx.listener(|this, _: &ToggleAiPanel, _window, cx| {
+                this.state.update(cx, |state, cx| {
+                    state.toggle_ai_panel(cx);
+                });
+            }))
             .on_action(cx.listener(|this, _: &OpenForge, _window, cx| {
                 this.state.update(cx, |state, cx| {
                     let Some(key) = state.current_database_key() else {
@@ -436,16 +470,22 @@ impl Render for AppRoot {
             }))
             .child({
                 let is_dragging = self.sidebar_dragging;
+                let is_ai_dragging = self.ai_dragging;
+                let sidebar_collapsed = self.sidebar.read(cx).width() == px(0.0);
 
                 let resize_handle = div()
                     .id("sidebar-resize-handle")
                     .flex_shrink_0()
-                    .w(px(4.0))
+                    .w(px(6.0))
                     .h_full()
                     .cursor_col_resize()
                     .bg(crate::theme::colors::transparent())
-                    .hover(|s| s.bg(cx.theme().ring))
-                    .when(is_dragging, |s: Stateful<Div>| s.bg(cx.theme().ring))
+                    .my(px(10.0))
+                    .rounded(px(999.0))
+                    .hover(|s| s.bg(islands::panel_border(&appearance, cx).opacity(0.7)))
+                    .when(is_dragging, |s: Stateful<Div>| {
+                        s.bg(islands::panel_border(&appearance, cx).opacity(0.9))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -465,21 +505,82 @@ impl Render for AppRoot {
                         }
                     }));
 
+                let sidebar_panel = div()
+                    .h_full()
+                    .overflow_hidden()
+                    .rounded(islands::radius_md(&appearance))
+                    .border_1()
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .bg(islands::tool_bg(&appearance, cx))
+                    .when(sidebar_collapsed, |s| s.w(px(0.0)).border_0())
+                    .child(self.sidebar.clone())
+                    .into_any_element();
+
+                let content_panel = div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .rounded(islands::radius_md(&appearance))
+                    .border_1()
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .bg(islands::content_bg(&appearance, cx))
+                    .child(self.content_area.clone())
+                    .into_any_element();
+
+                let ai_resize_handle = div()
+                    .id("ai-resize-handle")
+                    .flex_shrink_0()
+                    .w(px(6.0))
+                    .h_full()
+                    .cursor_col_resize()
+                    .bg(crate::theme::colors::transparent())
+                    .my(px(10.0))
+                    .rounded(px(999.0))
+                    .hover(|s| s.bg(islands::panel_border(&appearance, cx).opacity(0.7)))
+                    .when(is_ai_dragging, |s: Stateful<Div>| {
+                        s.bg(islands::panel_border(&appearance, cx).opacity(0.9))
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            this.ai_dragging = true;
+                            this.ai_drag_start_x = event.position.x;
+                            this.ai_drag_start_width = ai_panel_width;
+                            cx.notify();
+                        }),
+                    );
+
+                let ai_panel = div()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .w(px(ai_panel_width))
+                    .min_w(px(ai_panel_width))
+                    .max_w(px(ai_panel_width))
+                    .h_full()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .rounded(islands::radius_md(&appearance))
+                    .border_1()
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .bg(islands::ai_shell_bg(&appearance, cx))
+                    .child(self.ai_view.clone())
+                    .into_any_element();
+
                 let mut row = div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(self.sidebar.clone())
+                    .px(spacing::xs())
+                    .py(spacing::xs())
+                    .child(sidebar_panel)
                     .child(resize_handle)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .min_h(px(0.0))
-                            .child(self.content_area.clone()),
-                    );
+                    .child(content_panel)
+                    .children(show_ai_island.then(|| ai_resize_handle.into_any_element()))
+                    .children(show_ai_island.then_some(ai_panel));
 
                 if is_dragging {
                     row = row
@@ -501,6 +602,26 @@ impl Render for AppRoot {
                         );
                 }
 
+                if is_ai_dragging {
+                    row = row
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                            let delta = event.position.x - this.ai_drag_start_x;
+                            let new_width = (this.ai_drag_start_width - f32::from(delta))
+                                .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
+                            this.state.update(cx, |state, _cx| {
+                                state.set_workspace_ai_panel_width(new_width);
+                            });
+                            cx.notify();
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                this.ai_dragging = false;
+                                cx.notify();
+                            }),
+                        );
+                }
+
                 row
             })
             .children(show_status_bar.then(|| {
@@ -513,6 +634,10 @@ impl Render for AppRoot {
                     read_only,
                     update_status,
                     self.state.clone(),
+                )
+                .ai_state(
+                    self.state.read(cx).ai_assistant_available(),
+                    self.state.read(cx).ai_chat.panel_open,
                 )
                 .sidebar_collapsed(sidebar_collapsed)
                 .on_toggle_sidebar(move |_window: &mut Window, cx: &mut App| {

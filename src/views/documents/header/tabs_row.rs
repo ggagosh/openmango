@@ -5,15 +5,18 @@ use gpui_component::Sizable as _;
 use gpui_component::tab::{Tab, TabBar};
 
 use crate::state::{AppCommands, AppState, CollectionSubview, SessionKey};
+use crate::theme::islands;
 
 /// Render the subview tabs (Documents/Indexes/Stats/Aggregation/Schema).
 pub fn render_subview_tabs(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     active_subview: CollectionSubview,
+    cx: &App,
 ) -> TabBar {
-    TabBar::new("collection-subview-tabs")
-        .underline()
+    let appearance = state.read(cx).settings.appearance.clone();
+
+    islands::tab_bar(TabBar::new("collection-subview-tabs"), &appearance)
         .xsmall()
         .selected_index(active_subview.to_index())
         .on_click({

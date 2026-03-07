@@ -5,10 +5,11 @@
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
-    Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    EventEmitter, FocusHandle, Focusable, HighlightStyle, InteractiveElement as _, IntoElement,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    Styled as _, Subscription, Task, UTF16Selection, Window, actions, div, point,
+    prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
@@ -374,6 +375,10 @@ pub struct InputState {
 
     pub(super) _context_menu_task: Task<Result<()>>,
     pub(super) inline_completion: InlineCompletion,
+
+    /// Custom highlight ranges applied on top of (or instead of) syntax highlights.
+    /// Byte ranges into the text + style.
+    pub(super) custom_highlights: Vec<(Range<usize>, HighlightStyle)>,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -453,6 +458,7 @@ impl InputState {
             _context_menu_task: Task::ready(Ok(())),
             _pending_update: false,
             inline_completion: InlineCompletion::default(),
+            custom_highlights: Vec::new(),
         }
     }
 
@@ -702,6 +708,12 @@ impl InputState {
         self.scroll_handle.set_offset(point(px(0.), px(0.)));
 
         cx.notify();
+    }
+
+    /// Set custom highlight ranges (byte offsets into the text).
+    /// These are rendered on top of any syntax highlights.
+    pub fn set_custom_highlights(&mut self, highlights: Vec<(Range<usize>, HighlightStyle)>) {
+        self.custom_highlights = highlights;
     }
 
     /// Insert text at the current cursor position.

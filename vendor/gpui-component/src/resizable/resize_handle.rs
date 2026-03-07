@@ -25,6 +25,7 @@ pub(crate) struct ResizeHandle<T: 'static, E: 'static + Render> {
     drag_value: Option<Rc<T>>,
     placement: Option<DockPlacement>,
     on_drag: Option<Rc<dyn Fn(&Point<Pixels>, &mut Window, &mut App) -> Entity<E>>>,
+    line_visible: bool,
 }
 
 impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
@@ -36,6 +37,7 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
             drag_value: None,
             placement: None,
             axis,
+            line_visible: true,
         }
     }
 
@@ -54,6 +56,11 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
 
     pub(crate) fn placement(mut self, placement: DockPlacement) -> Self {
         self.placement = Some(placement);
+        self
+    }
+
+    pub(crate) fn line_visible(mut self, visible: bool) -> Self {
+        self.line_visible = visible;
         self
     }
 }
@@ -107,6 +114,8 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
 
             let bg_color = if state.is_active() {
                 cx.theme().drag_border
+            } else if !self.line_visible {
+                cx.theme().transparent
             } else {
                 cx.theme().border
             };

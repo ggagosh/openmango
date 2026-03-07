@@ -8,8 +8,8 @@
       "mode": "light",
       "font.family": "JetBrainsMono Nerd Font",
       "mono_font.family": "JetBrainsMono Nerd Font Mono",
-      "radius": 3,
-      "radius.lg": 6,
+      "radius": 8,
+      "radius.lg": 8,
       "shadow": false,
       "colors": {
         "background": "#faf4ed",
@@ -69,7 +69,7 @@
 
         "list.background": "#faf4ed",
         "list.hover.background": "#f2e9e1",
-        "list.active.background": "#28698322",
+        "list.active.background": "#28698344",
         "list.active.border": "#286983",
         "list.even.background": "#f6f0e9",
 

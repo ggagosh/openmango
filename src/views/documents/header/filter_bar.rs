@@ -1,7 +1,9 @@
 //! Filter bar and query options rendering for collection header.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::RopeExt as _;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName, Sizable as _};
 
@@ -10,22 +12,14 @@ use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 
-/// Render a query input wrapped with validation border.
-fn render_query_input(
-    input_state: &Entity<InputState>,
-    valid: bool,
-    disabled: bool,
-    cx: &App,
-) -> Div {
-    let border = if valid { cx.theme().input } else { cx.theme().danger };
-
-    div().border_1().border_color(border).rounded(cx.theme().radius).child(
-        Input::new(input_state)
-            .font_family(crate::theme::fonts::mono())
-            .bordered(false)
-            .w_full()
-            .disabled(disabled),
-    )
+fn set_query_object_default(
+    input: &mut InputState,
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+) {
+    input.set_value("{}".to_string(), window, cx);
+    let position = input.text().offset_to_position(1);
+    input.set_cursor_position(position, window, cx);
 }
 
 /// Render the filter row with filter input and buttons.
@@ -34,7 +28,9 @@ pub fn render_filter_row(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     filter_state: Option<Entity<InputState>>,
+    sort_state: Option<Entity<InputState>>,
     filter_valid: bool,
+    sort_valid: bool,
     filter_active: bool,
     sort_active: bool,
     projection_active: bool,
@@ -45,40 +41,45 @@ pub fn render_filter_row(
     let state_for_filter = state.clone();
     let state_for_clear = state.clone();
     let state_for_toggle = state.clone();
-
-    let options_label =
-        if sort_active || projection_active { "Options \u{2022}" } else { "Options" };
-    let options_icon =
-        Icon::new(if query_options_open { IconName::ChevronDown } else { IconName::ChevronRight })
-            .xsmall();
-
-    let hint = if !filter_valid { "invalid json" } else { "enter to run" };
-    let hint_color = if !filter_valid { cx.theme().danger } else { cx.theme().muted_foreground };
+    let disabled = session_key.is_none();
+    let segmented_border = cx.theme().sidebar_border.opacity(0.5);
 
     div()
         .flex()
         .items_center()
-        .gap(spacing::sm())
-        .child(if let Some(filter_state) = filter_state.clone() {
+        .gap(spacing::xs())
+        .child(
             div()
                 .flex()
-                .flex_col()
+                .items_center()
                 .flex_1()
-                .min_w(px(240.0))
-                .gap(spacing::xs())
-                .on_mouse_down(MouseButton::Left, |_, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(render_query_input(&filter_state, filter_valid, session_key.is_none(), cx))
-                .child(div().text_xs().text_color(hint_color).child(hint.to_string()))
-                .into_any_element()
-        } else {
-            div().flex_1().into_any_element()
-        })
+                .min_w(px(360.0))
+                .rounded(borders::radius_md())
+                .border_1()
+                .border_color(segmented_border)
+                .bg(cx.theme().secondary.opacity(0.14))
+                .child(render_query_segment(
+                    "query-segment-find",
+                    IconName::Search,
+                    filter_state.clone(),
+                    "find {}",
+                    filter_valid,
+                    disabled,
+                    cx,
+                ))
+                .child(div().w(px(1.0)).h(px(16.0)).bg(segmented_border.opacity(0.65)))
+                .child(render_query_segment(
+                    "query-segment-sort",
+                    IconName::SortAscending,
+                    sort_state.clone(),
+                    "sort",
+                    sort_valid,
+                    disabled,
+                    cx,
+                )),
+        )
         .child(
-            Button::new("apply-filter")
-                .compact()
-                .label("Filter")
+            filter_action_button(Button::new("apply-filter").compact(), IconName::Search, "Run")
                 .disabled(session_key.is_none() || !filter_valid)
                 .on_click({
                     let session_key = session_key.clone();
@@ -102,9 +103,7 @@ pub fn render_filter_row(
                 }),
         )
         .child(
-            Button::new("run-explain")
-                .compact()
-                .label("Explain")
+            filter_action_button(Button::new("run-explain").compact(), IconName::Info, "Explain")
                 .disabled(session_key.is_none() || explain_loading)
                 .on_click({
                     let session_key = session_key.clone();
@@ -118,41 +117,42 @@ pub fn render_filter_row(
                 }),
         )
         .child(
-            Button::new("clear-filter")
-                .compact()
-                .label("Clear")
-                .disabled(session_key.is_none() || !filter_active)
-                .on_click({
-                    let session_key = session_key.clone();
-                    let filter_state = filter_state.clone();
-                    let state_for_clear = state_for_clear.clone();
-                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        let Some(filter_state) = filter_state.clone() else {
-                            return;
-                        };
-                        filter_state.update(cx, |state, cx| {
-                            state.set_value("{}".to_string(), window, cx);
-                        });
-                        CollectionView::apply_filter(
-                            state_for_clear.clone(),
-                            session_key,
-                            filter_state,
-                            window,
-                            cx,
-                        );
-                    }
-                }),
+            filter_action_button(
+                Button::new("clear-filter").compact(),
+                IconName::Close,
+                "Clear Find",
+            )
+            .disabled(session_key.is_none() || !filter_active)
+            .on_click({
+                let session_key = session_key.clone();
+                let filter_state = filter_state.clone();
+                let state_for_clear = state_for_clear.clone();
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    let Some(session_key) = session_key.clone() else {
+                        return;
+                    };
+                    let Some(filter_state) = filter_state.clone() else {
+                        return;
+                    };
+                    filter_state.update(cx, |state, cx| {
+                        set_query_object_default(state, window, cx);
+                    });
+                    CollectionView::apply_filter(
+                        state_for_clear.clone(),
+                        session_key,
+                        filter_state,
+                        window,
+                        cx,
+                    );
+                }
+            }),
         )
-        .child(
-            Button::new("toggle-options")
+        .child({
+            let mut options_button = Button::new("toggle-options")
                 .ghost()
                 .compact()
-                .label(options_label)
-                .icon(options_icon)
-                .icon_right()
+                .icon(Icon::new(IconName::Settings).xsmall())
+                .tooltip("Projection options")
                 .disabled(session_key.is_none())
                 .on_click({
                     let session_key = session_key.clone();
@@ -162,13 +162,57 @@ pub fn render_filter_row(
                             return;
                         };
                         state_for_toggle.update(cx, |state, cx| {
-                            let session = state.ensure_session(session_key.clone());
-                            session.view.query_options_open = !session.view.query_options_open;
+                            state.toggle_query_options_open(&session_key);
                             cx.notify();
                         });
                     }
-                }),
-        )
+                });
+            if query_options_open || sort_active || projection_active {
+                options_button = options_button.active_style(cx.theme().secondary);
+            }
+            options_button
+        })
+}
+
+fn render_query_segment(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    state: Option<Entity<InputState>>,
+    placeholder: &'static str,
+    valid: bool,
+    disabled: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let mut row = div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(spacing::xs())
+        .flex_1()
+        .min_w(px(0.0))
+        .px(spacing::sm())
+        .py(px(2.0))
+        .text_color(if valid { cx.theme().muted_foreground } else { cx.theme().danger })
+        .when(!valid, |s| s.bg(cx.theme().danger.opacity(0.08)))
+        .child(Icon::new(icon).xsmall())
+        .on_mouse_down(MouseButton::Left, |_, _window, cx| {
+            cx.stop_propagation();
+        });
+
+    if let Some(state) = state {
+        row = row.child(
+            Input::new(&state)
+                .small()
+                .font_family(crate::theme::fonts::mono())
+                .appearance(false)
+                .w_full()
+                .disabled(disabled),
+        );
+    } else {
+        row = row.child(div().text_xs().child(placeholder));
+    }
+
+    row
 }
 
 /// Render the query options panel (sort/projection).
@@ -188,139 +232,107 @@ pub fn render_query_options(
     let state_for_clear = state.clone();
 
     let apply_disabled = session_key.is_none() || !sort_valid || !projection_valid;
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(spacing::sm())
-        .px(spacing::md())
-        .py(spacing::sm())
-        .bg(cx.theme().sidebar)
-        .border_1()
-        .border_color(cx.theme().sidebar_border)
-        .rounded(borders::radius_sm())
-        .child(render_query_option_row(
-            "Sort",
-            sort_state.clone(),
-            sort_valid,
-            session_key.is_none(),
-            cx,
-        ))
-        .child(render_query_option_row(
-            "Project",
-            projection_state.clone(),
-            projection_valid,
-            session_key.is_none(),
-            cx,
-        ))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap(spacing::sm())
-                .child(
-                    Button::new("apply-query")
-                        .compact()
-                        .label("Apply")
-                        .disabled(apply_disabled)
-                        .on_click({
-                            let session_key = session_key.clone();
-                            let sort_state = sort_state.clone();
-                            let projection_state = projection_state.clone();
-                            let state_for_query = state_for_query.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                let Some(session_key) = session_key.clone() else {
-                                    return;
-                                };
-                                let Some(sort_state) = sort_state.clone() else {
-                                    return;
-                                };
-                                let Some(projection_state) = projection_state.clone() else {
-                                    return;
-                                };
-                                CollectionView::apply_query_options(
-                                    state_for_query.clone(),
-                                    session_key,
-                                    sort_state,
-                                    projection_state,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("clear-query")
-                        .compact()
-                        .label("Clear")
-                        .disabled(session_key.is_none() || (!sort_active && !projection_active))
-                        .on_click({
-                            let session_key = session_key.clone();
-                            let sort_state = sort_state.clone();
-                            let projection_state = projection_state.clone();
-                            let state_for_clear = state_for_clear.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                let Some(session_key) = session_key.clone() else {
-                                    return;
-                                };
-                                let Some(sort_state) = sort_state.clone() else {
-                                    return;
-                                };
-                                let Some(projection_state) = projection_state.clone() else {
-                                    return;
-                                };
-                                sort_state.update(cx, |state, cx| {
-                                    state.set_value("{}".to_string(), window, cx);
-                                });
-                                projection_state.update(cx, |state, cx| {
-                                    state.set_value("{}".to_string(), window, cx);
-                                });
-                                CollectionView::apply_query_options(
-                                    state_for_clear.clone(),
-                                    session_key,
-                                    sort_state,
-                                    projection_state,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        }),
-                ),
-        )
-}
-
-/// Render a single query option row (label + input).
-pub fn render_query_option_row(
-    label: &str,
-    state: Option<Entity<InputState>>,
-    valid: bool,
-    disabled: bool,
-    cx: &App,
-) -> AnyElement {
-    let Some(state) = state else {
-        return div().into_any_element();
-    };
+    let disabled = session_key.is_none();
+    let segmented_border = cx.theme().sidebar_border.opacity(0.5);
 
     div()
         .flex()
         .items_center()
-        .gap(spacing::sm())
+        .gap(spacing::xs())
         .child(
             div()
-                .w(px(72.0))
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(label.to_string()),
-        )
-        .child(
-            div()
+                .flex()
+                .items_center()
                 .flex_1()
-                .min_w(px(0.0))
-                .on_mouse_down(MouseButton::Left, |_, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(render_query_input(&state, valid, disabled, cx)),
+                .min_w(px(240.0))
+                .rounded(borders::radius_md())
+                .border_1()
+                .border_color(segmented_border)
+                .bg(cx.theme().secondary.opacity(0.14))
+                .child(render_query_segment(
+                    "query-segment-project",
+                    IconName::Braces,
+                    projection_state.clone(),
+                    "project {}",
+                    projection_valid,
+                    disabled,
+                    cx,
+                )),
         )
-        .into_any_element()
+        .child(
+            filter_action_button(
+                Button::new("apply-query").compact(),
+                IconName::Check,
+                "Apply options",
+            )
+            .disabled(apply_disabled)
+            .on_click({
+                let session_key = session_key.clone();
+                let sort_state = sort_state.clone();
+                let projection_state = projection_state.clone();
+                let state_for_query = state_for_query.clone();
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    let Some(session_key) = session_key.clone() else {
+                        return;
+                    };
+                    let Some(sort_state) = sort_state.clone() else {
+                        return;
+                    };
+                    let Some(projection_state) = projection_state.clone() else {
+                        return;
+                    };
+                    CollectionView::apply_query_options(
+                        state_for_query.clone(),
+                        session_key,
+                        sort_state,
+                        projection_state,
+                        window,
+                        cx,
+                    );
+                }
+            }),
+        )
+        .child(
+            filter_action_button(
+                Button::new("clear-query").compact(),
+                IconName::Close,
+                "Clear options",
+            )
+            .disabled(session_key.is_none() || (!sort_active && !projection_active))
+            .on_click({
+                let session_key = session_key.clone();
+                let sort_state = sort_state.clone();
+                let projection_state = projection_state.clone();
+                let state_for_clear = state_for_clear.clone();
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    let Some(session_key) = session_key.clone() else {
+                        return;
+                    };
+                    let Some(sort_state) = sort_state.clone() else {
+                        return;
+                    };
+                    let Some(projection_state) = projection_state.clone() else {
+                        return;
+                    };
+                    sort_state.update(cx, |state, cx| {
+                        set_query_object_default(state, window, cx);
+                    });
+                    projection_state.update(cx, |state, cx| {
+                        set_query_object_default(state, window, cx);
+                    });
+                    CollectionView::apply_query_options(
+                        state_for_clear.clone(),
+                        session_key,
+                        sort_state,
+                        projection_state,
+                        window,
+                        cx,
+                    );
+                }
+            }),
+        )
+}
+
+fn filter_action_button(button: Button, icon: IconName, label: &'static str) -> Button {
+    button.ghost().icon(Icon::new(icon).xsmall()).tooltip(label)
 }

@@ -45,7 +45,7 @@ use crate::models::connection::SavedConnection;
 use crate::state::StatusMessage;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
-use crate::state::settings::AppSettings;
+use crate::state::settings::{AppSettings, migrate_islands_tab_style_to_islands};
 use crate::state::{ConfigManager, WorkspaceState};
 
 use updater::UpdateStatus;
@@ -131,10 +131,15 @@ impl AppState {
             log::warn!("Failed to load connections: {}", e);
             Vec::new()
         });
-        let settings = config.load_settings().unwrap_or_else(|e| {
+        let mut settings = config.load_settings().unwrap_or_else(|e| {
             log::warn!("Failed to load settings: {}", e);
             AppSettings::default()
         });
+        if migrate_islands_tab_style_to_islands(&mut settings)
+            && let Err(e) = config.save_settings(&settings)
+        {
+            log::warn!("Failed to persist Islands tab style migration: {e}");
+        }
         let workspace = config.load_workspace().unwrap_or_else(|e| {
             log::warn!("Failed to load workspace: {}", e);
             WorkspaceState::default()
@@ -142,7 +147,10 @@ impl AppState {
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
-        let startup_vibrancy = settings.appearance.vibrancy;
+        let startup_vibrancy = crate::theme::effective_vibrancy(
+            settings.appearance.theme,
+            settings.appearance.vibrancy,
+        );
 
         Self {
             connections,

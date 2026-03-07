@@ -422,7 +422,11 @@ impl RenderOnce for Dialog {
                     .child(
                         v_flex()
                             .id(layer_ix)
-                            .bg(cx.theme().background)
+                            .bg({
+                                let mut bg = cx.theme().background;
+                                bg.a = 1.0;
+                                bg
+                            })
                             .border_1()
                             .border_color(cx.theme().border)
                             .rounded(cx.theme().radius_lg)

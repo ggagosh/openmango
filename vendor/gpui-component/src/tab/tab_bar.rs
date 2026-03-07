@@ -74,6 +74,12 @@ impl TabBar {
         self
     }
 
+    /// Set the Tab variant to DataGrip, all children will inherit the variant.
+    pub fn data_grip(mut self) -> Self {
+        self.variant = TabVariant::DataGrip;
+        self
+    }
+
     /// Set the Tab variant to Underline, all children will inherit the variant.
     pub fn underline(mut self) -> Self {
         self.variant = TabVariant::Underline;
@@ -177,6 +183,15 @@ impl RenderOnce for TabBar {
             TabVariant::Pill => {
                 let padding = Edges::all(px(0.));
                 (cx.theme().transparent, padding, px(4.))
+            }
+            TabVariant::DataGrip => {
+                let gap = match self.size {
+                    Size::XSmall => px(4.),
+                    Size::Small => px(6.),
+                    Size::Large => px(10.),
+                    _ => px(8.),
+                };
+                (cx.theme().transparent, Edges::all(px(0.)), gap)
             }
             TabVariant::Segmented => {
                 let padding_x = match self.size {

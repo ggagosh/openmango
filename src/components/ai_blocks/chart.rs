@@ -51,8 +51,9 @@ fn chart_wrapper(
         .w_full()
         .h(px(height))
         .border_1()
-        .border_color(cx.theme().border)
-        .rounded(px(4.0))
+        .border_color(cx.theme().border.opacity(0.78))
+        .rounded(px(8.0))
+        .bg(cx.theme().table.opacity(0.55))
         .overflow_hidden();
 
     if let Some(title) = title {

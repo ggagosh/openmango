@@ -27,7 +27,7 @@ use crate::state::{
     AppCommands, AppState, CompressionMode, TransferFormat, TransferMode, TransferScope,
     TransferTabState,
 };
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, colors, islands, sizing, spacing};
 
 use helpers::{option_field, option_field_static, option_section};
 use progress_panel::{render_progress_panel, render_warnings};
@@ -386,13 +386,13 @@ impl Render for TransferView {
         }
 
         let state = self.state.clone();
+        let appearance = self.state.read(cx).settings.appearance.clone();
         let transfer_key: u64 = (transfer_id.as_u128() & 0xffff_ffff_ffff_ffff) as u64;
         let options_expanded = self.options_expanded;
         let view = cx.entity();
 
         // Mode tabs
-        let mode_tabs = TabBar::new(("transfer-mode", transfer_key))
-            .underline()
+        let mode_tabs = islands::tab_bar(TabBar::new(("transfer-mode", transfer_key)), &appearance)
             .small()
             .selected_index(transfer_state.config.mode.index())
             .on_click({
@@ -568,9 +568,9 @@ impl Render for TransferView {
             .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
-            .bg(cx.theme().tab_bar)
+            .bg(islands::tool_bg(&appearance, cx))
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(islands::panel_border(&appearance, cx))
             .child(
                 div()
                     .flex()
@@ -644,10 +644,10 @@ impl Render for TransferView {
                     .items_center()
                     .gap(spacing::sm())
                     .p(spacing::md())
-                    .bg(cx.theme().sidebar)
+                    .bg(islands::card_bg(&appearance, cx))
                     .border_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .rounded(borders::radius_sm())
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .rounded(islands::radius_sm(&appearance))
                     .child(Spinner::new().small())
                     .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
                         "{} {} documents",
@@ -668,10 +668,10 @@ impl Render for TransferView {
                     .items_center()
                     .gap(spacing::sm())
                     .p(spacing::md())
-                    .bg(cx.theme().sidebar)
+                    .bg(islands::card_bg(&appearance, cx))
                     .border_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .rounded(borders::radius_sm())
+                    .border_color(islands::panel_border(&appearance, cx))
+                    .rounded(islands::radius_sm(&appearance))
                     .child(Icon::new(IconName::Check).xsmall().text_color(cx.theme().success))
                     .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
                         "{} {} documents",
@@ -697,7 +697,7 @@ impl Render for TransferView {
                 .bg(colors::bg_error(cx))
                 .border_1()
                 .border_color(colors::border_error(cx))
-                .rounded(borders::radius_sm())
+                .rounded(islands::radius_sm(&appearance))
                 .text_sm()
                 .text_color(cx.theme().danger)
                 .overflow_hidden()
@@ -761,6 +761,7 @@ impl TransferView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.state.clone();
+        let appearance = self.state.read(cx).settings.appearance.clone();
 
         let header = div()
             .id(("options-header", key))
@@ -890,10 +891,10 @@ impl TransferView {
             .flex_col()
             .gap(spacing::sm())
             .p(spacing::md())
-            .bg(cx.theme().sidebar)
+            .bg(islands::card_bg(&appearance, cx))
             .border_1()
-            .border_color(cx.theme().sidebar_border)
-            .rounded(borders::radius_sm())
+            .border_color(islands::panel_border(&appearance, cx))
+            .rounded(islands::radius_sm(&appearance))
             .child(header)
             .child(content)
             .into_any_element()

@@ -27,15 +27,12 @@ impl CollectionView {
     ) -> impl IntoElement {
         let session_key_prev = session_key.clone();
         let session_key_next = session_key.clone();
-
         div()
             .flex()
             .items_center()
             .justify_between()
             .px(spacing::lg())
-            .py(spacing::sm())
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .py(px(5.0))
             .child(
                 div()
                     .text_sm()

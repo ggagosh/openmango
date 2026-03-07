@@ -23,6 +23,9 @@ pub(crate) fn render_status_left(
 
     div()
         .flex()
+        .flex_1()
+        .min_w(px(0.0))
+        .overflow_hidden()
         .items_center()
         .gap(spacing::sm())
         .child(

@@ -27,7 +27,7 @@ use gpui_component::{Icon, IconName, Sizable};
 
 use crate::components::Button;
 use crate::state::{AppEvent, AppState, View};
-use crate::theme::{borders, fonts, spacing};
+use crate::theme::{fonts, islands, spacing};
 use controller::ForgeController;
 use output::format_result_tab_label;
 use state::ForgeState;
@@ -83,41 +83,25 @@ impl ForgeView {
             (db, conn_name)
         };
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px(spacing::md())
-            .py(spacing::sm())
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(cx.theme().foreground)
-                            .child("Forge"),
-                    )
-                    .child(
-                        div()
-                            .px(spacing::sm())
-                            .py(px(2.0))
-                            .rounded(borders::radius_sm())
-                            .bg(cx.theme().sidebar)
-                            .text_xs()
-                            .text_color(cx.theme().secondary_foreground)
-                            .child(database),
-                    ),
-            )
+        div().flex().items_center().justify_between().px(spacing::md()).py(spacing::sm()).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(cx.theme().foreground)
+                        .child("Forge"),
+                )
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(database)),
+        )
     }
 
     fn render_output(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let forge_view = cx.entity();
+        let appearance = self.app_state.read(cx).settings.appearance.clone();
 
         let clear_button =
             Button::new("forge-output-clear").compact().ghost().label("Clear").on_click({
@@ -156,8 +140,7 @@ impl ForgeView {
             || self.state.output.last_error.is_some()
             || self.state.runtime.mongosh_error.is_some();
 
-        let tab_bar = TabBar::new("forge-output-tabs")
-            .underline()
+        let tab_bar = islands::tab_bar(TabBar::new("forge-output-tabs"), &appearance)
             .small()
             .selected_index(selected_index)
             .on_click({
@@ -199,11 +182,11 @@ impl ForgeView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .w(px(16.0))
-                                .h(px(16.0))
-                                .rounded(borders::radius_sm())
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .rounded(px(4.0))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(cx.theme().list_hover))
+                                .hover(|s| s.bg(cx.theme().secondary.opacity(0.45)))
                                 .child(pin_icon)
                                 .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                                     cx.stop_propagation();
@@ -218,16 +201,16 @@ impl ForgeView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .w(px(16.0))
-                                .h(px(16.0))
-                                .rounded(borders::radius_sm())
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .rounded(px(4.0))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(cx.theme().list_hover))
-                                .child(
-                                    Icon::new(IconName::Close)
-                                        .xsmall()
-                                        .text_color(cx.theme().muted_foreground),
-                                )
+                                .text_color(cx.theme().muted_foreground)
+                                .hover(|s| {
+                                    s.bg(cx.theme().secondary.opacity(0.45))
+                                        .text_color(cx.theme().foreground)
+                                })
+                                .child(Icon::new(IconName::Close).xsmall())
                                 .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                                     cx.stop_propagation();
                                     view_entity.update(cx, |this, _cx| {
@@ -244,7 +227,6 @@ impl ForgeView {
             ForgeOutputTab::Results => self.render_results_body(window, cx).into_any_element(),
             ForgeOutputTab::Raw => self.render_raw_output_body(window, cx).into_any_element(),
         };
-
         div()
             .flex()
             .flex_col()
@@ -253,15 +235,14 @@ impl ForgeView {
             .min_w(px(0.0))
             .size_full()
             .px(spacing::md())
-            .py(spacing::sm())
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().sidebar)
+            .pb(spacing::sm())
+            .pt(px(6.0))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
+                    .py(px(2.0))
                     .child(
                         div()
                             .flex()
@@ -277,7 +258,16 @@ impl ForgeView {
                     )
                     .child(clear_button),
             )
-            .child(body)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .mt(spacing::xs())
+                    .overflow_hidden()
+                    .child(body),
+            )
     }
 
     // render_results_body/render_raw_output_body moved to output module
@@ -286,6 +276,7 @@ impl ForgeView {
 impl Render for ForgeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.app_state.clone();
+        let appearance = state.read(cx).settings.appearance.clone();
 
         // Check if we have an active Forge tab
         let has_forge_tab = state.read(cx).active_forge_tab_id().is_some();
@@ -330,17 +321,17 @@ impl Render for ForgeView {
                 .id("forge-editor-container")
                 .relative()
                 .flex()
+                .flex_col()
                 .min_h(px(0.0))
-                .p(spacing::md())
+                .px(spacing::md())
+                .pt(spacing::sm())
+                .pb(px(6.0))
+                .child(self.render_header(cx))
                 .child(
                     div()
                         .relative()
                         .flex_1()
-                        .h_full()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded(borders::radius_sm())
-                        .bg(cx.theme().background)
+                        .min_h(px(0.0))
                         .overflow_hidden()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             window.focus(&forge_focus_handle);
@@ -389,6 +380,7 @@ impl Render for ForgeView {
 
         let split_panel = if self.state.output.output_visible {
             v_resizable("forge-main-split")
+                .handle_line_visible(true)
                 .child(
                     resizable_panel()
                         .size(px(320.0))
@@ -412,7 +404,7 @@ impl Render for ForgeView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(islands::content_bg(&appearance, cx))
             .child(self.render_header(cx))
             .child(div().flex_1().flex().flex_col().min_h(px(0.0)).child(split_panel))
             .child(
@@ -423,9 +415,7 @@ impl Render for ForgeView {
                     .justify_between()
                     .px(spacing::md())
                     .py(spacing::xs())
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().sidebar)
+                    .bg(islands::content_bg(&appearance, cx))
                     .child(
                         div()
                             .text_xs()

@@ -23,11 +23,11 @@ fn main() {
 
         // Load saved settings
         let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
-        let vibrancy = saved_settings.appearance.vibrancy;
+        let saved_theme = saved_settings.appearance.theme;
+        let vibrancy = theme::effective_vibrancy(saved_theme, saved_settings.appearance.vibrancy);
 
         // Load the saved theme (or default)
         {
-            let saved_theme = saved_settings.appearance.theme;
             if let Some(config) = theme::load_theme_config(saved_theme.theme_id()) {
                 gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
             }

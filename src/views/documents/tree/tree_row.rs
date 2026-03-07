@@ -120,17 +120,13 @@ pub fn render_tree_row(
         div().w(px(18.0)).into_any_element()
     };
 
-    let row = div()
-        .flex()
-        .items_center()
-        .w_full()
-        .gap(spacing::xs())
-        .rounded(borders::radius_sm())
-        .border_1()
-        .border_color(colors::transparent())
-        .when(_selected, |s: Div| s.bg(cx.theme().list_active).border_color(cx.theme().border))
+    let mut row =
+        div().flex().items_center().w_full().gap(spacing::xs()).rounded(borders::radius_sm());
+    row = row
+        .when(_selected, |s: Div| s.bg(cx.theme().list_active))
         .when(!_selected && is_multi_selected, |s: Div| s.bg(cx.theme().list_active))
-        .when(!_selected && !is_multi_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
+        .when(!_selected && !is_multi_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)));
+    let row = row
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
         .on_mouse_down(MouseButton::Left, {
@@ -271,7 +267,7 @@ pub fn render_tree_row(
         }
     });
 
-    ListItem::new(ix).selected(_selected).child(row)
+    ListItem::new(ix).child(row).selected(false).px_0().py(px(2.0))
 }
 
 #[allow(dead_code)]
@@ -339,16 +335,12 @@ pub fn render_readonly_tree_row(
         div().w(px(18.0)).into_any_element()
     };
 
-    let row = div()
-        .flex()
-        .items_center()
-        .w_full()
-        .gap(spacing::xs())
-        .rounded(borders::radius_sm())
-        .border_1()
-        .border_color(colors::transparent())
-        .when(selected, |s: Div| s.bg(cx.theme().list_active).border_color(cx.theme().border))
-        .when(!selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)))
+    let mut row =
+        div().flex().items_center().w_full().gap(spacing::xs()).rounded(borders::radius_sm());
+    row = row
+        .when(selected, |s: Div| s.bg(cx.theme().list_active))
+        .when(!selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)));
+    let row = row
         .on_mouse_down(MouseButton::Left, {
             let row_item_id = item_id.clone();
             let row_view = view.clone();
@@ -398,7 +390,7 @@ pub fn render_readonly_tree_row(
                 .child(type_label),
         );
 
-    ListItem::new(ix).selected(selected).child(row)
+    ListItem::new(ix).child(row).selected(false).px_0().py(px(2.0))
 }
 
 #[allow(clippy::too_many_arguments)]

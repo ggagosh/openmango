@@ -12,7 +12,7 @@ use crate::components::Button;
 use crate::helpers::format_number;
 use crate::state::app_state::{PipelineState, StageStatsMode};
 use crate::state::{AppCommands, SessionDocument, SessionKey};
-use crate::theme::spacing;
+use crate::theme::{islands, spacing};
 use crate::views::documents::tree::lazy_row::{compute_row_meta, render_lazy_readonly_row};
 use crate::views::documents::tree::lazy_tree::{build_visible_rows, collect_all_expandable_nodes};
 
@@ -30,6 +30,11 @@ impl CollectionView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let appearance = self.state.read(cx).settings.appearance.clone();
+        let panel_bg = islands::card_bg(&appearance, cx);
+        let panel_border = islands::panel_border(&appearance, cx).opacity(0.5);
+        let panel_radius = islands::radius_sm(&appearance);
+        let section_bg = cx.theme().transparent;
         let results_count = pipeline.results.as_ref().map(|docs| docs.len()).unwrap_or(0);
         let target_index = pipeline.selected_stage.or_else(|| pipeline.stages.len().checked_sub(1));
         let total_count = target_index
@@ -69,9 +74,7 @@ impl CollectionView {
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(cx.theme().tab_bar)
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .bg(section_bg)
             .child(
                 div()
                     .flex()
@@ -252,9 +255,10 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(cx.theme().background)
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .bg(panel_bg)
+            .border_1()
+            .border_color(panel_border)
+            .rounded(panel_radius)
             .child(header)
             .child(body)
             .into_any_element()
@@ -316,9 +320,7 @@ fn render_results_footer(
         .justify_between()
         .px(spacing::sm())
         .py(spacing::xs())
-        .bg(cx.theme().tab_bar)
-        .border_t_1()
-        .border_color(cx.theme().border)
+        .bg(cx.theme().transparent)
         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(range_label))
         .child(
             div()
@@ -485,9 +487,7 @@ fn render_results_tree(
                 .items_center()
                 .px(spacing::lg())
                 .py(spacing::xs())
-                .bg(cx.theme().tab_bar)
-                .border_b_1()
-                .border_color(cx.theme().border)
+                .bg(cx.theme().transparent)
                 .child(
                     div()
                         .flex()

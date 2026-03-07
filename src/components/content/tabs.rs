@@ -1,22 +1,19 @@
 use std::collections::HashSet;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
-use crate::state::{ActiveTab, AppState, SessionKey, TabKey, View};
-use crate::theme::{borders, spacing};
+use crate::state::{ActiveTab, AppState, IslandsTabStyle, SessionKey, TabKey, View};
+use crate::theme::{borders, islands, spacing};
 use crate::views::{
-    AiView, ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
+    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
 };
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
 const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
-const AI_PANEL_DEFAULT_WIDTH: f32 = 1100.0;
-const AI_PANEL_MIN_WIDTH: f32 = 320.0;
-const AI_PANEL_MAX_WIDTH: f32 = 2600.0;
 
 pub(crate) struct TabsHost<'a> {
     pub(crate) state: Entity<AppState>,
@@ -30,7 +27,6 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) has_collection: bool,
     pub(crate) collection_view: Option<&'a Entity<CollectionView>>,
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
-    pub(crate) ai_view: Option<&'a Entity<AiView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
@@ -76,6 +72,8 @@ fn scroll_tabs_by(scroll_handle: &ScrollHandle, delta_x: Pixels) {
 }
 
 pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
+    let appearance = host.state.read(cx).settings.appearance.clone();
+    let islands_tab_variant = appearance.islands.tab_style == IslandsTabStyle::Islands;
     let selected_index = match host.active_tab {
         ActiveTab::Preview => host.tabs.len(),
         ActiveTab::Index(index) => index.min(host.tabs.len().saturating_sub(1)),
@@ -91,8 +89,7 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         scroll_handle.scroll_to_item(selected_index);
     }
 
-    let tab_bar = TabBar::new("collection-tabs")
-        .underline()
+    let tab_bar = islands::tab_bar(TabBar::new("collection-tabs"), &appearance)
         .small()
         .min_w(px(0.0))
         .track_scroll(&scroll_handle)
@@ -150,39 +147,97 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                         TabKey::Settings => ("Settings".to_string(), false),
                         TabKey::Changelog => ("What's New".to_string(), false),
                     };
+                    let icon_name = match tab {
+                        TabKey::Collection(_) => IconName::Braces,
+                        TabKey::Database(_) => IconName::LayoutDashboard,
+                        TabKey::Transfer(_) => IconName::Download,
+                        TabKey::Forge(_) => IconName::SquareTerminal,
+                        TabKey::Settings => IconName::Settings,
+                        TabKey::Changelog => IconName::BookOpen,
+                    };
+                    let is_selected = selected_index == index;
                     let state = host.state.clone();
-                    let close_button = div()
-                        .id(("tab-close", index))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .w(px(16.0))
-                        .h(px(16.0))
-                        .rounded(borders::radius_sm())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().list_hover))
-                        .child(
-                            Icon::new(IconName::Close)
-                                .xsmall()
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                        .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
-                            cx.stop_propagation();
-                            state.update(cx, |state, cx| {
-                                state.close_tab(index, cx);
-                            });
-                        });
+                    let close_button = if islands_tab_variant {
+                        div()
+                            .id(("tab-close", index))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .mr(px(6.0))
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .text_color(cx.theme().muted_foreground)
+                            .hover(|s| {
+                                s.bg(cx.theme().secondary.opacity(0.45))
+                                    .text_color(cx.theme().foreground)
+                            })
+                            .child(Icon::new(IconName::Close).xsmall())
+                            .when(!is_selected, |s| {
+                                s.invisible().group_hover("tab-item", |s| s.visible())
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.close_tab(index, cx);
+                                });
+                            })
+                    } else {
+                        div()
+                            .id(("tab-close", index))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .mr(px(6.0))
+                            .rounded(borders::radius_sm())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(cx.theme().list_hover))
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .when(!is_selected, |s| {
+                                s.invisible().group_hover("tab-item", |s| s.visible())
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.close_tab(index, cx);
+                                });
+                            })
+                    };
 
-                    let dirty_dot =
+                    let mut dirty_dot =
                         div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
+                    if islands_tab_variant {
+                        dirty_dot = dirty_dot.mr(px(2.0));
+                    }
+
+                    let icon_color =
+                        if is_selected { cx.theme().primary } else { cx.theme().muted_foreground };
+                    let icon_el = Icon::new(icon_name).with_size(px(14.0)).text_color(icon_color);
+                    let prefix: AnyElement = if is_dirty {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .ml(px(6.0))
+                            .child(dirty_dot)
+                            .child(icon_el)
+                            .into_any_element()
+                    } else {
+                        div().flex().items_center().ml(px(6.0)).child(icon_el).into_any_element()
+                    };
 
                     let drag_label: SharedString = label.clone().into();
-                    let mut tab_view = Tab::new()
+                    let tab_view = Tab::new()
                         .max_w(px(OPEN_TAB_MAX_WIDTH))
-                        .child(div().max_w(px(OPEN_TAB_LABEL_MAX_WIDTH)).truncate().child(label));
-                    if is_dirty {
-                        tab_view = tab_view.prefix(dirty_dot);
-                    }
+                        .child(div().max_w(px(OPEN_TAB_LABEL_MAX_WIDTH)).truncate().child(label))
+                        .prefix(prefix);
 
                     let drag_data = DraggedOpenTab { from_index: index, label: drag_label };
                     let drag_state = host.state.clone();
@@ -285,45 +340,100 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 .chain(host.preview_tab.clone().map(|tab| {
                     let label = format!("{}/{}", tab.database, tab.collection);
                     let is_dirty = dirty_tabs.contains(&tab);
+                    let is_preview_selected = matches!(host.active_tab, ActiveTab::Preview);
                     let state = host.state.clone();
-                    let close_button = div()
-                        .id("tab-close-preview")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .w(px(16.0))
-                        .h(px(16.0))
-                        .rounded(borders::radius_sm())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().list_hover))
-                        .child(
-                            Icon::new(IconName::Close)
-                                .xsmall()
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                        .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
-                            cx.stop_propagation();
-                            state.update(cx, |state, cx| {
-                                state.close_preview_tab(cx);
-                            });
-                        });
-
-                    let dirty_dot =
-                        div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
-
-                    let mut tab_view = Tab::new().max_w(px(OPEN_TAB_MAX_WIDTH)).child(
+                    let close_button = if islands_tab_variant {
                         div()
-                            .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
-                            .truncate()
-                            .italic()
+                            .id("tab-close-preview")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .mr(px(6.0))
+                            .rounded(px(4.0))
+                            .cursor_pointer()
                             .text_color(cx.theme().muted_foreground)
-                            .child(label),
-                    );
-                    if is_dirty {
-                        tab_view = tab_view.prefix(dirty_dot);
+                            .hover(|s| {
+                                s.bg(cx.theme().secondary.opacity(0.45))
+                                    .text_color(cx.theme().foreground)
+                            })
+                            .child(Icon::new(IconName::Close).xsmall())
+                            .when(!is_preview_selected, |s| {
+                                s.invisible().group_hover("tab-item", |s| s.visible())
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.close_preview_tab(cx);
+                                });
+                            })
+                    } else {
+                        div()
+                            .id("tab-close-preview")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .mr(px(6.0))
+                            .rounded(borders::radius_sm())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(cx.theme().list_hover))
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .when(!is_preview_selected, |s| {
+                                s.invisible().group_hover("tab-item", |s| s.visible())
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.close_preview_tab(cx);
+                                });
+                            })
+                    };
+
+                    let mut dirty_dot =
+                        div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary);
+                    if islands_tab_variant {
+                        dirty_dot = dirty_dot.mr(px(2.0));
                     }
 
-                    tab_view.suffix(close_button)
+                    let icon_color = if is_preview_selected {
+                        cx.theme().primary
+                    } else {
+                        cx.theme().muted_foreground
+                    };
+                    let icon_el =
+                        Icon::new(IconName::Braces).with_size(px(14.0)).text_color(icon_color);
+                    let prefix: AnyElement = if is_dirty {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .ml(px(6.0))
+                            .child(dirty_dot)
+                            .child(icon_el)
+                            .into_any_element()
+                    } else {
+                        div().flex().items_center().ml(px(6.0)).child(icon_el).into_any_element()
+                    };
+
+                    Tab::new()
+                        .max_w(px(OPEN_TAB_MAX_WIDTH))
+                        .child(
+                            div()
+                                .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
+                                .truncate()
+                                .italic()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(label),
+                        )
+                        .prefix(prefix)
+                        .suffix(close_button)
                 })),
         );
 
@@ -367,41 +477,11 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
         }
     };
 
-    // Determine if AI panel should show alongside current content
-    let show_ai_panel = matches!(host.current_view, View::Documents) && host.ai_view.is_some();
+    let main_content: AnyElement = content;
 
-    let main_content: AnyElement = if show_ai_panel {
-        let persisted_ai_panel_width = host
-            .state
-            .read(cx)
-            .workspace
-            .ai_panel_width
-            .unwrap_or(AI_PANEL_DEFAULT_WIDTH)
-            .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH);
-        let ai_view = host.ai_view.unwrap().clone();
-        h_resizable("content-ai-split-v3")
-            .on_resize({
-                let state = host.state.clone();
-                move |resizable_state, _window, cx| {
-                    let maybe_width = resizable_state.read(cx).sizes().get(1).copied();
-                    if let Some(width) = maybe_width {
-                        state.update(cx, |app_state, _| {
-                            app_state.set_workspace_ai_panel_width(f32::from(width));
-                        });
-                    }
-                }
-            })
-            .child(resizable_panel().size_range(px(480.0)..px(9999.0)).child(content))
-            .child(
-                resizable_panel()
-                    .size(px(persisted_ai_panel_width))
-                    .size_range(px(AI_PANEL_MIN_WIDTH)..px(9999.0))
-                    .child(ai_view),
-            )
-            .into_any_element()
-    } else {
-        content
-    };
+    let strip_bg = islands::tool_bg(&appearance, cx).opacity(0.82);
+    let no_line_mode = matches!(host.current_view, View::Documents | View::Forge);
+    let strip_border = islands::panel_border(&appearance, cx);
 
     div()
         .flex()
@@ -415,9 +495,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
                 .id("collection-tabs-strip")
                 .w_full()
                 .min_w(px(0.0))
-                .border_b_1()
-                .border_color(cx.theme().border.opacity(0.65))
-                .bg(cx.theme().tab_bar.opacity(0.4))
+                .when(!no_line_mode, |s: Stateful<Div>| s.border_b_1().border_color(strip_border))
+                .bg(strip_bg)
+                .px(px(4.0))
+                .py(px(4.0))
                 .on_scroll_wheel({
                     let scroll_handle = scroll_handle.clone();
                     move |event, _window, _cx| {

@@ -5,9 +5,12 @@
 
 use std::rc::Rc;
 
+use gpui::{App, Hsla, Pixels, px};
+use gpui_component::ActiveTheme as _;
+use gpui_component::tab::TabBar;
 use gpui_component::theme::{ThemeConfig, ThemeSet};
 
-use crate::state::AppTheme;
+use crate::state::{AppTheme, AppearanceSettings, IslandsTabStyle};
 
 // =============================================================================
 // Theme Loading & Switching
@@ -55,6 +58,18 @@ pub fn apply_theme(
 
         window.refresh();
     }
+}
+
+pub fn effective_vibrancy(_app_theme: AppTheme, user_vibrancy: bool) -> bool {
+    user_vibrancy
+}
+
+pub fn requires_vibrancy_restart(
+    startup_vibrancy: bool,
+    _target_theme: AppTheme,
+    user_vibrancy: bool,
+) -> bool {
+    startup_vibrancy != user_vibrancy
 }
 
 /// Reduce alpha on background/sidebar so the macOS blur effect shows through.
@@ -147,6 +162,92 @@ pub mod colors {
 }
 
 // =============================================================================
+// Islands helpers
+// =============================================================================
+
+pub mod islands {
+    use super::*;
+
+    pub fn tab_bar(bar: TabBar, appearance: &AppearanceSettings) -> TabBar {
+        match appearance.islands.tab_style {
+            IslandsTabStyle::Islands => bar.data_grip(),
+            IslandsTabStyle::Segmented => bar.segmented(),
+            IslandsTabStyle::Underline => bar.underline(),
+        }
+    }
+
+    pub fn radius_sm(appearance: &AppearanceSettings) -> Pixels {
+        let _ = appearance;
+        px(8.0)
+    }
+
+    pub fn radius_md(appearance: &AppearanceSettings) -> Pixels {
+        let _ = appearance;
+        px(8.0)
+    }
+
+    pub fn panel_border(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().sidebar_border
+    }
+
+    pub fn canvas_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().tab_bar
+    }
+
+    pub fn tool_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().sidebar
+    }
+
+    pub fn content_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().background
+    }
+
+    pub fn card_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().tab_bar
+    }
+
+    pub fn ai_shell_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().sidebar
+    }
+
+    pub fn ai_header_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().sidebar.opacity(0.92)
+    }
+
+    pub fn ai_surface_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().tab_bar.opacity(0.82)
+    }
+
+    pub fn ai_surface_muted_bg(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().tab_bar.opacity(0.62)
+    }
+
+    pub fn ai_border(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
+        cx.theme().sidebar_border.opacity(0.78)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_vibrancy, requires_vibrancy_restart};
+    use crate::state::AppTheme;
+
+    #[test]
+    fn vibrancy_follows_user_toggle() {
+        assert!(!effective_vibrancy(AppTheme::VercelDark, false));
+        assert!(effective_vibrancy(AppTheme::VercelDark, true));
+    }
+
+    #[test]
+    fn restart_required_when_vibrancy_changes() {
+        assert!(requires_vibrancy_restart(true, AppTheme::VercelDark, false));
+        assert!(requires_vibrancy_restart(false, AppTheme::VercelDark, true));
+        assert!(!requires_vibrancy_restart(false, AppTheme::VercelDark, false));
+        assert!(!requires_vibrancy_restart(true, AppTheme::VercelDark, true));
+    }
+}
+
+// =============================================================================
 // Spacing
 // =============================================================================
 
@@ -233,6 +334,9 @@ pub mod fonts {
     pub fn mono() -> &'static str {
         "JetBrainsMono Nerd Font Mono"
     }
+    pub fn tabs() -> &'static str {
+        "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    }
     pub fn ui_line_height() -> gpui::DefiniteLength {
         relative(1.45)
     }
@@ -248,4 +352,8 @@ pub mod borders {
     pub fn radius_sm() -> Pixels {
         px(3.0)
     } // Subtler rounded corners
+
+    pub fn radius_md() -> Pixels {
+        px(8.0)
+    }
 }

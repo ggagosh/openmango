@@ -126,3 +126,34 @@ fn parse_optional_doc(raw: &str) -> Result<(String, Option<Document>), String> {
         Err(err) => Err(err.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{is_valid_query, parse_optional_doc};
+
+    #[test]
+    fn is_valid_query_accepts_empty_and_braces() {
+        assert!(is_valid_query(""));
+        assert!(is_valid_query("   "));
+        assert!(is_valid_query("{}"));
+    }
+
+    #[test]
+    fn parse_optional_doc_returns_none_for_empty_queries() {
+        assert_eq!(
+            parse_optional_doc("").expect("empty query should parse"),
+            (String::new(), None)
+        );
+        assert_eq!(
+            parse_optional_doc("  {} ").expect("brace query should parse"),
+            (String::new(), None)
+        );
+    }
+
+    #[test]
+    fn parse_optional_doc_trims_and_parses_document() {
+        let (raw, doc) = parse_optional_doc("  {\"x\": 1}  ").expect("document query should parse");
+        assert_eq!(raw, "{\"x\": 1}");
+        assert!(doc.is_some());
+    }
+}

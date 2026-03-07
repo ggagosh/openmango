@@ -177,7 +177,11 @@ impl RenderOnce for Sheet {
                             })
                             .absolute()
                             .occlude()
-                            .bg(cx.theme().background)
+                            .bg({
+                                let mut bg = cx.theme().background;
+                                bg.a = 1.0;
+                                bg
+                            })
                             .border_color(cx.theme().border)
                             .shadow_xl()
                             .map(|this| {

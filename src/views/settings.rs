@@ -2,8 +2,9 @@
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::button::ButtonVariants as _;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Sizable as _, Size};
@@ -16,7 +17,7 @@ use crate::state::{
     AiProvider, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS,
     InsertMode, TransferFormat,
 };
-use crate::theme::{borders, sizing, spacing};
+use crate::theme::{borders, islands, sizing, spacing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SettingsSubtab {
@@ -269,6 +270,7 @@ impl Render for SettingsView {
         let view = cx.entity();
         let state = self.state.clone();
         let settings = self.state.read(cx).settings.clone();
+        let appearance = settings.appearance.clone();
 
         // Header
         let header = div()
@@ -277,9 +279,9 @@ impl Render for SettingsView {
             .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
-            .bg(cx.theme().tab_bar)
+            .bg(islands::tool_bg(&appearance, cx))
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(islands::panel_border(&appearance, cx))
             .child(
                 div()
                     .text_sm()
@@ -288,8 +290,7 @@ impl Render for SettingsView {
                     .child("Settings"),
             );
 
-        let subtab_bar = TabBar::new("settings-subtabs")
-            .underline()
+        let subtab_bar = islands::tab_bar(TabBar::new("settings-subtabs"), &appearance)
             .xsmall()
             .selected_index(self.active_subtab.to_index())
             .on_click({
@@ -354,6 +355,7 @@ impl Render for SettingsView {
             .flex_col()
             .flex_1()
             .min_w(px(0.0))
+            .bg(islands::content_bg(&appearance, cx))
             .child(header)
             .child(div().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
             .child(
@@ -385,7 +387,7 @@ fn render_appearance_section(
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu: PopupMenu, _window, _cx| {
                 let mut m = menu;
                 // Dark themes section
                 m = m.label("Dark");
@@ -398,8 +400,27 @@ fn render_appearance_section(
                             state.save_settings();
                             cx.notify();
                         });
-                        let vibrancy = s.read(cx).startup_vibrancy;
-                        crate::theme::apply_theme(t, vibrancy, window, cx);
+                        let (user_vibrancy, startup_vibrancy) = {
+                            let state_ref = s.read(cx);
+                            (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
+                        };
+                        let target_vibrancy = crate::theme::effective_vibrancy(t, user_vibrancy);
+                        crate::theme::apply_theme(t, target_vibrancy, window, cx);
+                        if crate::theme::requires_vibrancy_restart(
+                            startup_vibrancy,
+                            t,
+                            user_vibrancy,
+                        ) {
+                            crate::components::open_confirm_dialog(
+                                window,
+                                cx,
+                                "Restart required",
+                                "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
+                                "Restart now",
+                                false,
+                                |_window, cx| cx.quit(),
+                            );
+                        }
                     }));
                 }
                 // Light themes section (when available)
@@ -416,8 +437,28 @@ fn render_appearance_section(
                                     state.save_settings();
                                     cx.notify();
                                 });
-                                let vibrancy = s.read(cx).startup_vibrancy;
-                                crate::theme::apply_theme(t, vibrancy, window, cx);
+                                let (user_vibrancy, startup_vibrancy) = {
+                                    let state_ref = s.read(cx);
+                                    (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
+                                };
+                                let target_vibrancy =
+                                    crate::theme::effective_vibrancy(t, user_vibrancy);
+                                crate::theme::apply_theme(t, target_vibrancy, window, cx);
+                                if crate::theme::requires_vibrancy_restart(
+                                    startup_vibrancy,
+                                    t,
+                                    user_vibrancy,
+                                ) {
+                                    crate::components::open_confirm_dialog(
+                                        window,
+                                        cx,
+                                        "Restart required",
+                                        "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
+                                        "Restart now",
+                                        false,
+                                        |_window, cx| cx.quit(),
+                                    );
+                                }
                             },
                         ));
                     }
@@ -540,7 +581,7 @@ fn render_transfer_section(
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu: PopupMenu, _window, _cx| {
                 let formats = [
                     TransferFormat::JsonLines,
                     TransferFormat::JsonArray,
@@ -756,6 +797,7 @@ fn render_transfer_section(
                         template_control,
                         cx,
                     )),
+                &settings.appearance,
                 cx,
             ))
             .child(group(
@@ -766,6 +808,7 @@ fn render_transfer_section(
                     .gap(spacing::md())
                     .child(setting_row("Default import mode", import_mode_dropdown, cx))
                     .child(setting_row("Batch size", batch_size_input, cx)),
+                &settings.appearance,
                 cx,
             )),
         cx,
@@ -814,10 +857,11 @@ fn render_ai_section(
         let state = state.clone();
         let view = view.clone();
         gpui_component::button::Button::new("ai-provider-dropdown")
+            .ghost()
             .compact()
             .label(current_provider.label())
             .dropdown_caret(true)
-            .rounded(borders::radius_sm())
+            .rounded(islands::radius_sm(&settings.appearance))
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
                 let providers = [
@@ -892,10 +936,11 @@ fn render_ai_section(
         };
 
         gpui_component::button::Button::new("ai-model-dropdown")
+            .ghost()
             .compact()
             .label(current_model)
             .dropdown_caret(true)
-            .rounded(borders::radius_sm())
+            .rounded(islands::radius_sm(&settings.appearance))
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
                 let mut menu = menu;
@@ -961,7 +1006,7 @@ fn render_ai_section(
         div()
             .px(spacing::xs())
             .py(px(2.0))
-            .rounded(px(5.0))
+            .rounded(islands::radius_sm(&settings.appearance))
             .bg(accent.opacity(0.1))
             .border_1()
             .border_color(accent.opacity(0.28))
@@ -1017,9 +1062,22 @@ fn render_ai_section(
                             .items_center()
                             .justify_between()
                             .gap(spacing::sm())
-                            .child(setting_row("Model", model_dropdown, cx))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().secondary_foreground)
+                                            .child("Model"),
+                                    )
+                                    .child(model_dropdown),
+                            )
                             .child(model_status_badge),
                     ),
+                &settings.appearance,
                 cx,
             ))
             .child(group(
@@ -1053,6 +1111,7 @@ fn render_ai_section(
                                 "If API key is empty, provider environment variables are used when available."
                             }),
                     ),
+                &settings.appearance,
                 cx,
             ))
             .child(group(
@@ -1071,12 +1130,13 @@ fn render_ai_section(
                         div()
                             .px(spacing::sm())
                             .py(spacing::xs())
-                            .rounded(borders::radius_sm())
+                            .rounded(islands::radius_sm(&settings.appearance))
                             .bg(color.opacity(0.1))
                             .border_1()
                             .border_color(color.opacity(0.3))
                             .child(div().text_xs().text_color(color).child(status))
                     })),
+                &settings.appearance,
                 cx,
             ))
             .children((!ai_enabled).then(|| {
@@ -1106,16 +1166,21 @@ fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
         .child(content)
 }
 
-fn group(title: &str, content: impl IntoElement, cx: &App) -> Div {
+fn group(
+    title: &str,
+    content: impl IntoElement,
+    appearance: &crate::state::AppearanceSettings,
+    cx: &App,
+) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(spacing::sm())
         .p(spacing::md())
-        .bg(cx.theme().tab_bar)
+        .bg(islands::card_bg(appearance, cx))
         .border_1()
-        .border_color(cx.theme().sidebar_border)
-        .rounded(borders::radius_sm())
+        .border_color(islands::panel_border(appearance, cx))
+        .rounded(islands::radius_sm(appearance))
         .child(
             div()
                 .text_sm()

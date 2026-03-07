@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::{Icon, IconName};
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
@@ -40,6 +41,7 @@ pub(super) fn build_document_menu(
     menu = menu
         .item(
             PopupMenuItem::new("Edit JSON")
+                .icon(Icon::new(IconName::Braces))
                 .disabled(multi)
                 .action(Box::new(EditDocumentJson))
                 .on_click({
@@ -59,10 +61,19 @@ pub(super) fn build_document_menu(
                     }
                 }),
         )
-        .item(PopupMenuItem::new(delete_label).action(Box::new(DeleteDocument)))
-        .item(PopupMenuItem::new(copy_label).action(Box::new(CopyDocumentJson)))
+        .item(
+            PopupMenuItem::new(delete_label)
+                .icon(Icon::new(IconName::Delete))
+                .action(Box::new(DeleteDocument)),
+        )
+        .item(
+            PopupMenuItem::new(copy_label)
+                .icon(Icon::new(IconName::Copy))
+                .action(Box::new(CopyDocumentJson)),
+        )
         .item(
             PopupMenuItem::new("Duplicate Document")
+                .icon(Icon::new(IconName::Copy))
                 .disabled(multi)
                 .action(Box::new(DuplicateDocument))
                 .on_click({
@@ -92,6 +103,7 @@ pub(super) fn build_document_menu(
         }))
         .item(
             PopupMenuItem::new("Discard Changes")
+                .icon(Icon::new(IconName::Undo))
                 .action(Box::new(DiscardDocumentChanges))
                 .disabled(!is_dirty)
                 .on_click({
@@ -138,6 +150,7 @@ pub(super) fn build_property_menu(
 
     menu = menu.item(
         PopupMenuItem::new("Edit Value / Type...")
+            .icon(Icon::new(IconName::Settings2))
             .action(Box::new(EditValueType))
             .disabled(!can_edit_value)
             .on_click({
@@ -162,48 +175,56 @@ pub(super) fn build_property_menu(
 
     if can_rename_field {
         menu = menu.item(
-            PopupMenuItem::new("Rename Field...").action(Box::new(RenameField)).on_click({
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let meta = meta.clone();
-                move |_, window, cx| {
-                    PropertyActionDialog::open_rename_field(
-                        state.clone(),
-                        session_key.clone(),
-                        meta.clone(),
-                        allow_bulk,
-                        window,
-                        cx,
-                    );
-                }
-            }),
+            PopupMenuItem::new("Rename Field...")
+                .icon(Icon::new(IconName::Settings2))
+                .action(Box::new(RenameField))
+                .on_click({
+                    let state = state.clone();
+                    let session_key = session_key.clone();
+                    let meta = meta.clone();
+                    move |_, window, cx| {
+                        PropertyActionDialog::open_rename_field(
+                            state.clone(),
+                            session_key.clone(),
+                            meta.clone(),
+                            allow_bulk,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
         );
     }
 
     if can_remove_field {
         menu = menu.item(
-            PopupMenuItem::new("Remove Field...").action(Box::new(RemoveSelectedField)).on_click({
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let meta = meta.clone();
-                move |_, window, cx| {
-                    PropertyActionDialog::open_remove_field(
-                        state.clone(),
-                        session_key.clone(),
-                        meta.clone(),
-                        allow_bulk,
-                        window,
-                        cx,
-                    );
-                }
-            }),
+            PopupMenuItem::new("Remove Field...")
+                .icon(Icon::new(IconName::Minus))
+                .action(Box::new(RemoveSelectedField))
+                .on_click({
+                    let state = state.clone();
+                    let session_key = session_key.clone();
+                    let meta = meta.clone();
+                    move |_, window, cx| {
+                        PropertyActionDialog::open_remove_field(
+                            state.clone(),
+                            session_key.clone(),
+                            meta.clone(),
+                            allow_bulk,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
         );
     }
 
     if can_remove_element {
         menu = menu.item(
-            PopupMenuItem::new("Remove Element...").action(Box::new(RemoveSelectedField)).on_click(
-                {
+            PopupMenuItem::new("Remove Element...")
+                .icon(Icon::new(IconName::Minus))
+                .action(Box::new(RemoveSelectedField))
+                .on_click({
                     let state = state.clone();
                     let session_key = session_key.clone();
                     let meta = meta.clone();
@@ -217,51 +238,57 @@ pub(super) fn build_property_menu(
                             cx,
                         );
                     }
-                },
-            ),
+                }),
         );
     }
 
     if can_add_field {
         menu = menu.item(
-            PopupMenuItem::new("Add Field/Value...").action(Box::new(AddField)).on_click({
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let meta = meta.clone();
-                move |_, window, cx| {
-                    PropertyActionDialog::open_add_field(
-                        state.clone(),
-                        session_key.clone(),
-                        meta.clone(),
-                        allow_bulk,
-                        window,
-                        cx,
-                    );
-                }
-            }),
+            PopupMenuItem::new("Add Field/Value...")
+                .icon(Icon::new(IconName::Plus))
+                .action(Box::new(AddField))
+                .on_click({
+                    let state = state.clone();
+                    let session_key = session_key.clone();
+                    let meta = meta.clone();
+                    move |_, window, cx| {
+                        PropertyActionDialog::open_add_field(
+                            state.clone(),
+                            session_key.clone(),
+                            meta.clone(),
+                            allow_bulk,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
         );
     }
 
     if is_array && !is_array_element {
         menu = menu.item(
-            PopupMenuItem::new("Add Element...").action(Box::new(AddElement)).on_click({
-                let state = state.clone();
-                let session_key = session_key.clone();
-                let meta = meta.clone();
-                move |_, window, cx| {
-                    PropertyActionDialog::open_add_element(
-                        state.clone(),
-                        session_key.clone(),
-                        meta.clone(),
-                        allow_bulk,
-                        window,
-                        cx,
-                    );
-                }
-            }),
+            PopupMenuItem::new("Add Element...")
+                .icon(Icon::new(IconName::Plus))
+                .action(Box::new(AddElement))
+                .on_click({
+                    let state = state.clone();
+                    let session_key = session_key.clone();
+                    let meta = meta.clone();
+                    move |_, window, cx| {
+                        PropertyActionDialog::open_add_element(
+                            state.clone(),
+                            session_key.clone(),
+                            meta.clone(),
+                            allow_bulk,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
         );
         menu = menu.item(
             PopupMenuItem::new("Remove Matching Values...")
+                .icon(Icon::new(IconName::Delete))
                 .action(Box::new(RemoveMatchingValues))
                 .on_click({
                     let state = state.clone();
@@ -281,27 +308,37 @@ pub(super) fn build_property_menu(
         );
     }
 
-    menu = menu.item(PopupMenuItem::new("Copy Value").action(Box::new(CopyValue)).on_click({
-        let state = state.clone();
-        let session_key = session_key.clone();
-        let doc_key = doc_key.clone();
-        let path = path.clone();
-        move |_, _window, cx| {
-            if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
-                && let Some(value) = get_bson_at_path(&doc, &path)
-            {
-                let text = format_bson_for_clipboard(value);
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-            }
-        }
-    }));
+    menu = menu.item(
+        PopupMenuItem::new("Copy Value")
+            .icon(Icon::new(IconName::Copy))
+            .action(Box::new(CopyValue))
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                let doc_key = doc_key.clone();
+                let path = path.clone();
+                move |_, _window, cx| {
+                    if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
+                        && let Some(value) = get_bson_at_path(&doc, &path)
+                    {
+                        let text = format_bson_for_clipboard(value);
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
+            }),
+    );
     menu = menu.separator();
-    menu = menu.item(PopupMenuItem::new("Copy Key").action(Box::new(CopyKey)).on_click({
-        let key_label = key_label.clone();
-        move |_, _window, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(key_label.clone()));
-        }
-    }));
+    menu = menu.item(
+        PopupMenuItem::new("Copy Key")
+            .icon(Icon::new(IconName::Copy))
+            .action(Box::new(CopyKey))
+            .on_click({
+                let key_label = key_label.clone();
+                move |_, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(key_label.clone()));
+                }
+            }),
+    );
 
     menu
 }

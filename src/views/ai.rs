@@ -9,7 +9,6 @@ use gpui_component::Sizable as _;
 use gpui_component::button::ButtonVariants as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_component::spinner::Spinner;
 use gpui_component::text::TextViewStyle;
@@ -24,10 +23,13 @@ use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
 use crate::ai::safety::SafetyTier;
 use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
-use crate::ai::{AiChatEntry, AiTurn, ChatRole, ContentBlock, ToolActivity, ToolActivityStatus};
+use crate::ai::{
+    AiChatEntry, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock, ToolActivity,
+    ToolActivityStatus,
+};
 use crate::components::Button;
 use crate::state::{AiProvider, AppState};
-use crate::theme::{borders, spacing};
+use crate::theme::{islands, spacing};
 use gpui_component::{Icon, IconName, Size};
 
 pub struct AiView {
@@ -52,6 +54,10 @@ pub struct AiView {
     tool_group_overrides: HashMap<Uuid, bool>,
     last_seen_provider: AiProvider,
     _subscriptions: Vec<Subscription>,
+    /// @-mention popup state
+    mention_query: Option<String>,
+    mention_filtered: Vec<String>,
+    mention_selected_index: usize,
 }
 
 impl AiView {
@@ -80,6 +86,9 @@ impl AiView {
             tool_group_overrides: HashMap::new(),
             last_seen_provider,
             _subscriptions: subscriptions,
+            mention_query: None,
+            mention_filtered: Vec::new(),
+            mention_selected_index: 0,
         }
     }
 
@@ -113,6 +122,168 @@ impl AiView {
         cx.notify();
     }
 
+    fn detect_mention_trigger(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
+        // Scan backward from cursor for `@` preceded by whitespace or at start
+        let before = &text[..cursor.min(text.len())];
+        let mut at_pos = None;
+        for (i, c) in before.char_indices().rev() {
+            if c == '@' && (i == 0 || before.as_bytes()[i - 1].is_ascii_whitespace()) {
+                at_pos = Some(i);
+                break;
+            }
+            if c.is_whitespace() {
+                break;
+            }
+        }
+
+        if let Some(pos) = at_pos {
+            let query = &before[pos + 1..];
+            self.mention_query = Some(query.to_string());
+            self.filter_mention_collections(query, cx);
+            self.mention_selected_index = 0;
+        } else {
+            self.mention_query = None;
+            self.mention_filtered.clear();
+        }
+    }
+
+    fn filter_mention_collections(&mut self, query: &str, cx: &Context<Self>) {
+        let s = self.state.read(cx);
+        let conn_id = match s.selected_connection_id() {
+            Some(id) => id,
+            None => {
+                self.mention_filtered.clear();
+                return;
+            }
+        };
+        let active = match s.active_connection_by_id(conn_id) {
+            Some(c) => c,
+            None => {
+                self.mention_filtered.clear();
+                return;
+            }
+        };
+        let db = match s.selected_database_name() {
+            Some(db) => db,
+            None => {
+                self.mention_filtered.clear();
+                return;
+            }
+        };
+        let cols = match active.collections.get(&db) {
+            Some(c) => c,
+            None => {
+                self.mention_filtered.clear();
+                return;
+            }
+        };
+        let already_mentioned = &s.ai_chat.mentioned_collections;
+        let query_lower = query.to_lowercase();
+        self.mention_filtered = cols
+            .iter()
+            .filter(|c| !already_mentioned.contains(c))
+            .filter(|c| query_lower.is_empty() || c.to_lowercase().contains(&query_lower))
+            .take(10)
+            .cloned()
+            .collect();
+    }
+
+    /// Remove pills whose `@collection` text is no longer present in the input.
+    fn sync_mentions_with_text(&self, text: &str, cx: &mut Context<Self>) {
+        let mentioned = self.state.read(cx).ai_chat.mentioned_collections.clone();
+        let removed: Vec<String> = mentioned
+            .iter()
+            .filter(|col| {
+                let needle = format!("@{col}");
+                !text.contains(&needle)
+            })
+            .cloned()
+            .collect();
+        if !removed.is_empty() {
+            self.state.update(cx, |s, _| {
+                for col in &removed {
+                    s.ai_chat.remove_mention(col);
+                }
+            });
+        }
+    }
+
+    /// Recompute inline highlight ranges for all `@collection` tokens in the text.
+    fn update_mention_highlights(
+        &self,
+        input: &Entity<InputState>,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mentioned = self.state.read(cx).ai_chat.mentioned_collections.clone();
+        if mentioned.is_empty() {
+            input.update(cx, |s, _| s.set_custom_highlights(Vec::new()));
+            return;
+        }
+        let theme = cx.theme();
+        let fg = theme.link;
+        let bg = Hsla { a: 0.15, ..fg };
+        let style = HighlightStyle {
+            background_color: Some(bg),
+            color: Some(fg),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        let mut highlights = Vec::new();
+        for col in &mentioned {
+            let needle = format!("@{col}");
+            let mut start = 0;
+            while let Some(pos) = text[start..].find(&needle) {
+                let abs = start + pos;
+                let end = abs + needle.len();
+                // Only match at word boundary (next char is whitespace, punctuation, or end)
+                let at_boundary =
+                    text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                if at_boundary {
+                    highlights.push((abs..end, style));
+                }
+                start = abs + 1;
+            }
+        }
+        highlights.sort_by_key(|(r, _)| r.start);
+        input.update(cx, |s, _| s.set_custom_highlights(highlights));
+    }
+
+    fn confirm_mention(&mut self, cx: &mut Context<Self>) {
+        let Some(collection) = self.mention_filtered.get(self.mention_selected_index).cloned()
+        else {
+            return;
+        };
+
+        self.state.update(cx, |s, _| {
+            s.ai_chat.add_mention(collection.clone());
+        });
+
+        // Trigger on-demand schema fetch if not cached
+        let fetch_key = {
+            let s = self.state.read(cx);
+            if let (Some(conn_id), Some(db)) =
+                (s.selected_connection_id(), s.selected_database_name())
+            {
+                let key = crate::state::SessionKey::new(conn_id, &db, &collection);
+                if s.collection_meta_stale(&key) && !s.is_collection_meta_inflight(&key) {
+                    Some(key)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(key) = fetch_key {
+            crate::state::AppCommands::fetch_single_collection_meta(self.state.clone(), key, cx);
+        }
+
+        self.mention_query = None;
+        self.mention_filtered.clear();
+        cx.notify();
+    }
+
     fn ensure_input_state(
         &mut self,
         window: &mut Window,
@@ -126,7 +297,7 @@ impl AiView {
                     .line_number(false)
                     .auto_indent(false)
                     .clean_on_escape()
-                    .placeholder("Message AI assistant... (Cmd+Enter to send)")
+                    .placeholder("Ask AI Assistant...")
             });
 
             let state = self.state.clone();
@@ -134,8 +305,53 @@ impl AiView {
                 cx.subscribe_in(&input_state, window, move |view, entity, event, window, cx| {
                     match event {
                         InputEvent::Change => {
-                            // Draft is synced to AppState on blur (not every keystroke)
-                            // to avoid triggering a full re-render via the observer.
+                            let text = entity.read(cx).value().to_string();
+                            let cursor = entity.read(cx).cursor();
+
+                            // If mention popup was visible and whitespace was just
+                            // inserted (Enter → \n, Tab → spaces/\t), complete the
+                            // @mention and confirm.
+                            if view.mention_query.is_some()
+                                && !view.mention_filtered.is_empty()
+                                && cursor > 0
+                                && text.as_bytes()[cursor - 1].is_ascii_whitespace()
+                                && let Some(col) =
+                                    view.mention_filtered.get(view.mention_selected_index).cloned()
+                            {
+                                // Strip the inserted whitespace, then find @trigger
+                                let ws_start = text[..cursor]
+                                    .rfind(|c: char| !c.is_ascii_whitespace())
+                                    .map_or(0, |p| p + 1);
+                                let before_ws = &text[..ws_start];
+                                if let Some(at_pos) = find_at_trigger(before_ws) {
+                                    let replacement = format!("@{} ", col);
+                                    let after = &text[cursor..];
+                                    let new_text =
+                                        format!("{}{}{}", &text[..at_pos], replacement, after,);
+                                    let new_cursor_byte = at_pos + replacement.len();
+                                    entity.update(cx, |input, cx| {
+                                        input.set_value(new_text.clone(), window, cx);
+                                        let before_cursor = &new_text[..new_cursor_byte];
+                                        let line = before_cursor.matches('\n').count() as u32;
+                                        let last_nl =
+                                            before_cursor.rfind('\n').map_or(0, |p| p + 1);
+                                        let character =
+                                            before_cursor[last_nl..].chars().count() as u32;
+                                        input.set_cursor_position(
+                                            gpui_component::input::Position::new(line, character),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                    view.confirm_mention(cx);
+                                    view.update_mention_highlights(entity, &new_text, cx);
+                                    return;
+                                }
+                            }
+
+                            view.detect_mention_trigger(&text, cursor, cx);
+                            view.sync_mentions_with_text(&text, cx);
+                            view.update_mention_highlights(entity, &text, cx);
                         }
                         InputEvent::Blur => {
                             let raw = entity.read(cx).value().to_string();
@@ -153,13 +369,17 @@ impl AiView {
 
                             let prompt = entity.read(cx).value().to_string().trim().to_string();
                             if !prompt.is_empty() && can_submit {
+                                // Take mentions before clearing input (clear triggers Change
+                                // which would strip them via sync_mentions_with_text).
+                                let mentioned = state.update(cx, |s, _| s.ai_chat.take_mentions());
                                 entity.update(cx, |input, cx| {
+                                    input.set_custom_highlights(Vec::new());
                                     input.set_value(String::new(), window, cx);
                                 });
                                 state.update(cx, |s, _| {
                                     s.ai_chat.draft_input.clear();
                                 });
-                                view.send_message(prompt, cx);
+                                view.send_message_with_mentions(prompt, mentioned, cx);
                             }
                         }
                         _ => {}
@@ -173,7 +393,12 @@ impl AiView {
         }
     }
 
-    fn send_message(&mut self, prompt: String, cx: &mut Context<Self>) {
+    fn send_message_with_mentions(
+        &mut self,
+        prompt: String,
+        mentioned: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
         let ai_settings = self.state.read(cx).settings.ai.clone();
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -227,7 +452,7 @@ impl AiView {
         {
             history.pop();
         }
-        let system_prompt = build_ai_context(self.state.read(cx));
+        let system_prompt = build_ai_context(self.state.read(cx), &mentioned);
         trim_history_for_context(&mut history, system_prompt.len(), None);
 
         let tool_ctx = {
@@ -360,8 +585,8 @@ impl AiView {
                         }
                         Err(ref error) => {
                             let msg = error.user_message();
-                            s.ai_chat.last_error = Some(msg.clone());
-                            s.ai_chat.push_system_message(msg);
+                            s.ai_chat.clear_error();
+                            s.ai_chat.fail_turn_response(message_id, msg);
                             span.finish_err(error.kind());
                         }
                     }
@@ -394,58 +619,48 @@ impl Render for AiView {
 
         let state = self.state.clone();
         let app_state = self.state.read(cx);
+        let appearance = app_state.settings.appearance.clone();
         let ai_chat = &app_state.ai_chat;
         let ai_enabled = app_state.settings.ai.enabled;
         let is_loading = ai_chat.is_loading;
-        let last_error = ai_chat.last_error.clone();
         let session_key = app_state.current_ai_session_key();
+        let streaming_turn_id = ai_chat.current_turn_id;
         let current_provider = app_state.settings.ai.provider;
         let current_model = app_state.settings.ai.model.clone();
         let selected_db = app_state.selected_database_name();
         let selected_collection = app_state.selected_collection_name();
         let session_ready = session_key.is_some();
-        let can_submit = ai_enabled && !is_loading && session_ready;
-        let input_disabled = is_loading || !ai_enabled || !session_ready;
+        let input_focused = input_state.read(cx).focus_handle(cx).is_focused(window);
         let subtitle = match (&selected_db, &selected_collection) {
             (Some(db), Some(col)) => format!("{db}.{col}"),
             (Some(db), None) => format!("{db} (database selected)"),
             _ => "No active collection context".to_string(),
         };
 
+        let panel_border = islands::ai_border(&appearance, cx);
+        let muted_surface_bg = islands::ai_surface_muted_bg(&appearance, cx);
+
         // Header
         let header = {
-            let clear_state = state.clone();
             let close_state = state.clone();
-            let header_buttons = div().flex().items_center().gap(spacing::xs());
+            let header_buttons = div().flex().items_center().gap(px(6.0));
 
             let header_buttons = if is_loading {
                 let view = cx.entity();
                 header_buttons.child(
-                    Button::new("stop-gen").ghost().compact().label("Stop").on_click(
-                        move |_, _, cx| {
+                    Button::new("stop-gen")
+                        .ghost()
+                        .compact()
+                        .icon(Icon::new(IconName::CircleX).xsmall())
+                        .tooltip("Stop generation")
+                        .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
                                 this.stop_generation(cx);
                             });
-                        },
-                    ),
-                )
-            } else {
-                header_buttons.child(
-                    Button::new("clear-chat")
-                        .ghost()
-                        .compact()
-                        .label("Clear")
-                        .disabled(!ai_enabled)
-                        .on_click(move |_, _, cx| {
-                            clear_state.update(cx, |state, cx| {
-                                state.ai_chat.entries.clear();
-                                state.ai_chat.last_error = None;
-                                state.ai_chat.cancel_flag = None;
-                                state.ai_chat.current_turn_id = None;
-                                cx.notify();
-                            });
                         }),
                 )
+            } else {
+                header_buttons
             };
 
             let close_button = Button::new("ai-panel-close")
@@ -462,114 +677,27 @@ impl Render for AiView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(52.0))
-                .px(spacing::lg())
-                .bg(cx.theme().tab_bar)
-                .border_b_1()
-                .border_color(cx.theme().border)
+                .h(px(46.0))
+                .px(spacing::md())
+                .bg(islands::ai_header_bg(&appearance, cx))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(cx.theme().foreground)
-                                .child("AI Assistant"),
-                        )
-                        .child(
-                            div().text_xs().text_color(cx.theme().muted_foreground).child(subtitle),
-                        ),
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().foreground)
+                        .child("AI Chat"),
                 )
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(spacing::sm())
+                        .gap(spacing::xs())
                         .child(header_buttons)
                         .child(close_button),
                 )
         };
 
-        let mut status_rows: Vec<AnyElement> = Vec::new();
-        if let Some(error_text) = last_error {
-            let dismiss_state = state.clone();
-            status_rows.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(spacing::md())
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(cx.theme().danger.opacity(0.08))
-                    .border_b_1()
-                    .border_color(cx.theme().danger.opacity(0.35))
-                    .child(
-                        div().text_xs().text_color(cx.theme().danger_foreground).child(error_text),
-                    )
-                    .child(
-                        Button::new("dismiss-error").ghost().compact().label("Dismiss").on_click(
-                            move |_, _, cx| {
-                                dismiss_state.update(cx, |state, cx| {
-                                    state.ai_chat.last_error = None;
-                                    cx.notify();
-                                });
-                            },
-                        ),
-                    )
-                    .into_any_element(),
-            );
-        }
-
-        if !ai_enabled {
-            let open_settings_state = state.clone();
-            status_rows.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(spacing::md())
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(cx.theme().warning.opacity(0.08))
-                    .border_b_1()
-                    .border_color(cx.theme().warning.opacity(0.35))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().warning)
-                            .child("AI is disabled. Enable it in Settings to use the assistant."),
-                    )
-                    .child(
-                        Button::new("open-ai-settings").compact().label("Open Settings").on_click(
-                            move |_, _, cx| {
-                                open_settings_state.update(cx, |state, cx| {
-                                    state.open_settings_tab(cx);
-                                });
-                            },
-                        ),
-                    )
-                    .into_any_element(),
-            );
-        } else if !session_ready {
-            status_rows.push(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(cx.theme().secondary.opacity(0.2))
-                    .border_b_1()
-                    .border_color(cx.theme().border.opacity(0.65))
-                    .child(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(
-                            "Select a collection tab to unlock AI chat with database context.",
-                        ),
-                    )
-                    .into_any_element(),
-            );
-        }
+        let status_rows: Vec<AnyElement> = Vec::new();
 
         // Message list with manual scroll for auto-scroll-to-bottom
         let entries = ai_chat.entries.clone();
@@ -602,67 +730,73 @@ impl Render for AiView {
         }
 
         let view_entity = cx.entity();
-        let starter_view = view_entity.clone();
-        let starter_input = input_state.clone();
-        let prompt_buttons = [
-            (
-                "Summarize this collection",
-                "Summarize the current collection: schema, key fields, and possible quality issues.",
-            ),
-            (
-                "Suggest useful indexes",
-                "Suggest practical indexes for this collection based on likely query patterns.",
-            ),
-            ("Find anomalies", "Help me find unusual or suspicious records in this collection."),
-            (
-                "Build an aggregation",
-                "Build an aggregation pipeline to get top-level insights from this collection.",
-            ),
-        ];
+        let empty_title =
+            if session_ready { "Ask about your data" } else { "AI stays open while you work" };
+        let empty_subtitle = if session_ready {
+            format!("Connected to {subtitle}. Ask for queries, indexes, or summaries.")
+        } else {
+            "Select a collection to unlock database-aware answers and actions.".to_string()
+        };
+        let empty_features = if session_ready {
+            vec![
+                ("Explain schema", "Break down fields, relationships, and document structure."),
+                (
+                    "Draft queries",
+                    "Turn natural language into filters, projections, and pipelines.",
+                ),
+                ("Review indexes", "Spot missing indexes and explain likely query tradeoffs."),
+            ]
+        } else {
+            vec![
+                ("Keep context nearby", "Leave chat open while switching tabs and tools."),
+                (
+                    "Grounded when ready",
+                    "Open any collection to connect the assistant to your data.",
+                ),
+                (
+                    "One place to think",
+                    "Use one panel for analysis, drafting, and follow-up questions.",
+                ),
+            ]
+        };
         let empty_state = div()
             .flex()
             .flex_col()
-            .items_center()
+            .items_start()
             .justify_center()
-            .px(px(24.0))
-            .py(px(28.0))
-            .gap(spacing::md())
+            .size_full()
+            .px(px(28.0))
+            .py(px(32.0))
+            .gap(spacing::lg())
             .child(
                 div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().foreground)
-                    .child("Start with a focused prompt"),
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(spacing::xs())
+                    .w_full()
+                    .max_w(px(360.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().foreground)
+                            .child(empty_title),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(empty_subtitle),
+                    ),
             )
             .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Use one of these starters or write your own query."),
-            )
-            .child(div().flex().flex_col().items_start().gap(spacing::sm()).children(
-                prompt_buttons.into_iter().enumerate().map(|(idx, (label, prompt))| {
-                    let view = starter_view.clone();
-                    let prompt = prompt.to_string();
-                    let input_state = starter_input.clone();
-                    Button::new(ElementId::Name(format!("ai-starter-{idx}").into()))
-                        .ghost()
-                        .compact()
-                        .label(label)
-                        .disabled(!can_submit)
-                        .on_click(move |_, window, cx| {
-                            input_state.update(cx, |input, cx| {
-                                input.set_value(String::new(), window, cx);
-                            });
-                            view.update(cx, |this, cx| {
-                                this.state.update(cx, |state, _| {
-                                    state.ai_chat.draft_input.clear();
-                                });
-                                this.send_message(prompt.clone(), cx);
-                            });
-                        })
-                }),
-            ));
+                div().flex().flex_col().gap(spacing::sm()).w_full().max_w(px(360.0)).children(
+                    empty_features
+                        .into_iter()
+                        .map(|(label, hint)| render_empty_feature(label, hint, &appearance, cx)),
+                ),
+            );
 
         let scroll_handle = self.scroll_handle.clone();
         let on_scroll_view = view_entity.clone();
@@ -671,6 +805,7 @@ impl Render for AiView {
             .size_full()
             .overflow_hidden()
             .relative()
+            .bg(islands::ai_shell_bg(&appearance, cx).opacity(0.72))
             .child(
                 div()
                     .id("ai-chat-scroll")
@@ -739,13 +874,21 @@ impl Render for AiView {
                                                 group_key,
                                                 view_entity.clone(),
                                                 state.clone(),
+                                                &appearance,
                                                 window,
                                                 cx,
                                             ))
                                         } else {
                                             None
                                         };
-                                        render_turn(turn, tool_section, is_loading, window, cx)
+                                        render_turn(
+                                            turn,
+                                            tool_section,
+                                            streaming_turn_id == Some(turn.id),
+                                            &appearance,
+                                            window,
+                                            cx,
+                                        )
                                     }
                                     RenderBlock::ToolGroup(tools) => {
                                         let group_key = tools[0].id;
@@ -760,22 +903,15 @@ impl Render for AiView {
                                             group_key,
                                             view_entity.clone(),
                                             state.clone(),
+                                            &appearance,
                                             window,
                                             cx,
                                         )
                                     }
                                     RenderBlock::Other(entry) => match entry {
-                                        AiChatEntry::SystemMessage(msg) => div()
-                                            .px(spacing::md())
-                                            .py(spacing::sm())
-                                            .bg(cx.theme().secondary.opacity(0.15))
-                                            .border_1()
-                                            .border_color(cx.theme().border.opacity(0.6))
-                                            .rounded(borders::radius_sm())
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(msg.content.clone())
-                                            .into_any_element(),
+                                        AiChatEntry::SystemMessage(msg) => {
+                                            render_status_message(msg, &appearance, cx)
+                                        }
                                         AiChatEntry::LegacyMessage(msg) => {
                                             let color = match msg.role {
                                                 ChatRole::User => cx.theme().foreground,
@@ -785,6 +921,10 @@ impl Render for AiView {
                                             div()
                                                 .px(spacing::md())
                                                 .py(spacing::sm())
+                                                .bg(muted_surface_bg)
+                                                .rounded(islands::radius_sm(&appearance))
+                                                .border_1()
+                                                .border_color(panel_border)
                                                 .text_sm()
                                                 .text_color(color)
                                                 .child(format!(
@@ -807,9 +947,10 @@ impl Render for AiView {
                             div()
                                 .flex()
                                 .flex_col()
-                                .p(spacing::lg())
+                                .p(spacing::md())
                                 .gap(spacing::md())
                                 .children(rendered)
+                                .child(div().h(px(18.0)))
                         }
                     }),
             )
@@ -841,14 +982,15 @@ impl Render for AiView {
 
         // Model selector dropdown — shows only current provider's models
         let model_selector = {
-            let selector_label = format!("{} \u{00B7} {}", current_provider.label(), current_model);
+            let selector_label =
+                compact_label(&current_provider.model_display_name(&current_model), 24);
             let state_for_menu = state.clone();
             gpui_component::button::Button::new("ai-model-selector")
                 .ghost()
                 .compact()
                 .label(selector_label)
                 .dropdown_caret(true)
-                .rounded(borders::radius_sm())
+                .rounded(islands::radius_sm(&appearance))
                 .with_size(Size::Small)
                 .disabled(is_loading)
                 .dropdown_menu_with_anchor(
@@ -920,9 +1062,10 @@ impl Render for AiView {
                             let is_current = model == active_model;
                             let s = state_for_menu.clone();
                             let m = model.clone();
+                            let display_name = provider.model_display_name(&model);
                             let note = AiProvider::model_note(&model);
                             let item = if let Some(note) = note {
-                                let model_label = model.clone();
+                                let model_label = display_name.clone();
                                 let note = note.to_string();
                                 PopupMenuItem::element(move |_window, cx| {
                                     div()
@@ -943,7 +1086,7 @@ impl Render for AiView {
                                 })
                                 .checked(is_current)
                             } else {
-                                PopupMenuItem::new(model).checked(is_current)
+                                PopupMenuItem::new(display_name).checked(is_current)
                             };
                             menu = menu.item(item.on_click(move |_, _, cx| {
                                 s.update(cx, |state, cx| {
@@ -962,7 +1105,7 @@ impl Render for AiView {
         let send_or_stop_button = if is_loading {
             let stop_view = cx.entity();
             Button::new("send-stop")
-                .ghost()
+                .danger()
                 .compact()
                 .icon(Icon::new(IconName::CircleX).xsmall())
                 .tooltip("Stop generation")
@@ -987,61 +1130,227 @@ impl Render for AiView {
                     if prompt.is_empty() {
                         return;
                     }
+                    // Take mentions before clearing input
+                    let mentioned = view.update(cx, |this, cx| {
+                        this.state.update(cx, |s, _| s.ai_chat.take_mentions())
+                    });
                     input_state_for_submit.update(cx, |input, cx| {
+                        input.set_custom_highlights(Vec::new());
                         input.set_value(String::new(), window, cx);
                     });
                     view.update(cx, |this, cx| {
                         this.state.update(cx, |state, _cx| {
                             state.ai_chat.draft_input.clear();
                         });
-                        this.send_message(prompt, cx);
+                        this.send_message_with_mentions(prompt, mentioned, cx);
                     });
                 })
         };
 
-        let context_chip = format!("{} · {}", current_provider.label(), current_model);
         let db_chip = match (&selected_db, &selected_collection) {
             (Some(db), Some(col)) => format!("{db}.{col}"),
             (Some(db), None) => format!("{db}.*"),
             _ => "No collection context".to_string(),
         };
-        let composer_hint = if !ai_enabled {
-            "Enable AI in Settings"
-        } else if !session_ready {
-            "Open a collection to chat"
-        } else if is_loading {
-            "Generating response..."
+        let context_chip_label = compact_label(&db_chip, 34);
+        let composer_border =
+            if input_focused { cx.theme().primary } else { panel_border.opacity(0.88) };
+
+        // Mention pills above input
+        let mentioned = self.state.read(cx).ai_chat.mentioned_collections.clone();
+        let mention_pills: Option<AnyElement> = if mentioned.is_empty() {
+            None
         } else {
-            "Cmd+Enter to send"
+            let state_for_pills = state.clone();
+            let input_for_pills = input_state.clone();
+            let pills: Vec<AnyElement> = mentioned
+                .iter()
+                .map(|col| {
+                    let col_name = col.clone();
+                    let st = state_for_pills.clone();
+                    let inp = input_for_pills.clone();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .px(spacing::xs())
+                        .py(px(2.0))
+                        .rounded(px(6.0))
+                        .bg(cx.theme().primary.opacity(0.12))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().primary)
+                                .child(format!("@{col_name}")),
+                        )
+                        .child(
+                            div()
+                                .id(ElementId::Name(format!("mention-remove-{col_name}").into()))
+                                .cursor_pointer()
+                                .child(
+                                    Icon::new(IconName::Close)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+                                        cx.stop_propagation();
+                                        let col = col_name.clone();
+                                        // Strip @collection from input text
+                                        let text = inp.read(cx).value().to_string();
+                                        let needle = format!("@{col}");
+                                        if let Some(pos) = text.find(&needle) {
+                                            let end = pos + needle.len();
+                                            // Also consume trailing space if present
+                                            let end = if text.as_bytes().get(end) == Some(&b' ') {
+                                                end + 1
+                                            } else {
+                                                end
+                                            };
+                                            let new_text =
+                                                format!("{}{}", &text[..pos], &text[end..],);
+                                            inp.update(cx, |input, cx| {
+                                                input.set_value(new_text, window, cx);
+                                            });
+                                        }
+                                        st.update(cx, |s, cx| {
+                                            s.ai_chat.remove_mention(&col);
+                                            cx.notify();
+                                        });
+                                    },
+                                ),
+                        )
+                        .into_any_element()
+                })
+                .collect();
+            Some(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(spacing::xs())
+                    .px(px(2.0))
+                    .children(pills)
+                    .into_any_element(),
+            )
+        };
+
+        // Mention popup — rendered between message_list and input_area to overlay chat
+        let mention_popup: Option<AnyElement> = if self.mention_query.is_some()
+            && !self.mention_filtered.is_empty()
+        {
+            let selected_idx = self.mention_selected_index;
+            let view_for_popup = view_entity.clone();
+            let items: Vec<AnyElement> = self
+                .mention_filtered
+                .iter()
+                .enumerate()
+                .map(|(i, col)| {
+                    let is_selected = i == selected_idx;
+                    let col_name = col.clone();
+                    let v = view_for_popup.clone();
+                    let bg = if is_selected {
+                        cx.theme().primary.opacity(0.12)
+                    } else {
+                        gpui::transparent_black()
+                    };
+                    div()
+                        .id(ElementId::Name(format!("mention-item-{i}").into()))
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .px(spacing::sm())
+                        .py(spacing::xs())
+                        .cursor_pointer()
+                        .rounded(px(4.0))
+                        .bg(bg)
+                        .hover(|s: gpui::StyleRefinement| s.bg(cx.theme().secondary.opacity(0.2)))
+                        .child(
+                            Icon::new(IconName::Braces)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(div().text_xs().text_color(cx.theme().foreground).child(col_name))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+                                cx.stop_propagation();
+                                v.update(cx, |this, cx| {
+                                    this.mention_selected_index = i;
+                                    this.confirm_mention(cx);
+                                });
+                            },
+                        )
+                        .into_any_element()
+                })
+                .collect();
+
+            Some(
+                div()
+                    .id("mention-popup")
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .max_h(px(240.0))
+                    .overflow_y_scroll()
+                    .mx(spacing::md())
+                    .py(spacing::xs())
+                    .px(spacing::sm())
+                    .bg(islands::ai_surface_bg(&appearance, cx))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(islands::radius_sm(&appearance))
+                    .shadow_md()
+                    .children(items)
+                    .into_any_element(),
+            )
+        } else {
+            None
         };
 
         // Input area panel
-        let input_area = div()
+        let mut input_area = div()
             .flex()
             .flex_col()
-            .size_full()
-            .overflow_hidden()
-            .bg(cx.theme().tab_bar.opacity(0.22))
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .flex_shrink_0()
+            .gap(spacing::sm())
+            .mx(spacing::md())
+            .mb(spacing::md())
+            .p(px(6.0))
+            .bg(islands::ai_surface_bg(&appearance, cx).opacity(0.96))
+            .border_1()
+            .border_color(composer_border)
+            .rounded(islands::radius_md(&appearance));
+
+        input_area = input_area.children(mention_pills);
+
+        input_area = input_area
+            .child(
+                div().px(px(2.0)).py(px(2.0)).child(
+                    Input::new(&input_state)
+                        .xsmall()
+                        .appearance(false)
+                        .focus_bordered(false)
+                        .w_full()
+                        .h(px(64.0)),
+                ),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(spacing::sm())
-                    .px(spacing::md())
-                    .py(spacing::xs())
-                    .border_b_1()
-                    .border_color(cx.theme().border.opacity(0.65))
+                    .pt(px(2.0))
                     .child(
                         div()
                             .flex()
                             .items_center()
+                            .min_w(px(0.0))
                             .gap(spacing::xs())
-                            .child(info_chip(&context_chip, cx.theme().primary))
+                            .child(model_selector)
                             .child(info_chip(
-                                &db_chip,
+                                &context_chip_label,
                                 if session_ready {
                                     cx.theme().muted_foreground
                                 } else {
@@ -1049,51 +1358,7 @@ impl Render for AiView {
                                 },
                             )),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(composer_hint),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .p(spacing::sm())
-                    .child(Input::new(&input_state).w_full().h_full().disabled(input_disabled)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_between()
-                    .px(spacing::md())
-                    .py(spacing::xs())
-                    .child(div())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
-                            .child(model_selector)
-                            .child(send_or_stop_button),
-                    ),
-            );
-
-        // Resizable split between messages and input
-        let split_panel = v_resizable("ai-chat-split")
-            .child(
-                resizable_panel()
-                    .size(px(430.0))
-                    .size_range(px(100.0)..px(2000.0))
-                    .child(message_list),
-            )
-            .child(
-                resizable_panel()
-                    .size(px(180.0))
-                    .size_range(px(120.0)..px(600.0))
-                    .child(input_area),
+                    .child(send_or_stop_button),
             );
 
         div()
@@ -1103,27 +1368,85 @@ impl Render for AiView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(cx.theme().background)
-            .border_l_1()
-            .border_color(cx.theme().border)
+            .bg(islands::ai_shell_bg(&appearance, cx))
             .child(header)
-            .children(status_rows)
-            .child(div().flex_1().flex().flex_col().min_h(px(0.0)).child(split_panel))
+            .children((!status_rows.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::sm())
+                    .px(spacing::md())
+                    .pt(spacing::sm())
+                    .children(status_rows)
+            }))
+            .child(div().flex_1().min_h(px(0.0)).child(message_list))
+            .children(mention_popup)
+            .child(input_area)
     }
+}
+
+/// Find the byte position of an `@` trigger scanning backward from the end of `text`.
+fn find_at_trigger(text: &str) -> Option<usize> {
+    for (i, c) in text.char_indices().rev() {
+        if c == '@' && (i == 0 || text.as_bytes()[i - 1].is_ascii_whitespace()) {
+            return Some(i);
+        }
+        if c.is_whitespace() {
+            return None;
+        }
+    }
+    None
 }
 
 fn info_chip(label: &str, accent: Hsla) -> AnyElement {
     div()
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(5.0))
-        .bg(accent.opacity(0.1))
-        .border_1()
-        .border_color(accent.opacity(0.28))
+        .rounded(px(6.0))
+        .bg(accent.opacity(0.08))
         .text_xs()
         .text_color(accent)
         .child(label.to_string())
         .into_any_element()
+}
+
+fn render_empty_feature(
+    title: &str,
+    hint: &str,
+    appearance: &crate::state::AppearanceSettings,
+    cx: &App,
+) -> AnyElement {
+    let title = title.to_string();
+    let hint = hint.to_string();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .w_full()
+        .px(spacing::sm())
+        .py(spacing::sm())
+        .rounded(islands::radius_sm(appearance))
+        .bg(islands::ai_surface_bg(appearance, cx).opacity(0.74))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(cx.theme().foreground)
+                .child(title),
+        )
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(hint))
+        .into_any_element()
+}
+
+fn compact_label(label: &str, max_chars: usize) -> String {
+    if label.chars().count() <= max_chars {
+        return label.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+    let compact: String = label.chars().take(max_chars - 1).collect();
+    format!("{compact}…")
 }
 
 enum RenderBlock<'a> {
@@ -1199,6 +1522,10 @@ fn timeline_revision(entries: &[AiChatEntry]) -> u64 {
                         .wrapping_mul(131)
                         .wrapping_add(msg.content.len() as u64)
                         .wrapping_add(msg.blocks.len() as u64)
+                        .wrapping_add(match msg.tone {
+                            ChatMessageTone::Normal => 1,
+                            ChatMessageTone::Error => 2,
+                        })
                         .wrapping_add(msg.id.as_u128() as u64);
                 }
             }
@@ -1216,6 +1543,10 @@ fn timeline_revision(entries: &[AiChatEntry]) -> u64 {
                 rev = rev
                     .wrapping_mul(131)
                     .wrapping_add(msg.content.len() as u64)
+                    .wrapping_add(match msg.tone {
+                        ChatMessageTone::Normal => 1,
+                        ChatMessageTone::Error => 2,
+                    })
                     .wrapping_add(msg.id.as_u128() as u64);
             }
         }
@@ -1261,10 +1592,15 @@ fn ai_markdown_style(cx: &App) -> TextViewStyle {
 fn render_turn(
     turn: &AiTurn,
     tool_section: Option<AnyElement>,
-    is_loading: bool,
+    is_streaming: bool,
+    appearance: &crate::state::AppearanceSettings,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let border = islands::ai_border(appearance, cx).opacity(0.82);
+    let user_bg = cx.theme().primary.opacity(0.1);
+    let assistant_bg = islands::ai_surface_bg(appearance, cx).opacity(0.88);
+
     let user_msg = div().flex().w_full().justify_end().child(
         div()
             .w_full()
@@ -1272,10 +1608,10 @@ fn render_turn(
             .min_w(px(0.0))
             .px(spacing::md())
             .py(spacing::sm())
-            .bg(cx.theme().primary.opacity(0.1))
+            .bg(user_bg)
             .border_1()
             .border_color(cx.theme().primary.opacity(0.26))
-            .rounded(borders::radius_sm())
+            .rounded(islands::radius_sm(appearance))
             .child(
                 div()
                     .text_xs()
@@ -1293,6 +1629,77 @@ fn render_turn(
     );
 
     let assistant_section = match &turn.assistant_message {
+        Some(msg) if msg.tone == ChatMessageTone::Error => {
+            let mut body = div().flex().flex_col().gap(ai_block_gap()).child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().danger)
+                    .child("Error"),
+            );
+            if let Some(ts) = tool_section {
+                body = body.child(ts);
+            }
+            body = body.child(
+                div()
+                    .text_sm()
+                    .min_w(px(0.0))
+                    .child(render_plain_text_lines(&msg.content, cx.theme().foreground)),
+            );
+
+            Some(
+                div()
+                    .px(spacing::md())
+                    .py(spacing::sm())
+                    .bg(cx.theme().danger.opacity(0.1))
+                    .border_1()
+                    .border_color(cx.theme().danger.opacity(0.42))
+                    .rounded(islands::radius_sm(appearance))
+                    .child(body),
+            )
+        }
+        Some(msg) if is_streaming && !msg.content.is_empty() => {
+            let mut body = div().flex().flex_col().gap(ai_block_gap()).child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().primary)
+                    .child("Assistant"),
+            );
+            if let Some(ts) = tool_section {
+                body = body.child(ts);
+            }
+            body = body
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .child(render_plain_text_lines(&msg.content, cx.theme().foreground)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::xs())
+                        .child(Spinner::new().xsmall())
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Streaming..."),
+                        ),
+                );
+
+            Some(
+                div()
+                    .px(spacing::md())
+                    .py(spacing::sm())
+                    .bg(assistant_bg)
+                    .border_1()
+                    .border_color(border)
+                    .rounded(islands::radius_sm(appearance))
+                    .child(body),
+            )
+        }
         Some(msg) if !msg.content.is_empty() => {
             let md_style = ai_markdown_style(cx);
             let blocks = crate::components::ai_blocks::render_content_blocks_or_fallback(
@@ -1325,14 +1732,14 @@ fn render_turn(
                 div()
                     .px(spacing::md())
                     .py(spacing::sm())
-                    .bg(cx.theme().tab_bar.opacity(0.28))
+                    .bg(assistant_bg)
                     .border_1()
-                    .border_color(cx.theme().border.opacity(0.75))
-                    .rounded(borders::radius_sm())
+                    .border_color(border)
+                    .rounded(islands::radius_sm(appearance))
                     .child(body),
             )
         }
-        Some(_) if is_loading => {
+        Some(_) if is_streaming => {
             let mut body = div().flex().flex_col().gap(ai_block_gap());
             if let Some(ts) = tool_section {
                 body = body.child(ts);
@@ -1355,10 +1762,10 @@ fn render_turn(
                 div()
                     .px(spacing::md())
                     .py(spacing::sm())
-                    .bg(cx.theme().tab_bar.opacity(0.28))
+                    .bg(assistant_bg)
                     .border_1()
-                    .border_color(cx.theme().border.opacity(0.75))
-                    .rounded(borders::radius_sm())
+                    .border_color(border)
+                    .rounded(islands::radius_sm(appearance))
                     .child(body),
             )
         }
@@ -1379,12 +1786,79 @@ fn render_turn(
         .into_any_element()
 }
 
+fn render_status_message(
+    msg: &ChatMessage,
+    appearance: &crate::state::AppearanceSettings,
+    cx: &App,
+) -> AnyElement {
+    let (title, border_color, bg, body_color) = if msg.tone == ChatMessageTone::Error {
+        (
+            "Error",
+            cx.theme().danger.opacity(0.42),
+            cx.theme().danger.opacity(0.1),
+            cx.theme().foreground,
+        )
+    } else {
+        (
+            msg.role.label(),
+            islands::ai_border(appearance, cx).opacity(0.78),
+            islands::ai_surface_muted_bg(appearance, cx),
+            cx.theme().muted_foreground,
+        )
+    };
+
+    div()
+        .px(spacing::md())
+        .py(spacing::sm())
+        .bg(bg)
+        .border_1()
+        .border_color(border_color)
+        .rounded(islands::radius_sm(appearance))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if msg.tone == ChatMessageTone::Error {
+                    cx.theme().danger
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .child(title),
+        )
+        .child(div().text_xs().child(render_plain_text_lines(&msg.content, body_color)))
+        .into_any_element()
+}
+
+fn render_plain_text_lines(text: &str, color: Hsla) -> AnyElement {
+    let mut lines: Vec<AnyElement> = Vec::new();
+    for line in text.lines() {
+        let element = if line.is_empty() {
+            div().h(px(10.0)).into_any_element()
+        } else {
+            div().text_color(color).whitespace_normal().child(line.to_string()).into_any_element()
+        };
+        lines.push(element);
+    }
+
+    if text.ends_with('\n') {
+        lines.push(div().h(px(10.0)).into_any_element());
+    }
+
+    if lines.is_empty() {
+        div().into_any_element()
+    } else {
+        div().flex().flex_col().gap(px(2.0)).children(lines).into_any_element()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_tool_group(
     tools: &[&ToolActivity],
     expanded: bool,
     group_key: Uuid,
     view: Entity<AiView>,
     state: Entity<AppState>,
+    appearance: &crate::state::AppearanceSettings,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -1440,12 +1914,12 @@ fn render_tool_group(
         .gap(spacing::sm())
         .px(spacing::sm())
         .py(spacing::xs())
-        .bg(cx.theme().secondary.opacity(0.2))
+        .bg(islands::ai_surface_bg(appearance, cx).opacity(0.86))
         .border_1()
-        .border_color(cx.theme().border.opacity(0.7))
-        .rounded(borders::radius_sm())
+        .border_color(islands::ai_border(appearance, cx).opacity(0.78))
+        .rounded(islands::radius_sm(appearance))
         .cursor_pointer()
-        .hover(|s| s.bg(cx.theme().list_hover))
+        .hover(|s| s.bg(cx.theme().secondary.opacity(0.2)))
         .child(
             div()
                 .flex()
@@ -1483,10 +1957,10 @@ fn render_tool_group(
 
         if i + 1 < tools.len() {
             item =
-                item.pb(ai_block_gap()).border_b_1().border_color(cx.theme().border.opacity(0.5));
+                item.pb(ai_block_gap()).border_b_1().border_color(cx.theme().border.opacity(0.35));
         }
 
-        item = item.child(render_tool_row(t, state.clone(), cx));
+        item = item.child(render_tool_row(t, state.clone(), appearance, cx));
         if let Some(block) = t.result_block.as_ref() {
             let style = ai_markdown_style(cx);
             item = item.child(crate::components::ai_blocks::render_single_block(
@@ -1554,12 +2028,17 @@ fn render_tool_group(
         .into_any_element()
 }
 
-fn render_tool_row(activity: &ToolActivity, state: Entity<AppState>, cx: &App) -> AnyElement {
+fn render_tool_row(
+    activity: &ToolActivity,
+    state: Entity<AppState>,
+    appearance: &crate::state::AppearanceSettings,
+    cx: &App,
+) -> AnyElement {
     let display_name = display_tool_name(&activity.tool_name);
 
     match &activity.status {
         ToolActivityStatus::AwaitingConfirmation { .. } => {
-            render_confirmation_card(activity, state, cx)
+            render_confirmation_card(activity, state, appearance, cx)
         }
         ToolActivityStatus::Rejected => div()
             .flex()
@@ -1594,8 +2073,8 @@ fn render_tool_row(activity: &ToolActivity, state: Entity<AppState>, cx: &App) -
                         .p(spacing::sm())
                         .border_1()
                         .border_color(cx.theme().danger)
-                        .rounded(borders::radius_sm())
-                        .bg(cx.theme().danger.opacity(0.08))
+                        .rounded(islands::radius_sm(appearance))
+                        .bg(cx.theme().danger.opacity(0.06))
                         .child(
                             div()
                                 .flex()
@@ -1709,6 +2188,7 @@ fn is_danger_tool(tool_name: &str) -> bool {
 fn render_confirmation_card(
     activity: &ToolActivity,
     state: Entity<AppState>,
+    appearance: &crate::state::AppearanceSettings,
     cx: &App,
 ) -> AnyElement {
     let ToolActivityStatus::AwaitingConfirmation {
@@ -1801,10 +2281,10 @@ fn render_confirmation_card(
             div()
                 .mt(spacing::sm())
                 .p(spacing::sm())
-                .bg(cx.theme().background)
+                .bg(islands::ai_surface_muted_bg(appearance, cx))
                 .border_1()
-                .border_color(cx.theme().border)
-                .rounded(borders::radius_sm())
+                .border_color(islands::ai_border(appearance, cx).opacity(0.72))
+                .rounded(islands::radius_sm(appearance))
                 .max_h(px(150.0))
                 .overflow_hidden()
                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(truncated)),
@@ -1829,9 +2309,12 @@ fn render_confirmation_card(
     let (border_color, bg) = if is_blocked {
         (cx.theme().danger, cx.theme().danger.opacity(0.08))
     } else if danger {
-        (cx.theme().danger, cx.theme().sidebar)
+        (cx.theme().danger, islands::ai_surface_bg(appearance, cx).opacity(0.9))
     } else {
-        (cx.theme().border, cx.theme().sidebar)
+        (
+            islands::ai_border(appearance, cx).opacity(0.8),
+            islands::ai_surface_bg(appearance, cx).opacity(0.9),
+        )
     };
 
     let summary_color = if is_blocked { cx.theme().danger } else { cx.theme().foreground };
@@ -1842,7 +2325,7 @@ fn render_confirmation_card(
         .p(spacing::sm())
         .border_1()
         .border_color(border_color)
-        .rounded(borders::radius_sm())
+        .rounded(islands::radius_sm(appearance))
         .bg(bg)
         .child(
             div().flex().items_center().gap(spacing::sm()).child(tier_icon).child(

@@ -5,7 +5,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt a
 
 use crate::components::Button;
 use crate::state::AppState;
-use crate::theme::{colors, spacing};
+use crate::theme::{colors, islands, spacing};
 
 pub(crate) fn render_shell(
     error_text: Option<String>,
@@ -16,7 +16,8 @@ pub(crate) fn render_shell(
 ) -> AnyElement {
     let mut root = div().flex().flex_col().flex_1().h_full().min_h(px(0.0)).min_w(px(0.0));
     if with_background {
-        root = root.bg(cx.theme().background);
+        let appearance = state.read(cx).settings.appearance.clone();
+        root = root.bg(islands::content_bg(&appearance, cx));
     }
     if let Some(text) = error_text {
         root = root.child(render_error_banner(text, state.clone(), cx));

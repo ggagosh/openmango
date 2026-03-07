@@ -35,11 +35,79 @@ pub struct AppearanceSettings {
     pub show_status_bar: bool,
     #[serde(default)]
     pub vibrancy: bool,
+    #[serde(default)]
+    pub islands: IslandsAppearanceSettings,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        Self { theme: AppTheme::default(), show_status_bar: true, vibrancy: false }
+        Self {
+            theme: AppTheme::default(),
+            show_status_bar: true,
+            vibrancy: false,
+            islands: IslandsAppearanceSettings::default(),
+        }
+    }
+}
+
+/// Islands-specific appearance settings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IslandsAppearanceSettings {
+    #[serde(default = "default_true")]
+    pub different_tool_window_background: bool,
+    #[serde(default)]
+    pub tab_style: IslandsTabStyle,
+    #[serde(default)]
+    pub corner_softness: IslandsCornerSoftness,
+    #[serde(default, alias = "tab_style_migrated_to_datagrip")]
+    pub tab_style_migrated_to_islands: bool,
+}
+
+impl Default for IslandsAppearanceSettings {
+    fn default() -> Self {
+        Self {
+            different_tool_window_background: true,
+            tab_style: IslandsTabStyle::default(),
+            corner_softness: IslandsCornerSoftness::default(),
+            tab_style_migrated_to_islands: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum IslandsTabStyle {
+    #[default]
+    #[serde(rename = "Islands", alias = "DataGrip")]
+    Islands,
+    Segmented,
+    Underline,
+}
+
+impl IslandsTabStyle {
+    pub fn label(self) -> &'static str {
+        match self {
+            IslandsTabStyle::Islands => "Islands",
+            IslandsTabStyle::Segmented => "Segmented",
+            IslandsTabStyle::Underline => "Underline",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum IslandsCornerSoftness {
+    Compact,
+    #[default]
+    Medium,
+    Soft,
+}
+
+impl IslandsCornerSoftness {
+    pub fn label(self) -> &'static str {
+        match self {
+            IslandsCornerSoftness::Compact => "Compact",
+            IslandsCornerSoftness::Medium => "Medium",
+            IslandsCornerSoftness::Soft => "Soft",
+        }
     }
 }
 
@@ -162,6 +230,18 @@ fn default_true() -> bool {
     true
 }
 
+pub fn migrate_islands_tab_style_to_islands(settings: &mut AppSettings) -> bool {
+    if settings.appearance.islands.tab_style_migrated_to_islands {
+        return false;
+    }
+
+    if settings.appearance.islands.tab_style == IslandsTabStyle::Segmented {
+        settings.appearance.islands.tab_style = IslandsTabStyle::Islands;
+    }
+    settings.appearance.islands.tab_style_migrated_to_islands = true;
+    true
+}
+
 fn default_filename_template() -> String {
     "${database}_${collection}_${datetime}".to_string()
 }
@@ -209,9 +289,55 @@ mod tests {
         assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
         assert!(settings.appearance.show_status_bar);
         assert!(!settings.appearance.vibrancy);
+        assert!(settings.appearance.islands.different_tool_window_background);
+        assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+        assert_eq!(settings.appearance.islands.corner_softness, IslandsCornerSoftness::Medium);
+        assert!(settings.appearance.islands.tab_style_migrated_to_islands);
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
         assert!(!settings.ai.enabled);
         assert_eq!(settings.ai.model, "gemini-3-flash-preview");
+    }
+
+    #[test]
+    fn test_migrate_islands_tab_style_to_islands() {
+        let mut settings = AppSettings::default();
+        settings.appearance.islands.tab_style = IslandsTabStyle::Segmented;
+        settings.appearance.islands.tab_style_migrated_to_islands = false;
+
+        let changed = migrate_islands_tab_style_to_islands(&mut settings);
+        assert!(changed);
+        assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+        assert!(settings.appearance.islands.tab_style_migrated_to_islands);
+    }
+
+    #[test]
+    fn test_legacy_datagrip_style_deserializes_to_islands() {
+        let raw = r#"{
+            "appearance": {
+                "theme": "VercelDark",
+                "islands": {
+                    "tab_style": "DataGrip"
+                }
+            }
+        }"#;
+
+        let settings: AppSettings = serde_json::from_str(raw).expect("should deserialize");
+        assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+    }
+
+    #[test]
+    fn test_legacy_migration_flag_deserializes() {
+        let raw = r#"{
+            "appearance": {
+                "theme": "VercelDark",
+                "islands": {
+                    "tab_style_migrated_to_datagrip": false
+                }
+            }
+        }"#;
+
+        let settings: AppSettings = serde_json::from_str(raw).expect("should deserialize");
+        assert!(!settings.appearance.islands.tab_style_migrated_to_islands);
     }
 }

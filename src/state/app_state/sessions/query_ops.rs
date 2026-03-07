@@ -76,12 +76,39 @@ impl AppState {
         }
     }
 
+    pub fn set_query_options_open(&mut self, session_key: &SessionKey, open: bool) {
+        self.promote_preview_collection_tab(session_key);
+        let mut changed = false;
+        if let Some(session) = self.session_mut(session_key)
+            && session.view.query_options_open != open
+        {
+            session.view.query_options_open = open;
+            changed = true;
+        }
+        if changed {
+            self.update_workspace_session_view(session_key);
+        }
+    }
+
+    pub fn toggle_query_options_open(&mut self, session_key: &SessionKey) {
+        self.promote_preview_collection_tab(session_key);
+        let mut changed = false;
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.query_options_open = !session.view.query_options_open;
+            changed = true;
+        }
+        if changed {
+            self.update_workspace_session_view(session_key);
+        }
+    }
+
     pub fn set_collection_subview(
         &mut self,
         session_key: &SessionKey,
         subview: CollectionSubview,
     ) -> bool {
         self.promote_preview_collection_tab(session_key);
+        let close_query_options = matches!(subview, CollectionSubview::Documents);
         let mut should_load = false;
         let mut changed = false;
 
@@ -91,6 +118,9 @@ impl AppState {
             }
             session.view.subview = subview;
             session.view.stats_open = matches!(subview, CollectionSubview::Stats);
+            if close_query_options {
+                session.view.query_options_open = false;
+            }
             should_load = match subview {
                 CollectionSubview::Stats => {
                     !session.data.stats_loading
@@ -116,7 +146,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ActiveTab, CollectionSubview, TabKey};
+    use crate::state::{ActiveTab, AppTheme, CollectionSubview, TabKey};
 
     fn preview_state() -> (AppState, SessionKey) {
         let mut state = AppState::new();
@@ -153,5 +183,28 @@ mod tests {
         assert!(matches!(state.open_tabs(), [TabKey::Collection(tab)] if tab == &key));
         assert_eq!(state.active_tab(), ActiveTab::Index(0));
         assert_eq!(state.session_subview(&key), Some(CollectionSubview::Indexes));
+    }
+
+    #[test]
+    fn set_collection_subview_closes_query_options_in_islands_documents() {
+        let (mut state, key) = preview_state();
+        state.ensure_session(key.clone()).view.query_options_open = true;
+
+        let _ = state.set_collection_subview(&key, CollectionSubview::Indexes);
+        let _ = state.set_collection_subview(&key, CollectionSubview::Documents);
+
+        assert_eq!(state.session_view(&key).map(|view| view.query_options_open), Some(false));
+    }
+
+    #[test]
+    fn set_collection_subview_closes_query_options_for_all_themes() {
+        let (mut state, key) = preview_state();
+        state.settings.appearance.theme = AppTheme::VercelDark;
+        state.ensure_session(key.clone()).view.query_options_open = true;
+
+        let _ = state.set_collection_subview(&key, CollectionSubview::Indexes);
+        let _ = state.set_collection_subview(&key, CollectionSubview::Documents);
+
+        assert_eq!(state.session_view(&key).map(|view| view.query_options_open), Some(false));
     }
 }

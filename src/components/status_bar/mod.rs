@@ -1,9 +1,8 @@
 use gpui::*;
-use gpui_component::ActiveTheme as _;
 
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::{AppState, StatusMessage};
-use crate::theme::{sizing, spacing};
+use crate::theme::{islands, sizing, spacing};
 
 mod left;
 mod right;
@@ -22,6 +21,8 @@ pub struct StatusBar {
     update_status: UpdateStatus,
     state: Entity<AppState>,
     sidebar_collapsed: bool,
+    ai_available: bool,
+    ai_panel_open: bool,
     on_toggle_sidebar: ToggleSidebarHandler,
 }
 
@@ -42,8 +43,16 @@ impl StatusBar {
             update_status,
             state,
             sidebar_collapsed: false,
+            ai_available: false,
+            ai_panel_open: false,
             on_toggle_sidebar: None,
         }
+    }
+
+    pub fn ai_state(mut self, available: bool, panel_open: bool) -> Self {
+        self.ai_available = available;
+        self.ai_panel_open = panel_open;
+        self
     }
 
     pub fn sidebar_collapsed(mut self, collapsed: bool) -> Self {
@@ -59,16 +68,21 @@ impl StatusBar {
 
 impl RenderOnce for StatusBar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let appearance = self.state.read(cx).settings.appearance.clone();
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .justify_between()
-            .w_full()
+            .min_w(px(0.0))
             .h(sizing::status_bar_height())
             .px(spacing::md())
-            .bg(cx.theme().tab_bar)
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .bg(islands::tool_bg(&appearance, cx))
+            .border_color(islands::panel_border(&appearance, cx))
+            .mx(spacing::xs())
+            .mb(spacing::xs())
+            .rounded(islands::radius_sm(&appearance))
+            .border_1()
             .child(render_status_left(
                 self.is_connected,
                 self.connection_name,
@@ -77,6 +91,13 @@ impl RenderOnce for StatusBar {
                 self.on_toggle_sidebar,
                 cx,
             ))
-            .child(render_status_right(self.status_message, self.update_status, self.state, cx))
+            .child(render_status_right(
+                self.status_message,
+                self.update_status,
+                self.ai_available,
+                self.ai_panel_open,
+                self.state,
+                cx,
+            ))
     }
 }

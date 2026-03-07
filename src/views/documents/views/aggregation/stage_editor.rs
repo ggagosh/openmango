@@ -11,7 +11,7 @@ use crate::components::Button;
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
 use crate::state::app_state::{PipelineState, default_stage_body};
 use crate::state::{SessionKey, StatusMessage};
-use crate::theme::{borders, spacing};
+use crate::theme::{borders, islands, spacing};
 
 use crate::views::CollectionView;
 
@@ -25,6 +25,11 @@ impl CollectionView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let appearance = self.state.read(cx).settings.appearance.clone();
+        let panel_bg = islands::card_bg(&appearance, cx);
+        let panel_border = islands::panel_border(&appearance, cx).opacity(0.5);
+        let panel_radius = islands::radius_sm(&appearance);
+        let header_bg = cx.theme().transparent;
         let selected_index = pipeline.selected_stage;
         let stage = selected_index.and_then(|idx| pipeline.stages.get(idx));
         let selected_operator = stage.map(|stage| stage.operator.clone()).unwrap_or_default();
@@ -35,9 +40,7 @@ impl CollectionView {
             .justify_between()
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(cx.theme().tab_bar)
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .bg(header_bg)
             .child(div().flex().items_center().gap(spacing::xs()).child(
                 if let Some(stage) = stage {
                     let operator_label = if stage.operator.trim().is_empty() {
@@ -241,10 +244,10 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .bg(cx.theme().background)
+            .bg(panel_bg)
             .border_1()
-            .border_color(cx.theme().sidebar_border)
-            .rounded(borders::radius_sm())
+            .border_color(panel_border)
+            .rounded(panel_radius)
             .child(header)
             .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(body))
             .into_any_element()

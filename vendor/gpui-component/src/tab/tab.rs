@@ -15,6 +15,7 @@ pub enum TabVariant {
     Tab,
     Outline,
     Pill,
+    DataGrip,
     Segmented,
     Underline,
 }
@@ -51,18 +52,22 @@ impl TabVariant {
         match size {
             Size::XSmall => match self {
                 TabVariant::Underline => px(26.),
+                TabVariant::DataGrip => px(24.),
                 _ => px(20.),
             },
             Size::Small => match self {
                 TabVariant::Underline => px(30.),
+                TabVariant::DataGrip => px(28.),
                 _ => px(24.),
             },
             Size::Large => match self {
                 TabVariant::Underline => px(44.),
+                TabVariant::DataGrip => px(40.),
                 _ => px(36.),
             },
             _ => match self {
                 TabVariant::Underline => px(36.),
+                TabVariant::DataGrip => px(36.),
                 _ => px(32.),
             },
         }
@@ -72,22 +77,26 @@ impl TabVariant {
         match size {
             Size::XSmall => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(18.),
+                TabVariant::DataGrip => px(22.),
                 TabVariant::Segmented => px(16.),
                 TabVariant::Underline => px(20.),
             },
             Size::Small => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(22.),
+                TabVariant::DataGrip => px(26.),
                 TabVariant::Segmented => px(20.),
                 TabVariant::Underline => px(22.),
             },
             Size::Large => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(36.),
+                TabVariant::DataGrip => px(40.),
                 TabVariant::Segmented => px(28.),
                 TabVariant::Underline => px(32.),
             },
             _ => match self {
                 TabVariant::Tab => px(30.),
                 TabVariant::Outline | TabVariant::Pill => px(26.),
+                TabVariant::DataGrip => px(30.),
                 TabVariant::Segmented => px(24.),
                 TabVariant::Underline => px(26.),
             },
@@ -96,7 +105,7 @@ impl TabVariant {
 
     /// Default px(12) to match panel px_3, See [`crate::dock::TabPanel`]
     fn inner_paddings(&self, size: Size) -> Edges<Pixels> {
-        let mut padding_x = match size {
+        let padding_x = match size {
             Size::XSmall => px(8.),
             Size::Small => px(10.),
             Size::Large => px(16.),
@@ -104,7 +113,36 @@ impl TabVariant {
         };
 
         if matches!(self, TabVariant::Underline) {
-            padding_x = px(0.);
+            return Edges {
+                left: px(0.),
+                right: px(0.),
+                ..Default::default()
+            };
+        }
+
+        if matches!(self, TabVariant::DataGrip) {
+            return match size {
+                Size::XSmall => Edges {
+                    left: px(5.),
+                    right: px(5.),
+                    ..Default::default()
+                },
+                Size::Small => Edges {
+                    left: px(6.),
+                    right: px(6.),
+                    ..Default::default()
+                },
+                Size::Large => Edges {
+                    left: px(12.),
+                    right: px(12.),
+                    ..Default::default()
+                },
+                _ => Edges {
+                    left: px(8.),
+                    right: px(8.),
+                    ..Default::default()
+                },
+            };
         }
 
         Edges {
@@ -179,6 +217,15 @@ impl TabVariant {
                 radius: px(99.),
                 ..Default::default()
             },
+            TabVariant::DataGrip => TabStyle {
+                fg: cx.theme().tab_foreground,
+                bg: cx.theme().transparent,
+                borders: Edges::all(px(1.)),
+                border_color: cx.theme().transparent,
+                radius: cx.theme().radius,
+                inner_radius: cx.theme().radius,
+                ..Default::default()
+            },
             TabVariant::Segmented => TabStyle {
                 fg: cx.theme().tab_foreground,
                 bg: cx.theme().transparent,
@@ -227,6 +274,15 @@ impl TabVariant {
                 fg: cx.theme().secondary_foreground,
                 bg: cx.theme().secondary,
                 radius: px(99.),
+                ..Default::default()
+            },
+            TabVariant::DataGrip => TabStyle {
+                fg: cx.theme().foreground,
+                bg: cx.theme().secondary.opacity(0.22),
+                borders: Edges::all(px(1.)),
+                border_color: cx.theme().border.opacity(0.65),
+                radius: cx.theme().radius,
+                inner_radius: cx.theme().radius,
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
@@ -282,6 +338,15 @@ impl TabVariant {
                 fg: cx.theme().primary_foreground,
                 bg: cx.theme().primary,
                 radius: px(99.),
+                ..Default::default()
+            },
+            TabVariant::DataGrip => TabStyle {
+                fg: cx.theme().tab_active_foreground,
+                bg: cx.theme().tab_active,
+                borders: Edges::all(px(1.)),
+                border_color: cx.theme().primary.opacity(0.62),
+                radius: cx.theme().radius,
+                inner_radius: cx.theme().radius,
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
@@ -347,6 +412,27 @@ impl TabVariant {
                     cx.theme().transparent
                 },
                 radius: px(99.),
+                ..Default::default()
+            },
+            TabVariant::DataGrip => TabStyle {
+                fg: if selected {
+                    cx.theme().tab_active_foreground.opacity(0.7)
+                } else {
+                    cx.theme().muted_foreground
+                },
+                bg: if selected {
+                    cx.theme().tab_active.opacity(0.7)
+                } else {
+                    cx.theme().transparent
+                },
+                borders: Edges::all(px(1.)),
+                border_color: if selected {
+                    cx.theme().primary.opacity(0.35)
+                } else {
+                    cx.theme().transparent
+                },
+                radius: cx.theme().radius,
+                inner_radius: cx.theme().radius,
                 ..Default::default()
             },
             TabVariant::Segmented => TabStyle {
@@ -487,6 +573,12 @@ impl Tab {
         self
     }
 
+    /// Use DataGrip variant.
+    pub fn data_grip(mut self) -> Self {
+        self.variant = TabVariant::DataGrip;
+        self
+    }
+
     /// Use Underline variant.
     pub fn underline(mut self) -> Self {
         self.variant = TabVariant::Underline;
@@ -577,16 +669,30 @@ impl RenderOnce for Tab {
             tab_style = self.variant.disabled(self.selected, cx);
             hover_style = self.variant.disabled(self.selected, cx);
         }
-        let inner_paddings = self.variant.inner_paddings(self.size);
+        let mut inner_paddings = self.variant.inner_paddings(self.size);
+        if self.variant == TabVariant::DataGrip && self.suffix.is_some() {
+            inner_paddings.right = match self.size {
+                Size::XSmall => px(2.),
+                Size::Small => px(3.),
+                Size::Large => px(6.),
+                _ => px(4.),
+            };
+        }
         let inner_margins = self.variant.inner_margins(self.size);
         let inner_height = self.variant.inner_height(self.size);
         let height = self.variant.height(self.size);
 
         self.base
             .id(self.id)
+            .group("tab-item")
             .flex()
-            .flex_wrap()
-            .gap_1()
+            .map(|this| {
+                if self.variant == TabVariant::DataGrip {
+                    this.gap_0()
+                } else {
+                    this.gap_1()
+                }
+            })
             .items_center()
             .flex_shrink_0()
             .overflow_hidden()
@@ -621,13 +727,19 @@ impl RenderOnce for Tab {
             .child(
                 h_flex()
                     .flex_1()
+                    .min_w(px(0.))
                     .h(inner_height)
                     .line_height(relative(1.))
                     .items_center()
-                    .justify_center()
+                    .map(|this| {
+                        if self.variant == TabVariant::DataGrip {
+                            this.justify_start()
+                        } else {
+                            this.justify_center()
+                        }
+                    })
                     .overflow_hidden()
                     .margins(inner_margins)
-                    .flex_shrink_0()
                     .map(|this| match self.icon {
                         Some(icon) => {
                             this.w(inner_height * 1.25)

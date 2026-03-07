@@ -25,13 +25,13 @@ impl CollectionView {
     ) -> AnyElement {
         self.ensure_aggregation_states(window, cx);
         self.sync_aggregation_inputs(&pipeline, session_key.clone(), window, cx);
-
         let stage_list = self.render_aggregation_stage_list(&pipeline, session_key.clone(), cx);
         let stage_editor =
             self.render_aggregation_stage_editor(&pipeline, session_key.clone(), window, cx);
         let results = self.render_aggregation_results(&pipeline, session_key, window, cx);
 
         let top_split = h_resizable("agg-top-split")
+            .handle_line_visible(false)
             .child(
                 resizable_panel().size(px(280.0)).size_range(px(220.0)..px(480.0)).child(
                     div()
@@ -40,6 +40,7 @@ impl CollectionView {
                         .min_w(px(0.0))
                         .min_h(px(0.0))
                         .overflow_hidden()
+                        .pr(spacing::xs())
                         .child(stage_list),
                 ),
             )
@@ -51,6 +52,7 @@ impl CollectionView {
                         .min_w(px(0.0))
                         .min_h(px(0.0))
                         .overflow_hidden()
+                        .pl(spacing::xs())
                         .child(stage_editor),
                 ),
             )
@@ -63,12 +65,21 @@ impl CollectionView {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .p(spacing::lg())
             .child(div().flex().flex_1().min_h(px(0.0)).child(top_split));
 
         let main_split = v_resizable("agg-main-split")
+            .handle_line_visible(false)
             .child(
-                resizable_panel().size(px(240.0)).size_range(px(180.0)..px(900.0)).child(top_panel),
+                resizable_panel().size(px(240.0)).size_range(px(180.0)..px(900.0)).child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .pb(spacing::xs())
+                        .child(top_panel),
+                ),
             )
             .child(
                 resizable_panel().size(px(360.0)).size_range(px(220.0)..px(1400.0)).child(
@@ -78,6 +89,7 @@ impl CollectionView {
                         .min_w(px(0.0))
                         .min_h(px(0.0))
                         .overflow_hidden()
+                        .pt(spacing::xs())
                         .child(results),
                 ),
             )
@@ -98,6 +110,7 @@ impl CollectionView {
                     .min_w(px(0.0))
                     .min_h(px(0.0))
                     .overflow_hidden()
+                    .p(spacing::lg())
                     .child(main_split),
             )
             .into_any_element()
