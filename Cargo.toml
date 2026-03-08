@@ -10,7 +10,7 @@ categories = ["database", "gui", "development-tools"]
 keywords = ["mongodb", "database", "gui", "gpui", "macos"]
 
 [features]
-default = []
+default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
@@ -24,32 +24,23 @@ mongodb = { version = "3.5", features = ["socks5-proxy"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bson = "3.1.0"
 json5 = "1.3"
 dirs = "6.0"
 rig-core = "0.31"
-schemars = "1.2"
 uuid = { version = "1.21", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 anyhow = "1.0"
-postcard = { version = "1.1", features = ["alloc"] }
 log = "0.4"
 env_logger = "0.11"
 mimalloc = { version = "0.1", optional = true }
 rust-embed = "8.11"
-raw-window-handle = "0.6"
-ropey = "2.0.0-beta.1"
-
 futures = "0.3"
-dashmap = "6.1"
-parking_lot = "0.12"
 rfd = "0.17"
 csv = "1.4"
 which = "8.0"
 flate2 = "1.1"
 encoding_rs = "0.8"
-unicode-segmentation = "1.12.0"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
@@ -75,10 +66,13 @@ testcontainers-modules = { version = "0.15.0", features = ["mongo"] }
 
 [profile.dev]
 opt-level = 1
+split-debuginfo = "unpacked"
+codegen-units = 256
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }

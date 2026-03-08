@@ -1,11 +1,9 @@
 // Configuration management for persistent state
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 use crate::models::connection::SavedConnection;
 use crate::state::settings::AppSettings;
@@ -21,52 +19,6 @@ const APP_NAME: &str = "openmango";
 #[derive(Clone)]
 pub struct ConfigManager {
     config_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LegacySavedConnectionV1 {
-    id: Uuid,
-    name: String,
-    uri: String,
-    last_connected: Option<DateTime<Utc>>,
-    #[serde(default)]
-    read_only: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LegacySavedConnectionV0 {
-    id: Uuid,
-    name: String,
-    uri: String,
-    last_connected: Option<DateTime<Utc>>,
-}
-
-impl From<LegacySavedConnectionV1> for SavedConnection {
-    fn from(value: LegacySavedConnectionV1) -> Self {
-        SavedConnection {
-            id: value.id,
-            name: value.name,
-            uri: value.uri,
-            last_connected: value.last_connected,
-            read_only: value.read_only,
-            ssh: None,
-            proxy: None,
-        }
-    }
-}
-
-impl From<LegacySavedConnectionV0> for SavedConnection {
-    fn from(value: LegacySavedConnectionV0) -> Self {
-        SavedConnection {
-            id: value.id,
-            name: value.name,
-            uri: value.uri,
-            last_connected: value.last_connected,
-            read_only: false,
-            ssh: None,
-            proxy: None,
-        }
-    }
 }
 
 impl ConfigManager {
@@ -90,22 +42,6 @@ impl ConfigManager {
     /// Get path to a specific config file
     fn file_path(&self, filename: &str) -> PathBuf {
         self.config_dir.join(filename)
-    }
-
-    /// Load data from a binary (postcard) file
-    fn load<T: DeserializeOwned>(&self, filename: &str) -> Result<Option<T>> {
-        let path = self.file_path(filename);
-
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let data = fs::read(&path).with_context(|| format!("Failed to read {}", filename))?;
-
-        let value: T = postcard::from_bytes(&data)
-            .with_context(|| format!("Failed to deserialize {}", filename))?;
-
-        Ok(Some(value))
     }
 
     /// Load data from a JSON file
@@ -143,75 +79,32 @@ impl ConfigManager {
     // =========================================================================
 
     const CONNECTIONS_FILE: &'static str = "connections.json";
-    const CONNECTIONS_FILE_LEGACY: &'static str = "connections.bin";
     const WORKSPACE_FILE: &'static str = "workspace.json";
-    const WORKSPACE_FILE_LEGACY: &'static str = "workspace.bin";
 
     /// Load saved connections from disk
     pub fn load_connections(&self) -> Result<Vec<SavedConnection>> {
         if let Some(connections) = self.load_json(Self::CONNECTIONS_FILE)? {
             return Ok(connections);
         }
-
-        let legacy_path = self.file_path(Self::CONNECTIONS_FILE_LEGACY);
-        if !legacy_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let legacy_data = fs::read(&legacy_path)
-            .with_context(|| format!("Failed to read {}", Self::CONNECTIONS_FILE_LEGACY))?;
-
-        if let Ok(connections) = postcard::from_bytes::<Vec<SavedConnection>>(&legacy_data) {
-            return self.migrate_legacy_connections(connections);
-        }
-
-        if let Ok(legacy_connections) =
-            postcard::from_bytes::<Vec<LegacySavedConnectionV1>>(&legacy_data)
-        {
-            let connections = legacy_connections.into_iter().map(Into::into).collect();
-            return self.migrate_legacy_connections(connections);
-        }
-
-        if let Ok(legacy_connections) =
-            postcard::from_bytes::<Vec<LegacySavedConnectionV0>>(&legacy_data)
-        {
-            let connections = legacy_connections.into_iter().map(Into::into).collect();
-            return self.migrate_legacy_connections(connections);
-        }
-
-        Err(anyhow::anyhow!(
-            "Failed to deserialize {} with current or legacy connection formats",
-            Self::CONNECTIONS_FILE_LEGACY
-        ))
+        Ok(Vec::new())
     }
 
     /// Save connections to disk with all secrets stripped.
     pub fn save_connections(&self, connections: &[SavedConnection]) -> Result<()> {
         let sanitized: Vec<SavedConnection> =
             connections.iter().map(|c| c.with_secrets_stripped()).collect();
-        self.save_json(Self::CONNECTIONS_FILE, &sanitized)?;
-        let legacy_path = self.file_path(Self::CONNECTIONS_FILE_LEGACY);
-        let _ = fs::remove_file(legacy_path);
-        Ok(())
+        self.save_json(Self::CONNECTIONS_FILE, &sanitized)
     }
 
     // =========================================================================
     // Workspace
     // =========================================================================
 
-    /// Load workspace state from disk (JSON, with postcard migration)
+    /// Load workspace state from disk
     pub fn load_workspace(&self) -> Result<WorkspaceState> {
         if let Some(workspace) = self.load_json(Self::WORKSPACE_FILE)? {
             return Ok(workspace);
         }
-
-        // Migrate from legacy postcard format
-        if let Ok(Some(workspace)) = self.load::<WorkspaceState>(Self::WORKSPACE_FILE_LEGACY) {
-            self.save_json(Self::WORKSPACE_FILE, &workspace)?;
-            let _ = fs::remove_file(self.file_path(Self::WORKSPACE_FILE_LEGACY));
-            return Ok(workspace);
-        }
-
         Ok(WorkspaceState::default())
     }
 
@@ -225,23 +118,12 @@ impl ConfigManager {
     // =========================================================================
 
     const SETTINGS_FILE: &'static str = "settings.json";
-    const SETTINGS_FILE_LEGACY: &'static str = "settings.bin";
 
-    /// Load application settings from disk (JSON, with postcard migration)
+    /// Load application settings from disk
     pub fn load_settings(&self) -> Result<AppSettings> {
-        // Try JSON first
         if let Some(settings) = self.load_json(Self::SETTINGS_FILE)? {
             return Ok(settings);
         }
-
-        // Migrate from legacy postcard format
-        if let Ok(Some(settings)) = self.load::<AppSettings>(Self::SETTINGS_FILE_LEGACY) {
-            // Save as JSON and remove the old binary file
-            self.save_json(Self::SETTINGS_FILE, &settings)?;
-            let _ = fs::remove_file(self.file_path(Self::SETTINGS_FILE_LEGACY));
-            return Ok(settings);
-        }
-
         Ok(AppSettings::default())
     }
 
@@ -251,15 +133,6 @@ impl ConfigManager {
         let mut to_save = settings.clone();
         to_save.ai.api_key.clear();
         self.save_json(Self::SETTINGS_FILE, &to_save)
-    }
-
-    fn migrate_legacy_connections(
-        &self,
-        connections: Vec<SavedConnection>,
-    ) -> Result<Vec<SavedConnection>> {
-        self.save_json(Self::CONNECTIONS_FILE, &connections)?;
-        let _ = fs::remove_file(self.file_path(Self::CONNECTIONS_FILE_LEGACY));
-        Ok(connections)
     }
 }
 
@@ -294,35 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn load_connections_migrates_legacy_v1_bin() {
-        let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
-        fs::create_dir_all(temp_dir.path()).expect("failed to create config dir");
-
-        let legacy = vec![LegacySavedConnectionV1 {
-            id: Uuid::new_v4(),
-            name: "legacy".to_string(),
-            uri: "mongodb://localhost:27017".to_string(),
-            last_connected: None,
-            read_only: true,
-        }];
-        let bytes = postcard::to_allocvec(&legacy).expect("failed to serialize legacy payload");
-        fs::write(temp_dir.path().join(ConfigManager::CONNECTIONS_FILE_LEGACY), bytes)
-            .expect("failed to write legacy bin");
-
-        let loaded = manager.load_connections().expect("failed to load migrated connections");
-
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].name, "legacy");
-        assert!(loaded[0].read_only);
-        assert!(loaded[0].ssh.is_none());
-        assert!(loaded[0].proxy.is_none());
-        assert!(temp_dir.path().join(ConfigManager::CONNECTIONS_FILE).exists());
-        assert!(!temp_dir.path().join(ConfigManager::CONNECTIONS_FILE_LEGACY).exists());
-    }
-
-    #[test]
-    fn load_connections_reads_json_first() {
+    fn load_connections_reads_json() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
         fs::create_dir_all(temp_dir.path()).expect("failed to create config dir");

@@ -7,7 +7,7 @@ use std::time::Duration;
 use mongodb::Client;
 use mongodb::bson::doc;
 use mongodb::results::CollectionSpecification;
-use parking_lot::Mutex;
+use std::sync::Mutex;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ impl ConnectionManager {
         self.stop_tunnel(connection_id);
         let (client, runtime_meta, tunnel) = self.connect_prepared(config)?;
         if let Some(tunnel) = tunnel {
-            self.ssh_tunnels.lock().insert(connection_id, tunnel);
+            self.ssh_tunnels.lock().unwrap().insert(connection_id, tunnel);
         }
         Ok((client, runtime_meta))
     }
@@ -397,7 +397,7 @@ impl ConnectionManager {
     }
 
     fn stop_tunnel(&self, connection_id: Uuid) {
-        if let Some(mut tunnel) = self.ssh_tunnels.lock().remove(&connection_id) {
+        if let Some(mut tunnel) = self.ssh_tunnels.lock().unwrap().remove(&connection_id) {
             tunnel.stop();
         }
     }
@@ -405,7 +405,7 @@ impl ConnectionManager {
 
 impl Drop for ConnectionManager {
     fn drop(&mut self) {
-        for (_id, mut tunnel) in self.ssh_tunnels.get_mut().drain() {
+        for (_id, mut tunnel) in self.ssh_tunnels.get_mut().unwrap().drain() {
             tunnel.stop();
         }
     }

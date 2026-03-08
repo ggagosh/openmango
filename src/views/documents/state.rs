@@ -4,7 +4,6 @@ use gpui_component::tree::TreeState;
 
 use mongodb::bson::Document;
 use regex::RegexBuilder;
-
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -917,7 +916,6 @@ pub(crate) fn matches_query(
             return false;
         };
         if whole_word {
-            // Check that any regex match is a whole word
             for m in re.find_iter(text) {
                 let start_ok =
                     m.start() == 0 || !text[..m.start()].ends_with(char::is_alphanumeric);
