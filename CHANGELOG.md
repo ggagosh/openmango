@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Table view for documents — browse collections in a spreadsheet-style grid with sortable, resizable, and pinnable columns
+- Per-page selector in the pagination bar — choose between 10, 25, 50, or 100 documents per page
+- Islands tab style — choose between Islands, Segmented, or Underline tab appearance in Settings
+- Tab icons — every tab now shows an icon for its content type (collection, database, forge, settings, etc.)
+- Icons in context menus throughout the app (document actions, connection menu, field operations)
+- AI sample_values tool — the AI assistant can now inspect real field values to give better answers
+- Column pinning — pin frequently-used columns to the left so they stay visible while scrolling
+
+### Fixed
+- Table column order is now deterministic — columns sort alphabetically (_id always first) instead of depending on document key insertion order
+- Table column widths no longer jump around when sorting or paginating — widths lock in on first render
+- Explain modal no longer shows content scrolling behind it — backdrop opacity increased and scroll events are properly blocked
+- Explain modal header is no longer semi-transparent
+
+### Changed
+- Filter bar redesigned — find and sort inputs are now side-by-side in a unified segmented control instead of being hidden behind an "Options" toggle
+- AI chat panel moved out of the documents view into its own dedicated space
+- Close buttons on tabs now only appear on hover (except the active tab)
+- Tab bar styling updated with padding and theme-aware background
+
 ## [0.2.0] - 2026-03-05
 
 ### Added

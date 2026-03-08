@@ -135,7 +135,7 @@ pub mod colors {
     // Modal backdrop — theme background darkened with alpha
     pub fn backdrop(cx: &App) -> Hsla {
         let mut c = cx.theme().background;
-        c.a = 0.5;
+        c.a = 0.85;
         c
     }
 

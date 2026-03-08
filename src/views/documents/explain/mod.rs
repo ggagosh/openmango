@@ -152,6 +152,9 @@ impl CollectionView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
+            .on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_key_down({
                 let state = self.state.clone();
                 let session_key = session_key.clone();
@@ -200,7 +203,7 @@ impl CollectionView {
                                 .py(spacing::sm())
                                 .border_b_1()
                                 .border_color(cx.theme().border)
-                                .bg(cx.theme().tab_bar.opacity(0.45))
+                                .bg(cx.theme().tab_bar)
                                 .child(
                                     div()
                                         .flex()
