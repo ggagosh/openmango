@@ -905,6 +905,47 @@ pub(in crate::views::documents) fn copy_documents_as(
     });
 }
 
+pub(in crate::views::documents) fn copy_aggregation_as(
+    this: &mut CollectionView,
+    format: CopyFormat,
+    cx: &mut Context<CollectionView>,
+) {
+    let Some(session_key) = this.view_model.current_session() else {
+        return;
+    };
+
+    let (text, count) = {
+        let state_ref = this.state.read(cx);
+        let Some(session) = state_ref.session(&session_key) else {
+            return;
+        };
+        let Some(results) = session.data.aggregation.results.as_ref() else {
+            return;
+        };
+        if results.is_empty() {
+            return;
+        }
+
+        let snapshot = ViewExportSnapshot::from_documents(
+            results.clone(),
+            session_key.collection.clone(),
+            session_key.database.clone(),
+        );
+        (render_to_clipboard(&snapshot, format), snapshot.documents.len())
+    };
+
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    this.state.update(cx, |state, cx| {
+        state.set_status_message(Some(StatusMessage::info(format!(
+            "Copied {} result{} as {}",
+            count,
+            if count == 1 { "" } else { "s" },
+            format.label()
+        ))));
+        cx.notify();
+    });
+}
+
 struct PropertyFlags {
     allow_bulk: bool,
     can_edit_value: bool,

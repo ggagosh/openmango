@@ -24,6 +24,24 @@ pub struct ViewExportSnapshot {
 
 impl ViewExportSnapshot {
     #[allow(clippy::too_many_arguments)]
+    pub fn from_documents(
+        documents: Vec<Document>,
+        collection_name: String,
+        database_name: String,
+    ) -> Self {
+        let mut keys = Vec::new();
+        let mut seen = HashSet::new();
+        for doc in &documents {
+            for key in doc.keys() {
+                if seen.insert(key.clone()) {
+                    keys.push(ColumnInfo { key: key.clone(), pinned: false });
+                }
+            }
+        }
+        Self { documents, columns: keys, collection_name, database_name }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn from_session_state(
         items: &[SessionDocument],
         selected_docs: &HashSet<DocumentKey>,

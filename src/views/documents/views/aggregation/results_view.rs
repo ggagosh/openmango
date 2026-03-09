@@ -222,7 +222,15 @@ impl CollectionView {
                             .into_any_element()
                     } else {
                         div().into_any_element()
-                    }),
+                    })
+                    .child(agg_separator(cx))
+                    .child(render_agg_copy_as(cx.entity().clone(), results_count > 0, cx))
+                    .child(render_agg_export(
+                        self.state.clone(),
+                        session_key.clone(),
+                        results_count > 0,
+                        cx,
+                    )),
             );
 
         let mut body =
@@ -597,6 +605,108 @@ fn render_results_tree(
             ),
         )
         .into_any_element()
+}
+
+fn agg_separator(cx: &App) -> Div {
+    div().w(px(1.0)).h(px(16.0)).bg(cx.theme().border.opacity(0.5))
+}
+
+fn render_agg_copy_as(
+    view: Entity<CollectionView>,
+    has_results: bool,
+    cx: &App,
+) -> impl IntoElement {
+    use gpui_component::Sizable as _;
+    use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+    use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+
+    use crate::theme::borders;
+    use crate::views::documents::actions::copy_aggregation_as;
+    use crate::views::documents::export::CopyFormat;
+
+    let clean_variant = ButtonCustomVariant::new(cx)
+        .color(cx.theme().transparent)
+        .foreground(cx.theme().muted_foreground)
+        .border(cx.theme().transparent)
+        .hover(cx.theme().secondary.opacity(0.5))
+        .active(cx.theme().secondary.opacity(0.62))
+        .shadow(false);
+
+    let formats = CopyFormat::tree_formats().to_vec();
+
+    MenuButton::new("agg-copy-as")
+        .compact()
+        .rounded(borders::radius_sm())
+        .with_size(gpui_component::Size::Small)
+        .custom(clean_variant)
+        .label("Copy As")
+        .icon(Icon::new(IconName::Copy).xsmall())
+        .tooltip("Copy results to clipboard")
+        .disabled(!has_results)
+        .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _window, _cx| {
+            let mut menu = menu;
+            for &fmt in &formats {
+                let view_click = view.clone();
+                let item = PopupMenuItem::new(fmt.label()).icon(fmt.icon()).on_click(
+                    move |_, _window, cx| {
+                        view_click.update(cx, |this, cx| {
+                            copy_aggregation_as(this, fmt, cx);
+                        });
+                    },
+                );
+                menu = menu.item(item);
+            }
+            menu
+        })
+}
+
+fn render_agg_export(
+    state: Entity<crate::state::AppState>,
+    session_key: Option<SessionKey>,
+    has_results: bool,
+    cx: &App,
+) -> impl IntoElement {
+    use gpui_component::Sizable as _;
+    use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+    use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+
+    use crate::state::AppCommands;
+    use crate::theme::borders;
+    use crate::views::documents::export::FileExportFormat;
+
+    let clean_variant = ButtonCustomVariant::new(cx)
+        .color(cx.theme().transparent)
+        .foreground(cx.theme().muted_foreground)
+        .border(cx.theme().transparent)
+        .hover(cx.theme().secondary.opacity(0.5))
+        .active(cx.theme().secondary.opacity(0.62))
+        .shadow(false);
+
+    MenuButton::new("agg-export")
+        .compact()
+        .rounded(borders::radius_sm())
+        .with_size(gpui_component::Size::Small)
+        .custom(clean_variant)
+        .label("Export")
+        .icon(Icon::new(IconName::Download).xsmall())
+        .tooltip("Export results to file")
+        .disabled(!has_results || session_key.is_none())
+        .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _window, _cx| {
+            let mut menu = menu;
+            for &fmt in FileExportFormat::all() {
+                let state_click = state.clone();
+                let sk = session_key.clone();
+                let item = PopupMenuItem::new(fmt.label())
+                    .icon(Icon::new(IconName::File))
+                    .on_click(move |_, _window, cx| {
+                        if let Some(sk) = sk.clone() {
+                            AppCommands::save_aggregation_as(state_click.clone(), sk, fmt, cx);
+                        }
+                    });
+                menu = menu.item(item);
+            }
+            menu
+        })
 }
 
 fn results_signature(documents: &[SessionDocument]) -> u64 {
