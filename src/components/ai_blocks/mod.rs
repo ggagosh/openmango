@@ -1,5 +1,6 @@
 mod chart;
 mod datatable;
+pub mod report;
 mod stats;
 
 use gpui::*;
@@ -18,6 +19,7 @@ fn block_label(block_type: &str) -> &str {
         "piechart" => "pie chart",
         "linechart" => "line chart",
         "stats" => "stats",
+        "report" => "report",
         _ => "block",
     }
 }
@@ -62,6 +64,13 @@ pub fn render_single_block(
             Some(el) => el,
             None => render_code_fallback(id_prefix, index, "stats", json, style, window, cx),
         },
+        ContentBlock::Report { title, sheets } => report::render_report_preview(
+            title,
+            sheets,
+            ElementId::Name(format!("{id_prefix}-rpt-{index}").into()),
+            None,
+            cx,
+        ),
         ContentBlock::Pending { block_type } => div()
             .flex()
             .items_center()

@@ -908,9 +908,21 @@ impl Render for AiView {
                                         } else {
                                             None
                                         };
+                                        let reports: Vec<(String, Vec<crate::ai::ReportSheet>)> =
+                                            tools
+                                                .iter()
+                                                .filter_map(|t| match &t.result_block {
+                                                    Some(ContentBlock::Report {
+                                                        title,
+                                                        sheets,
+                                                    }) => Some((title.clone(), sheets.clone())),
+                                                    _ => None,
+                                                })
+                                                .collect();
                                         render_turn(
                                             turn,
                                             tool_section,
+                                            TurnReportContext { reports, state: state.clone() },
                                             streaming_turn_id == Some(turn.id),
                                             &appearance,
                                             window,
@@ -1616,9 +1628,15 @@ fn ai_markdown_style(cx: &App) -> TextViewStyle {
     })
 }
 
+struct TurnReportContext {
+    reports: Vec<(String, Vec<crate::ai::ReportSheet>)>,
+    state: Entity<AppState>,
+}
+
 fn render_turn(
     turn: &AiTurn,
     tool_section: Option<AnyElement>,
+    report_ctx: TurnReportContext,
     is_streaming: bool,
     appearance: &crate::state::AppearanceSettings,
     window: &mut Window,
@@ -1754,6 +1772,16 @@ fn render_turn(
                     .min_w(px(0.0))
                     .child(div().flex().flex_col().gap(ai_block_gap()).children(blocks)),
             );
+
+            if !report_ctx.reports.is_empty() {
+                let buttons = render_report_download_buttons(
+                    &report_ctx.reports,
+                    &report_ctx.state,
+                    &turn.id,
+                    cx,
+                );
+                body = body.child(buttons);
+            }
 
             Some(
                 div()
@@ -1989,15 +2017,37 @@ fn render_tool_group(
 
         item = item.child(render_tool_row(t, state.clone(), appearance, cx));
         if let Some(block) = t.result_block.as_ref() {
-            let style = ai_markdown_style(cx);
-            item = item.child(crate::components::ai_blocks::render_single_block(
-                &format!("tool-result-{group_key}"),
-                i,
-                block,
-                &style,
-                window,
-                cx,
-            ));
+            if let ContentBlock::Report { title, sheets } = block {
+                let st = state.clone();
+                let title_dl = title.clone();
+                let sheets_dl = sheets.clone();
+                let on_download: crate::components::ai_blocks::report::DownloadHandler =
+                    Box::new(move |_, _, cx| {
+                        download_report_as_excel(
+                            st.clone(),
+                            title_dl.clone(),
+                            sheets_dl.clone(),
+                            cx,
+                        );
+                    });
+                item = item.child(crate::components::ai_blocks::report::render_report_preview(
+                    title,
+                    sheets,
+                    ElementId::Name(format!("tool-result-{group_key}-rpt-{i}").into()),
+                    Some(on_download),
+                    cx,
+                ));
+            } else {
+                let style = ai_markdown_style(cx);
+                item = item.child(crate::components::ai_blocks::render_single_block(
+                    &format!("tool-result-{group_key}"),
+                    i,
+                    block,
+                    &style,
+                    window,
+                    cx,
+                ));
+            }
             if matches!(block, ContentBlock::DataTable { .. }) && t.tool_name == "find_documents" {
                 let col_name = t.collection.clone().or_else(|| {
                     serde_json::from_str::<serde_json::Value>(&t.args_preview)
@@ -2497,6 +2547,159 @@ fn build_forge_aggregate_command(args_json: &str) -> Option<String> {
     let formatted = crate::bson::format_relaxed_json_value(&pipeline_array);
     let escaped = collection.replace('"', "\\\"");
     Some(format!("db.getCollection(\"{escaped}\").aggregate({formatted})"))
+}
+
+fn render_report_download_buttons(
+    reports: &[(String, Vec<crate::ai::ReportSheet>)],
+    state: &Entity<AppState>,
+    turn_id: &Uuid,
+    cx: &App,
+) -> AnyElement {
+    let border = cx.theme().border.opacity(0.5);
+    let mut row = div().flex().flex_wrap().gap(spacing::sm()).pt(spacing::sm());
+
+    for (i, (title, sheets)) in reports.iter().enumerate() {
+        let st = state.clone();
+        let title_dl = title.clone();
+        let sheets_dl = sheets.clone();
+        let label = if reports.len() == 1 {
+            "Download Excel".to_string()
+        } else {
+            format!("Download: {}", title)
+        };
+        row = row.child(
+            Button::new(ElementId::Name(format!("chat-dl-rpt-{turn_id}-{i}").into()))
+                .primary()
+                .compact()
+                .icon(Icon::new(IconName::Download).xsmall())
+                .label(label)
+                .on_click(move |_, _, cx| {
+                    download_report_as_excel(st.clone(), title_dl.clone(), sheets_dl.clone(), cx);
+                }),
+        );
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(spacing::xs())
+        .pt(spacing::xs())
+        .border_t_1()
+        .border_color(border)
+        .child(row)
+        .into_any_element()
+}
+
+fn download_report_as_excel(
+    state: Entity<AppState>,
+    title: String,
+    sheets: Vec<crate::ai::ReportSheet>,
+    cx: &mut App,
+) {
+    let (client, database, manager) = {
+        let st = state.read(cx);
+        let triple = st.selected_connection_id().and_then(|id| {
+            let client = st.active_connection_client(id)?;
+            let db = st.selected_database_name()?;
+            Some((client, db, st.connection_manager()))
+        });
+        match triple {
+            Some(t) => t,
+            None => {
+                state.update(cx, |s, cx| {
+                    s.set_status_message(Some(crate::state::StatusMessage::error(
+                        "No active connection or database",
+                    )));
+                    cx.notify();
+                });
+                return;
+            }
+        }
+    };
+
+    let now = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let safe_title: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let default_name = format!("{}_{}.xlsx", safe_title, now);
+
+    let filters = vec![crate::components::file_picker::FileFilter::excel()];
+
+    cx.spawn({
+        let state = state.clone();
+        async move |cx: &mut gpui::AsyncApp| {
+            let path = crate::components::file_picker::open_file_dialog_async(
+                crate::components::file_picker::FilePickerMode::Save,
+                filters,
+                Some(default_name),
+            )
+            .await;
+
+            let Some(path) = path else {
+                return;
+            };
+
+            let _ = cx.update(|cx| {
+                state.update(cx, |s, cx| {
+                    s.set_status_message(Some(crate::state::StatusMessage::info(
+                        "Exporting report...",
+                    )));
+                    cx.notify();
+                });
+
+                let task = cx.background_spawn({
+                    let client = client.clone();
+                    let database = database.clone();
+                    let sheets = sheets.clone();
+                    let path = path.clone();
+                    let manager = manager.clone();
+                    async move {
+                        manager.export_report_to_excel(&client, &database, &sheets, &path, |_| {})
+                    }
+                });
+
+                cx.spawn({
+                    let state = state.clone();
+                    async move |cx: &mut gpui::AsyncApp| {
+                        let result = task.await;
+                        let _ = cx.update(|cx| {
+                            state.update(cx, |s, cx| {
+                                match result {
+                                    Ok(r) => {
+                                        let mut msg = format!(
+                                            "Report exported: {} rows across {} sheets",
+                                            r.total_rows, r.sheets_written
+                                        );
+                                        if !r.errors.is_empty() {
+                                            msg.push_str(&format!(
+                                                " ({} sheet(s) failed)",
+                                                r.errors.len()
+                                            ));
+                                        }
+                                        s.set_status_message(Some(
+                                            crate::state::StatusMessage::info(msg),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        s.set_status_message(Some(
+                                            crate::state::StatusMessage::error(format!(
+                                                "Report export failed: {}",
+                                                e
+                                            )),
+                                        ));
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        });
+                    }
+                })
+                .detach();
+            });
+        }
+    })
+    .detach();
 }
 
 #[cfg(test)]

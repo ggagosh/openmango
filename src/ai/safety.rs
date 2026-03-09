@@ -70,6 +70,7 @@ const AUTO_EXECUTE_TOOLS: &[&str] = &[
     "collection_schema",
     "list_indexes",
     "explain_query",
+    "generate_report",
 ];
 
 const CONFIRM_FIRST_TOOLS: &[&str] = &["insert_documents", "create_index"];

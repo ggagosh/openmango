@@ -14,16 +14,41 @@ use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier};
 #[serde(tag = "type")]
 pub enum ContentBlock {
     /// Rendered as TextView::markdown
-    Markdown { text: String },
+    Markdown {
+        text: String,
+    },
     /// Rendered as native datatable (from tool result or LLM fenced block)
-    DataTable { json: String },
+    DataTable {
+        json: String,
+    },
     /// Rendered as native chart
-    Chart { chart_type: ChartType, json: String },
+    Chart {
+        chart_type: ChartType,
+        json: String,
+    },
     /// Rendered as native stats card
-    Stats { json: String },
-    /// Shown as spinner during streaming (not serialized to disk)
+    Stats {
+        json: String,
+    },
+    Report {
+        title: String,
+        sheets: Vec<ReportSheet>,
+    },
     #[serde(skip)]
-    Pending { block_type: String },
+    Pending {
+        block_type: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportSheet {
+    pub name: String,
+    pub collection: String,
+    /// Sanitized aggregation pipeline JSON — re-executed on download.
+    pub pipeline: String,
+    pub preview_json: String,
+    pub preview_count: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +59,7 @@ pub enum ChartType {
     Line,
 }
 
-const KNOWN_LANGS: &[&str] = &["datatable", "barchart", "piechart", "linechart", "stats"];
+const KNOWN_LANGS: &[&str] = &["datatable", "barchart", "piechart", "linechart", "stats", "report"];
 
 /// Parse markdown content into structured content blocks.
 /// Splits at custom fenced code blocks (datatable, barchart, etc.).
@@ -123,6 +148,7 @@ fn fenced_to_block(lang: &str, code: &str) -> ContentBlock {
         "piechart" => ContentBlock::Chart { chart_type: ChartType::Pie, json: code.to_string() },
         "linechart" => ContentBlock::Chart { chart_type: ChartType::Line, json: code.to_string() },
         "stats" => ContentBlock::Stats { json: code.to_string() },
+        "report" => parse_report_block(code),
         _ => ContentBlock::Markdown { text: format!("```{lang}\n{code}\n```") },
     }
 }
@@ -195,8 +221,42 @@ pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock>
             let stats = serde_json::json!({"title": "Drop Index Result", "metrics": metrics});
             Some(ContentBlock::Stats { json: stats.to_string() })
         }
+        "generate_report" => parse_report_from_tool_result(&val),
         _ => None,
     }
+}
+
+fn parse_report_from_tool_result(val: &serde_json::Value) -> Option<ContentBlock> {
+    let title = val.get("title").and_then(|v| v.as_str()).unwrap_or("Report").to_string();
+    let sheets_arr = val.get("sheets")?.as_array()?;
+    let sheets: Vec<ReportSheet> = sheets_arr
+        .iter()
+        .filter_map(|s| {
+            let name = s.get("name")?.as_str()?.to_string();
+            let collection = s.get("collection")?.as_str()?.to_string();
+            let pipeline = s.get("pipeline")?.as_str()?.to_string();
+            let preview = s.get("preview")?;
+            let preview_json = preview.to_string();
+            let preview_count = preview.as_array().map_or(0, |a| a.len());
+            let has_more = s.get("has_more").and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(ReportSheet { name, collection, pipeline, preview_json, preview_count, has_more })
+        })
+        .collect();
+    if sheets.is_empty() {
+        return None;
+    }
+    Some(ContentBlock::Report { title, sheets })
+}
+
+fn parse_report_block(code: &str) -> ContentBlock {
+    let val: serde_json::Value = match serde_json::from_str(code) {
+        Ok(v) => v,
+        Err(_) => {
+            return ContentBlock::Markdown { text: format!("```report\n{code}\n```") };
+        }
+    };
+    parse_report_from_tool_result(&val)
+        .unwrap_or_else(|| ContentBlock::Markdown { text: format!("```report\n{code}\n```") })
 }
 
 fn format_stat_value(v: &serde_json::Value) -> String {

@@ -5,6 +5,7 @@ pub mod create_index;
 pub mod delete;
 pub mod explain;
 pub mod find;
+pub mod generate_report;
 pub mod indexes;
 pub mod insert;
 pub mod list_collections;
@@ -80,7 +81,8 @@ pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
         Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
         Box::new(create_index::CreateIndexTool::new(ctx.clone())),
         Box::new(self::drop_index::DropIndexTool::new(ctx.clone())),
-        Box::new(sample_values::SampleFieldValuesTool::new(ctx)),
+        Box::new(sample_values::SampleFieldValuesTool::new(ctx.clone())),
+        Box::new(generate_report::GenerateReportTool::new(ctx)),
     ]
 }
 
@@ -137,7 +139,7 @@ pub fn truncate_output(value: serde_json::Value, max_bytes: usize) -> serde_json
 
     // For objects with a known array key, drop elements to fit.
     if let serde_json::Value::Object(mut map) = value {
-        for key in ["documents", "results", "indexes"] {
+        for key in ["documents", "results", "indexes", "sheets"] {
             if let Some(serde_json::Value::Array(arr)) = map.remove(key) {
                 let total = arr.len();
                 // Binary search: find max element count that fits.

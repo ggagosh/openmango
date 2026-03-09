@@ -9,6 +9,7 @@
 mod csv;
 mod excel;
 mod json;
+pub mod report_excel;
 
 use mongodb::Client;
 use mongodb::bson::Bson;
