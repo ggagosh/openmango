@@ -9,16 +9,19 @@ use crate::bson::{
     parse_documents_from_json,
 };
 use crate::keyboard::{
-    AddElement, AddField, CopyDocumentJson, CopyKey, CopyValue, DeleteDocument,
-    DiscardDocumentChanges, DuplicateDocument, EditDocumentJson, EditValueType, PasteDocuments,
-    RemoveMatchingValues, RemoveSelectedField, RenameField,
+    AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
+    CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DiscardDocumentChanges,
+    DuplicateDocument, EditDocumentJson, EditValueType, PasteDocuments, RemoveMatchingValues,
+    RemoveSelectedField, RenameField,
 };
-use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
+use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
+use crate::views::documents::export::CopyFormat;
 use crate::views::documents::node_meta::NodeMeta;
 
 use super::super::CollectionView;
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::views::documents) fn build_document_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
@@ -27,6 +30,9 @@ pub(in crate::views::documents) fn build_document_menu(
     doc_key: DocumentKey,
     is_dirty: bool,
     selected_count: usize,
+    view_mode: DocumentViewMode,
+    window: &mut Window,
+    cx: &mut App,
 ) -> PopupMenu {
     let delete_label = if selected_count > 1 {
         format!("Delete {} Documents", selected_count)
@@ -71,7 +77,29 @@ pub(in crate::views::documents) fn build_document_menu(
             PopupMenuItem::new(copy_label)
                 .icon(Icon::new(IconName::Copy))
                 .action(Box::new(CopyDocumentJson)),
-        )
+        );
+
+    let formats = match view_mode {
+        DocumentViewMode::Tree => CopyFormat::tree_formats(),
+        DocumentViewMode::Table => CopyFormat::table_formats(),
+    };
+    let copy_as_submenu = PopupMenu::build(window, cx, |mut menu, _window, _cx| {
+        for &fmt in formats {
+            let action: Box<dyn Action> = match fmt {
+                CopyFormat::Json => Box::new(CopyAsJson),
+                CopyFormat::JsonLines => Box::new(CopyAsJsonLines),
+                CopyFormat::Csv => Box::new(CopyAsCsv),
+                CopyFormat::Markdown => Box::new(CopyAsMarkdown),
+                CopyFormat::Tsv => Box::new(CopyAsTsv),
+            };
+            menu = menu.item(PopupMenuItem::new(fmt.label()).icon(fmt.icon()).action(action));
+        }
+        menu
+    });
+    menu = menu
+        .item(PopupMenuItem::submenu("Copy As", copy_as_submenu).icon(Icon::new(IconName::Copy)));
+
+    menu = menu
         .item(
             PopupMenuItem::new("Duplicate Document")
                 .icon(Icon::new(IconName::Copy))

@@ -500,7 +500,10 @@ impl DocumentViewModel {
         let delegate =
             DocumentTableDelegate::new(state.clone(), view.clone(), self.current_session.clone());
         let table_state = cx.new(|cx| {
-            TableState::new(delegate, window, cx).col_selectable(false).col_movable(true)
+            TableState::new(delegate, window, cx)
+                .col_selectable(false)
+                .col_movable(true)
+                .row_selectable(false)
         });
 
         // Subscribe to table events for row selection and double-click.
@@ -509,17 +512,7 @@ impl DocumentViewModel {
         cx.subscribe_in(&table_state, window, move |cv, ts, event, window, cx| {
             use gpui_component::table::TableEvent;
             match event {
-                TableEvent::SelectRow(row_ix) => {
-                    let row_ix = *row_ix;
-                    let session_key = cv.view_model.current_session();
-                    let doc_key = ts.read(cx).delegate().document_key(row_ix);
-                    if let (Some(sk), Some(dk)) = (session_key, doc_key) {
-                        cv.state.update(cx, |state, cx| {
-                            state.select_single_doc(&sk, dk, String::new());
-                            cx.notify();
-                        });
-                    }
-                }
+                TableEvent::SelectRow(_) => {}
                 TableEvent::DoubleClickedRow(row_ix) => {
                     let row_ix = *row_ix;
                     let session_key = cv.view_model.current_session();
@@ -557,13 +550,9 @@ impl DocumentViewModel {
                 TableEvent::MoveColumn(from_ix, to_ix) => {
                     let from_ix = *from_ix;
                     let to_ix = *to_ix;
-                    if from_ix == 0 || to_ix == 0 {
-                        return;
-                    }
-                    let (data_from, data_to) = (from_ix - 1, to_ix - 1);
                     let order = {
                         ts.update(cx, |ts, _cx| {
-                            ts.delegate_mut().apply_column_move(data_from, data_to);
+                            ts.delegate_mut().apply_column_move(from_ix, to_ix);
                             ts.delegate_mut().column_order()
                         })
                     };
@@ -595,49 +584,42 @@ impl DocumentViewModel {
         let Some(session_key) = self.current_session.clone() else {
             return;
         };
-        let (
-            generation,
-            documents,
-            drafts,
-            is_loading,
-            saved_widths,
-            saved_order,
-            pinned,
-            hidden,
-            selected_docs,
-        ) = {
-            let state_ref = state.read(cx);
-            let Some(session) = state_ref.session(&session_key) else {
-                return;
-            };
-            let generation = session.generation;
-            if self.table_generation == Some(generation) && self.table_state.is_some() {
-                return;
-            }
-            (
-                generation,
-                session.data.items.clone(),
-                session.view.drafts.clone(),
-                session.data.is_loading,
-                session.view.table_column_widths.clone(),
-                session.view.table_column_order.clone(),
-                session.view.table_pinned_columns.clone(),
-                session.view.table_hidden_columns.clone(),
-                session.view.selected_docs.clone(),
-            )
+        let state_ref = state.read(cx);
+        let Some(session) = state_ref.session(&session_key) else {
+            return;
         };
+        let generation = session.generation;
+        let generation_changed =
+            self.table_generation != Some(generation) || self.table_state.is_none();
+        let selected_docs = session.view.selected_docs.clone();
 
-        let table_state = self.ensure_table_state(state, view, window, cx);
-        table_state.update(cx, |ts, cx| {
-            ts.delegate_mut().set_saved_widths(saved_widths);
-            ts.delegate_mut().set_column_order(saved_order);
-            ts.delegate_mut().set_pinned_columns(pinned);
-            ts.delegate_mut().set_hidden_columns(hidden);
-            ts.delegate_mut().set_selected_doc_keys(selected_docs);
-            ts.delegate_mut().refresh_data(documents, drafts, Some(session_key), is_loading);
-            ts.refresh(cx);
-        });
-        self.table_generation = Some(generation);
+        if generation_changed {
+            let documents = session.data.items.clone();
+            let drafts = session.view.drafts.clone();
+            let is_loading = session.data.is_loading;
+            let saved_widths = session.view.table_column_widths.clone();
+            let saved_order = session.view.table_column_order.clone();
+            let pinned = session.view.table_pinned_columns.clone();
+            let hidden = session.view.table_hidden_columns.clone();
+
+            let table_state = self.ensure_table_state(state, view, window, cx);
+            table_state.update(cx, |ts, cx| {
+                ts.delegate_mut().set_saved_widths(saved_widths);
+                ts.delegate_mut().set_column_order(saved_order);
+                ts.delegate_mut().set_pinned_columns(pinned);
+                ts.delegate_mut().set_hidden_columns(hidden);
+                ts.delegate_mut().set_selected_doc_keys(selected_docs);
+                ts.delegate_mut().refresh_data(documents, drafts, Some(session_key), is_loading);
+                ts.refresh(cx);
+            });
+            self.table_generation = Some(generation);
+        } else {
+            let table_state = self.ensure_table_state(state, view, window, cx);
+            table_state.update(cx, |ts, cx| {
+                ts.delegate_mut().set_selected_doc_keys(selected_docs);
+                cx.notify();
+            });
+        }
     }
 
     pub fn invalidate_table(&mut self) {

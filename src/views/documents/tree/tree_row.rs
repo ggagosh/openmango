@@ -242,7 +242,7 @@ pub fn render_tree_row(
         let state = state.clone();
         let view = view.clone();
         let session_key = session_key.clone();
-        move |menu, _window, _cx| {
+        move |menu, window, cx| {
             let menu = menu.action_context(documents_focus.clone());
             let Some(meta) = menu_meta.clone() else {
                 return menu;
@@ -260,6 +260,9 @@ pub fn render_tree_row(
                     meta.doc_key.clone(),
                     meta.is_dirty,
                     selected_count,
+                    crate::state::DocumentViewMode::Tree,
+                    window,
+                    &mut *cx,
                 )
             } else {
                 build_property_menu(menu, state.clone(), session_key, meta)

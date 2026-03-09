@@ -71,12 +71,27 @@ impl CollectionView {
         let editing_node_id = self.view_model.editing_node_id();
         let tree_state = self.view_model.tree_state();
         let inline_state = self.view_model.inline_state();
+        let deselect_state = self.state.clone();
+        let deselect_session = session_key.clone();
+        let deselect_tree = self.view_model.tree_state();
         let documents_view = div()
             .flex()
             .flex_1()
             .min_w(px(0.0))
             .overflow_hidden()
             .track_focus(&self.documents_focus)
+            .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                let Some(sk) = deselect_session.clone() else {
+                    return;
+                };
+                deselect_state.update(cx, |state, cx| {
+                    state.clear_all_selection(&sk);
+                    cx.notify();
+                });
+                deselect_tree.update(cx, |tree, cx| {
+                    tree.set_selected_index(None, cx);
+                });
+            })
             .on_key_down({
                 let view = view.clone();
                 move |event, _window, cx| {

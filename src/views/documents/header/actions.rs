@@ -22,6 +22,7 @@ use crate::state::{
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 use crate::views::documents::dialogs::bulk_update::BulkUpdateDialog;
+use crate::views::documents::export::CopyFormat;
 
 /// Render action buttons for the Documents subview.
 #[allow(clippy::too_many_arguments)]
@@ -264,6 +265,53 @@ fn render_delete_menu(
     })
 }
 
+fn render_copy_as_dropdown(
+    view: Entity<CollectionView>,
+    view_mode: DocumentViewMode,
+    cx: &App,
+) -> impl IntoElement {
+    use crate::views::documents::actions::copy_documents_as;
+    use crate::views::documents::export::ExportScope;
+
+    let clean_variant = ButtonCustomVariant::new(cx)
+        .color(cx.theme().transparent)
+        .foreground(cx.theme().muted_foreground)
+        .border(cx.theme().transparent)
+        .hover(cx.theme().secondary.opacity(0.5))
+        .active(cx.theme().secondary.opacity(0.62))
+        .shadow(false);
+
+    let formats = match view_mode {
+        DocumentViewMode::Tree => CopyFormat::tree_formats(),
+        DocumentViewMode::Table => CopyFormat::table_formats(),
+    };
+    let formats: Vec<CopyFormat> = formats.to_vec();
+
+    MenuButton::new("copy-as-dropdown")
+        .compact()
+        .rounded(borders::radius_sm())
+        .with_size(Size::Small)
+        .custom(clean_variant)
+        .label("Copy As")
+        .icon(Icon::new(IconName::Copy).xsmall())
+        .tooltip("Copy all documents")
+        .dropdown_menu_with_anchor(Corner::TopLeft, move |menu: PopupMenu, _window, _cx| {
+            let mut menu = menu;
+            for &fmt in &formats {
+                let view_click = view.clone();
+                let item = PopupMenuItem::new(fmt.label()).icon(fmt.icon()).on_click(
+                    move |_, _window, cx| {
+                        view_click.update(cx, |this, cx| {
+                            copy_documents_as(this, fmt, ExportScope::CurrentPage, cx);
+                        });
+                    },
+                );
+                menu = menu.item(item);
+            }
+            menu
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_documents_actions_clean(
     view: Entity<CollectionView>,
@@ -446,6 +494,11 @@ fn render_documents_actions_clean(
     )
     .disabled(is_loading);
 
+    let view_mode =
+        session_key.as_ref().map(|sk| state.read(cx).session_view_mode(sk)).unwrap_or_default();
+
+    let copy_as_dropdown = render_copy_as_dropdown(view.clone(), view_mode, cx);
+
     let secondary_actions_menu = render_documents_secondary_menu(
         state_for_dialog.clone(),
         state_for_transfer.clone(),
@@ -455,9 +508,6 @@ fn render_documents_actions_clean(
         ai_loading,
         ai_panel_open,
     );
-
-    let view_mode =
-        session_key.as_ref().map(|sk| state.read(cx).session_view_mode(sk)).unwrap_or_default();
     let is_tree = view_mode == DocumentViewMode::Tree;
     let is_table = view_mode == DocumentViewMode::Table;
     let active_bg = cx.theme().secondary.opacity(0.55);
@@ -474,6 +524,7 @@ fn render_documents_actions_clean(
                     };
                     state.update(cx, |state, cx| {
                         state.set_view_mode(&sk, DocumentViewMode::Tree);
+                        state.clear_all_selection(&sk);
                         cx.notify();
                     });
                     view.update(cx, |this, cx| {
@@ -503,6 +554,7 @@ fn render_documents_actions_clean(
                     };
                     state.update(cx, |state, cx| {
                         state.set_view_mode(&sk, DocumentViewMode::Table);
+                        state.clear_all_selection(&sk);
                         cx.notify();
                     });
                     view.update(cx, |_this, cx| {
@@ -742,6 +794,8 @@ fn render_documents_actions_clean(
         .child(delete_menu)
         .child(toolbar_separator(cx))
         .child(refresh_button)
+        .child(toolbar_separator(cx))
+        .child(copy_as_dropdown)
         .child(toolbar_separator(cx))
         .child(secondary_actions_menu)
 }

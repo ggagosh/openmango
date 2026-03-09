@@ -17,6 +17,7 @@ mod view;
 mod view_model;
 
 pub mod dialogs;
+pub mod export;
 pub mod table;
 pub mod tree;
 pub mod views;

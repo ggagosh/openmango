@@ -139,6 +139,15 @@ impl AppState {
         }
     }
 
+    /// Clear all selection state: multi-selection, primary doc, and selected node.
+    pub fn clear_all_selection(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.selected_docs.clear();
+            session.view.selected_doc = None;
+            session.view.selected_node_id = None;
+        }
+    }
+
     pub fn set_draft(&mut self, session_key: &SessionKey, doc_key: DocumentKey, doc: Document) {
         if let Some(session) = self.session_mut(session_key) {
             session.view.drafts.insert(doc_key.clone(), doc);

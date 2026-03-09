@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::checkbox::Checkbox;
 use gpui_component::menu::PopupMenuItem;
 use gpui_component::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
@@ -17,15 +16,11 @@ use super::column_schema::{
     MIN_COL_WIDTH, TableColumnDef, build_column_defs_with_overrides, discover_columns,
 };
 
-const CHECKBOX_COL_NAME: &str = "\u{200B}";
-const CHECKBOX_COL_WIDTH: f32 = 36.0;
-
 pub struct DocumentTableDelegate {
     documents: Vec<SessionDocument>,
     drafts: HashMap<DocumentKey, Document>,
     columns: Vec<TableColumnDef>,
     column_defs: Vec<Column>,
-    checkbox_col: Column,
     selected_doc_keys: HashSet<DocumentKey>,
     saved_widths: HashMap<String, f32>,
     stable_column_keys: Vec<String>,
@@ -33,6 +28,7 @@ pub struct DocumentTableDelegate {
     active_sort: Option<(String, ColumnSort)>,
     pinned_columns: HashSet<String>,
     hidden_columns: HashSet<String>,
+    anchor_row: Option<usize>,
     state: Entity<AppState>,
     view: Entity<CollectionView>,
     session_key: Option<SessionKey>,
@@ -45,16 +41,11 @@ impl DocumentTableDelegate {
         view: Entity<CollectionView>,
         session_key: Option<SessionKey>,
     ) -> Self {
-        let checkbox_col = Column::new(CHECKBOX_COL_NAME, CHECKBOX_COL_NAME)
-            .width(px(CHECKBOX_COL_WIDTH))
-            .fixed_left()
-            .movable(false);
         Self {
             documents: Vec::new(),
             drafts: HashMap::new(),
             columns: Vec::new(),
             column_defs: Vec::new(),
-            checkbox_col,
             selected_doc_keys: HashSet::new(),
             saved_widths: HashMap::new(),
             stable_column_keys: Vec::new(),
@@ -62,6 +53,7 @@ impl DocumentTableDelegate {
             active_sort: None,
             pinned_columns: HashSet::new(),
             hidden_columns: HashSet::new(),
+            anchor_row: None,
             state,
             view,
             session_key,
@@ -127,10 +119,6 @@ impl DocumentTableDelegate {
 
     pub fn set_selected_doc_keys(&mut self, keys: HashSet<DocumentKey>) {
         self.selected_doc_keys = keys;
-    }
-
-    fn data_col_ix(&self, col_ix: usize) -> Option<usize> {
-        if col_ix == 0 { None } else { Some(col_ix - 1) }
     }
 
     pub fn set_saved_widths(&mut self, widths: HashMap<String, f32>) {
@@ -232,14 +220,12 @@ impl DocumentTableDelegate {
     }
 
     pub fn cell_value_for_copy(&self, row_ix: usize, col_ix: usize) -> Option<String> {
-        let data_ix = self.data_col_ix(col_ix)?;
-        let value = self.cell_value(row_ix, data_ix)?;
+        let value = self.cell_value(row_ix, col_ix)?;
         Some(crate::bson::bson_value_for_edit(value))
     }
 
     pub fn column_key(&self, col_ix: usize) -> Option<String> {
-        let data_ix = self.data_col_ix(col_ix)?;
-        self.columns.get(data_ix).map(|c| c.key.clone())
+        self.columns.get(col_ix).map(|c| c.key.clone())
     }
 
     pub fn document_key(&self, row_ix: usize) -> Option<DocumentKey> {
@@ -303,9 +289,7 @@ impl DocumentTableDelegate {
         session_key: &SessionKey,
         _cx: &App,
     ) -> gpui_component::menu::PopupMenu {
-        let col_key = selected_col
-            .and_then(|c| self.data_col_ix(c))
-            .and_then(|di| self.columns.get(di).map(|c| c.key.clone()));
+        let col_key = selected_col.and_then(|c| self.columns.get(c).map(|col| col.key.clone()));
 
         let Some(col_key) = col_key else {
             return menu;
@@ -394,7 +378,7 @@ impl DocumentTableDelegate {
 
 impl TableDelegate for DocumentTableDelegate {
     fn columns_count(&self, _cx: &App) -> usize {
-        self.column_defs.len() + 1
+        self.column_defs.len()
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
@@ -402,7 +386,7 @@ impl TableDelegate for DocumentTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> &Column {
-        if col_ix == 0 { &self.checkbox_col } else { &self.column_defs[col_ix - 1] }
+        &self.column_defs[col_ix]
     }
 
     fn render_th(
@@ -411,59 +395,8 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        if col_ix == 0 {
-            let all_selected = !self.documents.is_empty()
-                && self.documents.iter().all(|d| self.selected_doc_keys.contains(&d.key));
-            let state = self.state.clone();
-            let session_key = self.session_key.clone();
-            return div()
-                .id("th-checkbox")
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Checkbox::new("select-all")
-                        .checked(all_selected)
-                        .with_size(gpui_component::Size::XSmall)
-                        .on_click(cx.listener(move |ts, _, _window, cx| {
-                            let all = !ts.delegate().documents.is_empty()
-                                && ts
-                                    .delegate()
-                                    .documents
-                                    .iter()
-                                    .all(|d| ts.delegate().selected_doc_keys.contains(&d.key));
-                            if let Some(sk) = session_key.as_ref() {
-                                let sk = sk.clone();
-                                if all {
-                                    state.update(cx, |s, cx| {
-                                        s.clear_doc_selection(&sk);
-                                        cx.notify();
-                                    });
-                                    ts.delegate_mut().selected_doc_keys.clear();
-                                } else {
-                                    state.update(cx, |s, cx| {
-                                        s.select_all_docs(&sk);
-                                        cx.notify();
-                                    });
-                                    let all_keys: HashSet<DocumentKey> = ts
-                                        .delegate()
-                                        .documents
-                                        .iter()
-                                        .map(|d| d.key.clone())
-                                        .collect();
-                                    ts.delegate_mut().selected_doc_keys = all_keys;
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-                .into_any_element();
-        }
-
-        let data_ix = col_ix - 1;
-        let name = self.columns.get(data_ix).map(|c| c.key.clone()).unwrap_or_default();
-        let is_pinned = self.is_column_pinned(data_ix);
+        let name = self.columns.get(col_ix).map(|c| c.key.clone()).unwrap_or_default();
+        let is_pinned = self.is_column_pinned(col_ix);
         let col_key = name.clone();
         let state = self.state.clone();
         let session_key = self.session_key.clone();
@@ -525,10 +458,75 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
+        let is_selected =
+            self.documents.get(row_ix).is_some_and(|d| self.selected_doc_keys.contains(&d.key));
+        let is_dirty = self.is_row_dirty(row_ix);
+
+        let selected_bg = cx.theme().list_active;
+
         let mut row = div().id(("row", row_ix));
-        if self.is_row_dirty(row_ix) {
+
+        if is_dirty {
             row = row.bg(colors::bg_dirty(cx));
+        } else if is_selected {
+            row = row.bg(selected_bg);
         }
+
+        row = row.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ts, event: &MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+
+                let is_shift = event.modifiers.shift;
+                let is_cmd = event.modifiers.secondary() || event.modifiers.control;
+
+                let doc_key = ts.delegate().document_key(row_ix);
+                let session_key = ts.delegate().session_key.clone();
+
+                let (Some(dk), Some(sk)) = (doc_key, session_key) else {
+                    return;
+                };
+
+                let state = ts.delegate().state.clone();
+
+                if is_shift {
+                    let anchor = ts.delegate().anchor_row.unwrap_or(0);
+                    let lo = anchor.min(row_ix);
+                    let hi = anchor.max(row_ix);
+                    let doc_keys: HashSet<DocumentKey> =
+                        (lo..=hi).filter_map(|i| ts.delegate().document_key(i)).collect();
+                    let selected_keys = doc_keys.clone();
+                    state.update(cx, |s, cx| {
+                        s.select_doc_range(&sk, doc_keys, dk.clone(), String::new());
+                        cx.notify();
+                    });
+                    ts.delegate_mut().selected_doc_keys = selected_keys;
+                } else if is_cmd {
+                    state.update(cx, |s, cx| {
+                        s.toggle_doc_selection(&sk, &dk);
+                        cx.notify();
+                    });
+                    if ts.delegate().selected_doc_keys.contains(&dk) {
+                        ts.delegate_mut().selected_doc_keys.remove(&dk);
+                    } else {
+                        ts.delegate_mut().selected_doc_keys.insert(dk);
+                    }
+                    ts.delegate_mut().anchor_row = Some(row_ix);
+                } else {
+                    state.update(cx, |s, cx| {
+                        s.select_single_doc(&sk, dk.clone(), String::new());
+                        cx.notify();
+                    });
+                    let mut keys = HashSet::new();
+                    keys.insert(dk);
+                    ts.delegate_mut().selected_doc_keys = keys;
+                    ts.delegate_mut().anchor_row = Some(row_ix);
+                }
+
+                cx.notify();
+            }),
+        );
+
         row
     }
 
@@ -539,43 +537,7 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        if col_ix == 0 {
-            let is_checked =
-                self.documents.get(row_ix).is_some_and(|d| self.selected_doc_keys.contains(&d.key));
-            let doc_key = self.documents.get(row_ix).map(|d| d.key.clone());
-            let state = self.state.clone();
-            let session_key = self.session_key.clone();
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Checkbox::new(ElementId::NamedInteger("row-sel".into(), row_ix as u64))
-                        .checked(is_checked)
-                        .with_size(gpui_component::Size::XSmall)
-                        .on_click(cx.listener(move |ts, _, _window, cx| {
-                            if let (Some(sk), Some(dk)) = (session_key.as_ref(), doc_key.as_ref()) {
-                                let sk = sk.clone();
-                                let dk = dk.clone();
-                                state.update(cx, |s, cx| {
-                                    s.toggle_doc_selection(&sk, &dk);
-                                    cx.notify();
-                                });
-                                if ts.delegate().selected_doc_keys.contains(&dk) {
-                                    ts.delegate_mut().selected_doc_keys.remove(&dk);
-                                } else {
-                                    ts.delegate_mut().selected_doc_keys.insert(dk);
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-                .into_any_element();
-        }
-
-        let data_ix = col_ix - 1;
-        let Some(value) = self.cell_value(row_ix, data_ix) else {
+        let Some(value) = self.cell_value(row_ix, col_ix) else {
             return div().text_xs().text_color(cx.theme().muted_foreground).into_any_element();
         };
 
@@ -653,6 +615,9 @@ impl TableDelegate for DocumentTableDelegate {
             doc_key,
             is_dirty,
             selected_count,
+            crate::state::DocumentViewMode::Table,
+            _window,
+            &mut *cx,
         );
 
         self.build_table_column_menu(menu, selected_col, &session_key, cx)
@@ -665,11 +630,7 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) {
-        // col_ix includes the checkbox column at index 0; map to data column index.
-        let Some(data_ix) = self.data_col_ix(col_ix) else {
-            return;
-        };
-        let Some(col) = self.columns.get(data_ix) else {
+        let Some(col) = self.columns.get(col_ix) else {
             return;
         };
         let Some(session_key) = self.session_key.clone() else {

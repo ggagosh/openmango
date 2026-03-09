@@ -7,16 +7,18 @@ use crate::bson::{
 };
 use crate::components::open_confirm_dialog;
 use crate::keyboard::{
-    AddElement, AddField, ClearAggregationStage, CloseSearch, CopyDocumentJson, CopyKey, CopyValue,
-    CreateIndex, DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
+    AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs, CopyAsCsv, CopyAsJson,
+    CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey, CopyValue, CreateIndex,
+    DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
     DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
     FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
     PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation,
-    SaveDocument, SelectAllDocuments, SelectNextAggregationStage, SelectPrevAggregationStage,
-    ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
-    ToggleAggregationStageEnabled,
+    SaveDocument, SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
+    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
 };
-use crate::state::{AppCommands, CollectionSubview, StatusMessage};
+use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
+
+use super::export::{CopyFormat, ExportScope, ViewExportSnapshot, render_to_clipboard};
 
 use super::CollectionView;
 use super::dialogs::index_create::IndexCreateDialog;
@@ -196,16 +198,6 @@ impl CollectionView {
                     );
                 }
             });
-        }))
-        .on_action(cx.listener(|this, _: &SelectAllDocuments, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            this.state.update(cx, |state, cx| {
-                state.select_all_docs(&session_key);
-                cx.notify();
-            });
-            cx.notify();
         }))
         .on_action(cx.listener(|this, _: &PasteDocuments, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
@@ -429,6 +421,55 @@ impl CollectionView {
                 let json = format!("[{}]", docs.join(",\n"));
                 cx.write_to_clipboard(ClipboardItem::new_string(json));
             }
+        }))
+        .on_action(cx.listener(|this, _: &CopyAs, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            let (view_mode, has_selected) = {
+                let state_ref = this.state.read(cx);
+                let vm = state_ref.session_view_mode(&session_key);
+                let sel = state_ref
+                    .session(&session_key)
+                    .is_some_and(|s| !s.view.selected_docs.is_empty());
+                (vm, sel)
+            };
+
+            match view_mode {
+                DocumentViewMode::Tree => {
+                    let property_ctx = this.selected_property_context(cx);
+                    if let Some((sk, meta)) = property_ctx
+                        && !has_selected
+                        && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
+                        && let Some(value) = get_bson_at_path(&doc, &meta.path)
+                    {
+                        let text = format_bson_for_clipboard(value);
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    } else if has_selected {
+                        copy_documents_as(this, CopyFormat::Json, ExportScope::Selected, cx);
+                    }
+                }
+                DocumentViewMode::Table => {
+                    if has_selected {
+                        copy_documents_as(this, CopyFormat::Tsv, ExportScope::Selected, cx);
+                    }
+                }
+            }
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsJson, _window, cx| {
+            copy_documents_as(this, CopyFormat::Json, ExportScope::Selected, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsJsonLines, _window, cx| {
+            copy_documents_as(this, CopyFormat::JsonLines, ExportScope::Selected, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsCsv, _window, cx| {
+            copy_documents_as(this, CopyFormat::Csv, ExportScope::Selected, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsMarkdown, _window, cx| {
+            copy_documents_as(this, CopyFormat::Markdown, ExportScope::Selected, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsTsv, _window, cx| {
+            copy_documents_as(this, CopyFormat::Tsv, ExportScope::Selected, cx);
         }))
         .on_action(cx.listener(|this, _: &CopyKey, _window, cx| {
             let Some((_session_key, meta)) = this.selected_property_context(cx) else {
@@ -815,6 +856,53 @@ impl CollectionView {
             });
         }))
     }
+}
+
+pub(in crate::views::documents) fn copy_documents_as(
+    this: &mut CollectionView,
+    format: CopyFormat,
+    scope: ExportScope,
+    cx: &mut Context<CollectionView>,
+) {
+    let Some(session_key) = this.view_model.current_session() else {
+        return;
+    };
+
+    let (text, count) = {
+        let state_ref = this.state.read(cx);
+        let Some(session) = state_ref.session(&session_key) else {
+            return;
+        };
+
+        let snapshot = ViewExportSnapshot::from_session_state(
+            &session.data.items,
+            &session.view.selected_docs,
+            &session.view.table_column_order,
+            &session.view.table_hidden_columns,
+            &session.view.table_pinned_columns,
+            &session.view.drafts,
+            session_key.collection.clone(),
+            session_key.database.clone(),
+            scope,
+        );
+
+        if snapshot.documents.is_empty() {
+            return;
+        }
+
+        (render_to_clipboard(&snapshot, format), snapshot.documents.len())
+    };
+
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    this.state.update(cx, |state, cx| {
+        state.set_status_message(Some(StatusMessage::info(format!(
+            "Copied {} document{} as {}",
+            count,
+            if count == 1 { "" } else { "s" },
+            format.label()
+        ))));
+        cx.notify();
+    });
 }
 
 struct PropertyFlags {

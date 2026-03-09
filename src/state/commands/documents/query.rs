@@ -111,13 +111,8 @@ impl AppCommands {
                             session.data.is_loading = false;
 
                             session.view.selected_docs.clear();
-
-                            if let Some(selected) = session.view.selected_doc.clone()
-                                && !session.data.index_by_key.contains_key(&selected)
-                            {
-                                session.view.selected_doc = None;
-                                session.view.selected_node_id = None;
-                            }
+                            session.view.selected_doc = None;
+                            session.view.selected_node_id = None;
 
                             session.generation = session.generation.wrapping_add(1);
                             let event =
