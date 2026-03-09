@@ -246,7 +246,7 @@ impl AppCommands {
         format: FileExportFormat,
         cx: &mut App,
     ) {
-        let documents = {
+        let (documents, column_widths, column_order) = {
             let st = state.read(cx);
             let Some(session) = st.session(&session_key) else {
                 return;
@@ -257,7 +257,9 @@ impl AppCommands {
             if results.is_empty() {
                 return;
             }
-            results.clone()
+            let widths = session.view.agg_table_column_widths.clone();
+            let order = session.view.agg_table_column_order.clone();
+            (results.clone(), widths, order)
         };
 
         let collection = session_key.collection.clone();
@@ -284,7 +286,17 @@ impl AppCommands {
                     let task = cx.background_spawn({
                         let path = path.clone();
                         let documents = documents.clone();
-                        async move { write_documents_to_file(&documents, &path, format) }
+                        let column_widths = column_widths.clone();
+                        let column_order = column_order.clone();
+                        async move {
+                            write_documents_to_file(
+                                &documents,
+                                &path,
+                                format,
+                                column_widths,
+                                column_order,
+                            )
+                        }
                     });
 
                     cx.spawn({
@@ -322,6 +334,8 @@ fn write_documents_to_file(
     documents: &[mongodb::bson::Document],
     path: &std::path::Path,
     format: FileExportFormat,
+    column_widths: HashMap<String, f32>,
+    column_order: Vec<String>,
 ) -> crate::error::Result<u64> {
     use mongodb::bson::Bson;
     use std::io::{BufWriter, Write};
@@ -357,9 +371,10 @@ fn write_documents_to_file(
             writer.flush()?;
         }
         FileExportFormat::Csv => {
-            use crate::connection::csv_utils::{collect_columns, flatten_document};
+            use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
 
-            let columns = collect_columns(documents);
+            let detected = collect_columns(documents);
+            let columns = order_columns(detected, &column_order);
             if columns.is_empty() {
                 return Ok(0);
             }
@@ -375,16 +390,25 @@ fn write_documents_to_file(
             csv_writer.flush()?;
         }
         FileExportFormat::Excel => {
-            use crate::connection::csv_utils::{collect_columns, flatten_document};
+            use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
             use rust_xlsxwriter::{Format, Workbook};
 
-            let columns = collect_columns(documents);
+            let detected = collect_columns(documents);
+            let columns = order_columns(detected, &column_order);
             if columns.is_empty() {
                 return Ok(0);
             }
             let mut workbook = Workbook::new();
             let header_format = Format::new().set_bold();
             let worksheet = workbook.add_worksheet_with_constant_memory();
+
+            for (col_idx, col_name) in columns.iter().enumerate() {
+                if let Some(&width_px) = column_widths.get(col_name) {
+                    worksheet
+                        .set_column_width_pixels(col_idx as u16, width_px as u32)
+                        .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+                }
+            }
 
             for (col_idx, col_name) in columns.iter().enumerate() {
                 worksheet

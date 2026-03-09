@@ -230,12 +230,62 @@ impl AppState {
         }
     }
 
-    /// Get a mutable reference to a session.
+    // ── Aggregation table column state ───────────────────────────────
+
+    pub fn set_agg_table_column_widths(&mut self, key: &SessionKey, widths: HashMap<String, f32>) {
+        if let Some(session) = self.session_mut(key) {
+            session.view.agg_table_column_widths = widths;
+        }
+    }
+
+    pub fn set_agg_table_column_order(&mut self, key: &SessionKey, order: Vec<String>) {
+        if let Some(session) = self.session_mut(key) {
+            session.view.agg_table_column_order = order;
+        }
+    }
+
+    pub fn toggle_agg_table_pinned_column(&mut self, key: &SessionKey, column: String) -> bool {
+        if let Some(session) = self.session_mut(key) {
+            let is_pinned = if session.view.agg_table_pinned_columns.contains(&column) {
+                session.view.agg_table_pinned_columns.remove(&column);
+                false
+            } else {
+                session.view.agg_table_pinned_columns.insert(column);
+                true
+            };
+            return is_pinned;
+        }
+        false
+    }
+
+    pub fn toggle_agg_table_hidden_column(&mut self, key: &SessionKey, column: String) {
+        if let Some(session) = self.session_mut(key) {
+            if session.view.agg_table_hidden_columns.contains(&column) {
+                session.view.agg_table_hidden_columns.remove(&column);
+            } else {
+                session.view.agg_table_hidden_columns.insert(column);
+            }
+        }
+    }
+
+    pub fn set_aggregation_view_mode(
+        &mut self,
+        key: &SessionKey,
+        mode: super::super::types::DocumentViewMode,
+    ) {
+        if let Some(session) = self.session_mut(key) {
+            session.data.aggregation.results_view_mode = mode;
+        }
+    }
+
+    pub fn aggregation_view_mode(&self, key: &SessionKey) -> super::super::types::DocumentViewMode {
+        self.session(key).map(|s| s.data.aggregation.results_view_mode).unwrap_or_default()
+    }
+
     pub fn session_mut(&mut self, key: &SessionKey) -> Option<&mut SessionState> {
         self.sessions.get_mut(key)
     }
 
-    /// Ensure a session exists and return a mutable reference to it.
     pub fn ensure_session(&mut self, key: SessionKey) -> &mut SessionState {
         self.sessions.ensure(key)
     }

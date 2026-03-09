@@ -108,6 +108,24 @@ fn collect_keys_from_doc(
     }
 }
 
+pub fn order_columns(detected: Vec<String>, saved_order: &[String]) -> Vec<String> {
+    if saved_order.is_empty() {
+        return detected;
+    }
+    let detected_set: HashSet<&str> = detected.iter().map(|s| s.as_str()).collect();
+    let ordered_set: HashSet<&str> = saved_order.iter().map(|s| s.as_str()).collect();
+
+    let mut cols: Vec<String> =
+        saved_order.iter().filter(|c| detected_set.contains(c.as_str())).cloned().collect();
+
+    for col in &detected {
+        if !ordered_set.contains(col.as_str()) {
+            cols.push(col.clone());
+        }
+    }
+    cols
+}
+
 /// Unflatten a CSV row (map of column name -> value) back into a BSON Document.
 pub fn unflatten_row(row: &HashMap<String, String>) -> Document {
     let mut doc = Document::new();

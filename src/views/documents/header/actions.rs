@@ -1011,7 +1011,7 @@ fn render_export_progress(state: Entity<AppState>, cx: &App) -> Option<Div> {
     )
 }
 
-fn clean_toolbar_icon_button(button: Button, icon: IconName, tooltip: &'static str) -> Button {
+pub fn clean_toolbar_icon_button(button: Button, icon: IconName, tooltip: &'static str) -> Button {
     button.ghost().compact().icon(Icon::new(icon).xsmall()).tooltip(tooltip)
 }
 

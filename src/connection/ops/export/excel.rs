@@ -25,7 +25,7 @@ impl ConnectionManager {
     where
         F: Fn(u64) + Send + 'static,
     {
-        use crate::connection::csv_utils::{collect_columns, flatten_document};
+        use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
         use futures::TryStreamExt;
         use rust_xlsxwriter::{Format, Workbook};
 
@@ -61,27 +61,7 @@ impl ConnectionManager {
                 return Ok(0);
             }
 
-            let columns = if column_order.is_empty() {
-                detected_columns
-            } else {
-                let detected_set: std::collections::HashSet<&str> =
-                    detected_columns.iter().map(|s| s.as_str()).collect();
-                let ordered_set: std::collections::HashSet<&str> =
-                    column_order.iter().map(|s| s.as_str()).collect();
-
-                let mut cols: Vec<String> = column_order
-                    .iter()
-                    .filter(|c| detected_set.contains(c.as_str()))
-                    .cloned()
-                    .collect();
-
-                for col in &detected_columns {
-                    if !ordered_set.contains(col.as_str()) {
-                        cols.push(col.clone());
-                    }
-                }
-                cols
-            };
+            let columns = order_columns(detected_columns, &column_order);
 
             let mut workbook = Workbook::new();
             let header_format = Format::new().set_bold();

@@ -15,6 +15,7 @@ use crate::perf::log_tabs_duration;
 use crate::state::{AppState, SessionKey};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::table::aggregation_table_delegate::AggregationTableDelegate;
 use crate::views::documents::table::document_table_delegate::DocumentTableDelegate;
 use crate::views::documents::tree::document_tree::{build_documents_tree, flatten_tree_order_all};
 use crate::views::documents::types::InlineEditor;
@@ -48,6 +49,8 @@ pub struct DocumentViewModel {
     table_state: Option<Entity<TableState<DocumentTableDelegate>>>,
     table_generation: Option<u64>,
     col_visibility_search: Option<Entity<InputState>>,
+    agg_table_state: Option<Entity<TableState<AggregationTableDelegate>>>,
+    agg_table_generation: Option<u64>,
 }
 
 impl DocumentViewModel {
@@ -70,6 +73,8 @@ impl DocumentViewModel {
             table_state: None,
             table_generation: None,
             col_visibility_search: None,
+            agg_table_state: None,
+            agg_table_generation: None,
         }
     }
 
@@ -624,6 +629,123 @@ impl DocumentViewModel {
 
     pub fn invalidate_table(&mut self) {
         self.table_generation = None;
+    }
+
+    // ── Aggregation table ────────────────────────────────────────────
+
+    pub fn agg_table_state(&self) -> Option<&Entity<TableState<AggregationTableDelegate>>> {
+        self.agg_table_state.as_ref()
+    }
+
+    pub fn ensure_agg_table_state(
+        &mut self,
+        state: &Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<CollectionView>,
+    ) -> Entity<TableState<AggregationTableDelegate>> {
+        if let Some(agg_table) = &self.agg_table_state {
+            return agg_table.clone();
+        }
+        let delegate = AggregationTableDelegate::new(state.clone(), self.current_session.clone());
+        let agg_table = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .col_selectable(false)
+                .col_movable(true)
+                .row_selectable(false)
+        });
+
+        let state_clone = state.clone();
+        cx.subscribe_in(&agg_table, window, move |cv, ts, event, _window, cx| {
+            use gpui_component::table::TableEvent;
+            match event {
+                TableEvent::ColumnWidthsChanged(widths) => {
+                    let col_widths: HashMap<String, f32> = {
+                        let delegate = ts.read(cx).delegate();
+                        widths
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, w)| delegate.column_key(i).map(|k| (k, f32::from(*w))))
+                            .collect()
+                    };
+                    ts.update(cx, |ts, _cx| {
+                        ts.delegate_mut().update_saved_widths(col_widths.clone());
+                    });
+                    if let Some(sk) = cv.view_model.current_session() {
+                        state_clone.update(cx, |state, cx| {
+                            state.set_agg_table_column_widths(&sk, col_widths);
+                            cx.notify();
+                        });
+                    }
+                }
+                TableEvent::MoveColumn(from_ix, to_ix) => {
+                    let from_ix = *from_ix;
+                    let to_ix = *to_ix;
+                    let order = {
+                        ts.update(cx, |ts, _cx| {
+                            ts.delegate_mut().apply_column_move(from_ix, to_ix);
+                            ts.delegate_mut().column_order()
+                        })
+                    };
+                    if let Some(sk) = cv.view_model.current_session() {
+                        state_clone.update(cx, |state, cx| {
+                            state.set_agg_table_column_order(&sk, order);
+                            cx.notify();
+                        });
+                    }
+                    cv.view_model.invalidate_agg_table();
+                    cx.notify();
+                }
+                _ => {}
+            }
+        })
+        .detach();
+
+        self.agg_table_state = Some(agg_table.clone());
+        agg_table
+    }
+
+    pub fn rebuild_agg_table(
+        &mut self,
+        state: &Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<CollectionView>,
+    ) {
+        let Some(session_key) = self.current_session.clone() else {
+            return;
+        };
+        let state_ref = state.read(cx);
+        let Some(session) = state_ref.session(&session_key) else {
+            return;
+        };
+        let run_gen =
+            session.data.aggregation.run_generation.load(std::sync::atomic::Ordering::Relaxed);
+        let gen_changed =
+            self.agg_table_generation != Some(run_gen) || self.agg_table_state.is_none();
+
+        if !gen_changed {
+            return;
+        }
+
+        let documents = session.data.aggregation.results.clone().unwrap_or_default();
+        let saved_widths = session.view.agg_table_column_widths.clone();
+        let saved_order = session.view.agg_table_column_order.clone();
+        let pinned = session.view.agg_table_pinned_columns.clone();
+        let hidden = session.view.agg_table_hidden_columns.clone();
+
+        let agg_table = self.ensure_agg_table_state(state, window, cx);
+        agg_table.update(cx, |ts, cx| {
+            ts.delegate_mut().set_saved_widths(saved_widths);
+            ts.delegate_mut().set_column_order(saved_order);
+            ts.delegate_mut().set_pinned_columns(pinned);
+            ts.delegate_mut().set_hidden_columns(hidden);
+            ts.delegate_mut().refresh_data(documents, Some(session_key));
+            ts.refresh(cx);
+        });
+        self.agg_table_generation = Some(run_gen);
+    }
+
+    pub fn invalidate_agg_table(&mut self) {
+        self.agg_table_generation = None;
     }
 
     pub fn ensure_col_visibility_search(

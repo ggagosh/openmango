@@ -11,8 +11,9 @@ use crate::bson::DocumentKey;
 use crate::components::Button;
 use crate::helpers::format_number;
 use crate::state::app_state::{PipelineState, StageStatsMode};
-use crate::state::{AppCommands, SessionDocument, SessionKey};
+use crate::state::{AppCommands, DocumentViewMode, SessionDocument, SessionKey};
 use crate::theme::{islands, spacing};
+use crate::views::documents::header::clean_toolbar_icon_button;
 use crate::views::documents::tree::lazy_row::{compute_row_meta, render_lazy_readonly_row};
 use crate::views::documents::tree::lazy_tree::{build_visible_rows, collect_all_expandable_nodes};
 
@@ -224,7 +225,18 @@ impl CollectionView {
                         div().into_any_element()
                     })
                     .child(agg_separator(cx))
-                    .child(render_agg_copy_as(cx.entity().clone(), results_count > 0, cx))
+                    .child(self.render_agg_view_toggle(
+                        &pipeline.results_view_mode,
+                        session_key.clone(),
+                        cx,
+                    ))
+                    .child(agg_separator(cx))
+                    .child(render_agg_copy_as(
+                        cx.entity().clone(),
+                        results_count > 0,
+                        &pipeline.results_view_mode,
+                        cx,
+                    ))
                     .child(render_agg_export(
                         self.state.clone(),
                         session_key.clone(),
@@ -245,7 +257,22 @@ impl CollectionView {
                     .child(error),
             );
         }
-        body = body.child(render_results_tree(self, pipeline, session_key.clone(), window, cx));
+        if pipeline.results_view_mode == DocumentViewMode::Table {
+            self.view_model.rebuild_agg_table(&self.state, window, cx);
+            if let Some(agg_table) = self.view_model.agg_table_state().cloned() {
+                body = body.child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .child(gpui_component::table::Table::new(&agg_table)),
+                );
+            }
+        } else {
+            body = body.child(render_results_tree(self, pipeline, session_key.clone(), window, cx));
+        }
         let footer_data = ResultsFooterData {
             total_count,
             per_page,
@@ -270,6 +297,76 @@ impl CollectionView {
             .child(header)
             .child(body)
             .into_any_element()
+    }
+
+    fn render_agg_view_toggle(
+        &self,
+        mode: &DocumentViewMode,
+        session_key: Option<SessionKey>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let is_tree = *mode == DocumentViewMode::Tree;
+        let is_table = *mode == DocumentViewMode::Table;
+        let active_bg = cx.theme().secondary.opacity(0.55);
+
+        let tree_btn = {
+            let mut btn = clean_toolbar_icon_button(
+                Button::new("agg-view-tree").compact().on_click({
+                    let state = self.state.clone();
+                    let session_key = session_key.clone();
+                    let view = cx.entity().clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(sk) = session_key.clone() else {
+                            return;
+                        };
+                        state.update(cx, |state, cx| {
+                            state.set_aggregation_view_mode(&sk, DocumentViewMode::Tree);
+                            cx.notify();
+                        });
+                        view.update(cx, |this, cx| {
+                            this.view_model.invalidate_agg_table();
+                            cx.notify();
+                        });
+                    }
+                }),
+                IconName::Menu,
+                "Tree view",
+            );
+            if is_tree {
+                btn = btn.active_style(active_bg);
+            }
+            btn
+        };
+
+        let table_btn = {
+            let mut btn = clean_toolbar_icon_button(
+                Button::new("agg-view-table").compact().on_click({
+                    let state = self.state.clone();
+                    let session_key = session_key.clone();
+                    let view = cx.entity().clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(sk) = session_key.clone() else {
+                            return;
+                        };
+                        state.update(cx, |state, cx| {
+                            state.set_aggregation_view_mode(&sk, DocumentViewMode::Table);
+                            cx.notify();
+                        });
+                        view.update(cx, |_this, cx| {
+                            cx.notify();
+                        });
+                    }
+                }),
+                IconName::LayoutDashboard,
+                "Table view",
+            );
+            if is_table {
+                btn = btn.active_style(active_bg);
+            }
+            btn
+        };
+
+        div().flex().items_center().gap_0p5().child(tree_btn).child(table_btn)
     }
 }
 
@@ -614,6 +711,7 @@ fn agg_separator(cx: &App) -> Div {
 fn render_agg_copy_as(
     view: Entity<CollectionView>,
     has_results: bool,
+    view_mode: &DocumentViewMode,
     cx: &App,
 ) -> impl IntoElement {
     use gpui_component::Sizable as _;
@@ -632,7 +730,10 @@ fn render_agg_copy_as(
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
 
-    let formats = CopyFormat::tree_formats().to_vec();
+    let formats = match view_mode {
+        DocumentViewMode::Table => CopyFormat::table_formats().to_vec(),
+        _ => CopyFormat::tree_formats().to_vec(),
+    };
 
     MenuButton::new("agg-copy-as")
         .compact()

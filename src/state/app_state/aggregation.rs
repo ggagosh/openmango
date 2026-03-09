@@ -6,6 +6,8 @@ use futures::future::AbortHandle;
 use mongodb::bson::Document;
 use serde::{Deserialize, Serialize};
 
+use super::types::DocumentViewMode;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStage {
     pub operator: String,
@@ -102,6 +104,7 @@ pub struct PipelineState {
     pub result_limit: i64,
     pub results_page: u64,
     pub last_run_time_ms: Option<u64>,
+    pub results_view_mode: DocumentViewMode,
 }
 
 impl Default for PipelineState {
@@ -122,6 +125,7 @@ impl Default for PipelineState {
             result_limit: 50,
             results_page: 0,
             last_run_time_ms: None,
+            results_view_mode: DocumentViewMode::default(),
         }
     }
 }
