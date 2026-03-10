@@ -565,14 +565,11 @@ impl CollectionView {
         };
 
         let normalize_query_draft = |raw: String| {
-            if raw.trim() == "{}" {
-                String::new()
-            } else {
-                raw
-            }
+            if raw.trim() == "{}" { String::new() } else { raw }
         };
 
-        let next_filter = normalize_query_draft(filter_raw.unwrap_or_else(|| stored_filter.clone()));
+        let next_filter =
+            normalize_query_draft(filter_raw.unwrap_or_else(|| stored_filter.clone()));
         let next_sort = normalize_query_draft(sort_raw.unwrap_or_else(|| stored_sort.clone()));
         let next_projection =
             normalize_query_draft(projection_raw.unwrap_or_else(|| stored_projection.clone()));
@@ -582,7 +579,8 @@ impl CollectionView {
         let stored_projection = normalize_query_draft(stored_projection);
 
         let filter_changed = next_filter != stored_filter;
-        let sort_projection_changed = next_sort != stored_sort || next_projection != stored_projection;
+        let sort_projection_changed =
+            next_sort != stored_sort || next_projection != stored_projection;
         if !filter_changed && !sort_projection_changed {
             return;
         }

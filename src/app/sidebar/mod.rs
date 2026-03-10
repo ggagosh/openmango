@@ -562,12 +562,9 @@ impl Sidebar {
 
     pub(super) fn register_tree_click(&mut self, node_id: &TreeNodeId) -> bool {
         let now = Instant::now();
-        let is_double = self
-            .last_tree_click
-            .as_ref()
-            .is_some_and(|(last_id, last_at)| {
-                last_id == node_id && now.duration_since(*last_at) <= Duration::from_millis(350)
-            });
+        let is_double = self.last_tree_click.as_ref().is_some_and(|(last_id, last_at)| {
+            last_id == node_id && now.duration_since(*last_at) <= Duration::from_millis(350)
+        });
         self.last_tree_click = Some((node_id.clone(), now));
         is_double
     }
@@ -792,7 +789,11 @@ impl Sidebar {
         true
     }
 
-    fn handle_typeahead_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
+    fn handle_typeahead_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.model.search_open || self.collapsed {
             return false;
         }
@@ -824,9 +825,7 @@ impl Sidebar {
 
     fn schedule_typeahead_clear(&mut self, cx: &mut Context<Self>) {
         self.typeahead_clear_task = Some(cx.spawn(async |entity, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(1100))
-                .await;
+            cx.background_executor().timer(Duration::from_millis(1100)).await;
             entity
                 .update(cx, |this, cx| {
                     this.model.typeahead_query.clear();

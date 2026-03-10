@@ -183,10 +183,7 @@ impl SidebarModel {
         // If the currently selected item still matches, keep it (don't jump).
         if let Some(cur_id) = &self.selected_tree_id
             && let Some(cur_ix) = self.entries.iter().position(|e| &e.id == cur_id)
-            && self.entries[cur_ix]
-                .label
-                .to_lowercase()
-                .starts_with(&query)
+            && self.entries[cur_ix].label.to_lowercase().starts_with(&query)
         {
             return Some((cur_ix, cur_id.clone()));
         }

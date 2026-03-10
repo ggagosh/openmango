@@ -1,7 +1,5 @@
 // Screen/page components
 pub mod ai;
-pub mod collections;
-pub mod connections;
 pub mod databases;
 pub mod documents;
 pub mod forge;
