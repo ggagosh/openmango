@@ -35,6 +35,7 @@ pub fn render_filter_row(
     sort_active: bool,
     projection_active: bool,
     query_options_open: bool,
+    filter_builder_open: bool,
     explain_loading: bool,
     filter_error_message: Option<&str>,
     filter_dirty: bool,
@@ -200,6 +201,31 @@ pub fn render_filter_row(
                     options_button = options_button.active_style(cx.theme().secondary);
                 }
                 options_button
+            })
+            .child({
+                let mut builder_button = Button::new("toggle-filter-builder")
+                    .ghost()
+                    .compact()
+                    .icon(Icon::new(IconName::Braces).xsmall())
+                    .tooltip("Filter Builder")
+                    .disabled(session_key.is_none())
+                    .on_click({
+                        let session_key = session_key.clone();
+                        let state = state.clone();
+                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                            let Some(session_key) = session_key.clone() else {
+                                return;
+                            };
+                            state.update(cx, |state, cx| {
+                                state.toggle_filter_builder_open(&session_key);
+                                cx.notify();
+                            });
+                        }
+                    });
+                if filter_builder_open {
+                    builder_button = builder_button.active_style(cx.theme().primary.opacity(0.55));
+                }
+                builder_button
             }),
     );
 

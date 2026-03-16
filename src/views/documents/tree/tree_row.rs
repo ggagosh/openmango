@@ -14,6 +14,9 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
+use crate::components::filter_builder::drag::{
+    DragField, DragFieldPreview, DragValue, DragValuePreview,
+};
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
@@ -120,15 +123,36 @@ pub fn render_tree_row(
         div().w(px(18.0)).into_any_element()
     };
 
-    let mut row =
-        div().flex().items_center().w_full().gap(spacing::xs()).rounded(borders::radius_sm());
+    let is_draggable_field = !is_root && meta.is_some();
+    let drag_meta = meta.cloned();
+    let key_drag = if is_draggable_field {
+        drag_meta.as_ref().map(|meta| {
+            DragField::from_path_segments(&meta.path, &meta.type_label, meta.value.as_ref())
+        })
+    } else {
+        None
+    };
+    let value_drag = if is_draggable_field {
+        drag_meta.as_ref().and_then(|meta| meta.value.as_ref().map(DragValue::from_bson))
+    } else {
+        None
+    };
+
+    let mut row = div()
+        .id(("tree-row", ix))
+        .flex()
+        .items_center()
+        .w_full()
+        .gap(spacing::xs())
+        .rounded(borders::radius_sm());
     let theme_primary = cx.theme().primary;
     row = row
         .border_l_2()
         .border_color(gpui::transparent_black())
-        .when(_selected, |s: Div| s.bg(cx.theme().list_active).border_color(theme_primary))
-        .when(!_selected && is_multi_selected, |s: Div| s.bg(cx.theme().list_active))
-        .when(!_selected && !is_multi_selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)));
+        .when(_selected, |s| s.bg(cx.theme().list_active).border_color(theme_primary))
+        .when(!_selected && is_multi_selected, |s| s.bg(cx.theme().list_active))
+        .when(!_selected && !is_multi_selected, |s| s.hover(|s| s.bg(cx.theme().list_hover)));
+
     let row = row
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
@@ -204,6 +228,7 @@ pub fn render_tree_row(
             leading,
             &key_label,
             is_root,
+            key_drag,
             is_dirty,
             search_opts,
             current_match_id,
@@ -224,6 +249,7 @@ pub fn render_tree_row(
             tree_state.clone(),
             state.clone(),
             session_key.clone(),
+            value_drag,
             search_opts,
             current_match_id,
             documents_focus.clone(),
@@ -373,6 +399,7 @@ pub fn render_readonly_tree_row(
             leading,
             &key_label,
             is_root,
+            None,
             false,
             &SearchOptions {
                 query: None,
@@ -405,6 +432,7 @@ fn render_key_column(
     leading: AnyElement,
     key_label: &str,
     is_root: bool,
+    key_drag: Option<DragField>,
     is_dirty: bool,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
@@ -427,7 +455,8 @@ fn render_key_column(
     };
     let is_current_match = current_match_id.is_some_and(|id| id == item_id);
 
-    div()
+    let mut key = div()
+        .id(SharedString::from(format!("tree-key-{item_id}")))
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -461,7 +490,18 @@ fn render_key_column(
                         .py(px(1.0))
                 })
                 .child(key_label),
-        )
+        );
+
+    if let Some(key_drag) = key_drag {
+        let preview_path = key_drag.path.clone();
+        let preview_type = key_drag.field_type;
+        key = key.cursor_move().on_drag(key_drag, move |_drag, _position, _window, cx| {
+            cx.stop_propagation();
+            cx.new(|_| DragFieldPreview { path: preview_path.clone(), field_type: preview_type })
+        });
+    }
+
+    key
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -479,6 +519,7 @@ fn render_value_column(
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
+    value_drag: Option<DragValue>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     documents_focus: FocusHandle,
@@ -500,7 +541,8 @@ fn render_value_column(
     let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
     let focus_handle = documents_focus.clone();
 
-    div()
+    let mut value = div()
+        .id(SharedString::from(format!("tree-value-{item_id}")))
         .flex()
         .items_center()
         .gap(spacing::xs())
@@ -508,13 +550,13 @@ fn render_value_column(
         .min_w(px(0.0))
         .when(is_dirty && !selected, {
             let dirty_bg = colors::bg_dirty(cx);
-            move |s: Div| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+            move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
         .when(is_match && !is_dirty && !selected, {
             let dirty_bg = colors::bg_dirty(cx);
-            move |s: Div| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+            move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
-        .when(is_current_match && !selected, |s: Div| {
+        .when(is_current_match && !selected, |s| {
             s.border_1()
                 .border_color(cx.theme().primary)
                 .rounded(borders::radius_sm())
@@ -527,7 +569,7 @@ fn render_value_column(
             let view = view.clone();
             let tree_state = tree_state.clone();
             let state = state.clone();
-            move |this: Div| {
+            move |this| {
                 this.on_mouse_down(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
@@ -573,7 +615,20 @@ fn render_value_column(
                 .text_ellipsis()
                 .child(value_label)
                 .into_any_element()
-        })
+        });
+
+    if let Some(value_drag) = value_drag
+        && !is_editing
+    {
+        let preview = value_drag.preview.clone();
+        let preview_type = value_drag.field_type;
+        value = value.cursor_move().on_drag(value_drag, move |_drag, _position, _window, cx| {
+            cx.stop_propagation();
+            cx.new(|_| DragValuePreview { preview: preview.clone(), field_type: preview_type })
+        });
+    }
+
+    value
 }
 
 fn render_inline_editor(

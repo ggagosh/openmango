@@ -12,6 +12,8 @@ use gpui_component::h_flex;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
+use crate::components::filter_builder::FilterBuilderPanel;
+
 use super::CollectionView;
 use super::header::render_stats_row;
 use super::query::{
@@ -23,6 +25,13 @@ use super::query_completion::{
     is_query_input_in_string_or_comment,
 };
 use super::schema_filter_completion::SchemaFilterCompletionProvider;
+
+fn collapse_to_single_line(s: &str) -> String {
+    if !s.contains('\n') {
+        return s.to_string();
+    }
+    s.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ")
+}
 
 fn parse_time_part(val: &str, max: u32) -> u32 {
     val.trim().parse::<u32>().unwrap_or(0).min(max)
@@ -130,6 +139,7 @@ impl Render for CollectionView {
             sort_raw,
             projection_raw,
             query_options_open,
+            filter_builder_open,
             subview,
             stats,
             stats_loading,
@@ -160,6 +170,7 @@ impl Render for CollectionView {
                 snapshot.sort_raw,
                 snapshot.projection_raw,
                 snapshot.query_options_open,
+                snapshot.filter_builder_open,
                 snapshot.subview,
                 snapshot.stats,
                 snapshot.stats_loading,
@@ -190,6 +201,7 @@ impl Render for CollectionView {
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
                 false,
                 CollectionSubview::Documents,
                 None::<CollectionStats>,
@@ -323,6 +335,14 @@ impl Render for CollectionView {
                                             window,
                                             cx,
                                         );
+                                    }
+                                    if let Some(panel) = view.filter_builder_panel.clone()
+                                        && let Ok(doc) =
+                                            crate::bson::parse_document_from_json(formatted.trim())
+                                    {
+                                        panel.update(cx, |p, cx| {
+                                            p.populate_from_document(&doc, window, cx);
+                                        });
                                     }
                                     cx.notify();
                                 }
@@ -651,7 +671,7 @@ impl Render for CollectionView {
                 let val = if filter_raw.trim().is_empty() {
                     "{}".to_string()
                 } else {
-                    filter_raw.clone()
+                    collapse_to_single_line(&filter_raw)
                 };
                 filter_state.update(cx, |state, cx| {
                     state.set_value(val.clone(), window, cx);
@@ -679,8 +699,11 @@ impl Render for CollectionView {
         } else if let Some(filter_state) = self.filter_state.clone() {
             // Sync filter input when filter_raw was changed externally (e.g. AI "Open Collection").
             // Only sync when the input is not focused to avoid overwriting the user's typing.
-            let expected =
-                if filter_raw.trim().is_empty() { "{}".to_string() } else { filter_raw.clone() };
+            let expected = if filter_raw.trim().is_empty() {
+                "{}".to_string()
+            } else {
+                collapse_to_single_line(&filter_raw)
+            };
             let current = filter_state.read(cx).value().to_string();
             let is_focused = filter_state.read(cx).focus_handle(cx).is_focused(window);
             if !is_focused && !self.calendar_open && current != expected {
@@ -755,6 +778,7 @@ impl Render for CollectionView {
                     sort_active,
                     projection_active,
                     query_options_open,
+                    filter_builder_open,
                     subview,
                     stats_loading,
                     aggregation.loading,
@@ -875,7 +899,54 @@ impl Render for CollectionView {
         let explain_layer =
             self.render_explain_modal_layer(&explain, session_key.clone(), subview, cx);
 
-        root = root.relative().child(content).child(explain_layer);
+        let show_builder = filter_builder_open && subview == CollectionSubview::Documents;
+        if show_builder
+            && let Some(sk) = session_key.clone()
+            && let Some(filter_state) = self.filter_state.clone()
+        {
+            let needs_create = self.filter_builder_panel.is_none()
+                || self.filter_builder_session.as_ref() != Some(&sk);
+            if needs_create {
+                let existing_filter = filter_raw.trim().to_string();
+                let panel = cx.new(|cx| {
+                    let mut p = FilterBuilderPanel::new(
+                        self.state.clone(),
+                        sk.clone(),
+                        filter_state.clone(),
+                        window,
+                        cx,
+                    );
+                    if !existing_filter.is_empty()
+                        && existing_filter != "{}"
+                        && let Ok(doc) = crate::bson::parse_document_from_json(&existing_filter)
+                    {
+                        p.populate_from_document(&doc, window, cx);
+                    }
+                    p
+                });
+                self.filter_builder_panel = Some(panel);
+                self.filter_builder_session = Some(sk);
+            }
+        }
+
+        let content_with_builder = if show_builder {
+            if let Some(panel) = self.filter_builder_panel.clone() {
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(div().flex().flex_col().flex_1().min_w(px(0.0)).child(content))
+                    .child(div().w(px(560.0)).flex_shrink_0().h_full().child(panel))
+                    .into_any_element()
+            } else {
+                content
+            }
+        } else {
+            content
+        };
+
+        root = root.relative().child(content_with_builder).child(explain_layer);
 
         root
     }

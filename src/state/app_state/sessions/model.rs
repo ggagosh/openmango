@@ -125,6 +125,7 @@ impl AppState {
             sort_raw: session.data.sort_raw.clone(),
             projection_raw: session.data.projection_raw.clone(),
             query_options_open: session.view.query_options_open,
+            filter_builder_open: session.view.filter_builder_open,
             subview: session.view.subview,
             stats: session.data.stats.clone(),
             stats_loading: session.data.stats_loading,

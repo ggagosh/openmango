@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::bson::DocumentKey;
+use crate::components::filter_builder::FilterBuilderPanel;
 use crate::helpers::auto_pair::AutoPairState;
 use crate::perf::log_tabs_duration;
 use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
@@ -70,6 +71,8 @@ pub struct CollectionView {
     pub(crate) aggregation_ignore_body_change: bool,
     pub(crate) aggregation_stage_body_subscription: Option<Subscription>,
     pub(crate) aggregation_limit_subscription: Option<Subscription>,
+    pub(crate) filter_builder_panel: Option<Entity<FilterBuilderPanel>>,
+    pub(crate) filter_builder_session: Option<SessionKey>,
     pub(crate) _subscriptions: Vec<Subscription>,
 }
 
@@ -504,6 +507,8 @@ impl CollectionView {
             aggregation_ignore_body_change: false,
             aggregation_stage_body_subscription: None,
             aggregation_limit_subscription: None,
+            filter_builder_panel: None,
+            filter_builder_session: None,
             _subscriptions: subscriptions,
         }
     }

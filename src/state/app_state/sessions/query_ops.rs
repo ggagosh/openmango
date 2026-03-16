@@ -88,6 +88,18 @@ impl AppState {
         }
     }
 
+    pub fn set_filter_builder_open(&mut self, session_key: &SessionKey, open: bool) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.filter_builder_open = open;
+        }
+    }
+
+    pub fn toggle_filter_builder_open(&mut self, session_key: &SessionKey) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.filter_builder_open = !session.view.filter_builder_open;
+        }
+    }
+
     pub fn toggle_query_options_open(&mut self, session_key: &SessionKey) {
         self.promote_preview_collection_tab(session_key);
         let mut changed = false;

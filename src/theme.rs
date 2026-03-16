@@ -310,6 +310,9 @@ pub mod sizing {
 pub mod typography {
     use gpui::{Pixels, px};
 
+    pub fn text_2xs() -> Pixels {
+        px(9.0)
+    }
     pub fn text_xs() -> Pixels {
         px(10.0)
     }
