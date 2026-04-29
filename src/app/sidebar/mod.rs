@@ -26,6 +26,7 @@ mod view;
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
 const SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(500.0);
+const KEYBOARD_PREVIEW_DELAY: Duration = Duration::from_millis(140);
 
 pub(crate) struct Sidebar {
     state: Entity<AppState>,
@@ -37,6 +38,8 @@ pub(crate) struct Sidebar {
     collapsed: bool,
     sticky_connection_index: Option<usize>,
     typeahead_clear_task: Option<Task<()>>,
+    keyboard_preview_task: Option<Task<()>>,
+    keyboard_preview_generation: u64,
     last_tree_click: Option<(TreeNodeId, Instant)>,
     // Rc-cached: only refreshed on structural changes, cheap to capture in render closures.
     cached_connections: Rc<Vec<SavedConnection>>,
@@ -242,6 +245,8 @@ impl Sidebar {
             collapsed: false,
             sticky_connection_index: None,
             typeahead_clear_task: None,
+            keyboard_preview_task: None,
+            keyboard_preview_generation: 0,
             last_tree_click: None,
             cached_connections,
             cached_active,
@@ -434,6 +439,7 @@ impl Sidebar {
 
     fn handle_open_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_typeahead(cx);
+        self.cancel_keyboard_preview();
         if self.model.search_open {
             let query = self.search_state.read(cx).value().to_string();
             let results = self.search_results(&query, cx);
@@ -513,6 +519,7 @@ impl Sidebar {
     }
 
     fn handle_open_preview(&mut self, cx: &mut Context<Self>) {
+        self.cancel_keyboard_preview();
         let Some(node_id) = self.model.selected_tree_id.clone() else {
             return;
         };
@@ -860,29 +867,52 @@ impl Sidebar {
         }
     }
 
+    fn cancel_keyboard_preview(&mut self) {
+        self.keyboard_preview_generation = self.keyboard_preview_generation.wrapping_add(1);
+        self.keyboard_preview_task = None;
+    }
+
+    fn schedule_keyboard_preview(&mut self, node_id: TreeNodeId, cx: &mut Context<Self>) {
+        self.keyboard_preview_generation = self.keyboard_preview_generation.wrapping_add(1);
+        let generation = self.keyboard_preview_generation;
+        let state = self.state.clone();
+
+        self.keyboard_preview_task = Some(cx.spawn(async move |entity, cx| {
+            cx.background_executor().timer(KEYBOARD_PREVIEW_DELAY).await;
+            entity
+                .update(cx, move |this, cx| {
+                    if this.keyboard_preview_generation != generation
+                        || this.model.selected_tree_id.as_ref() != Some(&node_id)
+                    {
+                        return;
+                    }
+
+                    this.keyboard_preview_task = None;
+                    state.update(cx, |state, cx| match node_id {
+                        TreeNodeId::Connection(connection_id) => {
+                            state.select_connection(Some(connection_id), cx);
+                        }
+                        TreeNodeId::Database { connection, database } => {
+                            state.select_connection(Some(connection), cx);
+                            state.select_database(database, cx);
+                        }
+                        TreeNodeId::Collection { connection, database, collection } => {
+                            state.select_connection(Some(connection), cx);
+                            state.preview_collection(database, collection, cx);
+                        }
+                    });
+                })
+                .ok();
+        }));
+    }
+
     fn move_sidebar_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Some((next, node_id)) = self.model.move_sidebar_selection(delta) else {
             return;
         };
         self.scroll_handle.scroll_to_item(next, gpui::ScrollStrategy::Center);
         cx.notify();
-
-        let state = self.state.clone();
-        cx.defer(move |cx| {
-            state.update(cx, |state, cx| match node_id {
-                TreeNodeId::Connection(connection_id) => {
-                    state.select_connection(Some(connection_id), cx);
-                }
-                TreeNodeId::Database { connection, database } => {
-                    state.select_connection(Some(connection), cx);
-                    state.select_database(database, cx);
-                }
-                TreeNodeId::Collection { connection, database, collection } => {
-                    state.select_connection(Some(connection), cx);
-                    state.preview_collection(database, collection, cx);
-                }
-            });
-        });
+        self.schedule_keyboard_preview(node_id, cx);
     }
 
     fn move_search_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -898,6 +928,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_keyboard_preview();
         let database = result.database.clone();
         let connection_id = result.connection_id;
         self.model.expanded_nodes.insert(TreeNodeId::connection(connection_id));

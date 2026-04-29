@@ -483,6 +483,7 @@ impl Render for Sidebar {
                                                     // Optimistic: update selection visually, detect double-click
                                                     let is_double_click =
                                                         sidebar_entity.update(cx, |sidebar, cx| {
+                                                            sidebar.cancel_keyboard_preview();
                                                             sidebar.model.selected_tree_id =
                                                                 Some(node_id.clone());
                                                             let is_double =
