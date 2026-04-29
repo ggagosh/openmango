@@ -15,6 +15,7 @@ use crate::connection::{JsonTransferFormat, generate_export_preview};
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{
     AppCommands, AppEvent, AppState, SessionKey, StatusMessage, TransferFormat, TransferMode,
+    validate_transfer,
 };
 
 /// Maximum number of collections to process concurrently for database-scope operations.
@@ -208,6 +209,30 @@ impl AppCommands {
     /// Execute the transfer operation for a transfer tab.
     /// Extracts only the needed fields to avoid cloning the entire TransferTabState.
     pub fn execute_transfer(state: Entity<AppState>, transfer_id: Uuid, cx: &mut App) {
+        let validation = {
+            let state_ref = state.read(cx);
+            let Some(tab) = state_ref.transfer_tab(transfer_id) else {
+                return;
+            };
+            validate_transfer(tab)
+        };
+
+        if !validation.can_run() {
+            let message = validation
+                .blocking_errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Transfer is not ready to run.".to_string());
+            state.update(cx, |state, cx| {
+                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                    tab.runtime.error_message = Some(message.clone());
+                }
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.notify();
+            });
+            return;
+        }
+
         // Extract only the needed config fields without cloning the entire struct
         let config = {
             let state_ref = state.read(cx);

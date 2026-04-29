@@ -120,12 +120,12 @@ pub(super) fn option_field_static(label: &str, value: impl Into<String>, cx: &Ap
     option_field(label, option_value_pill(value, cx), cx)
 }
 
-/// Creates a checkbox field with "Enabled" label.
+/// Creates a compact checkbox control for use with an explicit option label.
 pub(super) fn checkbox_field<F>(
     id: impl Into<ElementId>,
     checked: bool,
     on_click: F,
-    cx: &App,
+    _cx: &App,
 ) -> Div
 where
     F: Fn(&mut App) + 'static,
@@ -133,9 +133,7 @@ where
     div()
         .flex()
         .items_center()
-        .gap(spacing::sm())
         .child(Checkbox::new(id).checked(checked).on_click(move |_, _, cx| on_click(cx)))
-        .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Enabled"))
 }
 
 /// Compact summary item for horizontal summary bar.

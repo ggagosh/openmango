@@ -7,12 +7,43 @@ use gpui_component::select::{SearchableVec, Select, SelectState};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::state::{
-    AppState, BsonOutputFormat, Encoding, ExtendedJsonMode, InsertMode, TransferFormat,
-    TransferScope, TransferTabState,
+    AppState, BsonOutputFormat, Encoding, ExtendedJsonMode, InsertMode, TargetWriteMode,
+    TransferFormat, TransferScope, TransferTabState,
 };
 use crate::theme::{borders, spacing};
 
 use super::helpers::{checkbox_field, option_field, option_field_static, option_section};
+
+fn target_behavior_dropdown(
+    state: Entity<AppState>,
+    key: u64,
+    transfer_state: &TransferTabState,
+) -> AnyElement {
+    let current = transfer_state.options.target_write_mode();
+    MenuButton::new(("target-write-mode", key))
+        .compact()
+        .label(current.label())
+        .dropdown_caret(true)
+        .rounded(borders::radius_sm())
+        .with_size(gpui_component::Size::XSmall)
+        .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _window, _cx| {
+            for mode in [TargetWriteMode::Append, TargetWriteMode::Clear, TargetWriteMode::Drop] {
+                let state = state.clone();
+                menu = menu.item(PopupMenuItem::new(mode.label()).on_click(move |_, _, cx| {
+                    state.update(cx, |state, cx| {
+                        if let Some(id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(id)
+                        {
+                            tab.options.set_target_write_mode(mode);
+                            cx.notify();
+                        }
+                    });
+                }));
+            }
+            menu
+        })
+        .into_any_element()
+}
 
 /// Render export-specific options sections.
 pub(super) fn render_export_options(
@@ -137,7 +168,7 @@ pub(super) fn render_export_options(
                     "JSON Options",
                     vec![
                         option_field("Extended JSON", json_mode_dropdown.into_any_element(), cx),
-                        option_field("Pretty print", pretty_checkbox.into_any_element(), cx),
+                        option_field("Pretty print JSON", pretty_checkbox.into_any_element(), cx),
                     ],
                     cx,
                 )
@@ -318,7 +349,7 @@ pub(super) fn render_import_options(
         option_section(
             "Input",
             vec![
-                option_field("Detect format", detect_format_checkbox.into_any_element(), cx),
+                option_field("Auto-detect format", detect_format_checkbox.into_any_element(), cx),
                 option_field("Encoding", encoding_dropdown.into_any_element(), cx),
             ],
             cx,
@@ -372,45 +403,7 @@ pub(super) fn render_import_options(
             })
     };
 
-    let drop_checkbox = {
-        let state = state.clone();
-        let checked = transfer_state.options.drop_before_import;
-        checkbox_field(
-            ("drop-before", key),
-            checked,
-            move |cx| {
-                state.update(cx, |state, cx| {
-                    if let Some(id) = state.active_transfer_tab_id()
-                        && let Some(tab) = state.transfer_tab_mut(id)
-                    {
-                        tab.options.drop_before_import = !checked;
-                        cx.notify();
-                    }
-                });
-            },
-            cx,
-        )
-    };
-
-    let clear_checkbox = {
-        let state = state.clone();
-        let checked = transfer_state.options.clear_before_import;
-        checkbox_field(
-            ("clear-before", key),
-            checked,
-            move |cx| {
-                state.update(cx, |state, cx| {
-                    if let Some(id) = state.active_transfer_tab_id()
-                        && let Some(tab) = state.transfer_tab_mut(id)
-                    {
-                        tab.options.clear_before_import = !checked;
-                        cx.notify();
-                    }
-                });
-            },
-            cx,
-        )
-    };
+    let target_behavior = target_behavior_dropdown(state.clone(), key, transfer_state);
 
     let stop_checkbox = {
         let state = state.clone();
@@ -442,9 +435,8 @@ pub(super) fn render_import_options(
                     transfer_state.options.batch_size.to_string(),
                     cx,
                 ),
-                option_field("Drop before import", drop_checkbox.into_any_element(), cx),
-                option_field("Clear before import", clear_checkbox.into_any_element(), cx),
-                option_field("Stop on error", stop_checkbox.into_any_element(), cx),
+                option_field("Target behavior", target_behavior, cx),
+                option_field("Stop on first error", stop_checkbox.into_any_element(), cx),
             ],
             cx,
         )
@@ -545,45 +537,7 @@ pub(super) fn render_copy_options(
             })
     };
 
-    let drop_checkbox = {
-        let state = state.clone();
-        let checked = transfer_state.options.drop_before_import;
-        checkbox_field(
-            ("copy-drop-before", key),
-            checked,
-            move |cx| {
-                state.update(cx, |state, cx| {
-                    if let Some(id) = state.active_transfer_tab_id()
-                        && let Some(tab) = state.transfer_tab_mut(id)
-                    {
-                        tab.options.drop_before_import = !checked;
-                        cx.notify();
-                    }
-                });
-            },
-            cx,
-        )
-    };
-
-    let clear_checkbox = {
-        let state = state.clone();
-        let checked = transfer_state.options.clear_before_import;
-        checkbox_field(
-            ("copy-clear-before", key),
-            checked,
-            move |cx| {
-                state.update(cx, |state, cx| {
-                    if let Some(id) = state.active_transfer_tab_id()
-                        && let Some(tab) = state.transfer_tab_mut(id)
-                    {
-                        tab.options.clear_before_import = !checked;
-                        cx.notify();
-                    }
-                });
-            },
-            cx,
-        )
-    };
+    let target_behavior = target_behavior_dropdown(state.clone(), key, transfer_state);
 
     let stop_checkbox = {
         let state = state.clone();
@@ -635,9 +589,8 @@ pub(super) fn render_copy_options(
                     transfer_state.options.batch_size.to_string(),
                     cx,
                 ),
-                option_field("Drop before copy", drop_checkbox.into_any_element(), cx),
-                option_field("Clear before copy", clear_checkbox.into_any_element(), cx),
-                option_field("Stop on error", stop_checkbox.into_any_element(), cx),
+                option_field("Target behavior", target_behavior, cx),
+                option_field("Stop on first error", stop_checkbox.into_any_element(), cx),
                 option_field("Copy indexes", copy_indexes_checkbox.into_any_element(), cx),
             ],
             cx,

@@ -38,7 +38,7 @@ impl TransferView {
                 render_export_destination(self, transfer_state, &state, &settings, window, cx)
             }
             TransferMode::Import => render_import_destination(self, transfer_state, &state, cx),
-            TransferMode::Copy => render_copy_destination(self, transfer_state, cx),
+            TransferMode::Copy => render_copy_destination(self, transfer_state, window, cx),
         }
     }
 }
@@ -81,11 +81,13 @@ fn render_export_destination(
 
     // Determine the label based on format and output mode
     let dest_label = if is_bson_folder {
-        "Output Folder"
+        "Dump Folder"
     } else if is_bson {
         "Archive File"
+    } else if matches!(transfer_state.config.scope, TransferScope::Database) {
+        "Output Folder"
     } else {
-        "File"
+        "Output File"
     };
 
     // Folder browse button - opens folder picker, then appends template filename
@@ -263,7 +265,7 @@ fn render_export_destination(
         .child(browse_button);
 
     panel(
-        "Destination",
+        "Export Destination",
         div().flex().flex_col().gap(spacing::md()).child(form_row(dest_label, file_control, cx)),
         cx,
     )
@@ -324,20 +326,6 @@ fn render_import_destination(
         })
     };
 
-    let target_db = if transfer_state.config.destination_database.is_empty() {
-        &transfer_state.config.source_database
-    } else {
-        &transfer_state.config.destination_database
-    };
-
-    let target_coll = if transfer_state.config.destination_collection.is_empty() {
-        &transfer_state.config.source_collection
-    } else {
-        &transfer_state.config.destination_collection
-    };
-
-    let show_coll = matches!(transfer_state.config.scope, TransferScope::Collection);
-
     let file_control = div()
         .flex()
         .items_center()
@@ -351,14 +339,8 @@ fn render_import_destination(
         .child(browse_button);
 
     panel(
-        "Destination",
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::md())
-            .child(form_row("File", file_control, cx))
-            .child(form_row_static("Target database", target_db, cx))
-            .children(show_coll.then(|| form_row_static("Target collection", target_coll, cx))),
+        "Import File",
+        div().flex().flex_col().gap(spacing::md()).child(form_row("File", file_control, cx)),
         cx,
     )
     .into_any_element()
@@ -368,12 +350,13 @@ fn render_import_destination(
 fn render_copy_destination(
     view: &TransferView,
     transfer_state: &TransferTabState,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     // Searchable select for destination connection
     let Some(ref dest_conn_state) = view.dest_conn_state else {
         return panel(
-            "Destination",
+            "Target",
             div()
                 .flex()
                 .items_center()
@@ -388,40 +371,42 @@ fn render_copy_destination(
     let conn_select =
         Select::new(dest_conn_state).small().w_full().placeholder("Select connection...");
 
-    let has_dest_conn = transfer_state.config.destination_connection_id.is_some();
-    let has_dest_db = !transfer_state.config.destination_database.is_empty();
     let show_coll = matches!(transfer_state.config.scope, TransferScope::Collection);
 
-    // Database selector (enabled when connection is selected)
-    let db_row: AnyElement = if let Some(ref dest_db_state) = view.dest_db_state {
-        let db_select = Select::new(dest_db_state)
-            .small()
-            .w_full()
-            .placeholder(if has_dest_conn {
-                "Select database..."
-            } else {
-                "Select connection first"
-            })
-            .disabled(!has_dest_conn);
-        form_row("Database", db_select, cx).into_any_element()
+    let db_row: AnyElement = if let Some(ref dest_db_input_state) = view.dest_db_input_state {
+        let input_value = dest_db_input_state.read(cx).value().to_string();
+        if input_value != transfer_state.config.destination_database {
+            dest_db_input_state.update(cx, |input_state, cx| {
+                input_state.set_value(
+                    transfer_state.config.destination_database.clone(),
+                    window,
+                    cx,
+                );
+            });
+        }
+        form_row("Database", Input::new(dest_db_input_state).small().w_full(), cx)
+            .into_any_element()
     } else {
         form_row_static("Database", &transfer_state.config.destination_database, cx)
             .into_any_element()
     };
 
-    // Collection selector (enabled when database is selected, only for collection scope)
     let coll_row: Option<AnyElement> = if show_coll {
-        if let Some(ref dest_coll_state) = view.dest_coll_state {
-            let coll_select = Select::new(dest_coll_state)
-                .small()
-                .w_full()
-                .placeholder(if has_dest_db {
-                    "Select collection..."
-                } else {
-                    "Select database first"
-                })
-                .disabled(!has_dest_db);
-            Some(form_row("Collection", coll_select, cx).into_any_element())
+        if let Some(ref dest_coll_input_state) = view.dest_coll_input_state {
+            let input_value = dest_coll_input_state.read(cx).value().to_string();
+            if input_value != transfer_state.config.destination_collection {
+                dest_coll_input_state.update(cx, |input_state, cx| {
+                    input_state.set_value(
+                        transfer_state.config.destination_collection.clone(),
+                        window,
+                        cx,
+                    );
+                });
+            }
+            Some(
+                form_row("Collection", Input::new(dest_coll_input_state).small().w_full(), cx)
+                    .into_any_element(),
+            )
         } else {
             Some(
                 form_row_static("Collection", &transfer_state.config.destination_collection, cx)
@@ -433,7 +418,7 @@ fn render_copy_destination(
     };
 
     panel(
-        "Destination",
+        "Target",
         div()
             .flex()
             .flex_col()

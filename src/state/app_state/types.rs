@@ -211,6 +211,33 @@ impl CompressionMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetWriteMode {
+    Append,
+    Clear,
+    Drop,
+}
+
+impl TargetWriteMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            TargetWriteMode::Append => "Append to target",
+            TargetWriteMode::Clear => "Clear target first",
+            TargetWriteMode::Drop => "Drop target first",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            TargetWriteMode::Append => "Keep existing documents and write incoming documents.",
+            TargetWriteMode::Clear => {
+                "Delete existing documents before writing incoming documents."
+            }
+            TargetWriteMode::Drop => "Drop the target collection or database before writing.",
+        }
+    }
+}
+
 // Encoding: canonical definition in crate::connection::types
 pub use crate::connection::Encoding;
 
@@ -345,6 +372,23 @@ impl Default for TransferOptions {
             export_projection: String::new(),
             export_sort: String::new(),
         }
+    }
+}
+
+impl TransferOptions {
+    pub fn target_write_mode(&self) -> TargetWriteMode {
+        if self.drop_before_import {
+            TargetWriteMode::Drop
+        } else if self.clear_before_import {
+            TargetWriteMode::Clear
+        } else {
+            TargetWriteMode::Append
+        }
+    }
+
+    pub fn set_target_write_mode(&mut self, mode: TargetWriteMode) {
+        self.drop_before_import = matches!(mode, TargetWriteMode::Drop);
+        self.clear_before_import = matches!(mode, TargetWriteMode::Clear);
     }
 }
 

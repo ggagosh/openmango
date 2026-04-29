@@ -29,8 +29,8 @@ pub use types::{
     ExplainScope, ExplainSeverity, ExplainStageDelta, ExplainState, ExplainSummary,
     ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SchemaAnalysis,
     SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument, SessionKey,
-    SessionState, SessionViewState, TabKey, TransferFormat, TransferMode, TransferScope,
-    TransferTabKey, TransferTabState, View,
+    SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat, TransferMode,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 use std::collections::{HashMap, HashSet};

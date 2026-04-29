@@ -10,7 +10,7 @@ use crate::connection::tools_available;
 use crate::state::app_state::{
     CollectionProgress, CollectionTransferStatus, DatabaseTransferProgress,
 };
-use crate::state::{AppState, TransferFormat, TransferMode, TransferTabState};
+use crate::state::{AppState, TransferFormat, TransferMode, TransferTabState, validate_transfer};
 use crate::theme::{borders, colors, spacing};
 
 /// Render the database progress panel with per-collection progress rows.
@@ -171,22 +171,25 @@ fn render_collection_progress_row(coll: &CollectionProgress, cx: &App) -> impl I
 
 /// Render format warnings (CSV type loss, BSON tool requirements).
 pub(super) fn render_warnings(transfer_state: &TransferTabState, cx: &App) -> AnyElement {
-    let mut warnings = Vec::new();
+    let validation = validate_transfer(transfer_state);
+    let mut messages: Vec<(bool, String)> =
+        validation.blocking_errors.into_iter().map(|message| (true, message)).collect();
+
+    messages.extend(validation.warnings.into_iter().map(|message| (false, message)));
 
     // Only show format warnings for Export/Import modes (not Copy)
     if matches!(transfer_state.config.mode, TransferMode::Export | TransferMode::Import) {
-        // CSV warning
-        if matches!(transfer_state.config.format, TransferFormat::Csv) {
-            warnings.push("CSV export will lose BSON type fidelity (dates, ObjectIds, etc.)");
-        }
-
         // BSON warning - only show if tools are NOT available
         if matches!(transfer_state.config.format, TransferFormat::Bson) && !tools_available() {
-            warnings.push("BSON format requires mongodump/mongorestore. Run: just download-tools");
+            messages.push((
+                true,
+                "BSON format requires mongodump/mongorestore. Run: just download-tools."
+                    .to_string(),
+            ));
         }
     }
 
-    if warnings.is_empty() {
+    if messages.is_empty() {
         return div().into_any_element();
     }
 
@@ -195,19 +198,29 @@ pub(super) fn render_warnings(transfer_state: &TransferTabState, cx: &App) -> An
         .flex_col()
         .gap(spacing::xs())
         .mb(spacing::md())
-        .children(warnings.into_iter().map(|warning| {
+        .children(messages.into_iter().map(|(is_error, message)| {
+            let (bg, border, fg, icon) = if is_error {
+                (colors::bg_error(cx), colors::border_error(cx), cx.theme().danger, IconName::Close)
+            } else {
+                (
+                    colors::bg_warning(cx),
+                    colors::border_warning(cx),
+                    cx.theme().warning,
+                    IconName::Info,
+                )
+            };
             div()
                 .flex()
                 .items_center()
                 .gap(spacing::sm())
                 .px(spacing::md())
                 .py(spacing::sm())
-                .bg(colors::bg_warning(cx))
+                .bg(bg)
                 .border_1()
-                .border_color(colors::border_warning(cx))
+                .border_color(border)
                 .rounded(borders::radius_sm())
-                .child(Icon::new(IconName::Info).xsmall().text_color(cx.theme().warning))
-                .child(div().text_sm().text_color(cx.theme().warning).child(warning))
+                .child(Icon::new(icon).xsmall().text_color(fg))
+                .child(div().text_sm().text_color(fg).child(message))
         }))
         .into_any_element()
 }

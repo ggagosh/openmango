@@ -292,9 +292,9 @@ fn render_copy_as_dropdown(
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
-        .label("Copy As")
+        .label("Copy Page As")
         .icon(Icon::new(IconName::Copy).xsmall())
-        .tooltip("Copy all documents")
+        .tooltip("Copy the current page")
         .dropdown_menu_with_anchor(Corner::TopLeft, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in &formats {
@@ -333,7 +333,7 @@ fn render_export_dropdown(
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
-        .label("Export")
+        .label("Export Matching")
         .icon(Icon::new(IconName::Download).xsmall())
         .tooltip("Export all matching documents to file")
         .disabled(session_key.is_none())
@@ -887,63 +887,75 @@ fn render_documents_secondary_menu(
 
             menu = menu
                 .item(PopupMenuItem::separator())
-                .item(PopupMenuItem::new("Export").icon(Icon::new(IconName::Download)).on_click({
-                    let session_key = session_key.clone();
-                    let state_for_transfer = state_for_transfer.clone();
-                    move |_, _, cx| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        state_for_transfer.update(cx, |state, cx| {
-                            state.open_transfer_tab_with_prefill(
-                                session_key.connection_id,
-                                session_key.database.clone(),
-                                Some(session_key.collection.clone()),
-                                TransferScope::Collection,
-                                TransferMode::Export,
-                                cx,
-                            );
-                        });
-                    }
-                }))
-                .item(PopupMenuItem::new("Import").icon(Icon::new(IconName::Upload)).on_click({
-                    let session_key = session_key.clone();
-                    let state_for_transfer = state_for_transfer.clone();
-                    move |_, _, cx| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        state_for_transfer.update(cx, |state, cx| {
-                            state.open_transfer_tab_with_prefill(
-                                session_key.connection_id,
-                                session_key.database.clone(),
-                                Some(session_key.collection.clone()),
-                                TransferScope::Collection,
-                                TransferMode::Import,
-                                cx,
-                            );
-                        });
-                    }
-                }))
-                .item(PopupMenuItem::new("Copy").icon(Icon::new(IconName::Copy)).on_click({
-                    let session_key = session_key.clone();
-                    let state_for_transfer = state_for_transfer.clone();
-                    move |_, _, cx| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        state_for_transfer.update(cx, |state, cx| {
-                            state.open_transfer_tab_with_prefill(
-                                session_key.connection_id,
-                                session_key.database.clone(),
-                                Some(session_key.collection.clone()),
-                                TransferScope::Collection,
-                                TransferMode::Copy,
-                                cx,
-                            );
-                        });
-                    }
-                }));
+                .item(
+                    PopupMenuItem::new("Export Data...")
+                        .icon(Icon::new(IconName::Download))
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_, _, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Export,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Import Data...")
+                        .icon(Icon::new(IconName::Upload))
+                        .on_click({
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_, _, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Import,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Copy Data To...").icon(Icon::new(IconName::Copy)).on_click(
+                        {
+                            let session_key = session_key.clone();
+                            let state_for_transfer = state_for_transfer.clone();
+                            move |_, _, cx| {
+                                let Some(session_key) = session_key.clone() else {
+                                    return;
+                                };
+                                state_for_transfer.update(cx, |state, cx| {
+                                    state.open_transfer_tab_with_prefill(
+                                        session_key.connection_id,
+                                        session_key.database.clone(),
+                                        Some(session_key.collection.clone()),
+                                        TransferScope::Collection,
+                                        TransferMode::Copy,
+                                        cx,
+                                    );
+                                });
+                            }
+                        },
+                    ),
+                );
 
             if ai_available {
                 let ai_label = if ai_loading {

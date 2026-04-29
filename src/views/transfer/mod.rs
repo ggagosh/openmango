@@ -22,17 +22,17 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
 
-use crate::components::Button;
+use crate::components::{Button, open_confirm_dialog};
 use crate::state::{
-    AppCommands, AppState, CompressionMode, TransferFormat, TransferMode, TransferScope,
-    TransferTabState,
+    AppCommands, AppState, CompressionMode, TransferMode, TransferScope, TransferTabState,
+    available_transfer_formats, coerce_transfer_format, validate_transfer,
 };
 use crate::theme::{borders, colors, islands, sizing, spacing};
 
 use helpers::{option_field, option_field_static, option_section};
 use progress_panel::{render_progress_panel, render_warnings};
 use select_states::ConnectionItem;
-use summary_panel::{can_execute_transfer, render_summary_panel};
+use summary_panel::render_summary_panel;
 
 pub struct TransferView {
     state: Entity<AppState>,
@@ -47,6 +47,8 @@ pub struct TransferView {
     dest_conn_state: Option<Entity<SelectState<SearchableVec<ConnectionItem>>>>,
     dest_db_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
     dest_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
+    dest_db_input_state: Option<Entity<InputState>>,
+    dest_coll_input_state: Option<Entity<InputState>>,
 
     // Exclude collections multi-select state
     exclude_coll_state: Option<Entity<SelectState<SearchableVec<SharedString>>>>,
@@ -81,6 +83,8 @@ impl TransferView {
             dest_conn_state: None,
             dest_db_state: None,
             dest_coll_state: None,
+            dest_db_input_state: None,
+            dest_coll_input_state: None,
             exclude_coll_state: None,
             export_path_input_state: None,
             prev_conn_ids: Vec::new(),
@@ -92,6 +96,30 @@ impl TransferView {
             query_edit_input: None,
         }
     }
+}
+
+fn destructive_transfer_message(transfer_state: &TransferTabState) -> String {
+    let target_db = if transfer_state.config.destination_database.is_empty() {
+        &transfer_state.config.source_database
+    } else {
+        &transfer_state.config.destination_database
+    };
+    let target_collection = if transfer_state.config.destination_collection.is_empty() {
+        &transfer_state.config.source_collection
+    } else {
+        &transfer_state.config.destination_collection
+    };
+    let target = if matches!(transfer_state.config.scope, TransferScope::Collection) {
+        format!("{target_db}.{target_collection}")
+    } else {
+        target_db.to_string()
+    };
+
+    format!(
+        "{} will run before {}. Target: {target}. This cannot be undone.",
+        transfer_state.options.target_write_mode().label(),
+        transfer_state.config.mode.label().to_lowercase()
+    )
 }
 
 impl Render for TransferView {
@@ -404,6 +432,15 @@ impl Render for TransferView {
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
                             tab.config.mode = mode;
+                            if matches!(mode, TransferMode::Import) {
+                                tab.config.destination_database.clear();
+                                tab.config.destination_collection.clear();
+                            }
+                            tab.config.format = coerce_transfer_format(
+                                tab.config.mode,
+                                tab.config.scope,
+                                tab.config.format,
+                            );
                             cx.notify();
                         }
                     });
@@ -434,9 +471,11 @@ impl Render for TransferView {
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
                                     tab.config.scope = TransferScope::Collection;
-                                    if matches!(tab.config.format, TransferFormat::Bson) {
-                                        tab.config.format = TransferFormat::JsonLines;
-                                    }
+                                    tab.config.format = coerce_transfer_format(
+                                        tab.config.mode,
+                                        tab.config.scope,
+                                        tab.config.format,
+                                    );
                                     cx.notify();
                                 }
                             });
@@ -449,6 +488,11 @@ impl Render for TransferView {
                                     && let Some(tab) = state.transfer_tab_mut(id)
                                 {
                                     tab.config.scope = TransferScope::Database;
+                                    tab.config.format = coerce_transfer_format(
+                                        tab.config.mode,
+                                        tab.config.scope,
+                                        tab.config.format,
+                                    );
                                     cx.notify();
                                 }
                             });
@@ -461,8 +505,9 @@ impl Render for TransferView {
         let format_control =
             if matches!(transfer_state.config.mode, TransferMode::Export | TransferMode::Import) {
                 let state = state.clone();
-                let is_collection =
-                    matches!(transfer_state.config.scope, TransferScope::Collection);
+                let mode = transfer_state.config.mode;
+                let scope = transfer_state.config.scope;
+                let formats = available_transfer_formats(mode, scope);
                 MenuButton::new(("transfer-format", transfer_key))
                     .compact()
                     .label(transfer_state.config.format.label())
@@ -470,58 +515,15 @@ impl Render for TransferView {
                     .rounded(borders::radius_sm())
                     .with_size(Size::XSmall)
                     .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _window, _cx| {
-                        let s1 = state.clone();
-                        let s2 = state.clone();
-                        let s3 = state.clone();
-                        let s4 = state.clone();
-
-                        menu = menu
-                            .item(PopupMenuItem::new("JSON Lines (.jsonl)").on_click(
+                        for format in formats.clone() {
+                            let state = state.clone();
+                            menu = menu.item(PopupMenuItem::new(format.label()).on_click(
                                 move |_, _, cx| {
-                                    s1.update(cx, |state, cx| {
+                                    state.update(cx, |state, cx| {
                                         if let Some(id) = state.active_transfer_tab_id()
                                             && let Some(tab) = state.transfer_tab_mut(id)
                                         {
-                                            tab.config.format = TransferFormat::JsonLines;
-                                            tab.config.file_path.clear();
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ))
-                            .item(PopupMenuItem::new("JSON array (.json)").on_click(
-                                move |_, _, cx| {
-                                    s2.update(cx, |state, cx| {
-                                        if let Some(id) = state.active_transfer_tab_id()
-                                            && let Some(tab) = state.transfer_tab_mut(id)
-                                        {
-                                            tab.config.format = TransferFormat::JsonArray;
-                                            tab.config.file_path.clear();
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ))
-                            .item(PopupMenuItem::new("CSV (.csv)").on_click(move |_, _, cx| {
-                                s3.update(cx, |state, cx| {
-                                    if let Some(id) = state.active_transfer_tab_id()
-                                        && let Some(tab) = state.transfer_tab_mut(id)
-                                    {
-                                        tab.config.format = TransferFormat::Csv;
-                                        tab.config.file_path.clear();
-                                        cx.notify();
-                                    }
-                                });
-                            }));
-
-                        if !is_collection {
-                            menu = menu.item(PopupMenuItem::new("BSON (mongodump)").on_click(
-                                move |_, _, cx| {
-                                    s4.update(cx, |state, cx| {
-                                        if let Some(id) = state.active_transfer_tab_id()
-                                            && let Some(tab) = state.transfer_tab_mut(id)
-                                        {
-                                            tab.config.format = TransferFormat::Bson;
+                                            tab.config.format = format;
                                             tab.config.file_path.clear();
                                             cx.notify();
                                         }
@@ -537,7 +539,10 @@ impl Render for TransferView {
             };
 
         // Run or Cancel button (depending on is_running state)
-        let can_run = can_execute_transfer(&transfer_state);
+        let validation = validate_transfer(&transfer_state);
+        let can_run = validation.can_run();
+        let requires_confirmation = validation.requires_confirmation;
+        let destructive_message = destructive_transfer_message(&transfer_state);
         let action_button = if transfer_state.runtime.is_running {
             let state = state.clone();
             Button::new("transfer-cancel")
@@ -555,8 +560,25 @@ impl Render for TransferView {
                 .compact()
                 .label(transfer_state.config.mode.label())
                 .disabled(!can_run)
-                .on_click(move |_, _, cx| {
-                    AppCommands::execute_transfer(state.clone(), transfer_id, cx);
+                .on_click(move |_, window, cx| {
+                    if requires_confirmation {
+                        open_confirm_dialog(
+                            window,
+                            cx,
+                            "Confirm destructive transfer",
+                            destructive_message.clone(),
+                            "Run Transfer",
+                            true,
+                            {
+                                let state = state.clone();
+                                move |_window, cx| {
+                                    AppCommands::execute_transfer(state.clone(), transfer_id, cx);
+                                }
+                            },
+                        );
+                    } else {
+                        AppCommands::execute_transfer(state.clone(), transfer_id, cx);
+                    }
                 })
                 .into_any_element()
         };
@@ -605,6 +627,12 @@ impl Render for TransferView {
 
         // Destination panel
         let destination_panel = self.render_destination_panel(&transfer_state, window, cx);
+        let (first_panel, second_panel) =
+            if matches!(transfer_state.config.mode, TransferMode::Import) {
+                (destination_panel, source_panel)
+            } else {
+                (source_panel, destination_panel)
+            };
 
         let source_conn_name = transfer_state
             .config
@@ -731,10 +759,9 @@ impl Render for TransferView {
                     .overflow_y_scrollbar()
                     // Mode tabs
                     .child(div().mb(section_gap).child(mode_tabs))
-                    // Source panel - full width
-                    .child(div().mb(section_gap).child(source_panel))
-                    // Destination panel - full width
-                    .child(div().mb(section_gap).child(destination_panel))
+                    // Mode-specific primary and secondary panels
+                    .child(div().mb(section_gap).child(first_panel))
+                    .child(div().mb(section_gap).child(second_panel))
                     // Options panel - collapsible
                     .child(div().mb(section_gap).child(options_panel))
                     // Warnings (only shown when needed)
@@ -791,7 +818,7 @@ impl TransferView {
         let content = if expanded {
             let mut sections = Vec::new();
 
-            // General section with compression dropdown
+            // General section with controls that apply to the selected mode.
             let compression_dropdown = {
                 let state = state.clone();
                 MenuButton::new(("compression", key))
@@ -828,26 +855,28 @@ impl TransferView {
                     })
             };
 
-            sections.push(
-                option_section(
-                    "General",
-                    vec![
-                        option_field_static("Scope", transfer_state.config.scope.label(), cx),
-                        option_field_static(
-                            "Format",
-                            if matches!(transfer_state.config.mode, TransferMode::Copy) {
-                                "Live copy"
-                            } else {
-                                transfer_state.config.format.label()
-                            },
-                            cx,
-                        ),
-                        option_field("Compression", compression_dropdown.into_any_element(), cx),
-                    ],
+            let mut general_rows = vec![
+                option_field_static("Scope", transfer_state.config.scope.label(), cx),
+                option_field_static(
+                    "Format",
+                    if matches!(transfer_state.config.mode, TransferMode::Copy) {
+                        "Live copy"
+                    } else {
+                        transfer_state.config.format.label()
+                    },
                     cx,
-                )
-                .into_any_element(),
-            );
+                ),
+            ];
+
+            if matches!(transfer_state.config.mode, TransferMode::Export) {
+                general_rows.push(option_field(
+                    "Compression",
+                    compression_dropdown.into_any_element(),
+                    cx,
+                ));
+            }
+
+            sections.push(option_section("General", general_rows, cx).into_any_element());
 
             match transfer_state.config.mode {
                 TransferMode::Export => {

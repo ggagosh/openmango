@@ -373,6 +373,10 @@ impl AppState {
             transfer_state.config.source_collection.clear();
             transfer_state.config.destination_collection.clear();
         }
+        if mode == TransferMode::Import {
+            transfer_state.config.destination_database.clear();
+            transfer_state.config.destination_collection.clear();
+        }
 
         self.push_transfer_tab(transfer_state, Some(connection_id), cx);
     }

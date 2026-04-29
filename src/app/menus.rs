@@ -242,7 +242,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Export...", "Cmd+Alt+E")
+            menu_item_with_shortcut("Export Data...", "Cmd+Alt+E")
                 .action(Box::new(TransferExport))
                 .on_click({
                     let state = state.clone();
@@ -263,7 +263,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Import...", "Cmd+Alt+I")
+            menu_item_with_shortcut("Import Data...", "Cmd+Alt+I")
                 .action(Box::new(TransferImport))
                 .on_click({
                     let state = state.clone();
@@ -284,7 +284,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy to...", "Cmd+Alt+C")
+            menu_item_with_shortcut("Copy Data To...", "Cmd+Alt+C")
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();
@@ -522,7 +522,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Export...", "Cmd+Alt+E")
+            menu_item_with_shortcut("Export Data...", "Cmd+Alt+E")
                 .action(Box::new(TransferExport))
                 .on_click({
                     let state = state.clone();
@@ -543,7 +543,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Import...", "Cmd+Alt+I")
+            menu_item_with_shortcut("Import Data...", "Cmd+Alt+I")
                 .action(Box::new(TransferImport))
                 .on_click({
                     let state = state.clone();
@@ -564,7 +564,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy to...", "Cmd+Alt+C")
+            menu_item_with_shortcut("Copy Data To...", "Cmd+Alt+C")
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();

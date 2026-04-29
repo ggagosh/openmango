@@ -531,6 +531,7 @@ mod tests {
         // Backwards-compatibility: old workspaces have WorkspaceTabKind::Ai tabs
         let mut state = AppState::new();
         let conn_id = Uuid::new_v4();
+        state.workspace = crate::state::WorkspaceState::default();
 
         state.workspace.open_tabs.push(WorkspaceTab {
             database: "db".to_string(),

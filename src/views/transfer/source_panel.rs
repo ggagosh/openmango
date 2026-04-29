@@ -22,11 +22,19 @@ impl TransferView {
         let show_collection = matches!(transfer_state.config.scope, TransferScope::Collection);
         let show_query_options =
             matches!(transfer_state.config.mode, TransferMode::Export) && show_collection;
+        let is_import = matches!(transfer_state.config.mode, TransferMode::Import);
+        let panel_title = if is_import { "Target" } else { "Source" };
+        let conn_placeholder =
+            if is_import { "Select target connection..." } else { "Select connection..." };
+        let db_placeholder =
+            if is_import { "Select target database..." } else { "Select database..." };
+        let coll_placeholder =
+            if is_import { "Select target collection..." } else { "Select collection..." };
 
         // Searchable select components (states are initialized by ensure_select_states)
         let Some(ref source_conn_state) = self.source_conn_state else {
             return panel(
-                "Source",
+                panel_title,
                 div()
                     .flex()
                     .items_center()
@@ -39,7 +47,7 @@ impl TransferView {
         };
         let Some(ref source_db_state) = self.source_db_state else {
             return panel(
-                "Source",
+                panel_title,
                 div()
                     .flex()
                     .items_center()
@@ -52,14 +60,13 @@ impl TransferView {
         };
 
         let conn_select =
-            Select::new(source_conn_state).small().w_full().placeholder("Select connection...");
+            Select::new(source_conn_state).small().w_full().placeholder(conn_placeholder);
 
-        let db_select =
-            Select::new(source_db_state).small().w_full().placeholder("Select database...");
+        let db_select = Select::new(source_db_state).small().w_full().placeholder(db_placeholder);
 
         let coll_select = if show_collection {
             self.source_coll_state.as_ref().map(|coll_state| {
-                Select::new(coll_state).small().w_full().placeholder("Select collection...")
+                Select::new(coll_state).small().w_full().placeholder(coll_placeholder)
             })
         } else {
             None
@@ -103,7 +110,7 @@ impl TransferView {
         };
 
         panel(
-            "Source",
+            panel_title,
             div()
                 .flex()
                 .flex_col()

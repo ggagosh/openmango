@@ -5,7 +5,7 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
 use uuid::Uuid;
 
-use crate::state::AppCommands;
+use crate::state::{AppCommands, TransferMode};
 
 use super::TransferView;
 
@@ -80,6 +80,10 @@ impl TransferView {
                             tab.config.source_connection_id = Some(*conn_id);
                             tab.config.source_database.clear();
                             tab.config.source_collection.clear();
+                            if matches!(tab.config.mode, TransferMode::Import) {
+                                tab.config.destination_database.clear();
+                                tab.config.destination_collection.clear();
+                            }
                             cx.notify();
                             return Some(tab_id);
                         }
@@ -120,6 +124,10 @@ impl TransferView {
                         {
                             tab.config.source_database = db_str.clone();
                             tab.config.source_collection.clear();
+                            if matches!(tab.config.mode, TransferMode::Import) {
+                                tab.config.destination_database.clear();
+                                tab.config.destination_collection.clear();
+                            }
                             cx.notify();
                             return tab.config.source_connection_id;
                         }
@@ -156,6 +164,9 @@ impl TransferView {
                             && let Some(tab) = state.transfer_tab_mut(tab_id)
                         {
                             tab.config.source_collection = coll_str.clone();
+                            if matches!(tab.config.mode, TransferMode::Import) {
+                                tab.config.destination_collection.clear();
+                            }
                             cx.notify();
                             return Some(tab_id);
                         }
@@ -307,6 +318,33 @@ impl TransferView {
             input_state
         });
 
+        let (current_dest_database, current_dest_collection) = {
+            let state_ref = state.read(cx);
+            state_ref
+                .active_transfer_tab_id()
+                .and_then(|id| {
+                    state_ref.transfer_tab(id).map(|tab| {
+                        (
+                            tab.config.destination_database.clone(),
+                            tab.config.destination_collection.clone(),
+                        )
+                    })
+                })
+                .unwrap_or_default()
+        };
+
+        let dest_db_input_state = cx.new(|cx| {
+            let mut input_state = InputState::new(window, cx).placeholder("Database name...");
+            input_state.set_value(current_dest_database, window, cx);
+            input_state
+        });
+
+        let dest_coll_input_state = cx.new(|cx| {
+            let mut input_state = InputState::new(window, cx).placeholder("Collection name...");
+            input_state.set_value(current_dest_collection, window, cx);
+            input_state
+        });
+
         // Subscribe to export path input changes
         let state_clone = state.clone();
         let sub5 = cx.subscribe_in(
@@ -327,14 +365,64 @@ impl TransferView {
             },
         );
 
-        self._select_subscriptions =
-            vec![sub1, sub2, sub3, sub4, sub_dest_db, sub_dest_coll, sub5, sub6];
+        let state_clone = state.clone();
+        let sub_dest_db_input = cx.subscribe_in(
+            &dest_db_input_state,
+            window,
+            move |_view, input_state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let new_value = input_state.read(cx).value().to_string();
+                    state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            tab.config.destination_database = new_value;
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        );
+
+        let state_clone = state.clone();
+        let sub_dest_coll_input = cx.subscribe_in(
+            &dest_coll_input_state,
+            window,
+            move |_view, input_state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let new_value = input_state.read(cx).value().to_string();
+                    state_clone.update(cx, |state, cx| {
+                        if let Some(tab_id) = state.active_transfer_tab_id()
+                            && let Some(tab) = state.transfer_tab_mut(tab_id)
+                        {
+                            tab.config.destination_collection = new_value;
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        );
+
+        self._select_subscriptions = vec![
+            sub1,
+            sub2,
+            sub3,
+            sub4,
+            sub_dest_db,
+            sub_dest_coll,
+            sub5,
+            sub6,
+            sub_dest_db_input,
+            sub_dest_coll_input,
+        ];
         self.source_conn_state = Some(source_conn_state);
         self.source_db_state = Some(source_db_state);
         self.source_coll_state = Some(source_coll_state);
         self.dest_conn_state = Some(dest_conn_state);
         self.dest_db_state = Some(dest_db_state);
         self.dest_coll_state = Some(dest_coll_state);
+        self.dest_db_input_state = Some(dest_db_input_state);
+        self.dest_coll_input_state = Some(dest_coll_input_state);
         self.exclude_coll_state = Some(exclude_coll_state);
         self.export_path_input_state = Some(export_path_input_state);
     }

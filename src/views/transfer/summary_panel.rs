@@ -11,37 +11,6 @@ use crate::theme::{borders, spacing};
 
 use super::helpers::{fallback_text, summary_item};
 
-/// Check if transfer can be executed based on current state.
-pub(super) fn can_execute_transfer(state: &TransferTabState) -> bool {
-    // Must have source connection and database
-    if state.config.source_connection_id.is_none() || state.config.source_database.is_empty() {
-        return false;
-    }
-
-    // For collection scope, must have collection
-    if matches!(state.config.scope, TransferScope::Collection)
-        && state.config.source_collection.is_empty()
-    {
-        return false;
-    }
-
-    // For export/import, must have file path
-    if matches!(state.config.mode, TransferMode::Export | TransferMode::Import)
-        && state.config.file_path.is_empty()
-    {
-        return false;
-    }
-
-    // For copy, must have destination connection
-    if matches!(state.config.mode, TransferMode::Copy)
-        && state.config.destination_connection_id.is_none()
-    {
-        return false;
-    }
-
-    true
-}
-
 /// Render the compact summary panel showing source, destination, and format.
 pub(super) fn render_summary_panel(
     transfer_state: &TransferTabState,
@@ -116,9 +85,9 @@ pub(super) fn render_summary_panel(
     };
 
     // Add compression indicator if enabled
-    let format_label = match transfer_state.options.compression {
-        CompressionMode::Gzip => format!("{format_label} (gzip)"),
-        CompressionMode::None => format_label,
+    let format_label = match (transfer_state.config.mode, transfer_state.options.compression) {
+        (TransferMode::Export, CompressionMode::Gzip) => format!("{format_label} (gzip)"),
+        _ => format_label,
     };
 
     // Compact horizontal summary
