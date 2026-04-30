@@ -435,31 +435,46 @@ impl CollectionView {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            let (view_mode, has_selected) = {
+            let (view_mode, selected_count) = {
                 let state_ref = this.state.read(cx);
                 let vm = state_ref.session_view_mode(&session_key);
-                let sel = state_ref
-                    .session(&session_key)
-                    .is_some_and(|s| !s.view.selected_docs.is_empty());
-                (vm, sel)
+                let selected_count =
+                    state_ref.session(&session_key).map_or(0, |s| s.view.selected_docs.len());
+                (vm, selected_count)
             };
 
             match view_mode {
                 DocumentViewMode::Tree => {
                     let property_ctx = this.selected_property_context(cx);
-                    if let Some((sk, meta)) = property_ctx
-                        && !has_selected
-                        && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
-                        && let Some(value) = get_bson_at_path(&doc, &meta.path)
-                    {
-                        let text = format_bson_for_clipboard(value);
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    } else if has_selected {
-                        copy_documents_as(this, CopyFormat::Json, ExportScope::Selected, cx);
+                    match tree_copy_target(
+                        property_ctx.as_ref().map(|(_, meta)| meta.path.as_slice()),
+                        selected_count,
+                    ) {
+                        TreeCopyTarget::FocusedProperty => {
+                            if let Some((sk, meta)) = property_ctx
+                                && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
+                                && let Some(value) = get_bson_at_path(&doc, &meta.path)
+                            {
+                                let text = format_bson_for_clipboard(value);
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            }
+                        }
+                        TreeCopyTarget::FocusedDocument => {
+                            if let Some((sk, meta)) = property_ctx
+                                && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
+                            {
+                                let text = document_to_shell_string(&doc);
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            }
+                        }
+                        TreeCopyTarget::SelectedDocuments => {
+                            copy_documents_as(this, CopyFormat::Json, ExportScope::Selected, cx);
+                        }
+                        TreeCopyTarget::None => {}
                     }
                 }
                 DocumentViewMode::Table => {
-                    if has_selected {
+                    if selected_count > 0 {
                         copy_documents_as(this, CopyFormat::Tsv, ExportScope::Selected, cx);
                     }
                 }
@@ -955,6 +970,26 @@ pub(in crate::views::documents) fn copy_aggregation_as(
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TreeCopyTarget {
+    FocusedProperty,
+    FocusedDocument,
+    SelectedDocuments,
+    None,
+}
+
+fn tree_copy_target(
+    focused_path: Option<&[PathSegment]>,
+    selected_doc_count: usize,
+) -> TreeCopyTarget {
+    match focused_path {
+        Some(path) if !path.is_empty() => TreeCopyTarget::FocusedProperty,
+        Some(_) if selected_doc_count == 0 => TreeCopyTarget::FocusedDocument,
+        _ if selected_doc_count > 0 => TreeCopyTarget::SelectedDocuments,
+        _ => TreeCopyTarget::None,
+    }
+}
+
 struct PropertyFlags {
     allow_bulk: bool,
     can_edit_value: bool,
@@ -998,5 +1033,30 @@ fn format_bson_for_clipboard(value: &Bson) -> String {
             format_relaxed_json_value(&value)
         }
         _ => bson_value_for_edit(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TreeCopyTarget, tree_copy_target};
+    use crate::bson::PathSegment;
+
+    #[test]
+    fn tree_copy_prefers_focused_property_over_selected_parent_document() {
+        let path = [PathSegment::Key("name".to_string())];
+
+        assert_eq!(tree_copy_target(Some(&path), 1), TreeCopyTarget::FocusedProperty);
+    }
+
+    #[test]
+    fn tree_copy_uses_selected_documents_when_document_row_is_focused() {
+        assert_eq!(tree_copy_target(Some(&[]), 1), TreeCopyTarget::SelectedDocuments);
+        assert_eq!(tree_copy_target(None, 2), TreeCopyTarget::SelectedDocuments);
+    }
+
+    #[test]
+    fn tree_copy_can_copy_focused_document_without_selected_docs_fallback() {
+        assert_eq!(tree_copy_target(Some(&[]), 0), TreeCopyTarget::FocusedDocument);
+        assert_eq!(tree_copy_target(None, 0), TreeCopyTarget::None);
     }
 }
