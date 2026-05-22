@@ -6,6 +6,7 @@ use gpui_component::input::Input;
 use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::ConnectionManager;
@@ -167,6 +168,7 @@ impl Render for Sidebar {
                                     .icon(Icon::new(IconName::Globe).xsmall())
                                     .ghost()
                                     .xsmall()
+                                    .tooltip("Connect saved connection")
                                     .dropdown_menu(move |mut menu: PopupMenu, _window, _cx| {
                                         if disconnected_connections.is_empty() {
                                             menu = menu.item(
@@ -196,37 +198,21 @@ impl Render for Sidebar {
                                     })
                             })
                             .child(
-                                // Add button
-                                div()
-                                    .id("add-connection-btn")
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .w(sizing::icon_lg())
-                                    .h(sizing::icon_lg())
-                                    .rounded(crate::theme::borders::radius_sm())
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(cx.theme().list_hover))
-                                    .text_color(cx.theme().foreground)
-                                    .child(Icon::new(IconName::Plus).xsmall())
+                                Button::new("add-connection-btn")
+                                    .icon(Icon::new(IconName::Plus).xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Add connection")
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
                                     }),
                             )
                             .child(
-                                // Manager button
-                                div()
-                                    .id("manage-connections-btn")
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .w(sizing::icon_lg())
-                                    .h(sizing::icon_lg())
-                                    .rounded(crate::theme::borders::radius_sm())
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(cx.theme().list_hover))
-                                    .text_color(cx.theme().foreground)
-                                    .child(Icon::new(IconName::Settings).xsmall())
+                                Button::new("manage-connections-btn")
+                                    .icon(Icon::new(IconName::Settings).xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Manage connections")
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         ConnectionManager::open(state_for_manager.clone(), window, cx);
                                     }),
@@ -273,6 +259,44 @@ impl Render for Sidebar {
                                             cx.stop_propagation();
                                             return;
                                         }
+                                        if key == "home" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                let query =
+                                                    sidebar.search_state.read(cx).value().to_string();
+                                                let results = sidebar.search_results(&query, cx);
+                                                sidebar.model.search_selected =
+                                                    if results.is_empty() { None } else { Some(0) };
+                                                cx.notify();
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "end" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                let query =
+                                                    sidebar.search_state.read(cx).value().to_string();
+                                                let results = sidebar.search_results(&query, cx);
+                                                sidebar.model.search_selected =
+                                                    results.len().checked_sub(1);
+                                                cx.notify();
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "pageup" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                sidebar.move_search_selection(-8, cx);
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        if key == "pagedown" {
+                                            sidebar_entity.update(cx, |sidebar, cx| {
+                                                sidebar.move_search_selection(8, cx);
+                                            });
+                                            cx.stop_propagation();
+                                            return;
+                                        }
                                         if key == "enter" || key == "return" {
                                             sidebar_entity.update(cx, |sidebar, cx| {
                                                 let query =
@@ -297,7 +321,7 @@ impl Render for Sidebar {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Type to search databases")
+                                    .child("Type to search connections, databases, or collections")
                                     .into_any_element()
                             } else if search_results.is_empty() {
                                 div()
@@ -312,8 +336,9 @@ impl Render for Sidebar {
                                     .gap(px(2.0))
                                     .children(search_results.iter().enumerate().map(|(ix, result)| {
                                         let result = result.clone();
-                                        let database = result.database.clone();
-                                        let connection_name = result.connection_name.clone();
+                                        let title = result.title.clone();
+                                        let subtitle = result.subtitle.clone();
+                                        let kind = result.kind.label();
                                         let sidebar_entity = sidebar_entity.clone();
                                         let is_selected = self.model.search_selected == Some(ix);
                                         div()
@@ -325,7 +350,7 @@ impl Render for Sidebar {
                                             .rounded(borders::radius_sm())
                                             .hover(|s| s.bg(cx.theme().list_hover))
                                             .cursor_pointer()
-                                            .id(("sidebar-search-row", result.index))
+                                            .id(("sidebar-search-row", ix))
                                             .when(is_selected, |s| s.bg(cx.theme().list_active))
                                             .child(
                                                 div()
@@ -337,16 +362,30 @@ impl Render for Sidebar {
                                                             .text_sm()
                                                             .text_color(cx.theme().foreground)
                                                             .truncate()
-                                                            .child(database.clone()),
+                                                            .child(title.clone()),
                                                     )
                                                     .child(
                                                         div()
                                                             .text_xs()
                                                             .text_color(cx.theme().muted_foreground)
                                                             .truncate()
-                                                            .child(connection_name),
+                                                            .child(subtitle.clone()),
                                                     ),
                                             )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(kind),
+                                            )
+                                            .tooltip({
+                                                let title = title.clone();
+                                                let subtitle = subtitle.clone();
+                                                move |window, cx| {
+                                                    Tooltip::new(format!("{title} - {subtitle}"))
+                                                        .build(window, cx)
+                                                }
+                                            })
                                             .on_click(move |_: &ClickEvent,
                                                            window: &mut Window,
                                                            cx: &mut App| {
@@ -421,7 +460,6 @@ impl Render for Sidebar {
                                       _cx| {
                                     let visible_start = visible_range.start;
                                     let mut items = Vec::with_capacity(visible_range.len());
-                                    let active_connections = active_connections.clone();
                                     let connecting_id = connecting_id;
 
                                     for ix in visible_range {
@@ -440,8 +478,6 @@ impl Render for Sidebar {
                                         let is_collection = node_id.is_collection();
 
                                         let connection_id = node_id.connection_id();
-                                        let is_connected = is_connection
-                                            && active_connections.contains_key(&connection_id);
                                         let is_connecting =
                                             is_connection && connecting_id == Some(connection_id);
                                         let is_loading_db =
@@ -449,10 +485,13 @@ impl Render for Sidebar {
 
                                         let db_name =
                                             node_id.database_name().map(|db| db.to_string());
-                                        let selected_db = db_name.clone();
-                                        let selected_col =
-                                            node_id.collection_name().map(|col| col.to_string());
-
+                                        let node_kind = if is_connection {
+                                            "Connection"
+                                        } else if is_database {
+                                            "Database"
+                                        } else {
+                                            "Collection"
+                                        };
                                         let selected =
                                             sidebar.model.selected_tree_id.as_ref() == Some(&node_id);
                                         let menu_focus = sidebar.focus_handle.clone();
@@ -469,165 +508,20 @@ impl Render for Sidebar {
                                             .py(px(2.0))
                                             .on_click({
                                                 let node_id = node_id.clone();
-                                                let state_clone = state_clone.clone();
-                                                let db_name = db_name.clone();
-                                                let selected_db = selected_db.clone();
-                                                let selected_col = selected_col.clone();
                                                 let sidebar_entity = sidebar_entity.clone();
                                                 move |_event: &ClickEvent,
-                                                      _window: &mut Window,
+                                                      window: &mut Window,
                                                       cx: &mut App| {
-                                                    _window.focus(&row_focus);
+                                                    window.focus(&row_focus);
                                                     cx.stop_propagation();
 
-                                                    // Optimistic: update selection visually, detect double-click
-                                                    let is_double_click =
-                                                        sidebar_entity.update(cx, |sidebar, cx| {
-                                                            sidebar.cancel_keyboard_preview();
-                                                            sidebar.model.selected_tree_id =
-                                                                Some(node_id.clone());
-                                                            let is_double =
-                                                                sidebar.register_tree_click(&node_id);
-                                                            cx.notify();
-                                                            is_double
-                                                        });
-
-                                                    // Deferred: state changes run after the frame paints
-                                                    let state_d = state_clone.clone();
-                                                    let sidebar_d = sidebar_entity.clone();
-                                                    let node_id_d = node_id.clone();
-                                                    let db_name_d = db_name.clone();
-                                                    let selected_db_d = selected_db.clone();
-                                                    let selected_col_d = selected_col.clone();
-                                                    sidebar_entity.update(cx, |_, cx| {
-                                                        cx.defer(move |cx| {
-                                                    state_d.update(cx, |state, cx| {
-                                                        state.select_connection(
-                                                            Some(connection_id),
-                                                            cx,
-                                                        );
-                                                    });
-
-                                                    if is_double_click {
-                                                        if is_connection {
-                                                            let currently_expanded = sidebar_d
-                                                                .update(cx, |sidebar, _cx| {
-                                                                    sidebar.model.expanded_nodes.contains(&node_id_d)
-                                                                });
-                                                            let should_expand = if is_connecting
-                                                            {
-                                                                true
-                                                            } else if is_connected {
-                                                                !currently_expanded
-                                                            } else {
-                                                                true
-                                                            };
-                                                            sidebar_d.update(cx, |sidebar, cx| {
-                                                                if should_expand {
-                                                                    sidebar
-                                                                        .model
-                                                                        .expanded_nodes
-                                                                        .insert(node_id_d.clone());
-                                                                } else {
-                                                                    sidebar
-                                                                        .model
-                                                                        .expanded_nodes
-                                                                        .remove(&node_id_d);
-                                                                }
-                                                                sidebar.persist_expanded_nodes(cx);
-                                                                sidebar.refresh_tree(cx);
-                                                            });
-
-                                                            if is_connected || is_connecting {
-                                                                return;
-                                                            }
-                                                            AppCommands::connect(
-                                                                state_d.clone(),
-                                                                node_id_d.connection_id(),
-                                                                cx,
-                                                            );
-                                                        } else if is_database
-                                                            && let Some(ref db) = db_name_d
-                                                        {
-                                                            let currently_expanded = sidebar_d
-                                                                .update(cx, |sidebar, _cx| {
-                                                                    sidebar.model.expanded_nodes.contains(&node_id_d)
-                                                                });
-                                                            let should_expand = !currently_expanded;
-                                                            sidebar_d.update(cx, |sidebar, cx| {
-                                                                if should_expand {
-                                                                    sidebar
-                                                                        .model
-                                                                        .expanded_nodes
-                                                                        .insert(node_id_d.clone());
-                                                                } else {
-                                                                    sidebar
-                                                                        .model
-                                                                        .expanded_nodes
-                                                                        .remove(&node_id_d);
-                                                                }
-                                                                sidebar.persist_expanded_nodes(cx);
-                                                                sidebar.refresh_tree(cx);
-                                                            });
-
-                                                            if !should_expand || is_loading_db {
-                                                                return;
-                                                            }
-                                                            let should_load = state_d
-                                                                .read(cx)
-                                                                .active_connection_by_id(connection_id)
-                                                                .is_some_and(|conn| {
-                                                                    !conn.collections.contains_key(db)
-                                                                });
-                                                            if should_load {
-                                                                sidebar_d.update(
-                                                                    cx,
-                                                                    |sidebar, cx| {
-                                                                        sidebar
-                                                                            .model
-                                                                            .loading_databases
-                                                                            .insert(node_id_d.clone());
-                                                                        cx.notify();
-                                                                    },
-                                                                );
-                                                                AppCommands::load_collections(
-                                                                    state_d.clone(),
-                                                                    connection_id,
-                                                                    db.clone(),
-                                                                    cx,
-                                                                );
-                                                            }
-                                                        } else if is_collection
-                                                            && let (Some(db), Some(col)) =
-                                                                (&selected_db_d, &selected_col_d)
-                                                        {
-                                                            state_d.update(cx, |state, cx| {
-                                                                state.select_collection(
-                                                                    db.clone(),
-                                                                    col.clone(),
-                                                                    cx,
-                                                                );
-                                                            });
+                                                    sidebar_entity.update(cx, |sidebar, cx| {
+                                                        sidebar.cancel_keyboard_preview();
+                                                        let is_double = sidebar.register_tree_click(&node_id);
+                                                        sidebar.select_sidebar_node(node_id.clone(), false, cx);
+                                                        if is_double {
+                                                            sidebar.handle_open_selection(window, cx);
                                                         }
-                                                    } else if is_database
-                                                        && let Some(db) = &db_name_d
-                                                    {
-                                                        state_d.update(cx, |state, cx| {
-                                                            state.select_database(db.clone(), cx);
-                                                        });
-                                                    } else if is_collection
-                                                        && let (Some(db), Some(col)) =
-                                                            (&selected_db_d, &selected_col_d)
-                                                    {
-                                                        state_d.update(cx, |state, cx| {
-                                                            state.preview_collection(
-                                                                db.clone(),
-                                                                col.clone(),
-                                                                cx,
-                                                            );
-                                                        });
-                                                    }
-                                                        });
                                                     });
                                                 }
                                             })
@@ -642,6 +536,12 @@ impl Render for Sidebar {
                                                     .hover(|s| s.bg(theme_list_active))
                                             })
                                             .cursor_pointer()
+                                            .tooltip({
+                                                let tooltip = format!(
+                                                    "{node_kind}: {label}. Press Enter to open, Arrow keys to navigate."
+                                                );
+                                                move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                                            })
                                             // Chevron for expandable items — single-click to toggle
                                             .when(is_folder, |this| {
                                                 let chevron_node_id = node_id.clone();
@@ -662,6 +562,11 @@ impl Render for Sidebar {
                                                         .rounded(px(4.0))
                                                         .cursor_pointer()
                                                         .hover(|s| s.bg(theme_foreground.opacity(0.1)))
+                                                        .tooltip({
+                                                            let action = if is_expanded { "Collapse" } else { "Expand" };
+                                                            let tooltip = format!("{action} {label}");
+                                                            move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                                                        })
                                                         .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
                                                             cx.stop_propagation();
 
@@ -881,6 +786,13 @@ impl Render for Sidebar {
                                 .border_color(cx.theme().border)
                                 .cursor_pointer()
                                 .hover(|s| s.bg(cx.theme().list_hover))
+                                .tooltip({
+                                    let label = label.clone();
+                                    move |window, cx| {
+                                        Tooltip::new(format!("Jump to connection: {label}"))
+                                            .build(window, cx)
+                                    }
+                                })
                                 .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                                     scroll_handle.scroll_to_item(idx, gpui::ScrollStrategy::Top);
                                     sidebar_entity.update(cx, |_sidebar, cx| {

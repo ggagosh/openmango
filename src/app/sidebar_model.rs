@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -13,6 +13,8 @@ pub(crate) struct SidebarModel {
     pub(crate) loading_databases: HashSet<TreeNodeId>,
     pub(crate) expanded_nodes: HashSet<TreeNodeId>,
     pub(crate) selected_tree_id: Option<TreeNodeId>,
+    selected_index: Option<usize>,
+    entry_index_by_id: HashMap<TreeNodeId, usize>,
     pub(crate) entries: Vec<SidebarEntry>,
     pub(crate) search_open: bool,
     pub(crate) search_selected: Option<usize>,
@@ -26,11 +28,14 @@ impl SidebarModel {
         active: std::collections::HashMap<Uuid, ActiveConnection>,
     ) -> Self {
         let entries = Self::build_entries(&connections, &active, &HashSet::new());
+        let entry_index_by_id = Self::build_index(&entries);
         Self {
             connecting_connection: None,
             loading_databases: HashSet::new(),
             expanded_nodes: HashSet::new(),
             selected_tree_id: None,
+            selected_index: None,
+            entry_index_by_id,
             entries,
             search_open: false,
             search_selected: None,
@@ -45,12 +50,55 @@ impl SidebarModel {
         active: &std::collections::HashMap<Uuid, ActiveConnection>,
     ) -> Option<usize> {
         self.entries = Self::build_entries(connections, active, &self.expanded_nodes);
-        self.selected_index()
+        self.rebuild_index();
+        self.sync_selected_index();
+        self.selected_index
     }
 
-    pub(crate) fn selected_index(&self) -> Option<usize> {
-        let node_id = self.selected_tree_id.as_ref()?;
-        self.entries.iter().position(|entry| &entry.id == node_id)
+    pub(crate) fn index_of(&self, node_id: &TreeNodeId) -> Option<usize> {
+        self.entry_index_by_id.get(node_id).copied()
+    }
+
+    pub(crate) fn select_node(&mut self, node_id: TreeNodeId) -> Option<usize> {
+        let index = self.index_of(&node_id)?;
+        self.selected_tree_id = Some(node_id);
+        self.selected_index = Some(index);
+        Some(index)
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.selected_tree_id = None;
+        self.selected_index = None;
+    }
+
+    pub(crate) fn select_index(&mut self, index: usize) -> Option<(usize, TreeNodeId)> {
+        let entry = self.entries.get(index)?;
+        self.selected_tree_id = Some(entry.id.clone());
+        self.selected_index = Some(index);
+        Some((index, entry.id.clone()))
+    }
+
+    pub(crate) fn select_first(&mut self) -> Option<(usize, TreeNodeId)> {
+        self.select_index(0)
+    }
+
+    pub(crate) fn select_last(&mut self) -> Option<(usize, TreeNodeId)> {
+        self.entries.len().checked_sub(1).and_then(|index| self.select_index(index))
+    }
+
+    pub(crate) fn move_sidebar_page(
+        &mut self,
+        delta: isize,
+        page_size: usize,
+    ) -> Option<(usize, TreeNodeId)> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let current_index = self.selected_index.unwrap_or(0).min(self.entries.len() - 1);
+        let page_size = page_size.max(1) as isize;
+        let next = (current_index as isize + delta * page_size)
+            .clamp(0, self.entries.len().saturating_sub(1) as isize) as usize;
+        self.select_index(next)
     }
 
     pub(crate) fn ensure_selection_from_state(
@@ -75,7 +123,8 @@ impl SidebarModel {
             _ => None,
         };
 
-        self.selected_index()
+        self.sync_selected_index();
+        self.selected_index
     }
 
     pub(crate) fn open_search(&mut self) {
@@ -121,16 +170,10 @@ impl SidebarModel {
         if self.entries.is_empty() {
             return None;
         }
-        let current_index = self
-            .selected_tree_id
-            .as_ref()
-            .and_then(|id| self.entries.iter().position(|entry| &entry.id == id))
-            .unwrap_or(0);
+        let current_index = self.selected_index.unwrap_or(0).min(self.entries.len() - 1);
         let len = self.entries.len() as isize;
         let next = (current_index as isize + delta).rem_euclid(len) as usize;
-        let entry = &self.entries[next];
-        self.selected_tree_id = Some(entry.id.clone());
-        Some((next, entry.id.clone()))
+        self.select_index(next)
     }
 
     pub(crate) fn handle_typeahead_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
@@ -182,16 +225,18 @@ impl SidebarModel {
 
         // If the currently selected item still matches, keep it (don't jump).
         if let Some(cur_id) = &self.selected_tree_id
-            && let Some(cur_ix) = self.entries.iter().position(|e| &e.id == cur_id)
-            && self.entries[cur_ix].label.to_lowercase().starts_with(&query)
+            && let Some(cur_ix) = self.selected_index
+            && self.entries[cur_ix].id == *cur_id
+            && self.entries[cur_ix].search_label.starts_with(&query)
         {
             return Some((cur_ix, cur_id.clone()));
         }
 
         // Current selection doesn't match — find the first match from the top.
         for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.label.to_lowercase().starts_with(&query) {
+            if entry.search_label.starts_with(&query) {
                 self.selected_tree_id = Some(entry.id.clone());
+                self.selected_index = Some(idx);
                 return Some((idx, entry.id.clone()));
             }
         }
@@ -219,13 +264,7 @@ impl SidebarModel {
 
             let conn_node_id = TreeNodeId::connection(conn.id);
             let conn_expanded = expanded.contains(&conn_node_id);
-            items.push(SidebarEntry {
-                id: conn_node_id,
-                label: conn.name.clone(),
-                depth: 0,
-                is_folder: true,
-                is_expanded: conn_expanded,
-            });
+            items.push(SidebarEntry::new(conn_node_id, conn.name.clone(), 0, true, conn_expanded));
 
             if let Some(active_conn) = active_conn
                 && conn_expanded
@@ -233,24 +272,24 @@ impl SidebarModel {
                 for db_name in &active_conn.databases {
                     let db_node_id = TreeNodeId::database(conn.id, db_name);
                     let db_expanded = expanded.contains(&db_node_id);
-                    items.push(SidebarEntry {
-                        id: db_node_id.clone(),
-                        label: db_name.clone(),
-                        depth: 1,
-                        is_folder: true,
-                        is_expanded: db_expanded,
-                    });
+                    items.push(SidebarEntry::new(
+                        db_node_id.clone(),
+                        db_name.clone(),
+                        1,
+                        true,
+                        db_expanded,
+                    ));
 
                     if db_expanded && let Some(collections) = active_conn.collections.get(db_name) {
                         for col_name in collections {
                             let col_node_id = TreeNodeId::collection(conn.id, db_name, col_name);
-                            items.push(SidebarEntry {
-                                id: col_node_id,
-                                label: col_name.clone(),
-                                depth: 2,
-                                is_folder: false,
-                                is_expanded: false,
-                            });
+                            items.push(SidebarEntry::new(
+                                col_node_id,
+                                col_name.clone(),
+                                2,
+                                false,
+                                false,
+                            ));
                         }
                     }
                 }
@@ -258,5 +297,21 @@ impl SidebarModel {
         }
 
         items
+    }
+
+    fn rebuild_index(&mut self) {
+        self.entry_index_by_id = Self::build_index(&self.entries);
+    }
+
+    fn build_index(entries: &[SidebarEntry]) -> HashMap<TreeNodeId, usize> {
+        entries.iter().enumerate().map(|(ix, entry)| (entry.id.clone(), ix)).collect()
+    }
+
+    fn sync_selected_index(&mut self) {
+        self.selected_index =
+            self.selected_tree_id.as_ref().and_then(|id| self.entry_index_by_id.get(id).copied());
+        if self.selected_index.is_none() {
+            self.selected_tree_id = None;
+        }
     }
 }

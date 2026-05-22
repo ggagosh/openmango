@@ -1,6 +1,7 @@
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::tooltip::Tooltip;
 
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
@@ -487,7 +488,13 @@ impl Render for AppRoot {
                 });
             }))
             .on_action(cx.listener(|this, _: &FocusSidebar, window, cx| {
-                window.focus(&this.sidebar.read(cx).focus_handle);
+                this.sidebar.update(cx, |sidebar, cx| {
+                    if sidebar.is_collapsed() {
+                        sidebar.toggle_collapsed();
+                        cx.notify();
+                    }
+                    window.focus(&sidebar.focus_handle);
+                });
             }))
             .on_action(cx.listener(|this, _: &FocusContent, window, _cx| {
                 window.focus(&this.focus_handle);
@@ -513,6 +520,10 @@ impl Render for AppRoot {
                     .my(px(10.0))
                     .rounded(px(999.0))
                     .hover(|s| s.bg(islands::panel_border(&appearance, cx).opacity(0.7)))
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Drag to resize sidebar. Double-click to hide or show.")
+                            .build(window, cx)
+                    })
                     .when(is_dragging, |s: Stateful<Div>| {
                         s.bg(islands::panel_border(&appearance, cx).opacity(0.9))
                     })
