@@ -1,5 +1,6 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::theme::{borders, sizing, spacing};
@@ -20,6 +21,7 @@ pub(crate) fn render_status_left(
 
     let sidebar_icon =
         if sidebar_collapsed { IconName::PanelLeftOpen } else { IconName::PanelLeftClose };
+    let sidebar_tooltip = if sidebar_collapsed { "Show sidebar" } else { "Hide sidebar" };
 
     div()
         .flex()
@@ -29,18 +31,11 @@ pub(crate) fn render_status_left(
         .items_center()
         .gap(spacing::sm())
         .child(
-            div()
-                .id("toggle-sidebar-btn")
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(sizing::icon_lg())
-                .h(sizing::icon_lg())
-                .rounded(borders::radius_sm())
-                .cursor_pointer()
-                .hover(|s| s.bg(cx.theme().list_hover))
-                .text_color(cx.theme().secondary_foreground)
-                .child(Icon::new(sidebar_icon).xsmall())
+            Button::new("toggle-sidebar-btn")
+                .icon(Icon::new(sidebar_icon).xsmall())
+                .ghost()
+                .xsmall()
+                .tooltip(sidebar_tooltip)
                 .when_some(on_toggle_sidebar, |el, handler| {
                     el.on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         handler(window, cx);

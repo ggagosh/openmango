@@ -13,7 +13,7 @@ use crate::state::{
 };
 
 use super::dialogs::open_rename_collection_dialog;
-use super::search::{SidebarSearchResult, search_results};
+use super::search::{SidebarSearchCandidate, SidebarSearchResult, search_results};
 use super::sidebar_model::SidebarModel;
 
 mod keys;
@@ -61,8 +61,9 @@ impl Sidebar {
             )
         };
         let model = SidebarModel::new((*cached_connections).clone(), (*cached_active).clone());
-        let search_state =
-            cx.new(|cx| InputState::new(_window, cx).placeholder("Search databases"));
+        let search_state = cx.new(|cx| {
+            InputState::new(_window, cx).placeholder("Search connections, databases, collections")
+        });
 
         let mut subscriptions = vec![];
 
@@ -106,13 +107,13 @@ impl Sidebar {
                     this.model.connecting_connection = None;
                 }
                 this.model.loading_databases.clear();
-                this.model.selected_tree_id = None;
+                this.model.clear_selection();
                 this.refresh_tree(cx);
             }
             AppEvent::ConnectionFailed(_) => {
                 this.model.connecting_connection = None;
                 this.model.loading_databases.clear();
-                this.model.selected_tree_id = None;
+                this.model.clear_selection();
                 cx.notify();
             }
             AppEvent::DocumentsLoaded { .. }
@@ -232,6 +233,22 @@ impl Sidebar {
                 this.move_sidebar_selection(1, cx);
                 return;
             }
+            if key == "home" {
+                this.select_sidebar_first(cx);
+                return;
+            }
+            if key == "end" {
+                this.select_sidebar_last(cx);
+                return;
+            }
+            if key == "pageup" {
+                this.move_sidebar_page(-1, cx);
+                return;
+            }
+            if key == "pagedown" {
+                this.move_sidebar_page(1, cx);
+                return;
+            }
             this.handle_typeahead_keystroke(ks, cx);
         }));
 
@@ -262,6 +279,10 @@ impl Sidebar {
 
     pub(crate) fn width(&self) -> Pixels {
         if self.collapsed { px(0.0) } else { self.width }
+    }
+
+    pub(crate) fn is_collapsed(&self) -> bool {
+        self.collapsed
     }
 
     pub(crate) fn set_width(&mut self, w: Pixels) {
@@ -408,7 +429,7 @@ impl Sidebar {
         if selected_db.is_some() {
             self.model.expanded_nodes.insert(TreeNodeId::connection(connection_id));
         }
-        self.model.selected_tree_id = None;
+        self.model.clear_selection();
         self.refresh_tree(cx);
         self.load_expanded_databases(cx);
     }
@@ -910,9 +931,53 @@ impl Sidebar {
         let Some((next, node_id)) = self.model.move_sidebar_selection(delta) else {
             return;
         };
+        self.apply_sidebar_selection(next, node_id, true, cx);
+    }
+
+    fn move_sidebar_page(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some((next, node_id)) = self.model.move_sidebar_page(delta, 10) else {
+            return;
+        };
+        self.apply_sidebar_selection(next, node_id, true, cx);
+    }
+
+    fn select_sidebar_first(&mut self, cx: &mut Context<Self>) {
+        let Some((next, node_id)) = self.model.select_first() else {
+            return;
+        };
+        self.apply_sidebar_selection(next, node_id, true, cx);
+    }
+
+    fn select_sidebar_last(&mut self, cx: &mut Context<Self>) {
+        let Some((next, node_id)) = self.model.select_last() else {
+            return;
+        };
+        self.apply_sidebar_selection(next, node_id, true, cx);
+    }
+
+    fn select_sidebar_node(
+        &mut self,
+        node_id: TreeNodeId,
+        preview: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let next = self.model.select_node(node_id.clone())?;
+        self.apply_sidebar_selection(next, node_id, preview, cx);
+        Some(next)
+    }
+
+    fn apply_sidebar_selection(
+        &mut self,
+        next: usize,
+        node_id: TreeNodeId,
+        preview: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.scroll_handle.scroll_to_item(next, gpui::ScrollStrategy::Center);
         cx.notify();
-        self.schedule_keyboard_preview(node_id, cx);
+        if preview {
+            self.schedule_keyboard_preview(node_id, cx);
+        }
     }
 
     fn move_search_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -929,31 +994,85 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.cancel_keyboard_preview();
-        let database = result.database.clone();
-        let connection_id = result.connection_id;
-        self.model.expanded_nodes.insert(TreeNodeId::connection(connection_id));
-        self.model.expanded_nodes.insert(result.node_id.clone());
+        self.model.clear_selection();
+        self.model.expanded_nodes.insert(TreeNodeId::connection(result.connection_id));
+        if let Some(database) = result.database.as_ref() {
+            self.model
+                .expanded_nodes
+                .insert(TreeNodeId::database(result.connection_id, database.clone()));
+        }
+        if result.node_id.is_connection() {
+            self.model.expanded_nodes.insert(result.node_id.clone());
+        }
         self.persist_expanded_nodes(cx);
-        self.model.loading_databases.insert(result.node_id.clone());
-        AppCommands::load_collections(self.state.clone(), connection_id, database.clone(), cx);
-        self.model.selected_tree_id = Some(result.node_id.clone());
-        self.scroll_handle.scroll_to_item(result.index, gpui::ScrollStrategy::Center);
-        self.state.update(cx, |state, cx| {
-            state.select_connection(Some(connection_id), cx);
-            state.select_database(database, cx);
-        });
+        self.refresh_tree(cx);
+        self.select_sidebar_node(result.node_id.clone(), false, cx);
+
+        match (result.database.clone(), result.collection.clone()) {
+            (Some(database), Some(collection)) => {
+                self.state.update(cx, |state, cx| {
+                    state.select_connection(Some(result.connection_id), cx);
+                    state.select_collection(database, collection, cx);
+                });
+            }
+            (Some(database), None) => {
+                let database_node = TreeNodeId::database(result.connection_id, database.clone());
+                let should_load = self
+                    .state
+                    .read(cx)
+                    .active_connection_by_id(result.connection_id)
+                    .is_some_and(|conn| !conn.collections.contains_key(&database));
+                if should_load && !self.model.loading_databases.contains(&database_node) {
+                    self.model.loading_databases.insert(database_node.clone());
+                    AppCommands::load_collections(
+                        self.state.clone(),
+                        result.connection_id,
+                        database.clone(),
+                        cx,
+                    );
+                }
+                self.state.update(cx, |state, cx| {
+                    state.select_connection(Some(result.connection_id), cx);
+                    state.select_database(database, cx);
+                });
+            }
+            (None, None) => {
+                self.state.update(cx, |state, cx| {
+                    state.select_connection(Some(result.connection_id), cx);
+                });
+            }
+            (None, Some(_)) => {}
+        }
         self.close_search(window, cx);
     }
 
-    fn search_results(&self, query: &str, cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {
-        let connection_names: HashMap<Uuid, String> = self
-            .state
-            .read(cx)
-            .connections_snapshot()
-            .into_iter()
-            .map(|conn| (conn.id, conn.name))
-            .collect();
+    fn search_results(&self, query: &str, _cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {
+        let mut candidates = Vec::new();
+        for connection in self.cached_connections.iter() {
+            let Some(active) = self.cached_active.get(&connection.id) else {
+                continue;
+            };
+            candidates
+                .push(SidebarSearchCandidate::connection(connection.id, connection.name.clone()));
+            for database in &active.databases {
+                candidates.push(SidebarSearchCandidate::database(
+                    connection.id,
+                    connection.name.clone(),
+                    database.clone(),
+                ));
+                if let Some(collections) = active.collections.get(database) {
+                    for collection in collections {
+                        candidates.push(SidebarSearchCandidate::collection(
+                            connection.id,
+                            connection.name.clone(),
+                            database.clone(),
+                            collection.clone(),
+                        ));
+                    }
+                }
+            }
+        }
 
-        search_results(query, &self.model.entries, &connection_names)
+        search_results(query, candidates)
     }
 }

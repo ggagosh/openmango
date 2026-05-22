@@ -22,6 +22,22 @@ impl Sidebar {
                     self.move_sidebar_selection(1, cx);
                     return true;
                 }
+                "home" => {
+                    self.select_sidebar_first(cx);
+                    return true;
+                }
+                "end" => {
+                    self.select_sidebar_last(cx);
+                    return true;
+                }
+                "pageup" => {
+                    self.move_sidebar_page(-1, cx);
+                    return true;
+                }
+                "pagedown" => {
+                    self.move_sidebar_page(1, cx);
+                    return true;
+                }
                 "left" | "arrowleft" => {
                     if let Some(node_id) = self.model.selected_tree_id.clone() {
                         if self.model.expanded_nodes.contains(&node_id) {
@@ -30,29 +46,11 @@ impl Sidebar {
                             self.refresh_tree(cx);
                         } else if let TreeNodeId::Database { connection, database: _ } = node_id {
                             let parent = TreeNodeId::connection(connection);
-                            self.model.selected_tree_id = Some(parent.clone());
-                            self.scroll_handle.scroll_to_item(
-                                self.model
-                                    .entries
-                                    .iter()
-                                    .position(|entry| entry.id == parent)
-                                    .unwrap_or(0),
-                                gpui::ScrollStrategy::Center,
-                            );
-                            cx.notify();
+                            self.select_sidebar_node(parent, true, cx);
                         } else if let TreeNodeId::Collection { connection, database, .. } = node_id
                         {
                             let parent = TreeNodeId::database(connection, database.clone());
-                            self.model.selected_tree_id = Some(parent.clone());
-                            self.scroll_handle.scroll_to_item(
-                                self.model
-                                    .entries
-                                    .iter()
-                                    .position(|entry| entry.id == parent)
-                                    .unwrap_or(0),
-                                gpui::ScrollStrategy::Center,
-                            );
-                            cx.notify();
+                            self.select_sidebar_node(parent, true, cx);
                         }
                     }
                     return true;
