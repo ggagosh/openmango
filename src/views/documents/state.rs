@@ -441,15 +441,15 @@ impl CollectionView {
                 this.update_search_results(cx);
                 cx.notify();
             }
-            AppEvent::DocumentSaveFailed { session, .. } => {
-                if this.view_model.is_current_session(session) {
-                    cx.notify();
-                }
+            AppEvent::DocumentSaveFailed { session, .. }
+                if this.view_model.is_current_session(session) =>
+            {
+                cx.notify();
             }
-            AppEvent::DocumentDeleteFailed { session, .. } => {
-                if this.view_model.is_current_session(session) {
-                    cx.notify();
-                }
+            AppEvent::DocumentDeleteFailed { session, .. }
+                if this.view_model.is_current_session(session) =>
+            {
+                cx.notify();
             }
             _ => {}
         }));

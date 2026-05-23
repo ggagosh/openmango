@@ -268,11 +268,9 @@ impl FilterBuilderPanel {
                         panel.set_field_from_suggestion(cid, &suggestion, window, cx);
                     }
                 }
-                InputEvent::Blur => {
-                    if panel.active_suggestion_row == Some(cid) {
-                        panel.active_suggestion_row = None;
-                        cx.notify();
-                    }
+                InputEvent::Blur if panel.active_suggestion_row == Some(cid) => {
+                    panel.active_suggestion_row = None;
+                    cx.notify();
                 }
                 _ => {}
             },

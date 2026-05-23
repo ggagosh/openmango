@@ -57,7 +57,7 @@ impl DetachedJsonEditorView {
             };
 
             match event {
-                AppEvent::DocumentSaved { session: saved_session, document } => {
+                AppEvent::DocumentSaved { session: saved_session, document }
                     if session.session_key == *saved_session
                         && matches!(
                             session.target,
@@ -65,50 +65,46 @@ impl DetachedJsonEditorView {
                                 doc_key: ref tab_doc_key,
                                 ..
                             } if tab_doc_key == document
-                        )
+                        ) =>
+                {
+                    if let Some(latest) =
+                        state.read(cx).session_draft_or_document(saved_session, document)
                     {
-                        if let Some(latest) =
-                            state.read(cx).session_draft_or_document(saved_session, document)
-                        {
-                            this.sessions.refresh_document_baseline(this.session_id, latest);
-                        }
-                        this.awaiting_create_as_new = false;
-                        this.clear_sync_issue();
-                        this.close_window(cx);
+                        this.sessions.refresh_document_baseline(this.session_id, latest);
                     }
+                    this.awaiting_create_as_new = false;
+                    this.clear_sync_issue();
+                    this.close_window(cx);
                 }
-                AppEvent::DocumentSaveFailed { session: failed_session, error } => {
+                AppEvent::DocumentSaveFailed { session: failed_session, error }
                     if session.session_key == *failed_session
-                        && matches!(session.target, EditorSessionTarget::Document { .. })
-                    {
-                        this.awaiting_create_as_new = false;
-                        this.clear_sync_issue();
-                        this.set_notice(true, format!("Save failed: {error}"));
-                        cx.notify();
-                    }
+                        && matches!(session.target, EditorSessionTarget::Document { .. }) =>
+                {
+                    this.awaiting_create_as_new = false;
+                    this.clear_sync_issue();
+                    this.set_notice(true, format!("Save failed: {error}"));
+                    cx.notify();
                 }
-                AppEvent::DocumentInserted => {
+                AppEvent::DocumentInserted
                     if matches!(session.target, EditorSessionTarget::Insert)
-                        || this.awaiting_create_as_new
-                    {
-                        this.awaiting_create_as_new = false;
-                        this.clear_sync_issue();
-                        this.close_window(cx);
-                    }
+                        || this.awaiting_create_as_new =>
+                {
+                    this.awaiting_create_as_new = false;
+                    this.clear_sync_issue();
+                    this.close_window(cx);
                 }
-                AppEvent::DocumentInsertFailed { error } => {
+                AppEvent::DocumentInsertFailed { error }
                     if matches!(session.target, EditorSessionTarget::Insert)
-                        || this.awaiting_create_as_new
-                    {
-                        this.awaiting_create_as_new = false;
-                        if matches!(session.target, EditorSessionTarget::Document { .. }) {
-                            this.sync_issue = Some(SyncIssue::MissingOriginal);
-                        } else {
-                            this.clear_sync_issue();
-                        }
-                        this.set_notice(true, format!("Insert failed: {error}"));
-                        cx.notify();
+                        || this.awaiting_create_as_new =>
+                {
+                    this.awaiting_create_as_new = false;
+                    if matches!(session.target, EditorSessionTarget::Document { .. }) {
+                        this.sync_issue = Some(SyncIssue::MissingOriginal);
+                    } else {
+                        this.clear_sync_issue();
                     }
+                    this.set_notice(true, format!("Insert failed: {error}"));
+                    cx.notify();
                 }
                 _ => {}
             }

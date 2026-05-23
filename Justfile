@@ -14,6 +14,9 @@ watch:
 lint:
     cargo clippy --all-targets -- -D warnings
 
+lint-release:
+    cargo clippy --release --features mimalloc -- -D warnings
+
 fmt:
     cargo fmt
 
@@ -22,6 +25,9 @@ fmt-check:
 
 check:
     cargo check
+
+check-release:
+    cargo check --release --features mimalloc
 
 # Build
 build:
@@ -51,7 +57,7 @@ clean:
     cargo clean
 
 # CI checks (matches GitHub Actions)
-ci: fmt-check lint check check-sidecar
+ci: fmt-check check-release lint-release check-sidecar
 
 # All checks before commit
 precommit: ci test

@@ -944,8 +944,7 @@ impl Default for ExplainState {
 
 fn build_explain_diff(from: &ExplainRun, to: &ExplainRun) -> ExplainDiff {
     let mut stage_deltas = build_stage_deltas(&from.nodes, &to.nodes);
-    stage_deltas
-        .sort_by(|left, right| right.impact_score_delta.abs().cmp(&left.impact_score_delta.abs()));
+    stage_deltas.sort_by_key(|delta| std::cmp::Reverse(delta.impact_score_delta.abs()));
     stage_deltas.truncate(16);
 
     ExplainDiff {

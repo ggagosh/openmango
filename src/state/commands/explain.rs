@@ -795,7 +795,7 @@ fn rank_bottlenecks(nodes: &[ExplainNode]) -> Vec<ExplainBottleneck> {
         })
         .collect();
 
-    ranked.sort_by(|left, right| right.impact_score.cmp(&left.impact_score));
+    ranked.sort_by_key(|item| std::cmp::Reverse(item.impact_score));
     ranked.truncate(5);
     for (index, item) in ranked.iter_mut().enumerate() {
         item.rank = index + 1;

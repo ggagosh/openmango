@@ -103,12 +103,12 @@ impl BulkUpdateDialog {
         let subscription =
             cx.subscribe_in(&dialog.state, window, move |view, _state, event, window, cx| {
                 match event {
-                    AppEvent::DocumentsUpdated { session, .. } if session == &view.session_key => {
-                        if view.updating {
-                            view.updating = false;
-                            view.error_message = None;
-                            window.close_dialog(cx);
-                        }
+                    AppEvent::DocumentsUpdated { session, .. }
+                        if session == &view.session_key && view.updating =>
+                    {
+                        view.updating = false;
+                        view.error_message = None;
+                        window.close_dialog(cx);
                     }
                     AppEvent::DocumentsUpdateFailed { session, error }
                         if session == &view.session_key =>
