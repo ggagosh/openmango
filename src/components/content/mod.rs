@@ -177,6 +177,31 @@ impl ContentArea {
             self.changelog_view = Some(cx.new(|cx| ChangelogView::new(self.state.clone(), cx)));
         }
     }
+
+    pub(crate) fn focus_current_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let should_focus_collection = {
+            let state_ref = self.state.read(cx);
+            matches!(state_ref.current_view, View::Documents)
+                && state_ref.selected_collection().is_some()
+        };
+
+        if should_focus_collection {
+            if self.collection_view.is_none() {
+                self.collection_view =
+                    Some(cx.new(|cx| CollectionView::new(self.state.clone(), cx)));
+            }
+            if let Some(view) = self.collection_view.clone() {
+                view.update(cx, |view, _cx| view.focus_documents(window));
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl Render for ContentArea {

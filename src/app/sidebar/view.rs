@@ -113,7 +113,7 @@ impl Render for Sidebar {
                 this.handle_rename_collection(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
-                if !this.model.typeahead_query.is_empty() {
+                if this.should_ignore_delete_action(window, cx) {
                     return;
                 }
                 this.handle_delete_selection(window, cx);
@@ -769,6 +769,8 @@ impl Render for Sidebar {
                     .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting)| {
                         let scroll_handle = self.scroll_handle.clone();
                         let sidebar_entity = sidebar_entity.clone();
+                        let sticky_bg = opaque_color(cx.theme().sidebar);
+                        let sticky_hover_bg = opaque_color(cx.theme().list_hover);
                         this.child(
                             div()
                                 .id("sticky-connection-header")
@@ -781,11 +783,11 @@ impl Render for Sidebar {
                                 .gap(px(4.0))
                                 .pl(px(8.0))
                                 .py(px(2.0))
-                                .bg(cx.theme().sidebar)
+                                .bg(sticky_bg)
                                 .border_b_1()
                                 .border_color(cx.theme().border)
                                 .cursor_pointer()
-                                .hover(|s| s.bg(cx.theme().list_hover))
+                                .hover(move |s| s.bg(sticky_hover_bg))
                                 .tooltip({
                                     let label = label.clone();
                                     move |window, cx| {
@@ -859,4 +861,9 @@ impl Render for Sidebar {
                     }),
             )
     }
+}
+
+fn opaque_color(mut color: Hsla) -> Hsla {
+    color.a = 1.0;
+    color
 }

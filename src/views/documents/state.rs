@@ -513,6 +513,10 @@ impl CollectionView {
         }
     }
 
+    pub(crate) fn focus_documents(&self, window: &mut Window) {
+        window.focus(&self.documents_focus);
+    }
+
     /// Ensure subview-specific data is loaded (indexes/stats) based on current subview.
     /// This replaces the logic that was previously in render().
     fn ensure_subview_data_loaded(

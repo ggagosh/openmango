@@ -3,10 +3,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
+use gpui_component::WindowExt as _;
 use gpui_component::input::InputState;
 use uuid::Uuid;
 
 use crate::components::{ConnectionDialog, ConnectionManager, open_confirm_dialog};
+use crate::keyboard::FocusContent;
 use crate::models::{ActiveConnection, SavedConnection, TreeNodeId};
 use crate::state::{
     AppCommands, AppEvent, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
@@ -14,7 +16,7 @@ use crate::state::{
 
 use super::dialogs::open_rename_collection_dialog;
 use super::search::{SidebarSearchCandidate, SidebarSearchResult, search_results};
-use super::sidebar_model::SidebarModel;
+use super::sidebar_model::{SidebarModel, TYPEAHEAD_RESET_DELAY};
 
 mod keys;
 mod view;
@@ -38,6 +40,7 @@ pub(crate) struct Sidebar {
     collapsed: bool,
     sticky_connection_index: Option<usize>,
     typeahead_clear_task: Option<Task<()>>,
+    typeahead_generation: u64,
     keyboard_preview_task: Option<Task<()>>,
     keyboard_preview_generation: u64,
     last_tree_click: Option<(TreeNodeId, Instant)>,
@@ -213,16 +216,9 @@ impl Sidebar {
                 this.clear_typeahead(cx);
                 return;
             }
-            if key == "backspace" && has_query {
-                this.model.typeahead_query.pop();
-                this.model.typeahead_last = Some(std::time::Instant::now());
-                if this.model.typeahead_query.is_empty() {
-                    this.typeahead_clear_task = None;
-                } else {
-                    this.select_typeahead_match(cx);
-                    this.schedule_typeahead_clear(cx);
-                }
-                cx.notify();
+            if (key == "backspace" || key == "delete") && (has_query || this.typeahead_is_active())
+            {
+                this.delete_typeahead_char(cx);
                 return;
             }
             if key == "up" || key == "arrowup" {
@@ -262,6 +258,7 @@ impl Sidebar {
             collapsed: false,
             sticky_connection_index: None,
             typeahead_clear_task: None,
+            typeahead_generation: 0,
             keyboard_preview_task: None,
             keyboard_preview_generation: 0,
             last_tree_click: None,
@@ -536,6 +533,7 @@ impl Sidebar {
                 state.select_connection(Some(node_id.connection_id()), cx);
                 state.select_collection(db, col, cx);
             });
+            window.dispatch_action(Box::new(FocusContent), cx);
         }
     }
 
@@ -823,12 +821,7 @@ impl Sidebar {
         if !self.model.handle_typeahead_key(&key, key_char) {
             return false;
         }
-        self.select_typeahead_match(cx);
-        if self.model.typeahead_query.is_empty() {
-            self.typeahead_clear_task = None;
-        } else {
-            self.schedule_typeahead_clear(cx);
-        }
+        self.finish_typeahead_key(&key, cx);
         cx.notify();
         true
     }
@@ -850,12 +843,7 @@ impl Sidebar {
         if !self.model.handle_typeahead_key(&key, key_char) {
             return false;
         }
-        self.select_typeahead_match(cx);
-        if self.model.typeahead_query.is_empty() {
-            self.typeahead_clear_task = None;
-        } else {
-            self.schedule_typeahead_clear(cx);
-        }
+        self.finish_typeahead_key(&key, cx);
         cx.notify();
         true
     }
@@ -863,15 +851,57 @@ impl Sidebar {
     fn clear_typeahead(&mut self, cx: &mut Context<Self>) {
         self.model.typeahead_query.clear();
         self.model.typeahead_last = None;
+        self.typeahead_generation = self.typeahead_generation.wrapping_add(1);
         self.typeahead_clear_task = None;
         cx.notify();
     }
 
+    fn typeahead_is_active(&self) -> bool {
+        !self.model.typeahead_query.is_empty() || self.typeahead_clear_task.is_some()
+    }
+
+    fn should_ignore_delete_action(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.model.search_open || self.typeahead_is_active() || window.has_active_dialog(cx)
+    }
+
+    fn delete_typeahead_char(&mut self, cx: &mut Context<Self>) {
+        if !self.model.typeahead_query.is_empty() {
+            self.model.typeahead_query.pop();
+            self.model.typeahead_last = Some(Instant::now());
+            if !self.model.typeahead_query.is_empty() {
+                self.select_typeahead_match(cx);
+            }
+        }
+        self.schedule_typeahead_clear(cx);
+        cx.notify();
+    }
+
+    fn finish_typeahead_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.model.typeahead_query.is_empty() {
+            self.select_typeahead_match(cx);
+            self.schedule_typeahead_clear(cx);
+            return;
+        }
+
+        if key == "backspace" || key == "delete" {
+            self.schedule_typeahead_clear(cx);
+        } else {
+            self.model.typeahead_last = None;
+            self.typeahead_generation = self.typeahead_generation.wrapping_add(1);
+            self.typeahead_clear_task = None;
+        }
+    }
+
     fn schedule_typeahead_clear(&mut self, cx: &mut Context<Self>) {
-        self.typeahead_clear_task = Some(cx.spawn(async |entity, cx| {
-            cx.background_executor().timer(Duration::from_millis(1100)).await;
+        self.typeahead_generation = self.typeahead_generation.wrapping_add(1);
+        let generation = self.typeahead_generation;
+        self.typeahead_clear_task = Some(cx.spawn(async move |entity, cx| {
+            cx.background_executor().timer(TYPEAHEAD_RESET_DELAY).await;
             entity
                 .update(cx, |this, cx| {
+                    if this.typeahead_generation != generation {
+                        return;
+                    }
                     this.model.typeahead_query.clear();
                     this.model.typeahead_last = None;
                     this.typeahead_clear_task = None;
@@ -1008,6 +1038,7 @@ impl Sidebar {
         self.refresh_tree(cx);
         self.select_sidebar_node(result.node_id.clone(), false, cx);
 
+        let opened_collection = result.collection.is_some();
         match (result.database.clone(), result.collection.clone()) {
             (Some(database), Some(collection)) => {
                 self.state.update(cx, |state, cx| {
@@ -1044,6 +1075,9 @@ impl Sidebar {
             (None, Some(_)) => {}
         }
         self.close_search(window, cx);
+        if opened_collection {
+            window.dispatch_action(Box::new(FocusContent), cx);
+        }
     }
 
     fn search_results(&self, query: &str, _cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {

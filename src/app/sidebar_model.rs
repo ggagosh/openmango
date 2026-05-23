@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::models::TreeNodeId;
 use crate::models::{ActiveConnection, SavedConnection};
 
-use super::search::SidebarEntry;
+use super::search::{SidebarEntry, ranked_match_score};
+
+pub(crate) const TYPEAHEAD_RESET_DELAY: Duration = Duration::from_millis(1100);
 
 pub(crate) struct SidebarModel {
     pub(crate) connecting_connection: Option<Uuid>,
@@ -187,7 +189,7 @@ impl SidebarModel {
             }
             return false;
         }
-        if key == "backspace" {
+        if key == "backspace" || key == "delete" {
             if !self.typeahead_query.is_empty() {
                 self.typeahead_query.pop();
                 self.typeahead_last = Some(Instant::now());
@@ -202,10 +204,7 @@ impl SidebarModel {
             return false;
         }
         let now = Instant::now();
-        if self
-            .typeahead_last
-            .is_none_or(|last| now.duration_since(last) > Duration::from_millis(1000))
-        {
+        if self.typeahead_last.is_none_or(|last| now.duration_since(last) > TYPEAHEAD_RESET_DELAY) {
             self.typeahead_query.clear();
         }
         self.typeahead_last = Some(now);
@@ -223,24 +222,36 @@ impl SidebarModel {
             return None;
         }
 
-        // If the currently selected item still matches, keep it (don't jump).
-        if let Some(cur_id) = &self.selected_tree_id
-            && let Some(cur_ix) = self.selected_index
-            && self.entries[cur_ix].id == *cur_id
-            && self.entries[cur_ix].search_label.starts_with(&query)
-        {
-            return Some((cur_ix, cur_id.clone()));
-        }
+        let best = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| {
+                ranked_match_score(&query, &entry.search_label).map(|score| (idx, score))
+            })
+            .min_by(|(left_idx, left_score), (right_idx, right_score)| {
+                left_score
+                    .cmp(right_score)
+                    .then_with(|| {
+                        let left_selected = self.selected_index == Some(*left_idx);
+                        let right_selected = self.selected_index == Some(*right_idx);
+                        right_selected.cmp(&left_selected)
+                    })
+                    .then_with(|| {
+                        self.entries[*left_idx]
+                            .label
+                            .len()
+                            .cmp(&self.entries[*right_idx].label.len())
+                    })
+                    .then_with(|| {
+                        self.entries[*left_idx].label.cmp(&self.entries[*right_idx].label)
+                    })
+            })?;
 
-        // Current selection doesn't match — find the first match from the top.
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.search_label.starts_with(&query) {
-                self.selected_tree_id = Some(entry.id.clone());
-                self.selected_index = Some(idx);
-                return Some((idx, entry.id.clone()));
-            }
-        }
-        None
+        let entry = &self.entries[best.0];
+        self.selected_tree_id = Some(entry.id.clone());
+        self.selected_index = Some(best.0);
+        Some((best.0, entry.id.clone()))
     }
 
     pub(crate) fn find_parent_connection_index(
@@ -313,5 +324,64 @@ impl SidebarModel {
         if self.selected_index.is_none() {
             self.selected_tree_id = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_with_entries(entries: Vec<SidebarEntry>) -> SidebarModel {
+        let entry_index_by_id = SidebarModel::build_index(&entries);
+        SidebarModel {
+            connecting_connection: None,
+            loading_databases: HashSet::new(),
+            expanded_nodes: HashSet::new(),
+            selected_tree_id: None,
+            selected_index: None,
+            entry_index_by_id,
+            entries,
+            search_open: false,
+            search_selected: None,
+            typeahead_query: String::new(),
+            typeahead_last: None,
+        }
+    }
+
+    #[test]
+    fn typeahead_uses_typo_tolerant_matching() {
+        let connection_id = Uuid::new_v4();
+        let mut model = model_with_entries(vec![
+            SidebarEntry::new(TreeNodeId::connection(connection_id), "Production", 0, true, true),
+            SidebarEntry::new(
+                TreeNodeId::database(connection_id, "analytics"),
+                "analytics",
+                1,
+                true,
+                false,
+            ),
+        ]);
+
+        model.typeahead_query = "prodction".to_string();
+        let (_, selected) = model.select_typeahead_match().expect("expected typo match");
+
+        assert_eq!(selected, TreeNodeId::connection(connection_id));
+    }
+
+    #[test]
+    fn typeahead_delete_keeps_the_session_active_when_empty() {
+        let connection_id = Uuid::new_v4();
+        let mut model = model_with_entries(vec![SidebarEntry::new(
+            TreeNodeId::connection(connection_id),
+            "Production",
+            0,
+            true,
+            true,
+        )]);
+        model.typeahead_query = "p".to_string();
+
+        assert!(model.handle_typeahead_key("backspace", None));
+        assert!(model.typeahead_query.is_empty());
+        assert!(model.typeahead_last.is_some());
     }
 }

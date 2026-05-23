@@ -496,8 +496,13 @@ impl Render for AppRoot {
                     window.focus(&sidebar.focus_handle);
                 });
             }))
-            .on_action(cx.listener(|this, _: &FocusContent, window, _cx| {
-                window.focus(&this.focus_handle);
+            .on_action(cx.listener(|this, _: &FocusContent, window, cx| {
+                let focused_content = this
+                    .content_area
+                    .update(cx, |content, cx| content.focus_current_view(window, cx));
+                if !focused_content {
+                    window.focus(&this.focus_handle);
+                }
             }))
             .on_action(cx.listener(|this, _: &DownloadUpdate, _window, cx| {
                 AppCommands::download_update(this.state.clone(), cx);
