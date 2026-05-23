@@ -4,6 +4,7 @@ mod actions;
 #[allow(dead_code)]
 pub(crate) mod ai_completion;
 mod explain;
+mod fast_filter;
 mod header;
 mod node_meta;
 mod pagination;

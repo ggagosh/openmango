@@ -83,15 +83,6 @@ fn move_cursor_inside_query_object(
     }
 }
 
-fn set_filter_object_default(
-    input: &mut InputState,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) {
-    input.set_value("{}".to_string(), window, cx);
-    move_cursor_inside_query_object(input, window, cx);
-}
-
 impl Render for CollectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.search_state.is_none() {
@@ -247,11 +238,10 @@ impl Render for CollectionView {
                     .code_editor("javascript")
                     .multi_line(false)
                     .submit_on_enter(true)
-                    .placeholder("find {}")
+                    .placeholder("status:active age>30 or { ... }")
                     .clean_on_escape();
                 state.lsp.completion_provider =
                     Some(Rc::new(FilterCompletionProvider::new(self.state.clone())));
-                state.set_value("{}".to_string(), window, cx);
                 state
             });
             let subscription =
@@ -321,11 +311,16 @@ impl Render for CollectionView {
                             let raw = state.read(cx).value().to_string();
                             match format_filter_query(&raw) {
                                 Ok(formatted) => {
+                                    let display = if raw.trim().is_empty() && formatted == "{}" {
+                                        String::new()
+                                    } else {
+                                        formatted.clone()
+                                    };
                                     state.update(cx, |input, cx| {
-                                        input.set_value(formatted.clone(), window, cx);
+                                        input.set_value(display.clone(), window, cx);
                                         move_cursor_inside_query_object(input, window, cx);
                                     });
-                                    view.filter_auto_pair.sync(&formatted);
+                                    view.filter_auto_pair.sync(&display);
                                     view.filter_error_message = None;
                                     if let Some(session_key) = view.view_model.current_session() {
                                         CollectionView::apply_filter(
@@ -355,10 +350,7 @@ impl Render for CollectionView {
                         InputEvent::Blur => {
                             let current = state.read(cx).value().to_string();
                             if current.trim().is_empty() {
-                                state.update(cx, |input, cx| {
-                                    set_filter_object_default(input, window, cx);
-                                });
-                                view.filter_auto_pair.sync("{}");
+                                view.filter_auto_pair.sync("");
                                 let had_error = view.filter_error_message.take().is_some();
                                 if had_error {
                                     cx.notify();
@@ -367,9 +359,7 @@ impl Render for CollectionView {
                         }
                         InputEvent::Focus => {
                             state.update(cx, |input, cx| {
-                                if input.value().trim().is_empty() {
-                                    set_filter_object_default(input, window, cx);
-                                } else {
+                                if !input.value().trim().is_empty() {
                                     move_cursor_inside_query_object(input, window, cx);
                                 }
                             });
@@ -669,7 +659,7 @@ impl Render for CollectionView {
             self.syncing_query_inputs = true;
             if let Some(filter_state) = self.filter_state.clone() {
                 let val = if filter_raw.trim().is_empty() {
-                    "{}".to_string()
+                    String::new()
                 } else {
                     collapse_to_single_line(&filter_raw)
                 };
@@ -700,7 +690,7 @@ impl Render for CollectionView {
             // Sync filter input when filter_raw was changed externally (e.g. AI "Open Collection").
             // Only sync when the input is not focused to avoid overwriting the user's typing.
             let expected = if filter_raw.trim().is_empty() {
-                "{}".to_string()
+                String::new()
             } else {
                 collapse_to_single_line(&filter_raw)
             };

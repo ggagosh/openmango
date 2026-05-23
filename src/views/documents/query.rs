@@ -1,12 +1,12 @@
 use gpui::*;
 use gpui_component::input::InputState;
-use mongodb::bson::Bson;
 use mongodb::bson::Document;
 
-use crate::bson::{format_relaxed_json_compact, parse_document_from_json};
+use crate::bson::parse_document_from_json;
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 
 use super::CollectionView;
+use super::fast_filter::{compile_filter_input, format_compiled_filter};
 
 impl CollectionView {
     pub(super) fn apply_filter(
@@ -17,22 +17,20 @@ impl CollectionView {
         cx: &mut App,
     ) {
         let raw = filter_state.read(cx).value().to_string();
-        let trimmed = normalized_filter_query(&raw);
 
-        if trimmed.is_empty() || trimmed == "{}" {
-            state.update(cx, |state, cx| {
-                state.clear_filter(&session_key);
-                state.set_status_message(Some(StatusMessage::info("Filter cleared")));
-                cx.notify();
-            });
-            AppCommands::load_documents_for_session(state.clone(), session_key, cx);
-            return;
-        }
-
-        match parse_document_from_json(&trimmed) {
-            Ok(filter) => {
+        match compile_filter_input(&raw) {
+            Ok(compiled) => {
+                let Some(filter) = compiled.document else {
+                    state.update(cx, |state, cx| {
+                        state.clear_filter(&session_key);
+                        state.set_status_message(Some(StatusMessage::info("Filter cleared")));
+                        cx.notify();
+                    });
+                    AppCommands::load_documents_for_session(state.clone(), session_key, cx);
+                    return;
+                };
                 state.update(cx, |state, cx| {
-                    state.set_filter(&session_key, trimmed.clone(), Some(filter));
+                    state.set_filter(&session_key, compiled.raw_store.clone(), Some(filter));
                     state.set_status_message(Some(StatusMessage::info("Filter applied")));
                     cx.notify();
                 });
@@ -41,7 +39,7 @@ impl CollectionView {
             Err(err) => {
                 state.update(cx, |state, cx| {
                     state.set_status_message(Some(StatusMessage::error(format!(
-                        "Invalid filter JSON: {err}"
+                        "Invalid filter: {err}"
                     ))));
                     cx.notify();
                 });
@@ -108,6 +106,10 @@ impl CollectionView {
 }
 
 pub(super) fn normalized_filter_query(raw: &str) -> String {
+    if let Ok(compiled) = compile_filter_input(raw) {
+        return format_compiled_filter(&compiled);
+    }
+
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return "{}".to_string();
@@ -119,10 +121,9 @@ pub(super) fn normalized_filter_query(raw: &str) -> String {
 }
 
 pub(super) fn format_filter_query(raw: &str) -> Result<String, String> {
-    let normalized = normalized_filter_query(raw);
-    let doc = parse_document_from_json(&normalized)?;
-    let value = Bson::Document(doc).into_relaxed_extjson();
-    Ok(format_relaxed_json_compact(&value))
+    compile_filter_input(raw)
+        .map(|compiled| format_compiled_filter(&compiled))
+        .map_err(|err| err.to_string())
 }
 
 /// Return a user-facing validation error for a query string, if any.
@@ -136,11 +137,9 @@ pub(super) fn query_validation_error(raw: &str) -> Option<String> {
 }
 
 pub(super) fn filter_query_validation_error(raw: &str) -> Option<String> {
-    let trimmed = normalized_filter_query(raw);
-    if trimmed == "{}" {
-        return None;
-    }
-    parse_document_from_json(&trimmed).err().map(|err| err.to_string())
+    compile_filter_input(raw)
+        .err()
+        .and_then(|err| if err.is_incomplete() { None } else { Some(err.to_string()) })
 }
 
 /// Check if a query string is valid (empty, `{}`, or parseable as a document).

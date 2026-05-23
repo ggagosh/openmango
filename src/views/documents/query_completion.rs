@@ -8,6 +8,7 @@ use lsp_types::{
 };
 use mongodb::bson::{Bson, Document};
 
+use crate::app::search::ranked_match_score;
 use crate::state::{AppCommands, AppState, SchemaField, SessionKey};
 use crate::views::forge::parser::{PositionKind, ScopeKind, parse_context};
 
@@ -34,6 +35,7 @@ struct ValueLiteral {
 
 #[derive(Clone, Debug, Default)]
 struct QueryEditorContext {
+    raw_text: String,
     position_kind: PositionKind,
     scope_kind: ScopeKind,
     token: String,
@@ -132,14 +134,21 @@ impl QueryCompletionProvider {
         cx: &mut Context<InputState>,
     ) -> QueryEditorContext {
         let text = rope.to_string();
-        let (token_start, token) = query_token(&text, offset);
+        let fast_filter = self.kind == QueryInputKind::Filter && is_fast_filter_text(&text);
+        let (token_start, token) =
+            if fast_filter { fast_filter_token(&text, offset) } else { query_token(&text, offset) };
         let replace_range = Range {
             start: rope.offset_to_position(token_start),
             end: rope.offset_to_position(offset.min(rope.len())),
         };
 
         let Some(session_key) = self.current_session_key(cx) else {
-            return QueryEditorContext { token, replace_range, ..Default::default() };
+            return QueryEditorContext {
+                raw_text: text,
+                token,
+                replace_range,
+                ..Default::default()
+            };
         };
 
         let (wrapped, wrapped_cursor) =
@@ -147,6 +156,7 @@ impl QueryCompletionProvider {
         let parsed = parse_context(&wrapped, wrapped_cursor);
 
         QueryEditorContext {
+            raw_text: text,
             position_kind: parsed.position_kind,
             scope_kind: parsed.scope_kind,
             token,
@@ -201,6 +211,10 @@ impl QueryCompletionProvider {
     ) -> Vec<CompletionItem> {
         if ctx.in_string_or_comment {
             return Vec::new();
+        }
+
+        if is_fast_filter_text(&ctx.raw_text) {
+            return self.fast_filter_items(ctx, cx);
         }
 
         let mut items = Vec::new();
@@ -283,6 +297,41 @@ impl QueryCompletionProvider {
                     ctx.replace_range,
                 ));
             }
+        }
+
+        rank_and_dedupe(items)
+    }
+
+    fn fast_filter_items(
+        &self,
+        ctx: &QueryEditorContext,
+        cx: &mut Context<InputState>,
+    ) -> Vec<CompletionItem> {
+        let Some(session_key) = ctx.session_key.as_ref() else {
+            return Vec::new();
+        };
+
+        let token = ctx.token.trim();
+        let field_token = token.strip_prefix('!').unwrap_or(token);
+        if fast_token_has_operator(field_token) {
+            return Vec::new();
+        }
+
+        let mut items = Vec::new();
+        for field in filter_field_candidates(self.field_candidates(session_key, cx), field_token) {
+            let snippet = if token.starts_with('!') {
+                format!("!{}$0", field.path)
+            } else {
+                format!("{}:$0", field.path)
+            };
+            items.push(completion_item(
+                field.path,
+                CompletionItemKind::FIELD,
+                "Field path",
+                snippet,
+                true,
+                ctx.replace_range,
+            ));
         }
 
         rank_and_dedupe(items)
@@ -383,7 +432,10 @@ impl CompletionProvider for QueryCompletionProvider {
         if new_text.is_empty() || new_text.chars().all(char::is_whitespace) {
             return false;
         }
-        new_text.chars().any(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$' | '.'))
+        new_text.chars().any(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, '_' | '$' | '.' | ':' | '>' | '<' | '=' | '~' | '!')
+        })
     }
 }
 
@@ -513,26 +565,40 @@ fn format_query_key(field: &str) -> String {
 }
 
 fn filter_field_candidates(fields: Vec<FieldCandidate>, token: &str) -> Vec<FieldCandidate> {
-    let token_lower = token.to_ascii_lowercase();
-    let only_top_level = token.is_empty() || !token.contains('.');
+    let token = token.trim();
+    let only_top_level = token.is_empty();
 
-    let mut filtered: Vec<FieldCandidate> = fields
+    let mut filtered: Vec<(usize, FieldCandidate)> = fields
         .into_iter()
-        .filter(|field| {
-            if !token_lower.is_empty() && !field.path.to_ascii_lowercase().starts_with(&token_lower)
-            {
-                return false;
-            }
+        .filter_map(|field| {
             if only_top_level && field.depth > 0 {
-                return false;
+                return None;
             }
-            true
+            let score = if token.is_empty() { 0 } else { field_match_score(token, &field.path)? };
+            Some((score, field))
         })
         .collect();
 
-    filtered.sort_unstable_by(compare_field_candidates);
+    filtered.sort_unstable_by(|(a_score, a), (b_score, b)| {
+        a_score.cmp(b_score).then_with(|| compare_field_candidates(a, b))
+    });
     filtered.truncate(24);
-    filtered
+    filtered.into_iter().map(|(_, field)| field).collect()
+}
+
+fn field_match_score(token: &str, path: &str) -> Option<usize> {
+    let path_score = ranked_match_score(token, path);
+    let leaf_score = path
+        .rsplit('.')
+        .next()
+        .and_then(|leaf| ranked_match_score(token, leaf))
+        .map(|score| score + 8);
+
+    match (path_score, leaf_score) {
+        (Some(path_score), Some(leaf_score)) => Some(path_score.min(leaf_score)),
+        (Some(score), None) | (None, Some(score)) => Some(score),
+        (None, None) => None,
+    }
 }
 
 fn compare_field_candidates(a: &FieldCandidate, b: &FieldCandidate) -> std::cmp::Ordering {
@@ -582,6 +648,29 @@ fn query_token(text: &str, offset: usize) -> (usize, String) {
     (start, text[start..offset].to_string())
 }
 
+fn fast_filter_token(text: &str, offset: usize) -> (usize, String) {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut start = offset;
+    while start > 0 {
+        if bytes[start - 1].is_ascii_whitespace() {
+            break;
+        }
+        start -= 1;
+    }
+    (start, text[start..offset].to_string())
+}
+
+fn is_fast_filter_text(text: &str) -> bool {
+    !text.trim_start().starts_with('{')
+}
+
+fn fast_token_has_operator(token: &str) -> bool {
+    [">=", "<=", "!=", ":!", ":", "=", "~", ">", "<"]
+        .iter()
+        .any(|operator| token.contains(operator))
+}
+
 fn completion_item(
     label: impl Into<String>,
     kind: CompletionItemKind,
@@ -613,8 +702,9 @@ fn rank_and_dedupe(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FieldCandidate, QueryInputKind, compare_field_candidates, field_penalty, format_query_key,
-        normalize_query_path, query_input_in_string_or_comment, query_token, wrap_query_input,
+        FieldCandidate, QueryInputKind, compare_field_candidates, fast_filter_token, field_penalty,
+        filter_field_candidates, format_query_key, normalize_query_path,
+        query_input_in_string_or_comment, query_token, wrap_query_input,
     };
 
     #[test]
@@ -634,6 +724,13 @@ mod tests {
         let (start, token) = query_token("{ profile.na", "{ profile.na".len());
         assert_eq!(start, 2);
         assert_eq!(token, "profile.na");
+    }
+
+    #[test]
+    fn fast_filter_token_keeps_negated_field_prefix() {
+        let (start, token) = fast_filter_token("status:active !dele", "status:active !dele".len());
+        assert_eq!(start, "status:active ".len());
+        assert_eq!(token, "!dele");
     }
 
     #[test]
@@ -663,5 +760,26 @@ mod tests {
             FieldCandidate { path: "__v".to_string(), depth: 0, presence: 10, sampled_count: 10 };
         assert!(compare_field_candidates(&normal, &internal).is_lt());
         assert!(field_penalty("__v") > field_penalty("status"));
+    }
+
+    #[test]
+    fn field_candidates_are_fuzzy_and_include_nested_matches() {
+        let fields = vec![
+            FieldCandidate {
+                path: "status".to_string(),
+                depth: 0,
+                presence: 10,
+                sampled_count: 10,
+            },
+            FieldCandidate {
+                path: "profile.email".to_string(),
+                depth: 1,
+                presence: 9,
+                sampled_count: 9,
+            },
+        ];
+
+        let results = filter_field_candidates(fields, "emial");
+        assert_eq!(results.first().map(|field| field.path.as_str()), Some("profile.email"));
     }
 }
