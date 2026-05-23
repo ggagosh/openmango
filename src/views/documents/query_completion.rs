@@ -12,6 +12,8 @@ use crate::app::search::ranked_match_score;
 use crate::state::{AppCommands, AppState, SchemaField, SessionKey};
 use crate::views::forge::parser::{PositionKind, ScopeKind, parse_context};
 
+use super::fast_filter::is_date_field;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryInputKind {
     Filter,
@@ -95,6 +97,29 @@ const FILTER_VALUE_LITERALS: &[ValueLiteral] = &[
     ValueLiteral { label: "null", snippet: "null", detail: "Null value" },
     ValueLiteral { label: "[]", snippet: "[$1]$0", detail: "Array literal" },
     ValueLiteral { label: "{}", snippet: "{$1}$0", detail: "Document literal" },
+];
+
+const DATE_SHORTCUT_LITERALS: &[ValueLiteral] = &[
+    ValueLiteral { label: "today", snippet: "today", detail: "UTC day range" },
+    ValueLiteral { label: "yesterday", snippet: "yesterday", detail: "Previous UTC day" },
+    ValueLiteral { label: "tomorrow", snippet: "tomorrow", detail: "Next UTC day" },
+    ValueLiteral { label: "now", snippet: "now", detail: "Current instant" },
+    ValueLiteral { label: "thisweek", snippet: "thisweek", detail: "Current UTC week" },
+    ValueLiteral { label: "lastweek", snippet: "lastweek", detail: "Previous UTC week" },
+    ValueLiteral { label: "thismonth", snippet: "thismonth", detail: "Current UTC month" },
+    ValueLiteral { label: "lastmonth", snippet: "lastmonth", detail: "Previous UTC month" },
+    ValueLiteral { label: "thisyear", snippet: "thisyear", detail: "Current UTC year" },
+    ValueLiteral { label: "lastyear", snippet: "lastyear", detail: "Previous UTC year" },
+    ValueLiteral { label: "last24h", snippet: "last24h", detail: "Rolling 24 hours" },
+    ValueLiteral { label: "last7d", snippet: "last7d", detail: "Rolling 7 days" },
+    ValueLiteral { label: "last30d", snippet: "last30d", detail: "Rolling 30 days" },
+    ValueLiteral { label: "next7d", snippet: "next7d", detail: "Next 7 days" },
+    ValueLiteral { label: "wtd", snippet: "wtd", detail: "Week to date" },
+    ValueLiteral { label: "mtd", snippet: "mtd", detail: "Month to date" },
+    ValueLiteral { label: "ytd", snippet: "ytd", detail: "Year to date" },
+    ValueLiteral { label: "YYYY-MM-DD", snippet: "2026-05-23", detail: "Specific UTC day" },
+    ValueLiteral { label: "YYYY-MM", snippet: "2026-05", detail: "Specific UTC month" },
+    ValueLiteral { label: "YYYYQ1", snippet: "2026Q1", detail: "Specific UTC quarter" },
 ];
 
 const SORT_VALUE_LITERALS: &[ValueLiteral] = &[
@@ -313,8 +338,17 @@ impl QueryCompletionProvider {
 
         let token = ctx.token.trim();
         let field_token = token.strip_prefix('!').unwrap_or(token);
-        if fast_token_has_operator(field_token) {
-            return Vec::new();
+        if let Some((field, operator, value_prefix)) = split_fast_value_token(field_token) {
+            if field.trim().is_empty() {
+                return Vec::new();
+            }
+            let prefix = if token.starts_with('!') { "!" } else { "" };
+            return fast_filter_value_items(
+                ctx,
+                &format!("{prefix}{field}{operator}"),
+                field,
+                value_prefix,
+            );
         }
 
         let mut items = Vec::new();
@@ -665,10 +699,74 @@ fn is_fast_filter_text(text: &str) -> bool {
     !text.trim_start().starts_with('{')
 }
 
-fn fast_token_has_operator(token: &str) -> bool {
-    [">=", "<=", "!=", ":!", ":", "=", "~", ">", "<"]
-        .iter()
-        .any(|operator| token.contains(operator))
+fn split_fast_value_token(token: &str) -> Option<(&str, &str, &str)> {
+    for operator in [">=", "<=", "!=", ":!", ":", "=", "~", ">", "<"] {
+        if let Some(index) = token.find(operator) {
+            let value_start = index + operator.len();
+            return Some((&token[..index], operator, &token[value_start..]));
+        }
+    }
+    None
+}
+
+fn fast_filter_value_items(
+    ctx: &QueryEditorContext,
+    token_prefix: &str,
+    field: &str,
+    value_prefix: &str,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    let value_prefix = value_prefix.trim();
+
+    if is_date_field(field) {
+        for literal in DATE_SHORTCUT_LITERALS {
+            push_fast_value_completion(&mut items, ctx, token_prefix, value_prefix, literal);
+        }
+    }
+
+    for constructor in BSON_CONSTRUCTORS {
+        if !matches_value_prefix(value_prefix, constructor.label) {
+            continue;
+        }
+        items.push(completion_item(
+            constructor.label,
+            CompletionItemKind::CONSTRUCTOR,
+            constructor.detail,
+            format!("{token_prefix}{}", constructor.snippet),
+            true,
+            ctx.replace_range,
+        ));
+    }
+
+    for literal in FILTER_VALUE_LITERALS {
+        push_fast_value_completion(&mut items, ctx, token_prefix, value_prefix, literal);
+    }
+
+    rank_and_dedupe(items)
+}
+
+fn push_fast_value_completion(
+    items: &mut Vec<CompletionItem>,
+    ctx: &QueryEditorContext,
+    token_prefix: &str,
+    value_prefix: &str,
+    literal: &ValueLiteral,
+) {
+    if !matches_value_prefix(value_prefix, literal.label) {
+        return;
+    }
+    items.push(completion_item(
+        literal.label,
+        CompletionItemKind::VALUE,
+        literal.detail,
+        format!("{token_prefix}{}", literal.snippet),
+        literal.snippet.contains('$'),
+        ctx.replace_range,
+    ));
+}
+
+fn matches_value_prefix(prefix: &str, label: &str) -> bool {
+    prefix.is_empty() || label.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase())
 }
 
 fn completion_item(
@@ -703,8 +801,8 @@ fn rank_and_dedupe(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
 mod tests {
     use super::{
         FieldCandidate, QueryInputKind, compare_field_candidates, fast_filter_token, field_penalty,
-        filter_field_candidates, format_query_key, normalize_query_path,
-        query_input_in_string_or_comment, query_token, wrap_query_input,
+        filter_field_candidates, format_query_key, matches_value_prefix, normalize_query_path,
+        query_input_in_string_or_comment, query_token, split_fast_value_token, wrap_query_input,
     };
 
     #[test]
@@ -731,6 +829,19 @@ mod tests {
         let (start, token) = fast_filter_token("status:active !dele", "status:active !dele".len());
         assert_eq!(start, "status:active ".len());
         assert_eq!(token, "!dele");
+    }
+
+    #[test]
+    fn fast_value_prefix_matching_is_case_insensitive() {
+        assert!(matches_value_prefix("iso", "ISODate"));
+        assert!(matches_value_prefix("TOD", "today"));
+        assert!(!matches_value_prefix("last9", "last7d"));
+    }
+
+    #[test]
+    fn fast_value_token_splits_field_operator_and_value_prefix() {
+        assert_eq!(split_fast_value_token("createdAt:to"), Some(("createdAt", ":", "to")));
+        assert_eq!(split_fast_value_token("createdAt>=last"), Some(("createdAt", ">=", "last")));
     }
 
     #[test]

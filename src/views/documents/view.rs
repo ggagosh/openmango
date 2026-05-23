@@ -18,7 +18,7 @@ use super::CollectionView;
 use super::header::render_stats_row;
 use super::query::{
     filter_query_validation_error, format_filter_query, is_valid_query, normalized_filter_query,
-    query_validation_error,
+    query_validation_error, strict_filter_query_validation_error,
 };
 use super::query_completion::{
     FilterCompletionProvider, QueryCompletionProvider, QueryInputKind,
@@ -127,6 +127,7 @@ impl Render for CollectionView {
             selected_count,
             any_selected_dirty,
             filter_raw,
+            filter_compiled_raw,
             sort_raw,
             projection_raw,
             query_options_open,
@@ -158,6 +159,7 @@ impl Render for CollectionView {
                 snapshot.selected_count,
                 snapshot.any_selected_dirty,
                 snapshot.filter_raw,
+                snapshot.filter_compiled_raw,
                 snapshot.sort_raw,
                 snapshot.projection_raw,
                 snapshot.query_options_open,
@@ -192,6 +194,7 @@ impl Render for CollectionView {
                 String::new(),
                 String::new(),
                 String::new(),
+                String::new(),
                 false,
                 false,
                 CollectionSubview::Documents,
@@ -211,14 +214,18 @@ impl Render for CollectionView {
                 String::new(),
             )
         };
-        let filter_active = !matches!(filter_raw.trim(), "" | "{}");
+        let filter_active = !matches!(filter_compiled_raw.trim(), "" | "{}");
         let sort_active = !matches!(sort_raw.trim(), "" | "{}");
         let projection_active = !matches!(projection_raw.trim(), "" | "{}");
         let filter_valid = self.filter_error_message.is_none();
 
         let filter_dirty = if let Some(ref fs) = self.filter_state {
             let input_text = normalized_filter_query(fs.read(cx).value().as_ref());
-            let applied = normalized_filter_query(&filter_raw);
+            let applied = if filter_compiled_raw.trim().is_empty() {
+                "{}".to_string()
+            } else {
+                filter_compiled_raw.clone()
+            };
             input_text != applied
         } else {
             false
@@ -309,43 +316,32 @@ impl Render for CollectionView {
                         }
                         InputEvent::PressEnter { .. } => {
                             let raw = state.read(cx).value().to_string();
-                            match format_filter_query(&raw) {
-                                Ok(formatted) => {
-                                    let display = if raw.trim().is_empty() && formatted == "{}" {
-                                        String::new()
-                                    } else {
-                                        formatted.clone()
-                                    };
-                                    state.update(cx, |input, cx| {
-                                        input.set_value(display.clone(), window, cx);
-                                        move_cursor_inside_query_object(input, window, cx);
-                                    });
-                                    view.filter_auto_pair.sync(&display);
-                                    view.filter_error_message = None;
-                                    if let Some(session_key) = view.view_model.current_session() {
-                                        CollectionView::apply_filter(
-                                            view.state.clone(),
-                                            session_key,
-                                            state.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    }
-                                    if let Some(panel) = view.filter_builder_panel.clone()
-                                        && let Ok(doc) =
-                                            crate::bson::parse_document_from_json(formatted.trim())
-                                    {
-                                        panel.update(cx, |p, cx| {
-                                            p.populate_from_document(&doc, window, cx);
-                                        });
-                                    }
-                                    cx.notify();
-                                }
-                                Err(err) => {
-                                    view.filter_error_message = Some(err);
-                                    cx.notify();
-                                }
+                            if let Some(err) = strict_filter_query_validation_error(&raw) {
+                                view.filter_error_message = Some(err);
+                                cx.notify();
+                                return;
                             }
+
+                            view.filter_error_message = None;
+                            if let Some(session_key) = view.view_model.current_session() {
+                                CollectionView::apply_filter(
+                                    view.state.clone(),
+                                    session_key,
+                                    state.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                            if let Some(panel) = view.filter_builder_panel.clone()
+                                && let Ok(formatted) = format_filter_query(&raw)
+                                && let Ok(doc) =
+                                    crate::bson::parse_document_from_json(formatted.trim())
+                            {
+                                panel.update(cx, |p, cx| {
+                                    p.populate_from_document(&doc, window, cx);
+                                });
+                            }
+                            cx.notify();
                         }
                         InputEvent::Blur => {
                             let current = state.read(cx).value().to_string();

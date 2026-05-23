@@ -1212,6 +1212,7 @@ pub struct SessionSnapshot {
     pub selected_count: usize,
     pub any_selected_dirty: bool,
     pub filter_raw: String,
+    pub filter_compiled_raw: String,
     pub sort_raw: String,
     pub projection_raw: String,
     pub query_options_open: bool,

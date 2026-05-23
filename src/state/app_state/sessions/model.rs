@@ -3,10 +3,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use mongodb::bson::Document;
+use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
-use crate::bson::DocumentKey;
+use crate::bson::{DocumentKey, format_relaxed_json_compact};
 use crate::state::AppState;
 use crate::state::app_state::types::{
     CollectionSubview, DocumentViewMode, SessionData, SessionKey, SessionSnapshot, SessionState,
@@ -122,6 +122,12 @@ impl AppState {
             selected_count,
             any_selected_dirty,
             filter_raw: session.data.filter_raw.clone(),
+            filter_compiled_raw: session
+                .data
+                .filter
+                .as_ref()
+                .map(format_document_compact)
+                .unwrap_or_default(),
             sort_raw: session.data.sort_raw.clone(),
             projection_raw: session.data.projection_raw.clone(),
             query_options_open: session.view.query_options_open,
@@ -290,4 +296,9 @@ impl AppState {
     pub fn ensure_session(&mut self, key: SessionKey) -> &mut SessionState {
         self.sessions.ensure(key)
     }
+}
+
+fn format_document_compact(doc: &Document) -> String {
+    let value = Bson::Document(doc.clone()).into_relaxed_extjson();
+    format_relaxed_json_compact(&value)
 }

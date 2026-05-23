@@ -1,10 +1,11 @@
-use crate::bson::parse_document_from_json;
+use crate::bson::{format_relaxed_json_compact, parse_document_from_json};
 use crate::state::app_state::StageDocCounts;
 use std::collections::{HashMap, HashSet};
 
 use crate::state::{
     CollectionSubview, TransferTabKey, TransferTabState, WorkspaceTab, WorkspaceTabKind,
 };
+use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
 use super::super::AppState;
@@ -196,7 +197,7 @@ impl AppState {
             };
             session.view.subview = restored_subview;
             session.view.stats_open = matches!(restored_subview, CollectionSubview::Stats);
-            restore_doc_option(&tab.filter_raw, |raw, doc| {
+            restore_filter_option(&tab.filter_raw, &tab.filter_compiled_raw, |raw, doc| {
                 session.data.filter_raw = raw;
                 session.data.filter = doc;
             });
@@ -236,6 +237,7 @@ impl AppState {
             TabKey::Collection(key) => {
                 let (
                     filter_raw,
+                    filter_compiled_raw,
                     sort_raw,
                     projection_raw,
                     aggregation_pipeline,
@@ -250,6 +252,12 @@ impl AppState {
                     .map(|session| {
                         (
                             session.data.filter_raw.clone(),
+                            session
+                                .data
+                                .filter
+                                .as_ref()
+                                .map(format_document_compact)
+                                .unwrap_or_default(),
                             session.data.sort_raw.clone(),
                             session.data.projection_raw.clone(),
                             session.data.aggregation.stages.clone(),
@@ -263,6 +271,7 @@ impl AppState {
                     })
                     .unwrap_or_else(|| {
                         (
+                            String::new(),
                             String::new(),
                             String::new(),
                             String::new(),
@@ -281,6 +290,7 @@ impl AppState {
                     kind: WorkspaceTabKind::Collection,
                     transfer: None,
                     filter_raw,
+                    filter_compiled_raw,
                     sort_raw,
                     projection_raw,
                     aggregation_pipeline,
@@ -303,6 +313,7 @@ impl AppState {
                 kind: WorkspaceTabKind::Database,
                 transfer: None,
                 filter_raw: String::new(),
+                filter_compiled_raw: String::new(),
                 sort_raw: String::new(),
                 projection_raw: String::new(),
                 aggregation_pipeline: Vec::new(),
@@ -326,6 +337,7 @@ impl AppState {
                     kind: WorkspaceTabKind::Transfer,
                     transfer: Some(transfer),
                     filter_raw: String::new(),
+                    filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
                     projection_raw: String::new(),
                     aggregation_pipeline: Vec::new(),
@@ -354,6 +366,7 @@ impl AppState {
                     kind: WorkspaceTabKind::Forge,
                     transfer: None,
                     filter_raw: String::new(),
+                    filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
                     projection_raw: String::new(),
                     aggregation_pipeline: Vec::new(),
@@ -378,6 +391,7 @@ impl AppState {
                     kind: WorkspaceTabKind::Database, // Placeholder, won't be saved
                     transfer: None,
                     filter_raw: String::new(),
+                    filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
                     projection_raw: String::new(),
                     aggregation_pipeline: Vec::new(),
@@ -453,6 +467,38 @@ fn restore_doc_option(raw: &str, mut apply: impl FnMut(String, Option<mongodb::b
     }
 }
 
+fn restore_filter_option(
+    display_raw: &str,
+    compiled_raw: &str,
+    mut apply: impl FnMut(String, Option<Document>),
+) {
+    let display_trimmed = display_raw.trim();
+    let compiled_trimmed = compiled_raw.trim();
+    if display_trimmed.is_empty() || display_trimmed == "{}" {
+        apply(String::new(), None);
+        return;
+    }
+
+    let raw_to_parse = if compiled_trimmed.is_empty() || compiled_trimmed == "{}" {
+        display_trimmed
+    } else {
+        compiled_trimmed
+    };
+
+    match parse_document_from_json(raw_to_parse) {
+        Ok(doc) => apply(display_raw.to_string(), Some(doc)),
+        Err(e) => {
+            log::warn!("Invalid filter JSON, resetting to empty: {e}");
+            apply(String::new(), None);
+        }
+    }
+}
+
+fn format_document_compact(doc: &Document) -> String {
+    let value = Bson::Document(doc.clone()).into_relaxed_extjson();
+    format_relaxed_json_compact(&value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +546,65 @@ mod tests {
     }
 
     #[test]
+    fn workspace_persists_filter_display_and_compiled_query() {
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+        let session = SessionKey::new(conn_id, "db", "col");
+
+        state.conn.selected_connection = Some(conn_id);
+        state.ensure_session(session.clone());
+        state.set_filter(
+            &session,
+            "status:active".to_string(),
+            Some(mongodb::bson::doc! { "status": "active" }),
+        );
+        state.tabs.open.push(TabKey::Collection(session));
+        state.tabs.active = ActiveTab::Index(0);
+
+        state.update_workspace_tabs();
+
+        let tab = &state.workspace.open_tabs[0];
+        assert_eq!(tab.filter_raw, "status:active");
+        assert_eq!(tab.filter_compiled_raw, "{status: \"active\"}");
+    }
+
+    #[test]
+    fn workspace_restores_filter_from_compiled_query_but_keeps_display_text() {
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+        state.workspace = crate::state::WorkspaceState::default();
+        state.workspace.open_tabs.push(WorkspaceTab {
+            database: "db".to_string(),
+            collection: "col".to_string(),
+            kind: WorkspaceTabKind::Collection,
+            transfer: None,
+            filter_raw: "status:active".to_string(),
+            filter_compiled_raw: "{status: \"active\"}".to_string(),
+            sort_raw: String::new(),
+            projection_raw: String::new(),
+            aggregation_pipeline: Vec::new(),
+            stats_open: false,
+            subview: CollectionSubview::Documents,
+            forge_content: String::new(),
+            ai_panel_open: false,
+            ai_draft_input: String::new(),
+            ai_entries: Vec::new(),
+            ai_messages: Vec::new(),
+            table_column_widths: HashMap::new(),
+            table_column_order: Vec::new(),
+            table_pinned_columns: HashSet::new(),
+            table_hidden_columns: HashSet::new(),
+        });
+
+        let _active = state.restore_tabs_from_workspace(conn_id, &["db".to_string()]);
+        let session = SessionKey::new(conn_id, "db", "col");
+        let data = state.session_data(&session).expect("session should restore");
+
+        assert_eq!(data.filter_raw, "status:active");
+        assert_eq!(data.filter, Some(mongodb::bson::doc! { "status": "active" }));
+    }
+
+    #[test]
     fn workspace_roundtrips_ai_chat_state() {
         let mut state = AppState::new();
         let conn_id = Uuid::new_v4();
@@ -539,6 +644,7 @@ mod tests {
             kind: WorkspaceTabKind::Ai,
             transfer: None,
             filter_raw: String::new(),
+            filter_compiled_raw: String::new(),
             sort_raw: String::new(),
             projection_raw: String::new(),
             aggregation_pipeline: Vec::new(),

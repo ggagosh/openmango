@@ -29,8 +29,9 @@ impl CollectionView {
                     AppCommands::load_documents_for_session(state.clone(), session_key, cx);
                     return;
                 };
+                let raw_store = raw.trim().to_string();
                 state.update(cx, |state, cx| {
-                    state.set_filter(&session_key, compiled.raw_store.clone(), Some(filter));
+                    state.set_filter(&session_key, raw_store.clone(), Some(filter));
                     state.set_status_message(Some(StatusMessage::info("Filter applied")));
                     cx.notify();
                 });
@@ -140,6 +141,10 @@ pub(super) fn filter_query_validation_error(raw: &str) -> Option<String> {
     compile_filter_input(raw)
         .err()
         .and_then(|err| if err.is_incomplete() { None } else { Some(err.to_string()) })
+}
+
+pub(super) fn strict_filter_query_validation_error(raw: &str) -> Option<String> {
+    compile_filter_input(raw).err().map(|err| err.to_string())
 }
 
 /// Check if a query string is valid (empty, `{}`, or parseable as a document).

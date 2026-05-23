@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Icons in context menus throughout the app (document actions, connection menu, field operations)
 - AI sample_values tool — the AI assistant can now inspect real field values to give better answers
 - Column pinning — pin frequently-used columns to the left so they stay visible while scrolling
+- Fast collection filters — type compact filters like `status:active age>30` instead of writing full MongoDB JSON
+- Smart filter value conversion — ObjectId fields accept bare 24-character IDs, and date fields accept shortcuts like `today`, `last7d`, `2026-05-23`, `2026-05`, `2026Q2`, and explicit ranges like `2026-05-01..2026-05-31`
+- Filter autocomplete now suggests field names, MongoDB constructors like `ISODate(...)` and `ObjectId(...)`, and date shortcuts after fast-filter operators
 
 ### Fixed
 - Search in JSON editors now wraps correctly in both directions — pressing Enter cycles forward through all matches, Shift+Enter cycles backward
@@ -33,9 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pressing Backspace with the typeahead indicator active no longer triggers the delete confirmation dialog
 - Preview tabs restored — single-clicking a collection opens an italic preview tab that gets replaced on the next click, matching VS Code behavior; previously every click opened a new permanent tab
 - Arrow keys now work in the sidebar tree after clicking a collection (previously stopped responding due to focus loss)
+- Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
-- Filter bar redesigned — find and sort inputs are now side-by-side in a unified segmented control instead of being hidden behind an "Options" toggle
+- Filter bar redesigned — filter stays primary with parsed readback chips, while sort and projection live in the Options panel
 - AI chat panel moved out of the documents view into its own dedicated space
 - Close buttons on tabs now only appear on hover (except the active tab)
 - Tab bar styling updated with padding and theme-aware background

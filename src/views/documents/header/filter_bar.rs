@@ -12,6 +12,8 @@ use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
 
+use super::super::fast_filter::filter_chips_for_input;
+
 fn set_query_object_default(
     input: &mut InputState,
     window: &mut Window,
@@ -28,9 +30,7 @@ pub fn render_filter_row(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     filter_state: Option<Entity<InputState>>,
-    sort_state: Option<Entity<InputState>>,
     filter_valid: bool,
-    sort_valid: bool,
     filter_active: bool,
     sort_active: bool,
     projection_active: bool,
@@ -63,7 +63,7 @@ pub fn render_filter_row(
                     .flex()
                     .items_center()
                     .flex_1()
-                    .min_w(px(360.0))
+                    .min_w(px(280.0))
                     .rounded(borders::radius_md())
                     .border_1()
                     .border_color(segmented_border)
@@ -80,17 +80,6 @@ pub fn render_filter_row(
                     "find {}",
                     filter_valid,
                     filter_active,
-                    disabled,
-                    cx,
-                ))
-                .child(div().w(px(1.0)).h(px(16.0)).bg(cx.theme().sidebar_border.opacity(0.32)))
-                .child(render_query_segment(
-                    "query-segment-sort",
-                    IconName::SortAscending,
-                    sort_state.clone(),
-                    "sort",
-                    sort_valid,
-                    false,
                     disabled,
                     cx,
                 ))
@@ -229,6 +218,14 @@ pub fn render_filter_row(
             }),
     );
 
+    let chips = filter_state
+        .as_ref()
+        .map(|state| filter_chips_for_input(&state.read(cx).value()))
+        .unwrap_or_default();
+    if !chips.is_empty() {
+        col = col.child(render_filter_chips(&chips, cx));
+    }
+
     if let Some(err) = filter_error_message {
         col = col.child(
             div()
@@ -244,6 +241,41 @@ pub fn render_filter_row(
     }
 
     col
+}
+
+fn render_filter_chips(chips: &[String], cx: &App) -> Div {
+    let visible_count = chips.len().min(8);
+    let remaining = chips.len().saturating_sub(visible_count);
+    let mut row = div().flex().flex_wrap().gap(px(4.0)).px(spacing::sm());
+
+    for chip in chips.iter().take(visible_count) {
+        row = row.child(
+            div()
+                .px(px(7.0))
+                .py(px(2.0))
+                .rounded(borders::radius_sm())
+                .border_1()
+                .border_color(cx.theme().sidebar_border.opacity(0.42))
+                .bg(cx.theme().secondary.opacity(0.16))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(chip.clone()),
+        );
+    }
+
+    if remaining > 0 {
+        row = row.child(
+            div()
+                .px(px(7.0))
+                .py(px(2.0))
+                .rounded(borders::radius_sm())
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("+{remaining}")),
+        );
+    }
+
+    row
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -331,6 +363,17 @@ pub fn render_query_options(
                 .border_1()
                 .border_color(segmented_border)
                 .bg(cx.theme().secondary.opacity(0.14))
+                .child(render_query_segment(
+                    "query-segment-sort",
+                    IconName::SortAscending,
+                    sort_state.clone(),
+                    "sort",
+                    sort_valid,
+                    sort_active,
+                    disabled,
+                    cx,
+                ))
+                .child(div().w(px(1.0)).h(px(16.0)).bg(cx.theme().sidebar_border.opacity(0.32)))
                 .child(render_query_segment(
                     "query-segment-project",
                     IconName::Braces,

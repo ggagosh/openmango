@@ -52,6 +52,8 @@ pub struct WorkspaceTab {
     #[serde(default)]
     pub filter_raw: String,
     #[serde(default)]
+    pub filter_compiled_raw: String,
+    #[serde(default)]
     pub sort_raw: String,
     #[serde(default)]
     pub projection_raw: String,
@@ -207,6 +209,7 @@ mod tests {
             kind: WorkspaceTabKind::Forge,
             transfer: None,
             filter_raw: String::new(),
+            filter_compiled_raw: String::new(),
             sort_raw: String::new(),
             projection_raw: String::new(),
             aggregation_pipeline: Vec::new(),
