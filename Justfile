@@ -46,6 +46,9 @@ test:
 test-verbose:
     cargo test -- --nocapture
 
+unit-test:
+    cargo test --bin openmango -- --test-threads=1
+
 # Maintenance
 udeps:
     cargo +nightly udeps
@@ -56,8 +59,8 @@ bloat:
 clean:
     cargo clean
 
-# CI checks (matches GitHub Actions)
-ci: fmt-check check-release lint-release check-sidecar
+# CI checks (matches GitHub Actions quality job; integration-tests still require Docker)
+ci: fmt-check check-release lint-release check-sidecar unit-test
 
 # All checks before commit
 precommit: ci test
