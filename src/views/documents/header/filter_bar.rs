@@ -222,35 +222,35 @@ pub fn render_filter_row(
         .as_ref()
         .map(|state| filter_chips_for_input(&state.read(cx).value()))
         .unwrap_or_default();
-    if !chips.is_empty() {
-        col = col.child(render_filter_chips(&chips, cx));
-    }
-
-    if let Some(err) = filter_error_message {
-        col = col.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(spacing::xs())
-                .px(spacing::sm())
-                .child(Icon::new(IconName::CircleX).size(px(12.0)).text_color(cx.theme().danger))
-                .child(
-                    div().text_xs().text_color(cx.theme().danger).truncate().child(err.to_string()),
-                ),
-        );
-    }
+    col = col.child(render_filter_feedback_row(&chips, filter_error_message, cx));
 
     col
+}
+
+fn render_filter_feedback_row(chips: &[String], error: Option<&str>, cx: &App) -> Div {
+    let row = div().flex().items_center().h(px(22.0)).overflow_hidden().px(spacing::sm());
+
+    if let Some(err) = error {
+        return row
+            .gap(spacing::xs())
+            .child(Icon::new(IconName::CircleX).size(px(12.0)).text_color(cx.theme().danger))
+            .child(
+                div().text_xs().text_color(cx.theme().danger).truncate().child(err.to_string()),
+            );
+    }
+
+    if chips.is_empty() { row } else { row.child(render_filter_chips(chips, cx)) }
 }
 
 fn render_filter_chips(chips: &[String], cx: &App) -> Div {
     let visible_count = chips.len().min(8);
     let remaining = chips.len().saturating_sub(visible_count);
-    let mut row = div().flex().flex_wrap().gap(px(4.0)).px(spacing::sm());
+    let mut row = div().flex().items_center().gap(px(4.0)).min_w(px(0.0)).overflow_hidden();
 
     for chip in chips.iter().take(visible_count) {
         row = row.child(
             div()
+                .flex_shrink_0()
                 .px(px(7.0))
                 .py(px(2.0))
                 .rounded(borders::radius_sm())
@@ -266,6 +266,7 @@ fn render_filter_chips(chips: &[String], cx: &App) -> Div {
     if remaining > 0 {
         row = row.child(
             div()
+                .flex_shrink_0()
                 .px(px(7.0))
                 .py(px(2.0))
                 .rounded(borders::radius_sm())
