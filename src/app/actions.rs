@@ -55,7 +55,7 @@ impl AppRoot {
                 }
 
                 if cmd_or_ctrl && !alt && !shift && key == "r" {
-                    this.handle_refresh(cx);
+                    this.handle_refresh(window, cx);
                     cx.stop_propagation();
                     return;
                 }
@@ -335,7 +335,14 @@ impl AppRoot {
         }
     }
 
-    pub(super) fn handle_refresh(&mut self, cx: &mut App) {
+    pub(super) fn handle_refresh(&mut self, window: &mut Window, cx: &mut App) {
+        let reloaded_sidebar_database = self
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.reload_selected_database_if_focused(window, cx));
+        if reloaded_sidebar_database {
+            return;
+        }
+
         let (current_view, session_key, database_key, subview) = {
             let state_ref = self.state.read(cx);
             let session_key = state_ref.current_session_key();
@@ -382,7 +389,7 @@ impl AppRoot {
                 let Some(database_key) = database_key else {
                     return;
                 };
-                AppCommands::load_database_overview(self.state.clone(), database_key, true, cx);
+                AppCommands::reload_database(self.state.clone(), database_key, cx);
             }
             View::Transfer | View::Forge | View::Settings | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {

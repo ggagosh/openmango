@@ -13,7 +13,7 @@ use crate::keyboard::{
 };
 use crate::models::TreeNodeId;
 use crate::state::{
-    AppCommands, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
+    AppCommands, AppState, CopiedTreeItem, DatabaseKey, StatusMessage, TransferMode, TransferScope,
 };
 use crate::theme::spacing;
 
@@ -219,8 +219,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            PopupMenuItem::new("Refresh Collections")
-                .icon(Icon::new(IconName::Redo))
+            menu_item_with_shortcut("Reload Database", "Cmd+R")
                 .action(Box::new(RefreshView))
                 .disabled(is_loading)
                 .on_click({
@@ -232,10 +231,9 @@ pub(crate) fn build_database_menu(
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.mark_database_loading(node_id.clone(), cx);
                         });
-                        AppCommands::load_collections(
+                        AppCommands::reload_database(
                             state.clone(),
-                            connection_id,
-                            database_for_refresh.clone(),
+                            DatabaseKey::new(connection_id, database_for_refresh.clone()),
                             cx,
                         );
                     }

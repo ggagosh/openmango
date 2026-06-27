@@ -11,7 +11,8 @@ use crate::components::{ConnectionDialog, ConnectionManager, open_confirm_dialog
 use crate::keyboard::FocusContent;
 use crate::models::{ActiveConnection, SavedConnection, TreeNodeId};
 use crate::state::{
-    AppCommands, AppEvent, AppState, CopiedTreeItem, StatusMessage, TransferMode, TransferScope,
+    AppCommands, AppEvent, AppState, CopiedTreeItem, DatabaseKey, StatusMessage, TransferMode,
+    TransferScope,
 };
 
 use super::dialogs::open_rename_collection_dialog;
@@ -326,6 +327,39 @@ impl Sidebar {
     pub(crate) fn mark_database_loading(&mut self, node_id: TreeNodeId, cx: &mut Context<Self>) {
         self.model.loading_databases.insert(node_id);
         cx.notify();
+    }
+
+    pub(crate) fn reload_selected_database_if_focused(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.model.search_open || !self.focus_handle.contains_focused(window, cx) {
+            return false;
+        }
+
+        self.reload_selected_database(cx)
+    }
+
+    fn reload_selected_database(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(TreeNodeId::Database { connection, database }) =
+            self.model.selected_tree_id.clone()
+        else {
+            return false;
+        };
+        if !self.state.read(cx).is_connected(connection) {
+            return false;
+        }
+
+        let node_id = TreeNodeId::database(connection, database.clone());
+        self.model.loading_databases.insert(node_id);
+        cx.notify();
+        AppCommands::reload_database(
+            self.state.clone(),
+            DatabaseKey::new(connection, database),
+            cx,
+        );
+        true
     }
 
     pub(crate) fn handle_transfer_action(&mut self, mode: TransferMode, cx: &mut Context<Self>) {

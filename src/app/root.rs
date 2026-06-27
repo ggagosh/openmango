@@ -30,7 +30,7 @@ const AI_ISLAND_MAX_WIDTH: f32 = 900.0;
 pub struct AppRoot {
     pub(super) state: Entity<AppState>,
     focus_handle: FocusHandle,
-    sidebar: Entity<Sidebar>,
+    pub(super) sidebar: Entity<Sidebar>,
     content_area: Entity<ContentArea>,
     ai_view: Entity<AiView>,
     pub(super) action_bar: Entity<ActionBar>,
@@ -461,8 +461,8 @@ impl Render for AppRoot {
                     cx.write_to_clipboard(ClipboardItem::new_string(name));
                 }
             }))
-            .on_action(cx.listener(|this, _: &RefreshView, _window, cx| {
-                this.handle_refresh(cx);
+            .on_action(cx.listener(|this, _: &RefreshView, window, cx| {
+                this.handle_refresh(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenActionBar, window, cx| {
                 this.action_bar.update(cx, |bar, cx| {

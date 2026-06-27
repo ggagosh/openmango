@@ -106,7 +106,7 @@ impl Render for DatabaseView {
                     let Some(key) = key.clone() else {
                         return;
                     };
-                    AppCommands::load_database_overview(state.clone(), key, true, cx);
+                    AppCommands::reload_database(state.clone(), key, cx);
                 }
             });
         let transfer_button = Button::new("open-transfer-db")
@@ -240,7 +240,7 @@ impl DatabaseView {
                                 let Some(key) = key.clone() else {
                                     return;
                                 };
-                                AppCommands::load_database_overview(state.clone(), key, true, cx);
+                                AppCommands::reload_database(state.clone(), key, cx);
                             }
                         }),
                 );
@@ -329,12 +329,7 @@ impl DatabaseView {
                                         let Some(key) = database_key.clone() else {
                                             return;
                                         };
-                                        AppCommands::load_database_overview(
-                                            state.clone(),
-                                            key,
-                                            true,
-                                            cx,
-                                        );
+                                        AppCommands::reload_database(state.clone(), key, cx);
                                     }
                                 }),
                         ),

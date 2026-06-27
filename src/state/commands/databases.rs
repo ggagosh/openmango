@@ -163,6 +163,7 @@ impl AppCommands {
                 let _ = cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         let mut status_message = None;
+                        let mut loaded_collections = None;
                         {
                             let session = state.ensure_database_session(database_key.clone());
                             session.data.stats_loading = false;
@@ -186,8 +187,9 @@ impl AppCommands {
                                     if let Some(conn) =
                                         state.active_connection_mut(database_key.connection_id)
                                     {
-                                        conn.collections.insert(database.clone(), names);
+                                        conn.collections.insert(database.clone(), names.clone());
                                     }
+                                    loaded_collections = Some(names);
                                 }
                                 Err(err) => {
                                     session.data.collections_error = Some(err.to_string());
@@ -195,6 +197,12 @@ impl AppCommands {
                                         Some(format!("Database collections failed: {err}"));
                                 }
                             }
+                        }
+
+                        if let Some(collections) = loaded_collections {
+                            let event = AppEvent::CollectionsLoaded(collections);
+                            state.update_status_from_event(&event);
+                            cx.emit(event);
                         }
 
                         if let Some(message) = status_message {
@@ -209,5 +217,14 @@ impl AppCommands {
             }
         })
         .detach();
+    }
+
+    /// Force a database reload, including overview metadata and sidebar collection names.
+    pub fn reload_database(state: Entity<AppState>, database_key: DatabaseKey, cx: &mut App) {
+        if !state.read(cx).is_connected(database_key.connection_id) {
+            return;
+        }
+
+        Self::load_database_overview(state, database_key, true, cx);
     }
 }
