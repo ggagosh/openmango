@@ -42,6 +42,7 @@ pub struct AppRoot {
     ai_dragging: bool,
     ai_drag_start_x: Pixels,
     ai_drag_start_width: f32,
+    ai_drag_current_width: Option<f32>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -270,6 +271,7 @@ impl AppRoot {
             ai_dragging: false,
             ai_drag_start_x: px(0.0),
             ai_drag_start_width: AI_ISLAND_DEFAULT_WIDTH,
+            ai_drag_current_width: None,
             _subscriptions: subscriptions,
         }
     }
@@ -300,10 +302,14 @@ impl Render for AppRoot {
         let show_status_bar = state.settings.appearance.show_status_bar;
         let appearance = state.settings.appearance.clone();
         let show_ai_island = state.ai_chat.panel_open && state.ai_assistant_available();
-        let ai_panel_width = state
+        let persisted_ai_panel_width = state
             .workspace
             .ai_panel_width
             .unwrap_or(AI_ISLAND_DEFAULT_WIDTH)
+            .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
+        let ai_panel_width = self
+            .ai_drag_current_width
+            .unwrap_or(persisted_ai_panel_width)
             .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
         let vibrancy = state.startup_vibrancy;
         let update_status = state.update_status.clone();
@@ -594,6 +600,7 @@ impl Render for AppRoot {
                             this.ai_dragging = true;
                             this.ai_drag_start_x = event.position.x;
                             this.ai_drag_start_width = ai_panel_width;
+                            this.ai_drag_current_width = Some(ai_panel_width);
                             cx.notify();
                         }),
                     );
@@ -654,15 +661,19 @@ impl Render for AppRoot {
                             let delta = event.position.x - this.ai_drag_start_x;
                             let new_width = (this.ai_drag_start_width - f32::from(delta))
                                 .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
-                            this.state.update(cx, |state, _cx| {
-                                state.set_workspace_ai_panel_width(new_width);
-                            });
+                            this.ai_drag_current_width = Some(new_width);
                             cx.notify();
                         }))
                         .on_mouse_up(
                             MouseButton::Left,
                             cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                let final_width = this.ai_drag_current_width.take();
                                 this.ai_dragging = false;
+                                if let Some(width) = final_width {
+                                    this.state.update(cx, |state, _cx| {
+                                        state.set_workspace_ai_panel_width(width);
+                                    });
+                                }
                                 cx.notify();
                             }),
                         );

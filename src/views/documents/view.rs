@@ -117,7 +117,7 @@ impl Render for CollectionView {
         let snapshot =
             session_key.as_ref().and_then(|session_key| state_ref.session_snapshot(session_key));
         let (
-            documents,
+            document_count,
             total,
             page,
             per_page,
@@ -149,7 +149,7 @@ impl Render for CollectionView {
             schema_filter,
         ) = if let Some(snapshot) = snapshot {
             (
-                snapshot.items,
+                snapshot.document_count,
                 snapshot.total,
                 snapshot.page,
                 snapshot.per_page,
@@ -182,7 +182,7 @@ impl Render for CollectionView {
             )
         } else {
             (
-                Vec::new(),
+                0,
                 0,
                 0,
                 50,
@@ -242,9 +242,7 @@ impl Render for CollectionView {
         if self.filter_state.is_none() {
             let filter_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
                     .multi_line(false)
-                    .submit_on_enter(true)
                     .placeholder("status:active age>30 or { ... }")
                     .clean_on_escape();
                 state.lsp.completion_provider =
@@ -443,9 +441,7 @@ impl Render for CollectionView {
         if self.sort_state.is_none() {
             let sort_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
                     .multi_line(false)
-                    .submit_on_enter(true)
                     .placeholder("sort")
                     .clean_on_escape();
                 state.lsp.completion_provider = Some(Rc::new(QueryCompletionProvider::new(
@@ -527,9 +523,7 @@ impl Render for CollectionView {
         if self.projection_state.is_none() {
             let projection_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("javascript")
                     .multi_line(false)
-                    .submit_on_enter(true)
                     .placeholder("project {}")
                     .clean_on_escape();
                 state.lsp.completion_provider = Some(Rc::new(QueryCompletionProvider::new(
@@ -612,10 +606,7 @@ impl Render for CollectionView {
         if self.schema_filter_state.is_none() {
             let schema_filter_state = cx.new(|cx| {
                 let mut state = InputState::new(window, cx)
-                    .code_editor("text")
-                    .line_number(false)
-                    .auto_indent(false)
-                    .submit_on_enter(true)
+                    .multi_line(false)
                     .placeholder("Filter fields...")
                     .clean_on_escape();
                 state.lsp.completion_provider =
@@ -843,7 +834,7 @@ impl Render for CollectionView {
 
         let content = match subview {
             CollectionSubview::Documents => self.render_documents_subview(
-                &documents,
+                document_count,
                 total,
                 display_page,
                 total_pages,

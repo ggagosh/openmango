@@ -3,18 +3,24 @@ use gpui_component::calendar::CalendarState;
 use gpui_component::input::InputState;
 use gpui_component::tree::TreeState;
 
-use mongodb::bson::Document;
-use regex::RegexBuilder;
-use std::collections::HashSet;
+use mongodb::bson::{Bson, Document};
+use regex::{Regex, RegexBuilder};
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use crate::bson::DocumentKey;
+use crate::bson::{
+    DocumentKey, PathSegment, bson_type_label, bson_value_preview, get_bson_at_path,
+    is_editable_value, path_to_id,
+};
 use crate::components::filter_builder::FilterBuilderPanel;
 use crate::helpers::auto_pair::AutoPairState;
 use crate::perf::log_tabs_duration;
-use crate::state::{AppCommands, AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
+use crate::state::{
+    AppCommands, AppEvent, AppState, CollectionSubview, SessionDocument, SessionKey, StatusMessage,
+};
 
 use super::node_meta::NodeMeta;
+use super::tree::document_tree::bson_tree_value_color;
 use super::view_model::DocumentViewModel;
 
 /// View for browsing documents in a collection
@@ -44,6 +50,7 @@ pub struct CollectionView {
     pub(crate) search_state: Option<Entity<InputState>>,
     pub(crate) search_visible: bool,
     pub(crate) search_matches: Vec<String>,
+    pub(crate) search_match_meta: HashMap<String, NodeMeta>,
     pub(crate) search_index: Option<usize>,
     pub(crate) search_case_sensitive: bool,
     pub(crate) search_whole_word: bool,
@@ -196,7 +203,13 @@ fn handle_aggregation_shortcut(
 
 impl CollectionView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let mut subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        let mut subscriptions = vec![cx.observe(&state, |this, state, cx| {
+            {
+                let state_ref = state.read(cx);
+                this.view_model.prune_tree_cache(state_ref);
+            }
+            cx.notify();
+        })];
 
         let weak_view = cx.entity().downgrade();
         subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
@@ -480,6 +493,7 @@ impl CollectionView {
             search_state: None,
             search_visible: false,
             search_matches: Vec::new(),
+            search_match_meta: HashMap::new(),
             search_index: None,
             search_case_sensitive: false,
             search_whole_word: false,
@@ -525,43 +539,37 @@ impl CollectionView {
         state: &Entity<AppState>,
         cx: &mut App,
     ) {
-        let state_ref = state.read(cx);
-        let Some(snapshot) = state_ref.session_snapshot(session_key) else {
-            return;
+        let (should_load_indexes, should_load_stats, should_analyze_schema) = {
+            let state_ref = state.read(cx);
+            let Some(session) = state_ref.session(session_key) else {
+                return;
+            };
+            let subview = session.view.subview;
+            (
+                subview == CollectionSubview::Indexes
+                    && session.data.indexes.is_none()
+                    && !session.data.indexes_loading
+                    && session.data.indexes_error.is_none(),
+                subview == CollectionSubview::Stats
+                    && session.data.stats.is_none()
+                    && !session.data.stats_loading
+                    && session.data.stats_error.is_none(),
+                subview == CollectionSubview::Schema
+                    && session.data.schema.is_none()
+                    && !session.data.schema_loading
+                    && session.data.schema_error.is_none(),
+            )
         };
 
-        let subview = snapshot.subview;
-        let indexes = snapshot.indexes;
-        let indexes_loading = snapshot.indexes_loading;
-        let indexes_error = snapshot.indexes_error;
-        let stats = snapshot.stats;
-        let stats_loading = snapshot.stats_loading;
-        let stats_error = snapshot.stats_error;
-
-        if subview == CollectionSubview::Indexes
-            && indexes.is_none()
-            && !indexes_loading
-            && indexes_error.is_none()
-        {
+        if should_load_indexes {
             AppCommands::load_collection_indexes(state.clone(), session_key.clone(), false, cx);
         }
 
-        if subview == CollectionSubview::Stats
-            && stats.is_none()
-            && !stats_loading
-            && stats_error.is_none()
-        {
+        if should_load_stats {
             AppCommands::load_collection_stats(state.clone(), session_key.clone(), cx);
         }
 
-        let schema = snapshot.schema;
-        let schema_loading = snapshot.schema_loading;
-        let schema_error = snapshot.schema_error;
-        if subview == CollectionSubview::Schema
-            && schema.is_none()
-            && !schema_loading
-            && schema_error.is_none()
-        {
+        if should_analyze_schema {
             AppCommands::analyze_collection_schema(state.clone(), session_key.clone(), cx);
         }
     }
@@ -688,6 +696,7 @@ impl CollectionView {
             });
         }
         self.search_matches.clear();
+        self.search_match_meta.clear();
         self.search_index = None;
         self.search_case_sensitive = false;
         self.search_whole_word = false;
@@ -718,34 +727,43 @@ impl CollectionView {
     pub(crate) fn update_search_results(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self.current_search_query(cx) else {
             self.search_matches.clear();
+            self.search_match_meta.clear();
             self.search_index = None;
             return;
         };
 
-        let case_sensitive = self.search_case_sensitive;
-        let whole_word = self.search_whole_word;
-        let use_regex = self.search_regex;
+        let Some(matcher) = SearchMatcher::new(
+            query,
+            self.search_case_sensitive,
+            self.search_whole_word,
+            self.search_regex,
+        ) else {
+            self.search_matches.clear();
+            self.search_match_meta.clear();
+            self.search_index = None;
+            return;
+        };
         let values_only = self.search_values_only;
 
-        let node_meta = self.view_model.node_meta();
         let mut matches = Vec::new();
-        for node_id in self.view_model.tree_order_all() {
-            let Some(meta) = node_meta.get(node_id) else {
-                continue;
-            };
-            if meta.path.is_empty() {
-                continue;
-            }
-            let key_matches = !values_only
-                && matches_query(&query, &meta.key_label, case_sensitive, whole_word, use_regex);
-            let value_matches =
-                matches_query(&query, &meta.value_label, case_sensitive, whole_word, use_regex);
-            if key_matches || value_matches {
-                matches.push(node_id.clone());
+        let mut match_meta = HashMap::new();
+        if let Some(session_key) = self.view_model.current_session() {
+            let state_ref = self.state.read(cx);
+            if let Some(session) = state_ref.session(&session_key) {
+                collect_document_search_matches(
+                    &session.data.items,
+                    &session.view.drafts,
+                    &matcher,
+                    values_only,
+                    &mut matches,
+                    &mut match_meta,
+                    cx,
+                );
             }
         }
 
         self.search_matches = matches;
+        self.search_match_meta = match_meta;
         if self.search_matches.is_empty() {
             self.search_index = None;
             return;
@@ -910,7 +928,11 @@ impl CollectionView {
             return;
         };
         let node_meta = self.view_model.node_meta();
-        let Some(meta) = node_meta.get(&match_id).cloned() else {
+        let Some(meta) = node_meta
+            .get(&match_id)
+            .cloned()
+            .or_else(|| self.search_match_meta.get(&match_id).cloned())
+        else {
             return;
         };
         let Some(session_key) = self.view_model.current_session() else {
@@ -936,46 +958,187 @@ impl CollectionView {
     }
 }
 
-pub(crate) fn matches_query(
-    query: &str,
-    text: &str,
-    case_sensitive: bool,
-    whole_word: bool,
-    use_regex: bool,
-) -> bool {
-    if query.is_empty() {
-        return false;
+fn collect_document_search_matches(
+    documents: &[SessionDocument],
+    drafts: &HashMap<DocumentKey, Document>,
+    matcher: &SearchMatcher,
+    values_only: bool,
+    matches: &mut Vec<String>,
+    match_meta: &mut HashMap<String, NodeMeta>,
+    cx: &App,
+) {
+    for item in documents {
+        let doc_key = &item.key;
+        let original = &item.doc;
+        let doc = drafts.get(doc_key).unwrap_or(original);
+
+        for (key, value) in doc.iter() {
+            collect_bson_search_matches(
+                doc_key,
+                original,
+                key.clone(),
+                vec![PathSegment::Key(key.clone())],
+                value,
+                matcher,
+                values_only,
+                matches,
+                match_meta,
+                cx,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_bson_search_matches(
+    doc_key: &DocumentKey,
+    original: &Document,
+    key_label: String,
+    path: Vec<PathSegment>,
+    value: &Bson,
+    matcher: &SearchMatcher,
+    values_only: bool,
+    matches: &mut Vec<String>,
+    match_meta: &mut HashMap<String, NodeMeta>,
+    cx: &App,
+) {
+    let value_label = bson_value_preview(value, 120);
+    let key_matches = !values_only && matcher.matches(&key_label);
+    let value_matches = matcher.matches(&value_label);
+    if key_matches || value_matches {
+        let node_id = path_to_id(doc_key, &path);
+        matches.push(node_id.clone());
+        match_meta.insert(
+            node_id,
+            search_node_meta(doc_key, original, key_label.clone(), &path, value, value_label, cx),
+        );
     }
 
-    if use_regex {
-        let Ok(re) = RegexBuilder::new(query).case_insensitive(!case_sensitive).build() else {
-            return false;
-        };
-        if whole_word {
-            for m in re.find_iter(text) {
-                let start_ok =
-                    m.start() == 0 || !text[..m.start()].ends_with(char::is_alphanumeric);
-                let end_ok =
-                    m.end() == text.len() || !text[m.end()..].starts_with(char::is_alphanumeric);
-                if start_ok && end_ok {
-                    return true;
-                }
+    match value {
+        Bson::Document(doc) => {
+            for (key, child) in doc.iter() {
+                let mut child_path = path.clone();
+                child_path.push(PathSegment::Key(key.clone()));
+                collect_bson_search_matches(
+                    doc_key,
+                    original,
+                    key.clone(),
+                    child_path,
+                    child,
+                    matcher,
+                    values_only,
+                    matches,
+                    match_meta,
+                    cx,
+                );
             }
-            false
-        } else {
-            re.is_match(text)
         }
-    } else if whole_word {
-        let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric() && c != '_').collect();
-        if case_sensitive {
-            words.contains(&query)
-        } else {
-            let q = query.to_lowercase();
-            words.iter().any(|w| w.to_lowercase() == q)
+        Bson::Array(values) => {
+            for (idx, child) in values.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(PathSegment::Index(idx));
+                collect_bson_search_matches(
+                    doc_key,
+                    original,
+                    format!("[{}]", idx),
+                    child_path,
+                    child,
+                    matcher,
+                    values_only,
+                    matches,
+                    match_meta,
+                    cx,
+                );
+            }
         }
-    } else if case_sensitive {
-        text.contains(query)
-    } else {
-        text.to_lowercase().contains(&query.to_lowercase())
+        _ => {}
+    }
+}
+
+fn search_node_meta(
+    doc_key: &DocumentKey,
+    original: &Document,
+    key_label: String,
+    path: &[PathSegment],
+    value: &Bson,
+    value_label: String,
+    cx: &App,
+) -> NodeMeta {
+    let is_editable = is_editable_value(value, path);
+    let original_value = get_bson_at_path(original, path);
+    NodeMeta {
+        key_label,
+        value_label,
+        value_color: bson_tree_value_color(value, cx),
+        type_label: bson_type_label(value).to_string(),
+        is_folder: matches!(value, Bson::Document(_) | Bson::Array(_)),
+        is_editable,
+        is_dirty: original_value.map(|orig| orig != value).unwrap_or(true),
+        doc_key: doc_key.clone(),
+        path: path.to_vec(),
+        value: if is_editable { Some(value.clone()) } else { None },
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SearchMatcher {
+    query: String,
+    query_lower: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    regex: Option<Regex>,
+}
+
+impl SearchMatcher {
+    pub(crate) fn new(
+        query: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        use_regex: bool,
+    ) -> Option<Self> {
+        if query.is_empty() {
+            return None;
+        }
+
+        let regex = if use_regex {
+            Some(RegexBuilder::new(&query).case_insensitive(!case_sensitive).build().ok()?)
+        } else {
+            None
+        };
+        let query_lower = if case_sensitive { String::new() } else { query.to_lowercase() };
+
+        Some(Self { query, query_lower, case_sensitive, whole_word, regex })
+    }
+
+    pub(crate) fn matches(&self, text: &str) -> bool {
+        if let Some(re) = &self.regex {
+            return if self.whole_word {
+                for m in re.find_iter(text) {
+                    let start_ok =
+                        m.start() == 0 || !text[..m.start()].ends_with(char::is_alphanumeric);
+                    let end_ok = m.end() == text.len()
+                        || !text[m.end()..].starts_with(char::is_alphanumeric);
+                    if start_ok && end_ok {
+                        return true;
+                    }
+                }
+                false
+            } else {
+                re.is_match(text)
+            };
+        }
+
+        if self.whole_word {
+            let words = text.split(|c: char| !c.is_alphanumeric() && c != '_');
+            if self.case_sensitive {
+                words.into_iter().any(|word| word == self.query)
+            } else {
+                words.into_iter().any(|word| word.to_lowercase() == self.query_lower)
+            }
+        } else if self.case_sensitive {
+            text.contains(&self.query)
+        } else {
+            text.to_lowercase().contains(&self.query_lower)
+        }
     }
 }

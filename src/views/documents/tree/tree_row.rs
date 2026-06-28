@@ -20,24 +20,21 @@ use crate::components::filter_builder::drag::{
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
-use crate::views::documents::state::matches_query;
+use crate::views::documents::state::SearchMatcher;
 use crate::views::documents::types::InlineEditor;
 
 use super::super::CollectionView;
 use super::tree_menus::{build_document_menu, build_property_menu};
 
 #[derive(Clone)]
-pub struct SearchOptions {
-    pub query: Option<String>,
-    pub case_sensitive: bool,
-    pub whole_word: bool,
-    pub use_regex: bool,
-    pub values_only: bool,
+pub(crate) struct SearchOptions {
+    pub(crate) matcher: Option<SearchMatcher>,
+    pub(crate) values_only: bool,
 }
 
 /// Render a single tree row with optional inline editing.
 #[allow(clippy::too_many_arguments)]
-pub fn render_tree_row(
+pub(crate) fn render_tree_row(
     ix: usize,
     entry: &TreeEntry,
     _selected: bool,
@@ -49,7 +46,7 @@ pub fn render_tree_row(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
     selected_docs: &HashSet<DocumentKey>,
-    tree_order: &[String],
+    tree_order: Arc<[String]>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     drag_enabled: bool,
@@ -125,7 +122,9 @@ pub fn render_tree_row(
     };
 
     let is_draggable_field = drag_enabled && !is_root && meta.is_some();
-    let drag_meta = meta.cloned();
+    // Only clone the (potentially heavy) node metadata when this row can
+    // actually start a drag; most rows never do.
+    let drag_meta = if is_draggable_field { meta.cloned() } else { None };
     let key_drag = if is_draggable_field {
         drag_meta.as_ref().map(|meta| {
             DragField::from_path_segments(&meta.path, &meta.type_label, meta.value.as_ref())
@@ -163,7 +162,7 @@ pub fn render_tree_row(
             let row_state = row_state.clone();
             let row_tree = row_tree.clone();
             let range_node_meta = node_meta.clone();
-            let range_tree_order: Vec<String> = tree_order.to_vec();
+            let range_tree_order = tree_order.clone();
             move |event, window, cx| {
                 window.focus(&row_focus);
                 cx.stop_propagation();
@@ -225,6 +224,7 @@ pub fn render_tree_row(
             }
         })
         .child(render_key_column(
+            ix,
             depth,
             leading,
             &key_label,
@@ -396,19 +396,14 @@ pub fn render_readonly_tree_row(
             }
         })
         .child(render_key_column(
+            ix,
             depth,
             leading,
             &key_label,
             is_root,
             None,
             false,
-            &SearchOptions {
-                query: None,
-                case_sensitive: false,
-                whole_word: false,
-                use_regex: false,
-                values_only: false,
-            },
+            &SearchOptions { matcher: None, values_only: false },
             None,
             &item_id,
             cx,
@@ -429,6 +424,7 @@ pub fn render_readonly_tree_row(
 
 #[allow(clippy::too_many_arguments)]
 fn render_key_column(
+    ix: usize,
     depth: usize,
     leading: AnyElement,
     key_label: &str,
@@ -442,22 +438,13 @@ fn render_key_column(
 ) -> impl IntoElement {
     let key_color = colors::syntax_key(cx);
     let key_label = key_label.to_string();
-    let is_key_match = if let Some(query) = &search_opts.query {
-        !search_opts.values_only
-            && matches_query(
-                query,
-                &key_label,
-                search_opts.case_sensitive,
-                search_opts.whole_word,
-                search_opts.use_regex,
-            )
-    } else {
-        false
-    };
+    let is_key_match = !search_opts.values_only
+        && search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&key_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id);
 
+    // Index-based id avoids allocating + hashing a per-node string every frame.
     let mut key = div()
-        .id(SharedString::from(format!("tree-key-{item_id}")))
+        .id(("tree-key", ix))
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -528,22 +515,14 @@ fn render_value_column(
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
     let value_label = value_label.to_string();
-    let is_match = if let Some(query) = &search_opts.query {
-        matches_query(
-            query,
-            &value_label,
-            search_opts.case_sensitive,
-            search_opts.whole_word,
-            search_opts.use_regex,
-        )
-    } else {
-        false
-    };
+    let is_match =
+        search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&value_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
     let focus_handle = documents_focus.clone();
 
+    // Index-based id avoids allocating + hashing a per-node string every frame.
     let mut value = div()
-        .id(SharedString::from(format!("tree-value-{item_id}")))
+        .id(("tree-value", ix))
         .flex()
         .items_center()
         .gap(spacing::xs())

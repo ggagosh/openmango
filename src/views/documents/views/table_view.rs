@@ -2,7 +2,7 @@ use gpui::*;
 use gpui_component::table::Table;
 
 use crate::bson::DocumentKey;
-use crate::state::{SessionDocument, SessionKey};
+use crate::state::SessionKey;
 
 use super::super::CollectionView;
 
@@ -10,7 +10,6 @@ impl CollectionView {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::views::documents) fn render_table_subview(
         &mut self,
-        _documents: &[SessionDocument],
         total: u64,
         display_page: u64,
         total_pages: u64,

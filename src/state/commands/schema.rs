@@ -36,22 +36,26 @@ impl AppCommands {
             cx.notify();
         });
 
-        let task =
-            cx.background_spawn({
-                let database = database.clone();
-                let collection = collection.clone();
-                async move {
-                    manager.sample_for_schema(&client, &database, &collection, SCHEMA_SAMPLE_SIZE)
-                }
-            });
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let collection = collection.clone();
+            async move {
+                let (docs, total) = manager.sample_for_schema(
+                    &client,
+                    &database,
+                    &collection,
+                    SCHEMA_SAMPLE_SIZE,
+                )?;
+                Ok::<_, crate::error::Error>(build_schema_analysis(&docs, total))
+            }
+        });
 
         cx.spawn({
             let state = state.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result = task.await;
+                let result: Result<SchemaAnalysis, crate::error::Error> = task.await;
                 let _ = cx.update(|cx| match result {
-                    Ok((docs, total)) => {
-                        let analysis = build_schema_analysis(&docs, total);
+                    Ok(analysis) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
                                 session.data.schema = Some(analysis);

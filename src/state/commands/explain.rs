@@ -27,6 +27,12 @@ struct ParsedExplain {
     bottlenecks: Vec<ExplainBottleneck>,
 }
 
+struct PreparedExplain {
+    generated_at_unix_ms: u64,
+    raw_json: String,
+    parsed: ParsedExplain,
+}
+
 impl AppCommands {
     pub fn run_explain_for_session(state: Entity<AppState>, session_key: SessionKey, cx: &mut App) {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
@@ -69,30 +75,29 @@ impl AppCommands {
 
         let manager = state.read(cx).connection_manager();
         let task = cx.background_spawn(async move {
-            manager.explain_find(
-                &client,
-                ExplainFindRequest {
-                    database,
-                    collection,
-                    filter,
-                    sort,
-                    projection,
-                    verbosity: EXPLAIN_VERBOSITY.to_string(),
-                },
-            )
+            manager
+                .explain_find(
+                    &client,
+                    ExplainFindRequest {
+                        database,
+                        collection,
+                        filter,
+                        sort,
+                        projection,
+                        verbosity: EXPLAIN_VERBOSITY.to_string(),
+                    },
+                )
+                .map(prepare_explain)
         });
 
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<Document, crate::error::Error> = task.await;
+                let result: Result<PreparedExplain, crate::error::Error> = task.await;
 
                 let _ = cx.update(|cx| match result {
-                    Ok(explain_doc) => {
-                        let parsed = parse_explain_document(&explain_doc);
-                        let raw_json = explain_to_pretty_json(&explain_doc);
-                        let generated_at_unix_ms = now_unix_ms();
+                    Ok(prepared) => {
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
@@ -105,15 +110,15 @@ impl AppCommands {
                             explain.view_mode = ExplainViewMode::Tree;
                             explain.stale = false;
                             let run = ExplainRun {
-                                id: format!("{generated_at_unix_ms}-{signature:016x}"),
-                                generated_at_unix_ms,
+                                id: format!("{}-{signature:016x}", prepared.generated_at_unix_ms),
+                                generated_at_unix_ms: prepared.generated_at_unix_ms,
                                 signature: Some(signature),
                                 scope: ExplainScope::Find,
-                                raw_json,
-                                nodes: parsed.nodes,
-                                summary: parsed.summary,
-                                rejected_plans: parsed.rejected_plans,
-                                bottlenecks: parsed.bottlenecks,
+                                raw_json: prepared.raw_json,
+                                nodes: prepared.parsed.nodes,
+                                summary: prepared.parsed.summary,
+                                rejected_plans: prepared.parsed.rejected_plans,
+                                bottlenecks: prepared.parsed.bottlenecks,
                             };
                             explain.push_run_with_limit(run, EXPLAIN_HISTORY_LIMIT);
 
@@ -229,26 +234,19 @@ impl AppCommands {
 
         let manager = state.read(cx).connection_manager();
         let task = cx.background_spawn(async move {
-            manager.explain_aggregation(
-                &client,
-                &database,
-                &collection,
-                pipeline,
-                EXPLAIN_VERBOSITY,
-            )
+            manager
+                .explain_aggregation(&client, &database, &collection, pipeline, EXPLAIN_VERBOSITY)
+                .map(prepare_explain)
         });
 
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<Document, crate::error::Error> = task.await;
+                let result: Result<PreparedExplain, crate::error::Error> = task.await;
 
                 let _ = cx.update(|cx| match result {
-                    Ok(explain_doc) => {
-                        let parsed = parse_explain_document(&explain_doc);
-                        let raw_json = explain_to_pretty_json(&explain_doc);
-                        let generated_at_unix_ms = now_unix_ms();
+                    Ok(prepared) => {
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
@@ -261,15 +259,15 @@ impl AppCommands {
                             explain.view_mode = ExplainViewMode::Tree;
                             explain.stale = false;
                             let run = ExplainRun {
-                                id: format!("{generated_at_unix_ms}-{signature:016x}"),
-                                generated_at_unix_ms,
+                                id: format!("{}-{signature:016x}", prepared.generated_at_unix_ms),
+                                generated_at_unix_ms: prepared.generated_at_unix_ms,
                                 signature: Some(signature),
                                 scope: ExplainScope::Aggregation,
-                                raw_json,
-                                nodes: parsed.nodes,
-                                summary: parsed.summary,
-                                rejected_plans: parsed.rejected_plans,
-                                bottlenecks: parsed.bottlenecks,
+                                raw_json: prepared.raw_json,
+                                nodes: prepared.parsed.nodes,
+                                summary: prepared.parsed.summary,
+                                rejected_plans: prepared.parsed.rejected_plans,
+                                bottlenecks: prepared.parsed.bottlenecks,
                             };
                             explain.push_run_with_limit(run, EXPLAIN_HISTORY_LIMIT);
 
@@ -388,6 +386,12 @@ fn now_unix_ms() -> u64 {
 fn explain_to_pretty_json(explain_doc: &Document) -> String {
     let value = Bson::Document(explain_doc.clone()).into_relaxed_extjson();
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+}
+
+fn prepare_explain(explain_doc: Document) -> PreparedExplain {
+    let parsed = parse_explain_document(&explain_doc);
+    let raw_json = explain_to_pretty_json(&explain_doc);
+    PreparedExplain { generated_at_unix_ms: now_unix_ms(), raw_json, parsed }
 }
 
 fn parse_explain_document(explain_doc: &Document) -> ParsedExplain {

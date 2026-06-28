@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::bson::{DocumentKey, format_relaxed_json_compact};
 use crate::state::AppState;
 use crate::state::app_state::types::{
-    CollectionSubview, DocumentViewMode, SessionData, SessionKey, SessionSnapshot, SessionState,
-    SessionViewState,
+    CollectionSubview, DocumentViewMode, ExplainOpenMode, SessionData, SessionKey, SessionSnapshot,
+    SessionState, SessionViewState,
 };
 
 #[derive(Default)]
@@ -111,8 +111,15 @@ impl AppState {
         let selected_docs = session.view.selected_docs.clone();
         let selected_count = selected_docs.len();
         let any_selected_dirty = selected_docs.iter().any(|k| session.view.dirty.contains(k));
+        let subview = session.view.subview;
+        let explain_active = session.data.explain.loading
+            || !matches!(session.data.explain.open_mode, ExplainOpenMode::Closed);
         Some(SessionSnapshot {
-            items: session.data.items.clone(),
+            document_count: if subview == CollectionSubview::Documents {
+                session.data.items.len()
+            } else {
+                0
+            },
             total: session.data.total,
             page: session.data.page,
             per_page: session.data.per_page,
@@ -132,17 +139,32 @@ impl AppState {
             projection_raw: session.data.projection_raw.clone(),
             query_options_open: session.view.query_options_open,
             filter_builder_open: session.view.filter_builder_open,
-            subview: session.view.subview,
-            stats: session.data.stats.clone(),
+            subview,
+            stats: if subview == CollectionSubview::Stats {
+                session.data.stats.clone()
+            } else {
+                None
+            },
             stats_loading: session.data.stats_loading,
             stats_error: session.data.stats_error.clone(),
-            indexes: session.data.indexes.clone(),
+            indexes: if subview == CollectionSubview::Indexes {
+                session.data.indexes.clone()
+            } else {
+                None
+            },
             indexes_loading: session.data.indexes_loading,
             indexes_error: session.data.indexes_error.clone(),
-            aggregation: session.data.aggregation.clone(),
-            explain: session.data.explain.clone(),
-            ai_chat: session.data.ai_chat.clone(),
-            schema: session.data.schema.clone(),
+            aggregation: if subview == CollectionSubview::Aggregation {
+                session.data.aggregation.clone()
+            } else {
+                Default::default()
+            },
+            explain: if explain_active { session.data.explain.clone() } else { Default::default() },
+            schema: if subview == CollectionSubview::Schema {
+                session.data.schema.clone()
+            } else {
+                None
+            },
             schema_loading: session.data.schema_loading,
             schema_error: session.data.schema_error.clone(),
             schema_selected_field: session.view.schema_selected_field.clone(),

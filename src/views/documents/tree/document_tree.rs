@@ -58,25 +58,30 @@ pub fn build_documents_tree(
         };
         meta.insert(root_id.clone(), root_meta);
 
+        let is_expanded = expanded_nodes.contains(&root_id);
         let mut root = TreeItem::new(root_id.clone(), key_label)
+            .folder(!doc.is_empty())
             .expanded(expanded_nodes.contains(&root_id))
             .disabled(true);
-        let children: Vec<TreeItem> = doc
-            .iter()
-            .map(|(key, value)| {
-                build_bson_tree_item(
-                    &doc_key,
-                    key.clone(),
-                    vec![PathSegment::Key(key.clone())],
-                    value,
-                    original,
-                    expanded_nodes,
-                    &mut meta,
-                    cx,
-                )
-            })
-            .collect();
-        root = root.children(children);
+        if is_expanded {
+            let children: Vec<TreeItem> = doc
+                .iter()
+                .map(|(key, value)| {
+                    build_bson_tree_item(
+                        &doc_key,
+                        key.clone(),
+                        vec![PathSegment::Key(key.clone())],
+                        value,
+                        original,
+                        is_doc_dirty,
+                        expanded_nodes,
+                        &mut meta,
+                        cx,
+                    )
+                })
+                .collect();
+            root = root.children(children);
+        }
         items.push(root);
     }
 
@@ -96,34 +101,33 @@ pub fn build_bson_tree_item(
     path: Vec<PathSegment>,
     value: &Bson,
     original: &Document,
+    doc_is_dirty: bool,
     expanded_nodes: &HashSet<String>,
     meta: &mut HashMap<String, NodeMeta>,
     cx: &App,
 ) -> TreeItem {
     let node_id = path_to_id(doc_key, &path);
     let is_folder = matches!(value, Bson::Document(_) | Bson::Array(_));
+    let has_children = match value {
+        Bson::Document(doc) => !doc.is_empty(),
+        Bson::Array(arr) => !arr.is_empty(),
+        _ => false,
+    };
+    let is_expanded = is_folder && expanded_nodes.contains(&node_id);
     let is_editable = is_editable_value(value, &path);
-    let original_value = get_bson_at_path(original, &path);
-    let is_dirty = original_value.map(|orig| orig != value).unwrap_or(true);
+    // Only diff against the original when this document actually has a draft.
+    // Clean documents are never dirty, so we skip the deep BSON subtree
+    // comparison (which is O(subtree) per node, i.e. O(N^2) over the tree).
+    let is_dirty = if doc_is_dirty {
+        get_bson_at_path(original, &path).map(|orig| orig != value).unwrap_or(true)
+    } else {
+        false
+    };
 
     let value_label = bson_value_preview(value, 120);
     let type_label = bson_type_label(value).to_string();
 
-    let value_color = match value {
-        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(cx),
-        Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Decimal128(_) => {
-            colors::syntax_number(cx)
-        }
-        Bson::Boolean(_) => colors::syntax_boolean(cx),
-        Bson::Null | Bson::Undefined => colors::syntax_null(cx),
-        Bson::ObjectId(_) => colors::syntax_object_id(cx),
-        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(cx),
-        Bson::RegularExpression(_) | Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => {
-            colors::syntax_comment(cx)
-        }
-        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => cx.theme().muted_foreground,
-        _ => cx.theme().foreground,
-    };
+    let value_color = bson_tree_value_color(value, cx);
 
     meta.insert(
         node_id.clone(),
@@ -142,55 +146,78 @@ pub fn build_bson_tree_item(
     );
 
     let mut item = TreeItem::new(node_id.clone(), key_label)
-        .expanded(expanded_nodes.contains(&node_id))
+        .folder(has_children)
+        .expanded(is_expanded)
         .disabled(true);
 
-    match value {
-        Bson::Document(doc) => {
-            let children: Vec<TreeItem> = doc
-                .iter()
-                .map(|(key, value)| {
-                    let mut child_path = path.clone();
-                    child_path.push(PathSegment::Key(key.clone()));
-                    build_bson_tree_item(
-                        doc_key,
-                        key.clone(),
-                        child_path,
-                        value,
-                        original,
-                        expanded_nodes,
-                        meta,
-                        cx,
-                    )
-                })
-                .collect();
-            item = item.children(children);
+    if is_expanded {
+        match value {
+            Bson::Document(doc) => {
+                let children: Vec<TreeItem> = doc
+                    .iter()
+                    .map(|(key, value)| {
+                        let mut child_path = path.clone();
+                        child_path.push(PathSegment::Key(key.clone()));
+                        build_bson_tree_item(
+                            doc_key,
+                            key.clone(),
+                            child_path,
+                            value,
+                            original,
+                            doc_is_dirty,
+                            expanded_nodes,
+                            meta,
+                            cx,
+                        )
+                    })
+                    .collect();
+                item = item.children(children);
+            }
+            Bson::Array(arr) => {
+                let children: Vec<TreeItem> = arr
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, value)| {
+                        let mut child_path = path.clone();
+                        child_path.push(PathSegment::Index(idx));
+                        build_bson_tree_item(
+                            doc_key,
+                            format!("[{}]", idx),
+                            child_path,
+                            value,
+                            original,
+                            doc_is_dirty,
+                            expanded_nodes,
+                            meta,
+                            cx,
+                        )
+                    })
+                    .collect();
+                item = item.children(children);
+            }
+            _ => {}
         }
-        Bson::Array(arr) => {
-            let children: Vec<TreeItem> = arr
-                .iter()
-                .enumerate()
-                .map(|(idx, value)| {
-                    let mut child_path = path.clone();
-                    child_path.push(PathSegment::Index(idx));
-                    build_bson_tree_item(
-                        doc_key,
-                        format!("[{}]", idx),
-                        child_path,
-                        value,
-                        original,
-                        expanded_nodes,
-                        meta,
-                        cx,
-                    )
-                })
-                .collect();
-            item = item.children(children);
-        }
-        _ => {}
     }
 
     item
+}
+
+pub(in crate::views::documents) fn bson_tree_value_color(value: &Bson, cx: &App) -> Hsla {
+    match value {
+        Bson::String(_) | Bson::Symbol(_) => colors::syntax_string(cx),
+        Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Decimal128(_) => {
+            colors::syntax_number(cx)
+        }
+        Bson::Boolean(_) => colors::syntax_boolean(cx),
+        Bson::Null | Bson::Undefined => colors::syntax_null(cx),
+        Bson::ObjectId(_) => colors::syntax_object_id(cx),
+        Bson::DateTime(_) | Bson::Timestamp(_) => colors::syntax_date(cx),
+        Bson::RegularExpression(_) | Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => {
+            colors::syntax_comment(cx)
+        }
+        Bson::Document(_) | Bson::Array(_) | Bson::Binary(_) => cx.theme().muted_foreground,
+        _ => cx.theme().foreground,
+    }
 }
 
 /// Flatten the tree order for visible nodes.
@@ -200,13 +227,5 @@ pub fn flatten_tree_order(item: &TreeItem, order: &mut Vec<String>) {
         for child in &item.children {
             flatten_tree_order(child, order);
         }
-    }
-}
-
-/// Flatten the tree order for all nodes, regardless of expanded state.
-pub fn flatten_tree_order_all(item: &TreeItem, order: &mut Vec<String>) {
-    order.push(item.id.to_string());
-    for child in &item.children {
-        flatten_tree_order_all(child, order);
     }
 }

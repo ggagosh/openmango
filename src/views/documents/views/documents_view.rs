@@ -1,14 +1,13 @@
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::tree::tree;
 use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
-use crate::state::{DocumentViewMode, SessionDocument, SessionKey};
+use crate::state::{DocumentViewMode, SessionKey};
 use crate::theme::spacing;
 
 use super::super::CollectionView;
@@ -19,7 +18,7 @@ impl CollectionView {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::views::documents) fn render_documents_subview(
         &mut self,
-        documents: &[SessionDocument],
+        document_count: usize,
         total: u64,
         display_page: u64,
         total_pages: u64,
@@ -39,7 +38,6 @@ impl CollectionView {
             .unwrap_or_default();
         if view_mode == DocumentViewMode::Table {
             return self.render_table_subview(
-                documents,
                 total,
                 display_page,
                 total_pages,
@@ -79,6 +77,7 @@ impl CollectionView {
             .flex()
             .flex_1()
             .min_w(px(0.0))
+            .min_h(px(0.0))
             .overflow_hidden()
             .track_focus(&self.documents_focus)
             .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
@@ -110,6 +109,7 @@ impl CollectionView {
                     .flex_col()
                     .flex_1()
                     .min_w(px(0.0))
+                    .min_h(px(0.0))
                     .overflow_hidden()
                     .child(
                         div()
@@ -140,7 +140,6 @@ impl CollectionView {
                                 let state = self.state.clone();
                                 let view = view.clone();
                                 let session_key_for_expand = session_key.clone();
-                                let documents_for_expand: Vec<SessionDocument> = documents.to_vec();
                                 div()
                                     .w(px(120.0))
                                     .flex()
@@ -167,8 +166,6 @@ impl CollectionView {
                                                         let view = view.clone();
                                                         let session_key =
                                                             session_key_for_expand.clone();
-                                                        let documents =
-                                                            documents_for_expand.clone();
                                                         move |_: &ClickEvent,
                                                               _window: &mut Window,
                                                               cx: &mut App| {
@@ -177,10 +174,18 @@ impl CollectionView {
                                                             else {
                                                                 return;
                                                             };
-                                                            let nodes =
-                                                                collect_all_expandable_nodes(
-                                                                    &documents,
-                                                                );
+                                                            let Some(nodes) = ({
+                                                                let state_ref = state.read(cx);
+                                                                state_ref
+                                                                    .session_data(&session_key)
+                                                                    .map(|data| {
+                                                                        collect_all_expandable_nodes(
+                                                                            &data.items,
+                                                                        )
+                                                                    })
+                                                            }) else {
+                                                                return;
+                                                            };
                                                             state.update(
                                                                 cx,
                                                                 |state, cx| {
@@ -401,100 +406,115 @@ impl CollectionView {
                             )
                             .into_any_element()
                     }))
-                    .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(
-                        if is_loading {
-                            div()
-                                .flex()
-                                .flex_1()
-                                .items_center()
-                                .justify_center()
-                                .gap(spacing::sm())
-                                .child(Spinner::new().small())
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Loading documents..."),
-                                )
-                                .into_any_element()
-                        } else if documents.is_empty() {
-                            div()
-                                .flex()
-                                .flex_1()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("No documents found"),
-                                )
-                                .into_any_element()
-                        } else {
-                            tree(&tree_state, {
-                                let view = view.clone();
-                                let node_meta = node_meta.clone();
-                                let editing_node_id = editing_node_id.clone();
-                                let inline_state = inline_state.clone();
-                                let tree_state = tree_state.clone();
-                                let state_clone = self.state.clone();
-                                let session_key = session_key.clone();
-                                let selected_docs = selected_docs.clone();
-                                let tree_order: Vec<String> = self.view_model.tree_order().to_vec();
-                                let search_opts = SearchOptions {
-                                    query: search_query.clone(),
-                                    case_sensitive: self.search_case_sensitive,
-                                    whole_word: self.search_whole_word,
-                                    use_regex: self.search_regex,
-                                    values_only: self.search_values_only,
-                                };
-                                let current_match_id = current_match_id.clone();
-                                let documents_focus = self.documents_focus.clone();
-
-                                move |ix, entry, selected, _window, cx| {
-                                    render_tree_row(
-                                        ix,
-                                        entry,
-                                        selected,
-                                        &node_meta,
-                                        &editing_node_id,
-                                        &inline_state,
-                                        view.clone(),
-                                        tree_state.clone(),
-                                        state_clone.clone(),
-                                        session_key.clone(),
-                                        &selected_docs,
-                                        &tree_order,
-                                        &search_opts,
-                                        current_match_id.as_deref(),
-                                        drag_enabled,
-                                        documents_focus.clone(),
-                                        cx,
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(0.0))
+                            .overflow_hidden()
+                            .child(if is_loading {
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(spacing::sm())
+                                    .child(Spinner::new().small())
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Loading documents..."),
                                     )
-                                }
-                            })
-                            .into_any_element()
-                        },
-                    )),
+                                    .into_any_element()
+                            } else if document_count == 0 {
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("No documents found"),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                tree(&tree_state, {
+                                    let view = view.clone();
+                                    let node_meta = node_meta.clone();
+                                    let editing_node_id = editing_node_id.clone();
+                                    let inline_state = inline_state.clone();
+                                    let tree_state = tree_state.clone();
+                                    let state_clone = self.state.clone();
+                                    let session_key = session_key.clone();
+                                    let selected_docs = selected_docs.clone();
+                                    let tree_order = self.view_model.tree_order_snapshot();
+                                    let search_opts = SearchOptions {
+                                        matcher: search_query.clone().and_then(|query| {
+                                            crate::views::documents::state::SearchMatcher::new(
+                                                query,
+                                                self.search_case_sensitive,
+                                                self.search_whole_word,
+                                                self.search_regex,
+                                            )
+                                        }),
+                                        values_only: self.search_values_only,
+                                    };
+                                    let current_match_id = current_match_id.clone();
+                                    let documents_focus = self.documents_focus.clone();
+
+                                    move |ix, entry, selected, _window, cx| {
+                                        render_tree_row(
+                                            ix,
+                                            entry,
+                                            selected,
+                                            &node_meta,
+                                            &editing_node_id,
+                                            &inline_state,
+                                            view.clone(),
+                                            tree_state.clone(),
+                                            state_clone.clone(),
+                                            session_key.clone(),
+                                            &selected_docs,
+                                            tree_order.clone(),
+                                            &search_opts,
+                                            current_match_id.as_deref(),
+                                            drag_enabled,
+                                            documents_focus.clone(),
+                                            cx,
+                                        )
+                                    }
+                                })
+                                .into_any_element()
+                            }),
+                    ),
             );
 
         let view = cx.entity();
-        let main_panel =
-            div().flex().flex_col().flex_1().min_w(px(0.0)).child(documents_view).child(
-                Self::render_pagination(
-                    display_page,
-                    total_pages,
-                    per_page,
-                    range_start,
-                    range_end,
-                    total,
-                    is_loading,
-                    session_key.clone(),
-                    self.state.clone(),
-                    view,
-                    cx,
-                ),
-            );
+        let main_panel = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .child(documents_view)
+            .child(Self::render_pagination(
+                display_page,
+                total_pages,
+                per_page,
+                range_start,
+                range_end,
+                total,
+                is_loading,
+                session_key.clone(),
+                self.state.clone(),
+                view,
+                cx,
+            ));
 
         main_panel.into_any_element()
     }

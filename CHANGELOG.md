@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fast collection filters — type compact filters like `status:active age>30` instead of writing full MongoDB JSON
 - Smart filter value conversion — ObjectId fields accept bare 24-character IDs, and date fields accept shortcuts like `today`, `last7d`, `2026-05-23`, `2026-05`, `2026Q2`, and explicit ranges like `2026-05-01..2026-05-31`
 - Filter autocomplete now suggests field names, MongoDB constructors like `ISODate(...)` and `ObjectId(...)`, and date shortcuts after fast-filter operators
+- Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
 - Search in JSON editors now wraps correctly in both directions — pressing Enter cycles forward through all matches, Shift+Enter cycles backward
@@ -43,6 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - AI chat panel moved out of the documents view into its own dedicated space
 - Close buttons on tabs now only appear on hover (except the active tab)
 - Tab bar styling updated with padding and theme-aware background
+
+### Performance
+- Document tree (JSON view) expands and scrolls much faster on large or deeply nested documents — removed a quadratic dirty-check and the redundant full-tree clones that ran on every interaction
 
 ## [0.2.0] - 2026-03-05
 

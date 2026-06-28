@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
     App, Context, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
@@ -64,6 +64,7 @@ pub struct TreeItem {
     pub id: SharedString,
     pub label: SharedString,
     pub children: Vec<TreeItem>,
+    folder: bool,
     state: Rc<RefCell<TreeItemState>>,
 }
 
@@ -88,6 +89,7 @@ impl TreeEntry {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn is_root(&self) -> bool {
         self.depth == 0
     }
@@ -126,6 +128,7 @@ impl TreeItem {
             id: id.into(),
             label: label.into(),
             children: Vec::new(),
+            folder: false,
             state: Rc::new(RefCell::new(TreeItemState {
                 expanded: false,
                 disabled: false,
@@ -145,6 +148,12 @@ impl TreeItem {
         self
     }
 
+    /// Mark this item as a folder even if children are populated lazily.
+    pub fn folder(mut self, folder: bool) -> Self {
+        self.folder = folder;
+        self
+    }
+
     /// Set expanded state for this tree item.
     pub fn expanded(self, expanded: bool) -> Self {
         self.state.borrow_mut().expanded = expanded;
@@ -160,7 +169,7 @@ impl TreeItem {
     /// Whether this item is a folder (has children).
     #[inline]
     pub fn is_folder(&self) -> bool {
-        self.children.len() > 0
+        self.folder || self.children.len() > 0
     }
 
     /// Return true if the item is disabled.
@@ -173,11 +182,32 @@ impl TreeItem {
     pub fn is_expanded(&self) -> bool {
         self.state.borrow().expanded
     }
+
+    /// A lightweight copy of this item without its children, used for the
+    /// flattened `entries` list. The `state` is shared (`Rc`) with the source
+    /// item so toggling expansion via an entry is reflected in the source tree.
+    /// `folder` captures the original `is_folder()` so the dropped children do
+    /// not change folder semantics.
+    #[inline]
+    fn shallow_entry(&self) -> TreeItem {
+        TreeItem {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            children: Vec::new(),
+            folder: self.is_folder(),
+            state: self.state.clone(),
+        }
+    }
 }
 
 /// State for managing tree items.
 pub struct TreeState {
     focus_handle: FocusHandle,
+    /// Source-of-truth tree. Holds the full nested structure; `entries` is the
+    /// flattened, virtualized view derived from it. Stored behind an `Arc` so
+    /// callers can hand ownership over (and keep a cheap clone) without
+    /// deep-copying the whole tree on every update.
+    roots: Arc<[TreeItem]>,
     entries: Vec<TreeEntry>,
     scroll_handle: UniformListScrollHandle,
     selected_ix: Option<usize>,
@@ -191,6 +221,7 @@ impl TreeState {
             selected_ix: None,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
+            roots: Arc::from(Vec::<TreeItem>::new()),
             entries: Vec::new(),
             render_item: Rc::new(|_, _, _, _, _| ListItem::new(0)),
         }
@@ -198,21 +229,23 @@ impl TreeState {
 
     /// Set the tree items.
     pub fn items(mut self, items: impl Into<Vec<TreeItem>>) -> Self {
-        let items = items.into();
-        self.entries.clear();
-        for item in items.into_iter() {
-            self.add_entry(item, 0);
-        }
+        self.roots = Arc::from(items.into());
+        self.rebuild_entries();
         self
     }
 
     /// Set the tree items.
     pub fn set_items(&mut self, items: impl Into<Vec<TreeItem>>, cx: &mut Context<Self>) {
-        let items = items.into();
-        self.entries.clear();
-        for item in items.into_iter() {
-            self.add_entry(item, 0);
-        }
+        self.set_items_shared(Arc::from(items.into()), cx);
+    }
+
+    /// Set the tree items from an already shared `Arc`, avoiding a deep copy.
+    ///
+    /// Useful when the caller wants to keep its own cheap clone of the same
+    /// items (e.g. for caching) without paying for a second full tree clone.
+    pub fn set_items_shared(&mut self, items: Arc<[TreeItem]>, cx: &mut Context<Self>) {
+        self.roots = items;
+        self.rebuild_entries();
         self.selected_ix = None;
         cx.notify();
     }
@@ -237,14 +270,18 @@ impl TreeState {
         self.selected_ix.and_then(|ix| self.entries.get(ix))
     }
 
-    fn add_entry(&mut self, item: TreeItem, depth: usize) {
+    /// Push a flattened, childless entry for `item` (sharing its expansion
+    /// state), then recurse into children when expanded. Takes `&TreeItem` and
+    /// stores only a shallow copy, so flattening is O(N) instead of repeatedly
+    /// deep-cloning each node's entire subtree (previously O(N*depth)).
+    fn add_entry(&mut self, item: &TreeItem, depth: usize) {
         self.entries.push(TreeEntry {
-            item: item.clone(),
+            item: item.shallow_entry(),
             depth,
         });
         if item.is_expanded() {
             for child in &item.children {
-                self.add_entry(child.clone(), depth + 1);
+                self.add_entry(child, depth + 1);
             }
         }
     }
@@ -257,19 +294,16 @@ impl TreeState {
             return;
         }
 
+        // `entry.item.state` is shared (`Rc`) with the matching node in `roots`,
+        // so this also flips expansion in the source tree.
         entry.item.state.borrow_mut().expanded = !entry.is_expanded();
         self.rebuild_entries();
     }
 
     fn rebuild_entries(&mut self) {
-        let root_items: Vec<TreeItem> = self
-            .entries
-            .iter()
-            .filter(|e| e.is_root())
-            .map(|e| e.item.clone())
-            .collect();
         self.entries.clear();
-        for item in root_items.into_iter() {
+        let roots = self.roots.clone();
+        for item in roots.iter() {
             self.add_entry(item, 0);
         }
     }

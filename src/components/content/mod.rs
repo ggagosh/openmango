@@ -11,14 +11,12 @@ mod tabs;
 
 use empty::render_empty_state;
 use shell::render_shell;
-use tabs::{TabsHost, render_tabs_host};
+use tabs::{OpenTabsBar, TabsHost, render_tabs_host};
 
 /// Content area component that shows collection view or welcome screen
 pub struct ContentArea {
     state: Entity<AppState>,
-    tabs_scroll_handle: ScrollHandle,
-    last_seen_open_tab_count: usize,
-    pending_scroll_to_end_frames: u8,
+    tabs_bar: Entity<OpenTabsBar>,
     collection_view: Option<Entity<CollectionView>>,
     database_view: Option<Entity<DatabaseView>>,
     ai_view: Option<Entity<AiView>>,
@@ -26,14 +24,47 @@ pub struct ContentArea {
     forge_view: Option<Entity<ForgeView>>,
     settings_view: Option<Entity<SettingsView>>,
     changelog_view: Option<Entity<ChangelogView>>,
+    last_inputs: ContentAreaInputs,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ContentAreaInputs {
+    has_collection: bool,
+    has_connection: bool,
+    selected_db: Option<String>,
+    has_tabs: bool,
+    current_view: View,
+    error_text: Option<String>,
+}
+
+impl ContentAreaInputs {
+    fn from_state(state: &AppState) -> Self {
+        Self {
+            has_collection: state.selected_collection().is_some(),
+            has_connection: state.has_active_connections(),
+            selected_db: state.selected_database_name(),
+            has_tabs: !state.open_tabs().is_empty() || state.preview_tab().is_some(),
+            current_view: state.current_view,
+            error_text: state.status_message().and_then(|message| {
+                if matches!(message.level, StatusLevel::Error) { Some(message.text) } else { None }
+            }),
+        }
+    }
 }
 
 impl ContentArea {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = vec![];
+        let last_inputs = ContentAreaInputs::from_state(state.read(cx));
 
-        subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe(&state, |this, state, cx| {
+            let next_inputs = ContentAreaInputs::from_state(state.read(cx));
+            if this.last_inputs != next_inputs {
+                this.last_inputs = next_inputs;
+                cx.notify();
+            }
+        }));
 
         // Subscribe to view-change events to lazily create collection view
         subscriptions.push(cx.subscribe(&state, |this, state, event, cx| match event {
@@ -83,6 +114,7 @@ impl ContentArea {
                     this.changelog_view = Some(cx.new(|cx| ChangelogView::new(state.clone(), cx)));
                 }
 
+                this.last_inputs = ContentAreaInputs::from_state(state.read(cx));
                 cx.notify();
             }
             _ => {}
@@ -122,14 +154,11 @@ impl ContentArea {
         } else {
             None
         };
-        let state_ref = state.read(cx);
-        let last_seen_open_tab_count = state_ref.open_tabs().len();
+        let tabs_bar = cx.new(|cx| OpenTabsBar::new(state.clone(), cx));
 
         Self {
             state,
-            tabs_scroll_handle: ScrollHandle::new(),
-            last_seen_open_tab_count,
-            pending_scroll_to_end_frames: 0,
+            tabs_bar,
             collection_view,
             database_view,
             ai_view,
@@ -137,6 +166,7 @@ impl ContentArea {
             forge_view,
             settings_view,
             changelog_view,
+            last_inputs,
             _subscriptions: subscriptions,
         }
     }
@@ -206,36 +236,19 @@ impl ContentArea {
 
 impl Render for ContentArea {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (
+        let inputs = {
+            let state_ref = self.state.read(cx);
+            ContentAreaInputs::from_state(state_ref)
+        };
+        self.last_inputs = inputs.clone();
+        let ContentAreaInputs {
             has_collection,
             has_connection,
             selected_db,
-            tabs,
-            active_tab,
-            preview_tab,
-            dirty_tabs,
+            has_tabs,
             current_view,
             error_text,
-        ) = {
-            let state_ref = self.state.read(cx);
-            (
-                state_ref.selected_collection().is_some(),
-                state_ref.has_active_connections(),
-                state_ref.selected_database_name(),
-                state_ref.open_tabs().to_vec(),
-                state_ref.active_tab(),
-                state_ref.preview_tab().cloned(),
-                state_ref.dirty_tabs().clone(),
-                state_ref.current_view,
-                state_ref.status_message().and_then(|message| {
-                    if matches!(message.level, StatusLevel::Error) {
-                        Some(message.text.clone())
-                    } else {
-                        None
-                    }
-                }),
-            )
-        };
+        } = inputs;
 
         let should_collection_view = matches!(current_view, View::Documents);
         let should_database_view = matches!(current_view, View::Database) && selected_db.is_some();
@@ -244,15 +257,7 @@ impl Render for ContentArea {
         let should_forge_view = matches!(current_view, View::Forge);
         let should_settings_view = matches!(current_view, View::Settings);
         let should_changelog_view = matches!(current_view, View::Changelog);
-        let tab_count = tabs.len();
-        let tab_count_increased = tab_count > self.last_seen_open_tab_count;
-        if tab_count_increased {
-            // Reveal the newest tab once; avoid extra render churn on regular tab switching.
-            self.pending_scroll_to_end_frames = 1;
-        }
-        self.last_seen_open_tab_count = tab_count;
 
-        let has_tabs = !tabs.is_empty() || preview_tab.is_some();
         if has_tabs {
             self.ensure_views(
                 should_collection_view,
@@ -264,21 +269,9 @@ impl Render for ContentArea {
                 should_changelog_view,
                 cx,
             );
-            let scroll_to_end_once = self.pending_scroll_to_end_frames > 0;
-            if self.pending_scroll_to_end_frames > 0 {
-                self.pending_scroll_to_end_frames -= 1;
-                if self.pending_scroll_to_end_frames > 0 {
-                    cx.notify();
-                }
-            }
             let host = TabsHost {
                 state: self.state.clone(),
-                tabs_scroll_handle: &self.tabs_scroll_handle,
-                scroll_to_end_once,
-                tabs: &tabs,
-                active_tab,
-                preview_tab,
-                dirty_tabs: &dirty_tabs,
+                tabs_bar: self.tabs_bar.clone(),
                 current_view,
                 has_collection,
                 collection_view: self.collection_view.as_ref(),
@@ -291,7 +284,6 @@ impl Render for ContentArea {
             let content = render_tabs_host(host, cx);
             return render_shell(error_text, self.state.clone(), content, false, cx);
         }
-        self.pending_scroll_to_end_frames = 0;
 
         if matches!(current_view, View::Settings) {
             self.ensure_views(false, false, false, false, false, should_settings_view, false, cx);

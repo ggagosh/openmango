@@ -1202,7 +1202,7 @@ pub struct SessionState {
 
 #[derive(Debug, Clone)]
 pub struct SessionSnapshot {
-    pub items: Vec<SessionDocument>,
+    pub document_count: usize,
     pub total: u64,
     pub page: u64,
     pub per_page: i64,
@@ -1226,7 +1226,6 @@ pub struct SessionSnapshot {
     pub indexes_error: Option<String>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
-    pub ai_chat: AiChatState,
     pub schema: Option<SchemaAnalysis>,
     pub schema_loading: bool,
     pub schema_error: Option<String>,

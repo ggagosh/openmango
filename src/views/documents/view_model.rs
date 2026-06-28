@@ -1,6 +1,6 @@
 //! View-model for document tree rendering and editing behavior.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,33 +12,35 @@ use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
 use crate::perf::log_tabs_duration;
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppState, SessionKey, TabKey};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
 use crate::views::documents::table::aggregation_table_delegate::AggregationTableDelegate;
 use crate::views::documents::table::document_table_delegate::DocumentTableDelegate;
-use crate::views::documents::tree::document_tree::{build_documents_tree, flatten_tree_order_all};
+use crate::views::documents::tree::document_tree::build_documents_tree;
 use crate::views::documents::types::InlineEditor;
 
 use super::CollectionView;
 
+const MAX_CACHED_TREE_SESSIONS: usize = 12;
+
 struct CachedTreeState {
     generation: u64,
-    items: Vec<TreeItem>,
+    items: Arc<[TreeItem]>,
     meta: Arc<HashMap<String, NodeMeta>>,
-    order: Vec<String>,
-    order_all: Vec<String>,
+    order: Arc<[String]>,
     selected_index: Option<usize>,
+    cached_at: u64,
 }
 
 pub struct DocumentViewModel {
     tree_state: Entity<TreeState>,
     current_session: Option<SessionKey>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
-    tree_items: Vec<TreeItem>,
-    tree_order: Vec<String>,
-    tree_order_all: Vec<String>,
+    tree_items: Arc<[TreeItem]>,
+    tree_order: Arc<[String]>,
     tree_cache: HashMap<SessionKey, CachedTreeState>,
+    cache_epoch: u64,
     inline_editor_state: Option<InlineEditor>,
     inline_editor_subscription: Option<Subscription>,
     inline_blur_subscription: Option<Subscription>,
@@ -59,10 +61,10 @@ impl DocumentViewModel {
             tree_state: cx.new(|cx| TreeState::new(cx)),
             current_session: None,
             node_meta: Arc::new(HashMap::new()),
-            tree_items: Vec::new(),
-            tree_order: Vec::new(),
-            tree_order_all: Vec::new(),
+            tree_items: Arc::from(Vec::<TreeItem>::new()),
+            tree_order: Arc::from(Vec::<String>::new()),
             tree_cache: HashMap::new(),
+            cache_epoch: 0,
             inline_editor_state: None,
             inline_editor_subscription: None,
             inline_blur_subscription: None,
@@ -90,12 +92,12 @@ impl DocumentViewModel {
         self.node_meta.clone()
     }
 
-    pub fn tree_order_all(&self) -> &[String] {
-        &self.tree_order_all
-    }
-
     pub fn tree_order(&self) -> &[String] {
         &self.tree_order
+    }
+
+    pub fn tree_order_snapshot(&self) -> Arc<[String]> {
+        self.tree_order.clone()
     }
 
     pub fn editing_node_id(&self) -> Option<String> {
@@ -146,26 +148,27 @@ impl DocumentViewModel {
         if let Some(prev_key) = self.current_session.clone() {
             let generation = state.read(cx).session(&prev_key).map(|s| s.generation).unwrap_or(0);
             let selected_index = self.tree_state.read(cx).selected_index();
+            self.cache_epoch = self.cache_epoch.saturating_add(1);
             self.tree_cache.insert(
                 prev_key,
                 CachedTreeState {
                     generation,
-                    items: std::mem::take(&mut self.tree_items),
+                    items: self.tree_items.clone(),
                     meta: self.node_meta.clone(),
-                    order: std::mem::take(&mut self.tree_order),
-                    order_all: std::mem::take(&mut self.tree_order_all),
+                    order: std::mem::replace(&mut self.tree_order, Arc::from(Vec::<String>::new())),
                     selected_index,
+                    cached_at: self.cache_epoch,
                 },
             );
+            self.enforce_tree_cache_limit();
         }
         self.current_session = next;
 
         // For loaded sessions, avoid rendering an intermediate empty tree during tab switches.
         if next_loaded {
             self.node_meta = Arc::new(HashMap::new());
-            self.tree_items.clear();
-            self.tree_order.clear();
-            self.tree_order_all.clear();
+            self.tree_items = Arc::from(Vec::<TreeItem>::new());
+            self.tree_order = Arc::from(Vec::<String>::new());
             self.inline_editor_state = None;
             self.inline_editor_subscription = None;
             self.clear_inline_edit();
@@ -188,11 +191,49 @@ impl DocumentViewModel {
         true
     }
 
+    pub fn prune_tree_cache(&mut self, state: &AppState) {
+        let mut live_sessions = HashSet::new();
+
+        for tab in state.open_tabs() {
+            if let TabKey::Collection(session_key) = tab {
+                live_sessions.insert(session_key.clone());
+            }
+        }
+
+        if let Some(preview) = state.preview_tab() {
+            live_sessions.insert(preview.clone());
+        }
+
+        if let Some(current) = &self.current_session {
+            live_sessions.insert(current.clone());
+        }
+
+        self.tree_cache.retain(|session_key, _| live_sessions.contains(session_key));
+        self.enforce_tree_cache_limit();
+    }
+
+    fn enforce_tree_cache_limit(&mut self) {
+        if self.tree_cache.len() <= MAX_CACHED_TREE_SESSIONS {
+            return;
+        }
+
+        let mut cached_entries: Vec<(SessionKey, u64)> = self
+            .tree_cache
+            .iter()
+            .map(|(session_key, cached)| (session_key.clone(), cached.cached_at))
+            .collect();
+        cached_entries.sort_by_key(|(_, cached_at)| *cached_at);
+
+        let remove_count = self.tree_cache.len().saturating_sub(MAX_CACHED_TREE_SESSIONS);
+        for (session_key, _) in cached_entries.into_iter().take(remove_count) {
+            self.tree_cache.remove(&session_key);
+        }
+    }
+
     pub fn reset_view_state(&mut self, cx: &mut Context<CollectionView>) {
         self.node_meta = Arc::new(HashMap::new());
-        self.tree_items.clear();
-        self.tree_order.clear();
-        self.tree_order_all.clear();
+        self.tree_items = Arc::from(Vec::<TreeItem>::new());
+        self.tree_order = Arc::from(Vec::<String>::new());
         self.inline_editor_state = None;
         self.inline_editor_subscription = None;
         self.clear_inline_edit();
@@ -221,13 +262,12 @@ impl DocumentViewModel {
             self.node_meta = cached.meta;
             self.tree_items = cached.items.clone();
             self.tree_order = cached.order;
-            self.tree_order_all = cached.order_all;
 
             self.tree_state.update(cx, |tree, cx| {
-                tree.set_items(cached.items, cx);
+                tree.set_items_shared(cached.items, cx);
                 tree.set_selected_index(cached.selected_index, cx);
             });
-            let items = self.tree_order_all.len();
+            let items = self.tree_order.len();
             log_tabs_duration("documents.rebuild_tree", start, || {
                 format!(
                     "cache=hit generation={generation} items={items} session={}/{}",
@@ -242,26 +282,23 @@ impl DocumentViewModel {
 
         let (items, meta, order) =
             build_documents_tree(&data.items, &view.drafts, &view.expanded_nodes, cx);
-        let mut full_order = Vec::new();
-        for item in &items {
-            flatten_tree_order_all(item, &mut full_order);
-        }
-
         let selected_index = view
             .selected_node_id
             .as_ref()
             .and_then(|id| order.iter().position(|entry| entry == id));
 
+        // Share a single allocation between the view-model copy (used for
+        // caching) and the tree widget instead of deep-cloning the whole tree.
+        let items: Arc<[TreeItem]> = Arc::from(items);
         self.node_meta = Arc::new(meta);
         self.tree_items = items.clone();
-        self.tree_order = order;
-        self.tree_order_all = full_order;
+        self.tree_order = Arc::from(order);
 
         self.tree_state.update(cx, |tree, cx| {
-            tree.set_items(items, cx);
+            tree.set_items_shared(items, cx);
             tree.set_selected_index(selected_index, cx);
         });
-        let items = self.tree_order_all.len();
+        let items = self.tree_order.len();
         log_tabs_duration("documents.rebuild_tree", start, || {
             format!(
                 "cache=miss generation={generation} items={items} session={}/{}",
