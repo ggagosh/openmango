@@ -378,33 +378,37 @@ fn flatten_recurse(fields: &[SchemaField], expanded: &HashSet<String>, rows: &mu
     }
 }
 
-fn field_matches_filter(field: &SchemaField, filter_plan: &SchemaFilterPlan) -> bool {
-    if filter_plan.matches_path(&field.path) {
-        return true;
-    }
-    field.children.iter().any(|c| field_matches_filter(c, filter_plan))
-}
-
+/// Flatten only matching fields. Single pass — returns whether anything at this
+/// level matched (self or a descendant), computing each node's match state once
+/// instead of re-walking every subtree per ancestor (previously O(N*depth)).
 fn flatten_filtered(
     fields: &[SchemaField],
     expanded: &HashSet<String>,
     filter_plan: &SchemaFilterPlan,
     rows: &mut Vec<FlatRow>,
-) {
+) -> bool {
+    let mut any_matched = false;
     for field in fields {
         let has_children = !field.children.is_empty();
         let matches_self = filter_plan.matches_path(&field.path);
+
+        // Recurse once into a scratch buffer so descendant matches are known
+        // without a separate subtree walk per ancestor.
+        let mut child_rows = Vec::new();
         let has_matching_descendants = has_children
-            && field.children.iter().any(|child| field_matches_filter(child, filter_plan));
+            && flatten_filtered(&field.children, expanded, filter_plan, &mut child_rows);
+
         if !matches_self && !has_matching_descendants {
             continue;
         }
+        any_matched = true;
         let is_expanded = expanded.contains(&field.path) || has_matching_descendants;
         rows.push(to_flat_row(field, has_children, is_expanded));
         if has_matching_descendants {
-            flatten_filtered(&field.children, expanded, filter_plan, rows);
+            rows.extend(child_rows);
         }
     }
+    any_matched
 }
 
 #[derive(Clone, Copy)]

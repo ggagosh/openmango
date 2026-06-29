@@ -813,7 +813,8 @@ impl DocumentViewModel {
             return;
         }
 
-        let documents = session.data.aggregation.results.clone().unwrap_or_default();
+        let documents =
+            session.data.aggregation.results.as_ref().map(|r| (**r).clone()).unwrap_or_default();
         let saved_widths = session.view.agg_table_column_widths.clone();
         let saved_order = session.view.agg_table_column_order.clone();
         let pinned = session.view.agg_table_pinned_columns.clone();

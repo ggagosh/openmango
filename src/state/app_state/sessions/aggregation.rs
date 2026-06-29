@@ -305,7 +305,7 @@ mod tests {
             session.data.aggregation.stage_doc_counts[0].input = Some(10);
             session.data.aggregation.stage_doc_counts[0].output = Some(5);
             session.data.aggregation.stage_doc_counts[0].time_ms = Some(2);
-            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.results = Some(std::sync::Arc::new(vec![doc! { "_id": 1 }]));
             session.data.aggregation.results_page = 3;
             session.data.aggregation.last_run_time_ms = Some(42);
             session.data.aggregation.error = Some("boom".to_string());
@@ -344,7 +344,7 @@ mod tests {
         let (prev_request_id, prev_generation) = {
             let session = state.session_mut(&session_key).expect("session exists");
             session.data.aggregation.stage_doc_counts[0].output = Some(7);
-            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.results = Some(std::sync::Arc::new(vec![doc! { "_id": 1 }]));
             session.data.aggregation.results_page = 2;
             session.data.aggregation.last_run_time_ms = Some(11);
             session.data.aggregation.error = Some("err".to_string());
@@ -380,7 +380,7 @@ mod tests {
         let (prev_request_id, prev_generation) = {
             let session = state.session_mut(&session_key).expect("session exists");
             session.data.aggregation.stage_doc_counts[0].output = Some(9);
-            session.data.aggregation.results = Some(vec![doc! { "_id": 1 }]);
+            session.data.aggregation.results = Some(std::sync::Arc::new(vec![doc! { "_id": 1 }]));
             session.data.aggregation.last_run_time_ms = Some(33);
             session.data.aggregation.error = Some("old".to_string());
             (

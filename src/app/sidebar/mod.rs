@@ -31,6 +31,17 @@ const SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(500.0);
 const KEYBOARD_PREVIEW_DELAY: Duration = Duration::from_millis(140);
 
+/// Memoizes sidebar fuzzy-search results so the full candidate scan + fuzzy
+/// match doesn't re-run on every incidental sidebar re-render. Invalidated when
+/// the query changes or the (Rc-identity) connection/database/collection source
+/// changes.
+struct SidebarSearchCache {
+    query: String,
+    connections: Rc<Vec<SavedConnection>>,
+    active: Rc<HashMap<Uuid, ActiveConnection>>,
+    results: Vec<SidebarSearchResult>,
+}
+
 pub(crate) struct Sidebar {
     state: Entity<AppState>,
     model: SidebarModel,
@@ -48,6 +59,7 @@ pub(crate) struct Sidebar {
     // Rc-cached: only refreshed on structural changes, cheap to capture in render closures.
     cached_connections: Rc<Vec<SavedConnection>>,
     cached_active: Rc<HashMap<Uuid, ActiveConnection>>,
+    search_cache: Option<SidebarSearchCache>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -265,6 +277,7 @@ impl Sidebar {
             last_tree_click: None,
             cached_connections,
             cached_active,
+            search_cache: None,
             _subscriptions: subscriptions,
         };
 
@@ -1114,7 +1127,17 @@ impl Sidebar {
         }
     }
 
-    fn search_results(&self, query: &str, _cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {
+    fn search_results(&mut self, query: &str, _cx: &mut Context<Self>) -> Vec<SidebarSearchResult> {
+        // Skip the candidate scan + fuzzy match entirely when neither the query
+        // nor the (Rc-identity) source changed since the last call.
+        if let Some(cache) = &self.search_cache
+            && cache.query == query
+            && Rc::ptr_eq(&cache.connections, &self.cached_connections)
+            && Rc::ptr_eq(&cache.active, &self.cached_active)
+        {
+            return cache.results.clone();
+        }
+
         let mut candidates = Vec::new();
         for connection in self.cached_connections.iter() {
             let Some(active) = self.cached_active.get(&connection.id) else {
@@ -1141,6 +1164,13 @@ impl Sidebar {
             }
         }
 
-        search_results(query, candidates)
+        let results = search_results(query, candidates);
+        self.search_cache = Some(SidebarSearchCache {
+            query: query.to_string(),
+            connections: self.cached_connections.clone(),
+            active: self.cached_active.clone(),
+            results: results.clone(),
+        });
+        results
     }
 }

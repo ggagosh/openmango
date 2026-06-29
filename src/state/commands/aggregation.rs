@@ -199,7 +199,8 @@ impl AppCommands {
                             if session.data.aggregation.request_id != request_id {
                                 return false;
                             }
-                            session.data.aggregation.results = Some(run.documents);
+                            session.data.aggregation.results =
+                                Some(std::sync::Arc::new(run.documents));
                             session.data.aggregation.loading = false;
                             session.data.aggregation.error = None;
                             session.data.aggregation.stage_doc_counts = run.stage_stats;

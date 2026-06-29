@@ -259,7 +259,7 @@ impl AppCommands {
             }
             let widths = session.view.agg_table_column_widths.clone();
             let order = session.view.agg_table_column_order.clone();
-            (results.clone(), widths, order)
+            ((**results).clone(), widths, order)
         };
 
         let collection = session_key.collection.clone();

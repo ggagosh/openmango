@@ -967,7 +967,7 @@ pub(in crate::views::documents) fn copy_aggregation_as(
         }
 
         let snapshot = ViewExportSnapshot::from_documents(
-            results.clone(),
+            (**results).clone(),
             session_key.collection.clone(),
             session_key.database.clone(),
         );

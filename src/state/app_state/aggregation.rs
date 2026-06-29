@@ -90,7 +90,7 @@ impl StageStatsMode {
 pub struct PipelineState {
     pub stages: Vec<PipelineStage>,
     pub selected_stage: Option<usize>,
-    pub results: Option<Vec<Document>>,
+    pub results: Option<Arc<Vec<Document>>>,
     pub stage_doc_counts: Vec<StageDocCounts>,
     pub analysis: Option<PipelineAnalysis>,
     #[allow(dead_code)]
