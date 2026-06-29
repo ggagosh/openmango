@@ -50,9 +50,29 @@ pub struct DocumentViewModel {
     editing_original: Option<Bson>,
     table_state: Option<Entity<TableState<DocumentTableDelegate>>>,
     table_generation: Option<u64>,
+    /// Order-independent signature of the selection last pushed to the table,
+    /// so we can skip re-pushing + re-notifying when nothing changed.
+    table_selected_sig: Option<u64>,
     col_visibility_search: Option<Entity<InputState>>,
     agg_table_state: Option<Entity<TableState<AggregationTableDelegate>>>,
     agg_table_generation: Option<u64>,
+}
+
+/// Order-independent signature of a selection set: two independent accumulators
+/// (XOR + sum) over per-key hashes plus the count, so a changed selection is
+/// detected cheaply each frame without cloning the set.
+fn selection_signature(set: &HashSet<DocumentKey>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut xor: u64 = 0;
+    let mut sum: u64 = 0;
+    for key in set {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        let h = hasher.finish();
+        xor ^= h;
+        sum = sum.wrapping_add(h);
+    }
+    xor ^ sum.rotate_left(32) ^ (set.len() as u64)
 }
 
 impl DocumentViewModel {
@@ -74,6 +94,7 @@ impl DocumentViewModel {
             editing_original: None,
             table_state: None,
             table_generation: None,
+            table_selected_sig: None,
             col_visibility_search: None,
             agg_table_state: None,
             agg_table_generation: None,
@@ -651,6 +672,16 @@ impl DocumentViewModel {
         let generation = session.generation;
         let generation_changed =
             self.table_generation != Some(generation) || self.table_state.is_none();
+        let selected_sig = selection_signature(&session.view.selected_docs);
+        let selection_changed = self.table_selected_sig != Some(selected_sig);
+
+        // Nothing the table depends on changed → leave it untouched. Avoids a
+        // per-frame HashSet clone and an unconditional `cx.notify()` that would
+        // otherwise re-render every visible cell on every frame.
+        if !generation_changed && !selection_changed {
+            return;
+        }
+
         let selected_docs = session.view.selected_docs.clone();
 
         if generation_changed {
@@ -680,6 +711,7 @@ impl DocumentViewModel {
                 cx.notify();
             });
         }
+        self.table_selected_sig = Some(selected_sig);
     }
 
     pub fn invalidate_table(&mut self) {

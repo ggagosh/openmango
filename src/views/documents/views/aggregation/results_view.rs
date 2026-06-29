@@ -19,8 +19,6 @@ use crate::views::documents::tree::lazy_tree::{build_visible_rows, collect_all_e
 
 use crate::views::CollectionView;
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 impl CollectionView {
@@ -555,24 +553,26 @@ fn render_results_tree(
             .into_any_element();
     }
 
-    // Build documents from results
-    let documents: Arc<Vec<SessionDocument>> = Arc::new(
-        results
-            .iter()
-            .enumerate()
-            .map(|(idx, doc)| SessionDocument {
-                key: DocumentKey::from_document(doc, idx),
-                doc: doc.clone(),
-            })
-            .collect(),
-    );
-
-    // Check if results changed - if so, clear expanded state
-    let signature = results_signature(&documents);
-    if view.aggregation_results_signature != Some(signature) {
-        view.aggregation_results_signature = Some(signature);
+    // Rebuild the (deep) SessionDocument list only when the result set changes.
+    // `request_id` is bumped on every pipeline run, so it uniquely identifies
+    // the current results without hashing/cloning every document each frame.
+    let request_id = pipeline.request_id;
+    if view.aggregation_results_signature != Some(request_id) {
+        view.aggregation_results_signature = Some(request_id);
         view.aggregation_results_expanded_nodes.clear();
+        view.aggregation_results_documents = Some(Arc::new(
+            results
+                .iter()
+                .enumerate()
+                .map(|(idx, doc)| SessionDocument {
+                    key: DocumentKey::from_document(doc, idx),
+                    doc: doc.clone(),
+                })
+                .collect(),
+        ));
     }
+    let documents =
+        view.aggregation_results_documents.clone().unwrap_or_else(|| Arc::new(Vec::new()));
 
     // Build visible rows lazily based on expanded state
     let expanded_nodes = &view.aggregation_results_expanded_nodes;
@@ -808,13 +808,4 @@ fn render_agg_export(
             }
             menu
         })
-}
-
-fn results_signature(documents: &[SessionDocument]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    documents.len().hash(&mut hasher);
-    for doc in documents {
-        doc.key.hash(&mut hasher);
-    }
-    hasher.finish()
 }

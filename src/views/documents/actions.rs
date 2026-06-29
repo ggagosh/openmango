@@ -1,5 +1,5 @@
 use gpui::*;
-use mongodb::bson::{Bson, doc, oid::ObjectId};
+use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{
     PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
@@ -235,17 +235,25 @@ impl CollectionView {
                     cx.write_to_clipboard(ClipboardItem::new_string(json));
                 }
             } else {
-                let state_ref = this.state.read(cx);
-                let docs: Vec<String> = selected_docs
-                    .iter()
-                    .filter_map(|dk| {
-                        state_ref
-                            .session_draft_or_document(&session_key, dk)
-                            .map(|d| document_to_shell_string(&d))
-                    })
-                    .collect();
-                let json = format!("[{}]", docs.join(",\n"));
-                cx.write_to_clipboard(ClipboardItem::new_string(json));
+                // Gather the owned documents on the main thread (cheap clone),
+                // then serialize off-thread so a large multi-selection copy
+                // doesn't block the UI.
+                let docs: Vec<Document> = {
+                    let state_ref = this.state.read(cx);
+                    selected_docs
+                        .iter()
+                        .filter_map(|dk| state_ref.session_draft_or_document(&session_key, dk))
+                        .collect()
+                };
+                let task = cx.background_spawn(async move {
+                    let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
+                    format!("[{}]", parts.join(",\n"))
+                });
+                cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
+                    let json = task.await;
+                    let _ = cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
+                })
+                .detach();
             }
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
@@ -418,17 +426,25 @@ impl CollectionView {
                     cx.write_to_clipboard(ClipboardItem::new_string(json));
                 }
             } else {
-                let state_ref = this.state.read(cx);
-                let docs: Vec<String> = selected_docs
-                    .iter()
-                    .filter_map(|dk| {
-                        state_ref
-                            .session_draft_or_document(&session_key, dk)
-                            .map(|d| document_to_shell_string(&d))
-                    })
-                    .collect();
-                let json = format!("[{}]", docs.join(",\n"));
-                cx.write_to_clipboard(ClipboardItem::new_string(json));
+                // Gather the owned documents on the main thread (cheap clone),
+                // then serialize off-thread so a large multi-selection copy
+                // doesn't block the UI.
+                let docs: Vec<Document> = {
+                    let state_ref = this.state.read(cx);
+                    selected_docs
+                        .iter()
+                        .filter_map(|dk| state_ref.session_draft_or_document(&session_key, dk))
+                        .collect()
+                };
+                let task = cx.background_spawn(async move {
+                    let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
+                    format!("[{}]", parts.join(",\n"))
+                });
+                cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
+                    let json = task.await;
+                    let _ = cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
+                })
+                .detach();
             }
         }))
         .on_action(cx.listener(|this, _: &CopyAs, _window, cx| {

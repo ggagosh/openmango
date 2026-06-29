@@ -61,7 +61,6 @@ impl CollectionView {
             format!("{}/{}", match_position, match_total)
         };
 
-        let search_query = self.current_search_query(cx);
         let current_match_id =
             self.search_index.and_then(|index| self.search_matches.get(index)).cloned();
 
@@ -454,14 +453,9 @@ impl CollectionView {
                                     let selected_docs = selected_docs.clone();
                                     let tree_order = self.view_model.tree_order_snapshot();
                                     let search_opts = SearchOptions {
-                                        matcher: search_query.clone().and_then(|query| {
-                                            crate::views::documents::state::SearchMatcher::new(
-                                                query,
-                                                self.search_case_sensitive,
-                                                self.search_whole_word,
-                                                self.search_regex,
-                                            )
-                                        }),
+                                        // Use the matcher cached on query/flag change instead of
+                                        // recompiling the regex every frame.
+                                        matcher: self.search_matcher.clone(),
                                         values_only: self.search_values_only,
                                     };
                                     let current_match_id = current_match_id.clone();

@@ -33,14 +33,18 @@ pub fn render_cell(value: &Bson, row_ix: usize, col_ix: usize, cx: &App) -> AnyE
     let is_nested = matches!(value, Bson::Document(_) | Bson::Array(_));
 
     if is_nested {
-        let tooltip = format_nested_preview(value);
+        // Build the (bounded) nested preview lazily on hover instead of every
+        // frame — the string is only ever shown inside the tooltip. Index-based
+        // id avoids a per-cell `format!` allocation each render.
+        let value = value.clone();
         div()
-            .id(ElementId::Name(format!("cell-{}-{}", row_ix, col_ix).into()))
+            .id(("doc-cell", row_ix * 64 + col_ix))
             .text_xs()
             .text_color(color)
             .cursor_pointer()
             .tooltip(move |_window, cx| {
-                cx.new(|_cx| gpui_component::tooltip::Tooltip::new(tooltip.clone())).into()
+                let preview = format_nested_preview(&value);
+                cx.new(|_cx| gpui_component::tooltip::Tooltip::new(preview)).into()
             })
             .child(text)
             .into_any_element()

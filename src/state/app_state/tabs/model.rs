@@ -152,6 +152,13 @@ impl AppState {
             || self.tabs.preview.as_ref() == Some(key);
         if !still_referenced {
             self.sessions.remove(key);
+            // Drop per-collection metadata caches as well, so they don't
+            // accumulate for every collection ever opened in a connection
+            // (previously only freed when the whole connection was removed).
+            self.forge_schema.remove(key);
+            self.forge_schema_inflight.remove(key);
+            self.collection_meta.remove(key);
+            self.collection_meta_inflight.remove(key);
         }
     }
 

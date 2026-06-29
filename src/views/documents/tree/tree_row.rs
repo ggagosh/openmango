@@ -71,8 +71,6 @@ pub(crate) fn render_tree_row(
     let is_folder = entry.is_folder();
     let is_expanded = entry.is_expanded();
 
-    let menu_meta = meta.cloned();
-    let row_meta = meta.cloned();
     let row_session = session_key.clone();
     let row_state = state.clone();
     let row_tree = tree_state.clone();
@@ -157,7 +155,6 @@ pub(crate) fn render_tree_row(
         // Prevent TreeState from toggling expansion on single click.
         // Also handle selection when clicking outside key/value columns.
         .on_mouse_down(MouseButton::Left, {
-            let row_meta = row_meta.clone();
             let row_session = row_session.clone();
             let row_state = row_state.clone();
             let row_tree = row_tree.clone();
@@ -175,7 +172,9 @@ pub(crate) fn render_tree_row(
                         tree.set_selected_index(Some(ix), cx);
                     });
                 }
-                if let (Some(meta), Some(session_key)) = (row_meta.clone(), row_session.clone()) {
+                if let (Some(meta), Some(session_key)) =
+                    (range_node_meta.get(&row_item_id), row_session.clone())
+                {
                     let is_cmd = event.modifiers.secondary() || event.modifiers.control;
                     row_state.update(cx, |state, cx| {
                         if is_shift && meta.path.is_empty() {
@@ -268,13 +267,14 @@ pub(crate) fn render_tree_row(
 
     let selected_count = selected_docs.len();
     let row = row.context_menu({
-        let menu_meta = menu_meta.clone();
+        let node_meta = node_meta.clone();
+        let menu_item_id = item_id.clone();
         let state = state.clone();
         let view = view.clone();
         let session_key = session_key.clone();
         move |menu, window, cx| {
             let menu = menu.action_context(documents_focus.clone());
-            let Some(meta) = menu_meta.clone() else {
+            let Some(meta) = node_meta.get(&menu_item_id).cloned() else {
                 return menu;
             };
             let Some(session_key) = session_key.clone() else {

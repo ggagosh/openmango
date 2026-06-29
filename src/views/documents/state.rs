@@ -6,6 +6,7 @@ use gpui_component::tree::TreeState;
 use mongodb::bson::{Bson, Document};
 use regex::{Regex, RegexBuilder};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::bson::{
@@ -56,6 +57,9 @@ pub struct CollectionView {
     pub(crate) search_whole_word: bool,
     pub(crate) search_regex: bool,
     pub(crate) search_values_only: bool,
+    /// Cached matcher, rebuilt only when the query or flags change, so render
+    /// doesn't recompile the regex every frame.
+    pub(crate) search_matcher: Option<SearchMatcher>,
     pub(crate) input_session: Option<SessionKey>,
     pub(crate) schema_filter_session: Option<SessionKey>,
     pub(crate) aggregation_input_session: Option<SessionKey>,
@@ -74,6 +78,10 @@ pub struct CollectionView {
     pub(crate) aggregation_limit_state: Option<Entity<InputState>>,
     pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
     pub(crate) aggregation_results_signature: Option<u64>,
+    /// Cached SessionDocument list for the aggregation results tree, rebuilt
+    /// only when the result set changes (keyed by pipeline request id) instead
+    /// of deep-cloning every result document each frame.
+    pub(crate) aggregation_results_documents: Option<Arc<Vec<SessionDocument>>>,
     pub(crate) syncing_query_inputs: bool,
     pub(crate) aggregation_ignore_body_change: bool,
     pub(crate) aggregation_stage_body_subscription: Option<Subscription>,
@@ -499,6 +507,7 @@ impl CollectionView {
             search_whole_word: false,
             search_regex: false,
             search_values_only: false,
+            search_matcher: None,
             input_session: None,
             schema_filter_session: None,
             aggregation_input_session: None,
@@ -517,6 +526,7 @@ impl CollectionView {
             aggregation_limit_state: None,
             aggregation_results_expanded_nodes: HashSet::new(),
             aggregation_results_signature: None,
+            aggregation_results_documents: None,
             syncing_query_inputs: false,
             aggregation_ignore_body_change: false,
             aggregation_stage_body_subscription: None,
@@ -702,6 +712,7 @@ impl CollectionView {
         self.search_whole_word = false;
         self.search_regex = false;
         self.search_values_only = false;
+        self.search_matcher = None;
     }
 
     pub(crate) fn toggle_search_case_sensitive(&mut self, cx: &mut Context<Self>) {
@@ -726,6 +737,7 @@ impl CollectionView {
 
     pub(crate) fn update_search_results(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self.current_search_query(cx) else {
+            self.search_matcher = None;
             self.search_matches.clear();
             self.search_match_meta.clear();
             self.search_index = None;
@@ -738,11 +750,14 @@ impl CollectionView {
             self.search_whole_word,
             self.search_regex,
         ) else {
+            self.search_matcher = None;
             self.search_matches.clear();
             self.search_match_meta.clear();
             self.search_index = None;
             return;
         };
+        // Cache for the render path so the regex isn't recompiled every frame.
+        self.search_matcher = Some(matcher.clone());
         let values_only = self.search_values_only;
 
         let mut matches = Vec::new();
