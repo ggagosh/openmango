@@ -47,6 +47,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 - Document tree (JSON view) expands and scrolls much faster on large or deeply nested documents — removed a quadratic dirty-check and the redundant full-tree clones that ran on every interaction
+- Documents table is much smoother — it now re-renders only when the data or selection actually changes instead of rebuilding every visible cell every frame
+- Aggregation results, schema view, and in-document search no longer redo expensive work (deep document clones, regex compilation, full schema re-walks) on every frame
+- Sidebar search is much faster — results are cached and recomputed only when the query or the connection/database/collection list changes
+- Per-collection caches are now freed when a tab closes, so memory no longer grows as you browse through many collections
+- Copying a large multi-document selection no longer briefly freezes the UI
 
 ## [0.2.0] - 2026-03-05
 
