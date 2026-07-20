@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Workspace restore now waits for saved connection credentials to finish loading from Keychain before reconnecting
 - Import and copy Clear/Drop operations now stage changes before atomic promotion, and Replace preserves failed originals while reporting partial progress
 - Application read-only mode now blocks every app-owned write path, including AI and Forge, while destructive operations require frozen, revalidated confirmations
 - Connection credentials now use versioned Keychain bundles; saved configuration and process arguments no longer expose URI secrets

@@ -293,9 +293,28 @@ impl AppState {
         }
     }
 
+    fn should_queue_connection(&mut self, connection_id: Uuid) -> bool {
+        if self.connection_secrets_ready() {
+            return false;
+        }
+        self.connections_waiting_for_secret_sync.insert(connection_id);
+        true
+    }
+
+    pub(crate) fn take_connections_waiting_for_secrets(&mut self) -> Vec<Uuid> {
+        if !self.connection_secrets_ready() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.connections_waiting_for_secret_sync)
+            .into_iter()
+            .filter(|connection_id| {
+                self.connections.iter().any(|connection| connection.id == *connection_id)
+            })
+            .collect()
+    }
+
     pub fn connect_when_secrets_ready(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
-        if self.connection_secret_sync_pending {
-            self.connections_waiting_for_secret_sync.insert(connection_id);
+        if self.should_queue_connection(connection_id) {
             return;
         }
         AppCommands::connect(cx.entity(), connection_id, cx);
@@ -426,15 +445,7 @@ impl AppState {
                         Ok(()) => {
                             state.connection_secret_sync_pending = false;
                             state.cleanup_secret_bundles(stale_bundles, cx);
-                            std::mem::take(&mut state.connections_waiting_for_secret_sync)
-                                .into_iter()
-                                .filter(|connection_id| {
-                                    state
-                                        .connections
-                                        .iter()
-                                        .any(|connection| connection.id == *connection_id)
-                                })
-                                .collect::<Vec<_>>()
+                            state.take_connections_waiting_for_secrets()
                         }
                         Err(error) => {
                             state.connection_secret_sync_pending = false;
@@ -680,6 +691,26 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_autoconnect_waits_for_startup_credential_hydration() {
+        let connection_id = Uuid::new_v4();
+        let mut state = AppState::new();
+        state.connections_persistence_blocked = true;
+        state.connection_secret_sync_pending = false;
+
+        assert!(state.should_queue_connection(connection_id));
+        assert!(state.connections_waiting_for_secret_sync.contains(&connection_id));
+
+        let mut connection =
+            SavedConnection::new("workspace".into(), "mongodb://user@localhost".into());
+        connection.id = connection_id;
+        state.connections = vec![connection];
+        state.connections_persistence_blocked = false;
+
+        assert_eq!(state.take_connections_waiting_for_secrets(), vec![connection_id]);
+        assert!(state.connections_waiting_for_secret_sync.is_empty());
+    }
 
     #[test]
     fn secret_bundle_round_trips_all_connection_credentials() {

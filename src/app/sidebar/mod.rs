@@ -300,7 +300,9 @@ impl Sidebar {
         };
 
         if let Some(connection_id) = sidebar.state.read(cx).workspace_autoconnect_id() {
-            AppCommands::connect(sidebar.state.clone(), connection_id, cx);
+            sidebar.state.update(cx, |state, cx| {
+                state.connect_when_secrets_ready(connection_id, cx);
+            });
         }
 
         sidebar

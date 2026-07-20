@@ -606,10 +606,9 @@ fn parse_relative_period(raw: &str) -> Option<ParsedDateValue> {
         (-1, rest)
     } else if let Some(rest) = normalized.strip_prefix("past") {
         (-1, rest)
-    } else if let Some(rest) = normalized.strip_prefix("next") {
-        (1, rest)
     } else {
-        return None;
+        let rest = normalized.strip_prefix("next")?;
+        (1, rest)
     };
 
     let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();

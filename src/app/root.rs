@@ -248,6 +248,11 @@ impl AppRoot {
                         .detach();
                         return;
                     }
+                    for connection_id in
+                        state.update(cx, |state, _| state.take_connections_waiting_for_secrets())
+                    {
+                        AppCommands::connect(state.clone(), connection_id, cx);
+                    }
                     if let Some(api_key) = api_key {
                         state.update(cx, |state, _| {
                             if state.settings.ai.api_key.is_empty() {
