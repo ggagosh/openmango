@@ -4,6 +4,7 @@ mod aggregation;
 mod connection;
 mod database_sessions;
 mod forge;
+mod query_library;
 mod selection;
 mod sessions;
 mod status;
@@ -51,7 +52,7 @@ use crate::state::StatusMessage;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
 use crate::state::settings::{AppSettings, migrate_islands_tab_style_to_islands};
-use crate::state::{ConfigManager, WorkspaceState};
+use crate::state::{ConfigManager, QueryLibrary, WorkspaceState};
 
 use updater::UpdateStatus;
 
@@ -78,6 +79,8 @@ pub struct AppState {
     // Persisted state
     pub connections: Vec<SavedConnection>,
     pub settings: AppSettings,
+    query_library: QueryLibrary,
+    query_library_persistence_blocked: bool,
 
     /// Vibrancy state from startup (window creation). Runtime changes require restart.
     pub startup_vibrancy: bool,
@@ -163,6 +166,17 @@ impl AppState {
             log::warn!("Failed to load workspace: {}", e);
             WorkspaceState::default()
         });
+        let (query_library, query_library_load_error) = match config.load_query_library() {
+            Ok(library) => (library, None),
+            Err(error) => {
+                let message = format!(
+                    "Query Library could not be loaded. The original file was preserved: {error}"
+                );
+                log::error!("{message}");
+                (QueryLibrary::default(), Some(message))
+            }
+        };
+        let query_library_persistence_blocked = query_library_load_error.is_some();
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
@@ -174,6 +188,8 @@ impl AppState {
         Self {
             connections,
             settings,
+            query_library,
+            query_library_persistence_blocked,
             startup_vibrancy,
             connection_manager,
             conn: ConnectionState::default(),
@@ -188,7 +204,10 @@ impl AppState {
             collection_meta_inflight: HashSet::new(),
             ai_chat: AiChatState::default(),
             current_view: View::Welcome,
-            status_message: connection_load_error.clone().map(StatusMessage::error),
+            status_message: connection_load_error
+                .clone()
+                .or(query_library_load_error)
+                .map(StatusMessage::error),
             unsaved_guard_active: false,
             invalid_inline_edits: HashSet::new(),
             copied_tree_item: None,

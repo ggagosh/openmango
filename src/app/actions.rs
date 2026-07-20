@@ -2,7 +2,9 @@ use gpui::*;
 use uuid::Uuid;
 
 use crate::components::action_bar::ActionExecution;
-use crate::components::{ConnectionDialog, request_disconnect_connection, request_unsaved_action};
+use crate::components::{
+    ConnectionDialog, QueryLibraryDialog, request_disconnect_connection, request_unsaved_action,
+};
 use crate::keyboard::RefreshView;
 use crate::state::settings::AppTheme;
 use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, UnsavedScope, View};
@@ -281,6 +283,9 @@ impl AppRoot {
             }
             "cmd:disconnect" => {
                 // Handled as two-step in ActionBar (switches to Disconnect mode)
+            }
+            "cmd:query-library" => {
+                QueryLibraryDialog::open_for_current(state.clone(), window, cx);
             }
             "cmd:settings" => {
                 state.update(cx, |state, cx| {

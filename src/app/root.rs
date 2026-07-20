@@ -7,8 +7,8 @@ use uuid::Uuid;
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
 use crate::components::{
-    ConnectionManager, ContentArea, StatusBar, open_confirm_dialog, request_app_quit,
-    request_disconnect_connection, request_remove_connection,
+    ConnectionManager, ContentArea, QueryLibraryDialog, StatusBar, open_confirm_dialog,
+    request_app_quit, request_disconnect_connection, request_remove_connection,
 };
 use crate::helpers::keystore::KeyStore;
 use crate::helpers::validate::UriSecrets;
@@ -16,7 +16,7 @@ use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
     FocusContent, FocusSidebar, InstallUpdate, NewConnection, NextTab, OpenActionBar, OpenForge,
-    OpenSettings, PrevTab, QuitApp, RefreshView, ToggleAiPanel,
+    OpenQueryLibrary, OpenSettings, PrevTab, QuitApp, RefreshView, ToggleAiPanel,
 };
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::app_state::{
@@ -638,6 +638,9 @@ impl Render for AppRoot {
                 this.action_bar.update(cx, |bar, cx| {
                     bar.toggle(window, cx);
                 });
+            }))
+            .on_action(cx.listener(|this, _: &OpenQueryLibrary, window, cx| {
+                QueryLibraryDialog::open_for_current(this.state.clone(), window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, _window, cx| {
                 this.state.update(cx, |state, cx| {

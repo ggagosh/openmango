@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Query Library for Documents, Aggregation, and Forge with successful-run history, saved queries, full-text search, restore/run/copy/update/delete actions, keyboard access, atomic local persistence, and credential-aware exclusion
 - Optional connection colors that accent connections in the sidebar, connection manager, and tabs, and survive connection import/export
 - Shared unsaved-change protection across tabs, detached editors, connection changes, workspace restore, app quit, theme restart, and updater relaunch
 - Query failures now stay visible per tab with Retry and Copy Details actions while preserving the last successful result

@@ -25,7 +25,7 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Icon, IconName, Sizable};
 
-use crate::components::Button;
+use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::state::{AppEvent, AppState, View};
 use crate::theme::{fonts, islands, spacing};
 use controller::ForgeController;
@@ -69,34 +69,54 @@ impl ForgeView {
     }
 
     fn render_header(&self, cx: &App) -> impl IntoElement {
-        let (database, _connection_name) = {
-            let state_ref = self.app_state.read(cx);
-            let db = state_ref
-                .active_forge_tab_key()
-                .map(|k| k.database.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            let conn_name = state_ref
-                .active_forge_tab_key()
-                .and_then(|k| state_ref.active_connection_by_id(k.connection_id))
-                .map(|c| c.config.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            (db, conn_name)
-        };
+        let target = self.app_state.read(cx).active_forge_tab_key().cloned();
+        let database = target
+            .as_ref()
+            .map(|key| key.database.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
 
-        div().flex().items_center().justify_between().px(spacing::md()).py(spacing::sm()).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(spacing::xs())
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(cx.theme().foreground)
-                        .child("Forge"),
-                )
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(database)),
-        )
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(spacing::md())
+            .py(spacing::sm())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::xs())
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(cx.theme().foreground)
+                            .child("Forge"),
+                    )
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(database)),
+            )
+            .child(
+                Button::new("forge-query-library")
+                    .ghost()
+                    .compact()
+                    .icon(Icon::new(IconName::BookOpen).xsmall())
+                    .label("Query Library")
+                    .disabled(target.is_none())
+                    .on_click({
+                        let state = self.app_state.clone();
+                        move |_, window, cx| {
+                            let Some(target) = target.clone() else {
+                                return;
+                            };
+                            QueryLibraryDialog::open(
+                                state.clone(),
+                                QueryLibraryTarget::Forge(target),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+            )
     }
 
     fn render_output(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

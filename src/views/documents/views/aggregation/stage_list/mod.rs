@@ -13,7 +13,7 @@ use gpui::Styled as _;
 use gpui::*;
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
-use crate::components::Button;
+use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::state::SessionKey;
 use crate::state::app_state::PipelineState;
 use crate::theme::{islands, spacing};
@@ -50,6 +50,29 @@ impl CollectionView {
                     .flex()
                     .items_center()
                     .gap(spacing::xs())
+                    .child(
+                        Button::new("aggregation-query-library")
+                            .compact()
+                            .icon(Icon::new(IconName::BookOpen).xsmall())
+                            .label("Library")
+                            .tooltip("Query Library (Cmd/Ctrl+Shift+H)")
+                            .disabled(session_key.is_none())
+                            .on_click({
+                                let session_key = session_key.clone();
+                                let state = state.clone();
+                                move |_, window, cx| {
+                                    let Some(session_key) = session_key.clone() else {
+                                        return;
+                                    };
+                                    QueryLibraryDialog::open(
+                                        state.clone(),
+                                        QueryLibraryTarget::Aggregation(session_key),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                    )
                     .child(
                         Button::new("agg-import-pipeline")
                             .compact()

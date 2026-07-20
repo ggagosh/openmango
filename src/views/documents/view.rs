@@ -680,24 +680,52 @@ impl Render for CollectionView {
                 self.projection_error = query_validation_error(&val).is_some();
             }
             self.syncing_query_inputs = false;
-        } else if let Some(filter_state) = self.filter_state.clone() {
-            // Sync filter input when filter_raw was changed externally (e.g. AI "Open Collection").
-            // Only sync when the input is not focused to avoid overwriting the user's typing.
-            let expected = if filter_raw.trim().is_empty() {
-                String::new()
-            } else {
-                collapse_to_single_line(&filter_raw)
-            };
-            let current = filter_state.read(cx).value().to_string();
-            let is_focused = filter_state.read(cx).focus_handle(cx).is_focused(window);
-            if !is_focused && !self.calendar_open && current != expected {
-                self.syncing_query_inputs = true;
-                filter_state.update(cx, |state, cx| {
-                    state.set_value(expected.clone(), window, cx);
-                });
-                self.filter_auto_pair.sync(&expected);
-                self.filter_error_message = filter_query_validation_error(&expected);
-                self.syncing_query_inputs = false;
+        } else {
+            // Sync query inputs changed externally (for example Query Library restore).
+            // Never overwrite a field while the user is actively editing it.
+            if let Some(filter_state) = self.filter_state.clone() {
+                let expected = if filter_raw.trim().is_empty() {
+                    String::new()
+                } else {
+                    collapse_to_single_line(&filter_raw)
+                };
+                let current = filter_state.read(cx).value().to_string();
+                let is_focused = filter_state.read(cx).focus_handle(cx).is_focused(window);
+                if !is_focused && !self.calendar_open && current != expected {
+                    self.syncing_query_inputs = true;
+                    filter_state.update(cx, |state, cx| {
+                        state.set_value(expected.clone(), window, cx);
+                    });
+                    self.filter_auto_pair.sync(&expected);
+                    self.filter_error_message = filter_query_validation_error(&expected);
+                    self.syncing_query_inputs = false;
+                }
+            }
+            if let Some(sort_state) = self.sort_state.clone() {
+                let current = sort_state.read(cx).value().to_string();
+                let is_focused = sort_state.read(cx).focus_handle(cx).is_focused(window);
+                if !is_focused && current != sort_raw {
+                    self.syncing_query_inputs = true;
+                    sort_state.update(cx, |state, cx| {
+                        state.set_value(sort_raw.clone(), window, cx);
+                    });
+                    self.sort_auto_pair.sync(&sort_raw);
+                    self.sort_error = query_validation_error(&sort_raw).is_some();
+                    self.syncing_query_inputs = false;
+                }
+            }
+            if let Some(projection_state) = self.projection_state.clone() {
+                let current = projection_state.read(cx).value().to_string();
+                let is_focused = projection_state.read(cx).focus_handle(cx).is_focused(window);
+                if !is_focused && current != projection_raw {
+                    self.syncing_query_inputs = true;
+                    projection_state.update(cx, |state, cx| {
+                        state.set_value(projection_raw.clone(), window, cx);
+                    });
+                    self.projection_auto_pair.sync(&projection_raw);
+                    self.projection_error = query_validation_error(&projection_raw).is_some();
+                    self.syncing_query_inputs = false;
+                }
             }
         }
 

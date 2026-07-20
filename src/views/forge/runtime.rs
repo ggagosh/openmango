@@ -61,7 +61,7 @@ fn ensure_forge_execution_allowed(read_only: bool) -> Result<(), crate::error::E
 impl ForgeView {
     pub fn handle_execute_query(&mut self, text: &str, cx: &mut Context<Self>) {
         self.state.editor.current_text = text.to_string();
-        let (session_id, uri, database, runtime_handle, read_only) = {
+        let (session_id, uri, database, runtime_handle, read_only, forge_key) = {
             let state_ref = self.app_state.read(cx);
             let (session_id, uri, database) = match active_forge_session_info(state_ref) {
                 Ok(Some(info)) => info,
@@ -78,10 +78,18 @@ impl ForgeView {
                     return;
                 }
             };
-            let read_only = state_ref
-                .active_forge_tab_key()
+            let forge_key = state_ref.active_forge_tab_key().cloned();
+            let read_only = forge_key
+                .as_ref()
                 .is_some_and(|key| state_ref.connection_read_only(key.connection_id));
-            (session_id, uri, database, state_ref.connection_manager().runtime_handle(), read_only)
+            (
+                session_id,
+                uri,
+                database,
+                state_ref.connection_manager().runtime_handle(),
+                read_only,
+                forge_key,
+            )
         };
 
         if let Err(error) = ensure_forge_execution_allowed(read_only) {
@@ -111,6 +119,7 @@ impl ForgeView {
         cx.notify();
 
         let code = text.to_string();
+        let history_statement = code.clone();
         super::controller::ForgeController::clear_result_pages(self, true);
         self.begin_run(seq, &code);
         self.ensure_output_listener(cx);
@@ -186,6 +195,20 @@ impl ForgeView {
                             this.state.output.last_error = None;
                             super::controller::ForgeController::sync_output_tab(this);
                             this.append_eval_output(seq, &eval.printable);
+                            if let Some(forge_key) = forge_key.as_ref() {
+                                this.app_state.update(cx, |state, cx| {
+                                    if let Err(error) = state
+                                        .record_forge_query(forge_key, history_statement.clone())
+                                    {
+                                        state.set_status_message(Some(
+                                            crate::state::StatusMessage::error(format!(
+                                                "Forge completed, but {error}"
+                                            )),
+                                        ));
+                                    }
+                                    cx.notify();
+                                });
+                            }
                         }
                         Ok(Err(err)) => {
                             super::controller::ForgeController::clear_result_pages(this, true);
