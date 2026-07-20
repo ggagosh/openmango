@@ -1,8 +1,9 @@
 use gpui::{Action, SharedString, Window};
 
 use crate::keyboard::{
-    CreateCollection, CreateDatabase, OpenSettings, RefreshView, ShowAggregationSubview,
-    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview, ToggleAiPanel,
+    CreateCollection, CreateDatabase, OpenQueryLibrary, OpenSettings, RefreshView,
+    ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
+    ToggleAiPanel,
 };
 use crate::state::AppState;
 use crate::state::TabKey;
@@ -180,6 +181,16 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             category: ActionCategory::Command,
             available: has_connection,
             priority: 30,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:query-library"),
+            label: SharedString::from("Query Library"),
+            detail: Some(SharedString::from("Search query history and saved queries")),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &OpenQueryLibrary),
+            available: state.has_query_library_target(),
+            priority: 22,
             ..Default::default()
         },
         ActionItem {

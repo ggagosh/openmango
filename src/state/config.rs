@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::connection::SavedConnection;
+use crate::state::QueryLibrary;
 use crate::state::settings::AppSettings;
 use crate::state::workspace::WorkspaceState;
 
@@ -79,6 +80,7 @@ impl ConfigManager {
     // =========================================================================
 
     const CONNECTIONS_FILE: &'static str = "connections.json";
+    const QUERY_LIBRARY_FILE: &'static str = "query_library.json";
     const WORKSPACE_FILE: &'static str = "workspace.json";
 
     /// Load saved connections from disk
@@ -94,6 +96,18 @@ impl ConfigManager {
         let sanitized: Vec<SavedConnection> =
             connections.iter().map(|c| c.with_secrets_stripped()).collect();
         self.save_json(Self::CONNECTIONS_FILE, &sanitized)
+    }
+
+    // =========================================================================
+    // Query Library
+    // =========================================================================
+
+    pub fn load_query_library(&self) -> Result<QueryLibrary> {
+        Ok(self.load_json(Self::QUERY_LIBRARY_FILE)?.unwrap_or_default())
+    }
+
+    pub fn save_query_library(&self, library: &QueryLibrary) -> Result<()> {
+        self.save_json(Self::QUERY_LIBRARY_FILE, library)
     }
 
     // =========================================================================
@@ -212,6 +226,36 @@ mod tests {
         fs::write(&path, malformed).expect("failed to write malformed fixture");
 
         assert!(manager.load_connections().is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn query_library_round_trips_atomically() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+        let mut library = QueryLibrary::default();
+        library.record(crate::state::QueryDefinition {
+            connection_id: uuid::Uuid::nil(),
+            database: "app".into(),
+            collection: None,
+            content: crate::state::QueryContent::Forge { statement: "db.users.find({})".into() },
+        });
+
+        manager.save_query_library(&library).expect("failed to save query library");
+        let loaded = manager.load_query_library().expect("failed to load query library");
+
+        assert_eq!(loaded.history().len(), 1);
+    }
+
+    #[test]
+    fn malformed_query_library_is_left_untouched() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+        let path = temp_dir.path().join(ConfigManager::QUERY_LIBRARY_FILE);
+        let malformed = r#"{\"history\":["#;
+        fs::write(&path, malformed).expect("failed to write malformed fixture");
+
+        assert!(manager.load_query_library().is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), malformed);
     }
 

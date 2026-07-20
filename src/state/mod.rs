@@ -6,6 +6,7 @@ pub mod commands;
 pub mod config;
 pub mod editor_sessions;
 pub mod events;
+mod query_library;
 pub mod settings;
 pub mod status;
 pub mod transfer_rules;
@@ -18,11 +19,11 @@ pub use app_state::{
     DatabaseSessionState, DatabaseStats, DocumentViewMode, Encoding, ExplainBottleneck,
     ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
     ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
-    ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, InsertMode, SchemaAnalysis,
-    SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument, SessionKey,
-    SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, UnsavedChange, UnsavedInventory, UnsavedScope,
-    View,
+    ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
+    InsertMode, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
+    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
+    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange,
+    UnsavedInventory, UnsavedScope, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;
@@ -30,6 +31,10 @@ pub use editor_sessions::{
     EditorSession, EditorSessionId, EditorSessionStore, EditorSessionTarget,
 };
 pub use events::AppEvent;
+pub use query_library::{
+    DocumentQuery, QueryContent, QueryDefinition, QueryHistoryEntry, QueryKind, QueryLibrary,
+    QueryLibraryPersistenceError, SavedQuery,
+};
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, IslandsAppearanceSettings,

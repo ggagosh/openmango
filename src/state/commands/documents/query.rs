@@ -1,9 +1,12 @@
 use gpui::{App, AppContext as _, Entity};
-use mongodb::bson::{Document, doc};
+use mongodb::bson::{Bson, Document, doc};
 
-use crate::bson::DocumentKey;
+use crate::bson::{DocumentKey, format_relaxed_json_compact};
 use crate::connection::FindDocumentsOptions;
-use crate::state::{AppEvent, AppState, SessionData, SessionDocument, SessionKey};
+use crate::state::{
+    AppEvent, AppState, DocumentQuery, QueryContent, QueryDefinition, SessionData, SessionDocument,
+    SessionKey, StatusMessage,
+};
 
 use crate::state::AppCommands;
 
@@ -59,6 +62,16 @@ fn record_document_query_failure(data: &mut SessionData, request_id: u64, detail
     true
 }
 
+fn format_query_document(document: &Option<Document>) -> String {
+    document
+        .as_ref()
+        .map(|document| {
+            let value = Bson::Document(document.clone()).into_relaxed_extjson();
+            format_relaxed_json_compact(&value)
+        })
+        .unwrap_or_default()
+}
+
 impl AppCommands {
     /// Load documents for a collection session with pagination.
     pub fn load_documents_for_session(
@@ -79,12 +92,12 @@ impl AppCommands {
             request_id,
             filter,
             sort,
-            projection,
             sort_raw,
+            projection,
             max_time,
         ) = {
             let state = state.read(cx);
-            let (page, per_page, request_id, filter, sort, projection, sort_raw) =
+            let (page, per_page, request_id, filter, sort, sort_raw, projection) =
                 match state.session(&session_key) {
                     Some(session) => (
                         session.data.page,
@@ -92,10 +105,10 @@ impl AppCommands {
                         session.data.request_id + 1,
                         session.data.filter.clone(),
                         session.data.sort.clone(),
-                        session.data.projection.clone(),
                         session.data.sort_raw.clone(),
+                        session.data.projection.clone(),
                     ),
-                    None => (0, 50, 1, None, None, None, String::new()),
+                    None => (0, 50, 1, None, None, String::new(), None),
                 };
             (
                 session_key.database.clone(),
@@ -105,14 +118,27 @@ impl AppCommands {
                 request_id,
                 filter,
                 sort,
-                projection,
                 sort_raw,
+                projection,
                 std::time::Duration::from_millis(
                     state.settings.interactive_query_timeout_ms.max(100),
                 ),
             )
         };
 
+        let query_definition = QueryDefinition {
+            connection_id: session_key.connection_id,
+            database: session_key.database.clone(),
+            collection: Some(session_key.collection.clone()),
+            content: QueryContent::Documents(Box::new(DocumentQuery {
+                filter_raw: format_query_document(&filter),
+                filter: filter.clone(),
+                sort_raw: format_query_document(&sort),
+                sort: sort.clone(),
+                projection_raw: format_query_document(&projection),
+                projection: projection.clone(),
+            })),
+        };
         let effective_sort = if sort.is_none() && sort_raw.trim().is_empty() {
             Some(doc! { "$natural": 1 })
         } else {
@@ -180,6 +206,11 @@ impl AppCommands {
                             let event =
                                 AppEvent::DocumentsLoaded { session: session_key.clone(), total };
                             state.update_status_from_event(&event);
+                            if let Err(error) = state.record_query(query_definition.clone()) {
+                                state.set_status_message(Some(StatusMessage::error(format!(
+                                    "Documents loaded, but {error}"
+                                ))));
+                            }
                             cx.emit(event);
                             cx.notify();
                         });

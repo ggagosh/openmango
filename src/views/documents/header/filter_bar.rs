@@ -7,7 +7,7 @@ use gpui_component::RopeExt as _;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName, Sizable as _};
 
-use crate::components::Button;
+use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 use crate::views::documents::CollectionView;
@@ -215,7 +215,31 @@ pub fn render_filter_row(
                     builder_button = builder_button.active_style(cx.theme().primary.opacity(0.55));
                 }
                 builder_button
-            }),
+            })
+            .child(
+                Button::new("document-query-library")
+                    .ghost()
+                    .compact()
+                    .icon(Icon::new(IconName::BookOpen).xsmall())
+                    .label("Library")
+                    .tooltip("Query Library (Cmd/Ctrl+Shift+H)")
+                    .disabled(session_key.is_none())
+                    .on_click({
+                        let session_key = session_key.clone();
+                        let state = state.clone();
+                        move |_, window, cx| {
+                            let Some(session_key) = session_key.clone() else {
+                                return;
+                            };
+                            QueryLibraryDialog::open(
+                                state.clone(),
+                                QueryLibraryTarget::Documents(session_key),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+            ),
     );
 
     let chips = filter_state

@@ -11,6 +11,7 @@ pub mod dialog_helpers;
 pub mod file_picker;
 pub mod filter_builder;
 pub mod form_field;
+pub mod query_library;
 mod status_bar;
 mod unsaved_guard;
 pub use button::Button;
@@ -21,6 +22,7 @@ pub use content::ContentArea;
 pub use dialog_helpers::{cancel_button, primary_button};
 pub use filter_builder::FilterBuilderPanel;
 pub use form_field::FormField;
+pub use query_library::{QueryLibraryDialog, QueryLibraryTarget};
 pub use status_bar::StatusBar;
 pub use unsaved_guard::{
     request_app_quit, request_disconnect_connection, request_preview_collection,

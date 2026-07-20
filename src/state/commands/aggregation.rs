@@ -11,7 +11,9 @@ use gpui::{App, AppContext as _, Entity};
 use crate::bson::parse_bson_from_relaxed_json;
 use crate::connection::{AggregatePipelineError, ConnectionManager};
 use crate::state::app_state::{PipelineStage, StageDocCounts, StageStatsMode};
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey, StatusMessage};
+use crate::state::{
+    AppCommands, AppEvent, AppState, QueryContent, QueryDefinition, SessionKey, StatusMessage,
+};
 use mongodb::bson::{Bson, Document, doc};
 
 impl AppCommands {
@@ -169,6 +171,13 @@ impl AppCommands {
             }
         }
 
+        let query_definition = QueryDefinition {
+            connection_id: session_key.connection_id,
+            database: session_key.database.clone(),
+            collection: Some(session_key.collection.clone()),
+            content: QueryContent::Aggregation { stages: stages.clone(), selected_stage },
+        };
+
         let (request_id, run_generation_value) = state.update(cx, |state, cx| {
             let session = state.ensure_session(session_key.clone());
             if let Ok(mut handle) = session.data.aggregation.abort_handle.lock()
@@ -230,12 +239,12 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(run) => {
                         let count = run.documents.len();
-                        let applied = state.update(cx, |state, cx| {
+                        let (applied, history_failed) = state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
-                                return false;
+                                return (false, false);
                             };
                             if session.data.aggregation.request_id != request_id {
-                                return false;
+                                return (false, false);
                             }
                             session.data.aggregation.results =
                                 Some(std::sync::Arc::new(run.documents));
@@ -250,11 +259,20 @@ impl AppCommands {
                                 limited,
                             };
                             state.update_status_from_event(&event);
+                            let history_failed =
+                                if let Err(error) = state.record_query(query_definition.clone()) {
+                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                        "Aggregation completed, but {error}"
+                                    ))));
+                                    true
+                                } else {
+                                    false
+                                };
                             cx.emit(event);
                             cx.notify();
-                            true
+                            (true, history_failed)
                         });
-                        if applied && has_write_stage {
+                        if applied && has_write_stage && !history_failed {
                             state.update(cx, |state, cx| {
                                 state.set_status_message(Some(StatusMessage::info(
                                     "Write stage detected: stage stats and preview limit are disabled.",

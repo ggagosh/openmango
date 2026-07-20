@@ -124,12 +124,18 @@ impl ForgeView {
         force: bool,
     ) {
         let active_id = self.app_state.read(cx).active_forge_tab_id();
-        if !force && active_id == self.state.editor.active_tab_id {
-            return;
+        let same_tab = active_id == self.state.editor.active_tab_id;
+        if !force && same_tab {
+            let stored = active_id
+                .and_then(|id| self.app_state.read(cx).forge_tab_content(id))
+                .unwrap_or("");
+            if stored == self.state.editor.current_text {
+                return;
+            }
+        } else {
+            self.save_current_content(cx);
+            self.state.editor.active_tab_id = active_id;
         }
-        self.save_current_content(cx);
-
-        self.state.editor.active_tab_id = active_id;
         let Some(active_id) = active_id else {
             return;
         };
