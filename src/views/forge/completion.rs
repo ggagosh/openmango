@@ -77,7 +77,7 @@ impl ForgeCompletionProvider {
         let Some(tab_key) = self.state.read(cx).active_forge_tab_key() else {
             return;
         };
-        let Some((session_id, uri, database)) = active_forge_session_info(self.state.read(cx))
+        let Ok(Some((session_id, uri, database))) = active_forge_session_info(self.state.read(cx))
         else {
             return;
         };
@@ -435,7 +435,7 @@ impl CompletionProvider for ForgeCompletionProvider {
             return Task::ready(Ok(CompletionResponse::Array(local_items)));
         }
 
-        let Some((session_id, uri, database)) = active_forge_session_info(self.state.read(cx))
+        let Ok(Some((session_id, uri, database))) = active_forge_session_info(self.state.read(cx))
         else {
             return Task::ready(Ok(CompletionResponse::Array(local_items)));
         };

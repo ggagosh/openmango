@@ -1,6 +1,6 @@
 //! CSV export operations for collections and databases.
 
-use std::fs::File;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -10,8 +10,23 @@ use mongodb::Client;
 use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
+use crate::connection::ops::export::AtomicExportFile;
 use crate::connection::types::{CancellationToken, ExportQueryOptions};
 use crate::error::Result;
+
+fn csv_row(
+    document: &Document,
+    columns: &[String],
+    seen_columns: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let flat = crate::connection::csv_utils::flatten_document(document);
+    if let Some(field) = flat.keys().find(|field| !seen_columns.contains(*field)) {
+        return Err(crate::error::Error::Parse(format!(
+            "Export source changed while discovering columns; new field '{field}' was not skipped"
+        )));
+    }
+    Ok(columns.iter().map(|column| flat.get(column).cloned().unwrap_or_default()).collect())
+}
 
 impl ConnectionManager {
     /// Export a collection to CSV (runs in Tokio runtime).
@@ -48,7 +63,6 @@ impl ConnectionManager {
         query: ExportQueryOptions,
         cancellation: Option<CancellationToken>,
     ) -> Result<u64> {
-        use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
 
         let client = client.clone();
@@ -65,29 +79,37 @@ impl ConnectionManager {
             find_options.projection = query.projection;
             find_options.sort = query.sort;
 
-            // Start single cursor for all documents
-            let mut cursor = coll.find(filter).with_options(find_options).await?;
-
-            // Buffer first N documents to detect columns
-            const SAMPLE_SIZE: usize = 1000;
-            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
-
-            while buffered_docs.len() < SAMPLE_SIZE {
-                match cursor.try_next().await? {
-                    Some(doc) => buffered_docs.push(doc),
-                    None => break, // No more documents
+            // First pass discovers every column without buffering every document.
+            let mut discovery_cursor =
+                coll.find(filter.clone()).with_options(find_options.clone()).await?;
+            let mut seen_columns = HashSet::new();
+            let mut columns = Vec::new();
+            while let Some(doc) = discovery_cursor.try_next().await? {
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
                 }
+                crate::connection::csv_utils::collect_document_columns(
+                    &doc,
+                    &mut seen_columns,
+                    &mut columns,
+                );
             }
 
-            // Collect columns from buffered documents
-            let columns = collect_columns(&buffered_docs);
-
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
             if columns.is_empty() {
+                drop(file);
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+                output.commit()?;
                 return Ok(0);
             }
 
+            // Second pass streams complete rows using the full column set.
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
+
             // Write CSV with optional gzip compression
-            let file = File::create(&path)?;
             let mut csv_writer = if gzip {
                 csv::Writer::from_writer(
                     Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
@@ -99,31 +121,24 @@ impl ConnectionManager {
             // Write header
             csv_writer.write_record(&columns)?;
 
-            // Write buffered documents first
             let mut count = 0u64;
-            for doc in buffered_docs {
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
-                csv_writer.write_record(&row)?;
-                count += 1;
-            }
-
-            // Continue streaming remaining documents from same cursor
             while let Some(doc) = cursor.try_next().await? {
                 // Check cancellation
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                     return Err(crate::error::Error::Parse("Export cancelled".to_string()));
                 }
 
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                let row = csv_row(&doc, &columns, &seen_columns)?;
                 csv_writer.write_record(&row)?;
                 count += 1;
             }
 
             csv_writer.flush()?;
+            drop(csv_writer);
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             Ok(count)
         })
     }
@@ -141,12 +156,12 @@ impl ConnectionManager {
         path: &Path,
         gzip: bool,
         query: ExportQueryOptions,
+        cancellation: Option<CancellationToken>,
         on_progress: F,
     ) -> Result<u64>
     where
         F: Fn(u64) + Send + 'static,
     {
-        use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
 
         let client = client.clone();
@@ -163,30 +178,35 @@ impl ConnectionManager {
             find_options.projection = query.projection;
             find_options.sort = query.sort;
 
-            // Start single cursor for all documents
-            let mut cursor = coll.find(filter).with_options(find_options).await?;
-
-            // Buffer first N documents to detect columns
-            const SAMPLE_SIZE: usize = 1000;
-            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
-
-            while buffered_docs.len() < SAMPLE_SIZE {
-                match cursor.try_next().await? {
-                    Some(doc) => buffered_docs.push(doc),
-                    None => break, // No more documents
+            let mut discovery_cursor =
+                coll.find(filter.clone()).with_options(find_options.clone()).await?;
+            let mut seen_columns = HashSet::new();
+            let mut columns = Vec::new();
+            while let Some(doc) = discovery_cursor.try_next().await? {
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
                 }
+                crate::connection::csv_utils::collect_document_columns(
+                    &doc,
+                    &mut seen_columns,
+                    &mut columns,
+                );
             }
 
-            // Collect columns from buffered documents
-            let columns = collect_columns(&buffered_docs);
-
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
             if columns.is_empty() {
+                drop(file);
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+                output.commit()?;
                 on_progress(0);
                 return Ok(0);
             }
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
 
             // Write CSV with optional gzip compression
-            let file = File::create(&path)?;
             let mut csv_writer = if gzip {
                 csv::Writer::from_writer(
                     Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
@@ -198,28 +218,14 @@ impl ConnectionManager {
             // Write header
             csv_writer.write_record(&columns)?;
 
-            // Write buffered documents first
             let mut count = 0u64;
             const PROGRESS_INTERVAL: u64 = 1000;
 
-            for doc in buffered_docs {
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
-                csv_writer.write_record(&row)?;
-                count += 1;
-
-                // Report progress every N documents
-                if count.is_multiple_of(PROGRESS_INTERVAL) {
-                    on_progress(count);
-                }
-            }
-
-            // Continue streaming remaining documents from same cursor
             while let Some(doc) = cursor.try_next().await? {
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+                let row = csv_row(&doc, &columns, &seen_columns)?;
                 csv_writer.write_record(&row)?;
                 count += 1;
 
@@ -230,6 +236,11 @@ impl ConnectionManager {
             }
 
             csv_writer.flush()?;
+            drop(csv_writer);
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             // Final progress report
             on_progress(count);
             Ok(count)
@@ -252,7 +263,6 @@ impl ConnectionManager {
     where
         F: Fn(u64) + Send + 'static,
     {
-        use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
 
         let client = client.clone();
@@ -263,30 +273,28 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let coll = client.database(&database).collection::<Document>(&collection);
 
-            // Start single cursor for all documents
-            let mut cursor = coll.find(doc! {}).await?;
-
-            // Buffer first N documents to detect columns
-            const SAMPLE_SIZE: usize = 1000;
-            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
-
-            while buffered_docs.len() < SAMPLE_SIZE {
-                match cursor.try_next().await? {
-                    Some(doc) => buffered_docs.push(doc),
-                    None => break, // No more documents
-                }
+            let mut discovery_cursor = coll.find(doc! {}).await?;
+            let mut seen_columns = HashSet::new();
+            let mut columns = Vec::new();
+            while let Some(doc) = discovery_cursor.try_next().await? {
+                crate::connection::csv_utils::collect_document_columns(
+                    &doc,
+                    &mut seen_columns,
+                    &mut columns,
+                );
             }
 
-            // Collect columns from buffered documents
-            let columns = collect_columns(&buffered_docs);
-
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
             if columns.is_empty() {
+                drop(file);
+                output.commit()?;
                 on_progress(0);
                 return Ok(0);
             }
+            let mut cursor = coll.find(doc! {}).await?;
 
             // Write CSV
-            let file = File::create(&path)?;
             let mut csv_writer = if gzip {
                 csv::Writer::from_writer(
                     Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
@@ -297,27 +305,11 @@ impl ConnectionManager {
 
             csv_writer.write_record(&columns)?;
 
-            // Write buffered documents first
             let mut count = 0u64;
             const PROGRESS_INTERVAL: u64 = 1000;
 
-            for doc in buffered_docs {
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
-                csv_writer.write_record(&row)?;
-                count += 1;
-
-                if count.is_multiple_of(PROGRESS_INTERVAL) {
-                    on_progress(count);
-                }
-            }
-
-            // Continue streaming remaining documents from same cursor
             while let Some(doc) = cursor.try_next().await? {
-                let flat = flatten_document(&doc);
-                let row: Vec<String> =
-                    columns.iter().map(|col| flat.get(col).cloned().unwrap_or_default()).collect();
+                let row = csv_row(&doc, &columns, &seen_columns)?;
                 csv_writer.write_record(&row)?;
                 count += 1;
 
@@ -327,6 +319,8 @@ impl ConnectionManager {
             }
 
             csv_writer.flush()?;
+            drop(csv_writer);
+            output.commit()?;
             on_progress(count);
             Ok(count)
         })
@@ -344,7 +338,6 @@ impl ConnectionManager {
         gzip: bool,
         exclude_collections: &[String],
     ) -> Result<u64> {
-        use crate::connection::csv_utils::{collect_columns, flatten_document};
         use futures::TryStreamExt;
 
         let client = client.clone();
@@ -355,9 +348,15 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let db = client.database(&database);
             let collections = db.list_collection_names().await?;
-
-            // Create directory if it doesn't exist
-            std::fs::create_dir_all(&directory)?;
+            let final_directory = directory;
+            let parent = final_directory
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let staging =
+                tempfile::Builder::new().prefix(".openmango-database-csv-").tempdir_in(parent)?;
+            let directory = staging.path().join("export");
+            std::fs::create_dir(&directory)?;
 
             let mut total_count = 0u64;
 
@@ -376,32 +375,28 @@ impl ConnectionManager {
                 let file_name = format!("{}_{}.csv", database, coll_name);
                 let file_path = directory.join(&file_name);
 
-                // Export this collection using single-pass buffering
                 let coll = client.database(&database).collection::<Document>(&coll_name);
-
-                // Start single cursor for all documents
-                let mut cursor = coll.find(doc! {}).await?;
-
-                // Buffer first N documents to detect columns
-                const SAMPLE_SIZE: usize = 1000;
-                let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
-
-                while buffered_docs.len() < SAMPLE_SIZE {
-                    match cursor.try_next().await? {
-                        Some(doc) => buffered_docs.push(doc),
-                        None => break,
-                    }
+                let mut discovery_cursor = coll.find(doc! {}).await?;
+                let mut seen_columns = HashSet::new();
+                let mut columns = Vec::new();
+                while let Some(doc) = discovery_cursor.try_next().await? {
+                    crate::connection::csv_utils::collect_document_columns(
+                        &doc,
+                        &mut seen_columns,
+                        &mut columns,
+                    );
                 }
 
-                // Collect columns from buffered documents
-                let columns = collect_columns(&buffered_docs);
-
+                let output = AtomicExportFile::new(&file_path)?;
+                let file = output.reopen()?;
                 if columns.is_empty() {
+                    drop(file);
+                    output.commit()?;
                     continue;
                 }
+                let mut cursor = coll.find(doc! {}).await?;
 
                 // Write CSV
-                let file = File::create(&file_path)?;
                 let mut csv_writer = if gzip {
                     csv::Writer::from_writer(
                         Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
@@ -412,33 +407,20 @@ impl ConnectionManager {
 
                 csv_writer.write_record(&columns)?;
 
-                // Write buffered documents first
                 let mut count = 0u64;
-                for doc in buffered_docs {
-                    let flat = flatten_document(&doc);
-                    let row: Vec<String> = columns
-                        .iter()
-                        .map(|col| flat.get(col).cloned().unwrap_or_default())
-                        .collect();
-                    csv_writer.write_record(&row)?;
-                    count += 1;
-                }
-
-                // Continue streaming remaining documents from same cursor
                 while let Some(doc) = cursor.try_next().await? {
-                    let flat = flatten_document(&doc);
-                    let row: Vec<String> = columns
-                        .iter()
-                        .map(|col| flat.get(col).cloned().unwrap_or_default())
-                        .collect();
+                    let row = csv_row(&doc, &columns, &seen_columns)?;
                     csv_writer.write_record(&row)?;
                     count += 1;
                 }
 
                 csv_writer.flush()?;
+                drop(csv_writer);
+                output.commit()?;
                 total_count += count;
             }
 
+            crate::connection::ops::export::promote_export_directory(&directory, &final_directory)?;
             Ok(total_count)
         })
     }

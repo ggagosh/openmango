@@ -4,12 +4,14 @@ use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::{extract_uri_password, inject_uri_password, redact_uri_password};
+use crate::helpers::{
+    UriSecrets, extract_uri_secrets, inject_uri_password, inject_uri_secrets, strip_uri_secrets,
+};
 use crate::models::{ProxyConfig, SavedConnection, SshConfig};
 
 use super::crypto;
 
-const CURRENT_VERSION: u32 = 1;
+const CURRENT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +45,12 @@ struct TransportSecrets {
     ssh_identity_passphrase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tls_certificate_key_file_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uri_proxy_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aws_session_token: Option<String>,
 }
 
 impl TransportSecrets {
@@ -50,6 +58,12 @@ impl TransportSecrets {
         self.ssh_password.as_deref().is_some_and(|v| !v.trim().is_empty())
             || self.ssh_identity_passphrase.as_deref().is_some_and(|v| !v.trim().is_empty())
             || self.proxy_password.as_deref().is_some_and(|v| !v.trim().is_empty())
+            || self
+                .tls_certificate_key_file_password
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty())
+            || self.uri_proxy_password.as_deref().is_some_and(|v| !v.trim().is_empty())
+            || self.aws_session_token.as_deref().is_some_and(|v| !v.trim().is_empty())
     }
 }
 
@@ -71,12 +85,17 @@ pub fn build_export(
     let mut exported = Vec::with_capacity(connections.len());
 
     for conn in connections {
-        let (sanitized_ssh, sanitized_proxy, transport_secrets) =
+        let uri_secrets = extract_uri_secrets(&conn.uri);
+        let (sanitized_ssh, sanitized_proxy, mut transport_secrets) =
             sanitize_transport(conn.ssh.clone(), conn.proxy.clone());
+        transport_secrets.tls_certificate_key_file_password =
+            uri_secrets.tls_certificate_key_file_password.clone();
+        transport_secrets.uri_proxy_password = uri_secrets.proxy_password.clone();
+        transport_secrets.aws_session_token = uri_secrets.aws_session_token.clone();
         let entry = match mode {
             ExportMode::Redacted => ExportedConnection {
                 name: conn.name.clone(),
-                uri: redact_uri_password(&conn.uri),
+                uri: strip_uri_secrets(&conn.uri),
                 read_only: conn.read_only,
                 encrypted_password: None,
                 encrypted_transport: None,
@@ -86,8 +105,7 @@ pub fn build_export(
             ExportMode::Encrypted => {
                 let passphrase = passphrase
                     .ok_or_else(|| anyhow::anyhow!("passphrase required for encrypted export"))?;
-                let password = extract_uri_password(&conn.uri);
-                let encrypted = match &password {
+                let encrypted = match &uri_secrets.password {
                     Some(pw) => Some(crypto::encrypt_password(pw, passphrase)?),
                     None => None,
                 };
@@ -99,7 +117,7 @@ pub fn build_export(
                 };
                 ExportedConnection {
                     name: conn.name.clone(),
-                    uri: redact_uri_password(&conn.uri),
+                    uri: strip_uri_secrets(&conn.uri),
                     read_only: conn.read_only,
                     encrypted_password: encrypted,
                     encrypted_transport,
@@ -107,15 +125,9 @@ pub fn build_export(
                     proxy: sanitized_proxy,
                 }
             }
-            ExportMode::Plaintext => ExportedConnection {
-                name: conn.name.clone(),
-                uri: conn.uri.clone(),
-                read_only: conn.read_only,
-                encrypted_password: None,
-                encrypted_transport: None,
-                ssh: conn.ssh.clone(),
-                proxy: conn.proxy.clone(),
-            },
+            ExportMode::Plaintext => {
+                bail!("Plaintext exports are disabled; use an encrypted export for credentials")
+            }
         };
         exported.push(entry);
     }
@@ -203,6 +215,15 @@ fn sanitize_transport(
 }
 
 fn apply_transport_secrets(conn: &mut ExportedConnection, secrets: TransportSecrets) {
+    conn.uri = inject_uri_secrets(
+        &conn.uri,
+        &UriSecrets {
+            password: None,
+            tls_certificate_key_file_password: secrets.tls_certificate_key_file_password.clone(),
+            proxy_password: secrets.uri_proxy_password.clone(),
+            aws_session_token: secrets.aws_session_token.clone(),
+        },
+    );
     if let Some(ssh_cfg) = conn.ssh.as_mut() {
         if secrets.ssh_password.as_deref().is_some_and(|v| !v.is_empty()) {
             ssh_cfg.password = secrets.ssh_password;
@@ -230,7 +251,7 @@ mod tests {
             SavedConnection {
                 id: Uuid::new_v4(),
                 name: "Local".into(),
-                uri: "mongodb://admin:secret@localhost:27017".into(),
+                uri: "mongodb://admin:secret@localhost:27017/?tlsCertificateKeyFilePassword=tls-secret&proxyPassword=uri-proxy-secret&authMechanismProperties=SERVICE_NAME%3Amongodb%2CAWS_SESSION_TOKEN%3Aaws-secret".into(),
                 last_connected: None,
                 read_only: false,
                 ssh: Some(SshConfig {
@@ -253,6 +274,7 @@ mod tests {
                     username: Some("proxy-user".into()),
                     password: Some("proxy-password".into()),
                 }),
+                secret_id: None,
             },
             SavedConnection {
                 id: Uuid::new_v4(),
@@ -262,6 +284,7 @@ mod tests {
                 read_only: true,
                 ssh: None,
                 proxy: None,
+                secret_id: None,
             },
         ]
     }
@@ -275,6 +298,9 @@ mod tests {
         for ec in &file.connections {
             assert!(!ec.uri.contains("secret"));
             assert!(!ec.uri.contains("pass"));
+            assert!(!ec.uri.contains("tls-secret"));
+            assert!(!ec.uri.contains("uri-proxy-secret"));
+            assert!(!ec.uri.contains("aws-secret"));
             assert!(ec.encrypted_password.is_none());
             assert!(ec.encrypted_transport.is_none());
             if let Some(ssh) = &ec.ssh {
@@ -288,20 +314,11 @@ mod tests {
     }
 
     #[test]
-    fn export_plaintext_keeps_passwords() {
+    fn export_plaintext_is_rejected() {
         let conns = make_connections();
-        let file = build_export(&conns, ExportMode::Plaintext, None).unwrap();
-        assert_eq!(file.mode, ExportMode::Plaintext);
-        assert!(file.connections[0].uri.contains("secret"));
-        assert!(file.connections[1].uri.contains("pass"));
-        assert_eq!(
-            file.connections[0].ssh.as_ref().and_then(|cfg| cfg.password.as_deref()),
-            Some("ssh-password")
-        );
-        assert_eq!(
-            file.connections[0].proxy.as_ref().and_then(|cfg| cfg.password.as_deref()),
-            Some("proxy-password")
-        );
+        let error = build_export(&conns, ExportMode::Plaintext, None)
+            .expect_err("plaintext credentials must not be exported");
+        assert!(error.to_string().contains("disabled"));
     }
 
     #[test]
@@ -313,6 +330,9 @@ mod tests {
         for ec in &file.connections {
             assert!(ec.encrypted_password.is_some());
             assert!(!ec.uri.contains("secret"));
+            assert!(!ec.uri.contains("tls-secret"));
+            assert!(!ec.uri.contains("uri-proxy-secret"));
+            assert!(!ec.uri.contains("aws-secret"));
             if let Some(ssh) = &ec.ssh {
                 assert!(ssh.password.is_none());
                 assert!(ssh.identity_passphrase.is_none());
@@ -322,8 +342,23 @@ mod tests {
             }
         }
         assert!(file.connections[0].encrypted_transport.is_some());
+        let serialized = serde_json::to_string(&file).unwrap();
+        for secret in [
+            "secret",
+            "tls-secret",
+            "uri-proxy-secret",
+            "aws-secret",
+            "ssh-password",
+            "ssh-passphrase",
+            "proxy-password",
+        ] {
+            assert!(!serialized.contains(secret), "encrypted export leaked {secret}");
+        }
         decrypt_import_file(&mut file, passphrase).unwrap();
         assert!(file.connections[0].uri.contains("secret"));
+        assert!(file.connections[0].uri.contains("tls-secret"));
+        assert!(file.connections[0].uri.contains("uri-proxy-secret"));
+        assert!(file.connections[0].uri.contains("aws-secret"));
         assert!(file.connections[1].uri.contains("pass"));
         assert_eq!(
             file.connections[0].ssh.as_ref().and_then(|cfg| cfg.password.as_deref()),
@@ -353,11 +388,11 @@ mod tests {
         let file = build_export(&conns, ExportMode::Redacted, None).unwrap();
         let json = serde_json::to_string_pretty(&file).unwrap();
         let parsed = parse_import(&json).unwrap();
-        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.version, 2);
         assert_eq!(parsed.connections.len(), 2);
 
         // Future version should fail
-        let bad = json.replace("\"version\": 1", "\"version\": 99");
+        let bad = json.replace("\"version\": 2", "\"version\": 99");
         assert!(parse_import(&bad).is_err());
     }
 
@@ -371,6 +406,7 @@ mod tests {
             read_only: false,
             ssh: None,
             proxy: None,
+            secret_id: None,
         }];
 
         let file = ConnectionExportFile {
@@ -418,6 +454,7 @@ mod tests {
             read_only: false,
             ssh: None,
             proxy: None,
+            secret_id: None,
         }];
 
         let file = build_export(&conns, ExportMode::Encrypted, Some("pass")).unwrap();

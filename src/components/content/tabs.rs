@@ -4,7 +4,11 @@ use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
-use crate::state::{ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, TabKey, View};
+use crate::components::request_unsaved_action;
+use crate::state::{
+    ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, SessionKey, TabKey, UnsavedScope,
+    View,
+};
 use crate::theme::{borders, islands, spacing};
 use crate::views::{
     ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
@@ -12,6 +16,47 @@ use crate::views::{
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
 const OPEN_TAB_LABEL_MAX_WIDTH: f32 = 210.0;
+
+fn request_close_tab(state: Entity<AppState>, tab: TabKey, window: &mut Window, cx: &mut App) {
+    let state_for_close = state.clone();
+    request_unsaved_action(
+        state,
+        UnsavedScope::Tab(tab.clone()),
+        window,
+        cx,
+        move |_window, cx| {
+            state_for_close.update(cx, |state, cx| {
+                if let Some(index) =
+                    state.open_tabs().iter().position(|candidate| candidate == &tab)
+                {
+                    state.close_tab(index, cx);
+                }
+            });
+        },
+    );
+}
+
+fn request_close_preview(
+    state: Entity<AppState>,
+    session_key: SessionKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let state_for_close = state.clone();
+    request_unsaved_action(
+        state,
+        UnsavedScope::Preview(session_key.clone()),
+        window,
+        cx,
+        move |_window, cx| {
+            state_for_close.update(cx, |state, cx| {
+                if state.preview_tab() == Some(&session_key) {
+                    state.close_preview_tab(cx);
+                }
+            });
+        },
+    );
+}
 
 fn tab_strip_height(appearance: &AppearanceSettings) -> Pixels {
     match appearance.islands.tab_style {
@@ -201,6 +246,7 @@ impl Render for OpenTabsBar {
                         };
                         let is_selected = selected_index == index;
                         let state = self.state.clone();
+                        let tab_to_close = tab.clone();
                         let close_button = if islands_tab_variant {
                             div()
                                 .id(("tab-close", index))
@@ -221,11 +267,14 @@ impl Render for OpenTabsBar {
                                 .when(!is_selected, |s| {
                                     s.invisible().group_hover("tab-item", |s| s.visible())
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     cx.stop_propagation();
-                                    state.update(cx, |state, cx| {
-                                        state.close_tab(index, cx);
-                                    });
+                                    request_close_tab(
+                                        state.clone(),
+                                        tab_to_close.clone(),
+                                        window,
+                                        cx,
+                                    );
                                 })
                         } else {
                             div()
@@ -247,11 +296,14 @@ impl Render for OpenTabsBar {
                                 .when(!is_selected, |s| {
                                     s.invisible().group_hover("tab-item", |s| s.visible())
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     cx.stop_propagation();
-                                    state.update(cx, |state, cx| {
-                                        state.close_tab(index, cx);
-                                    });
+                                    request_close_tab(
+                                        state.clone(),
+                                        tab_to_close.clone(),
+                                        window,
+                                        cx,
+                                    );
                                 })
                         };
 
@@ -400,6 +452,7 @@ impl Render for OpenTabsBar {
                         let is_dirty = dirty_tabs.contains(&tab);
                         let is_preview_selected = matches!(active_tab, ActiveTab::Preview);
                         let state = self.state.clone();
+                        let preview_to_close = tab.clone();
                         let close_button = if islands_tab_variant {
                             div()
                                 .id("tab-close-preview")
@@ -420,11 +473,14 @@ impl Render for OpenTabsBar {
                                 .when(!is_preview_selected, |s| {
                                     s.invisible().group_hover("tab-item", |s| s.visible())
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     cx.stop_propagation();
-                                    state.update(cx, |state, cx| {
-                                        state.close_preview_tab(cx);
-                                    });
+                                    request_close_preview(
+                                        state.clone(),
+                                        preview_to_close.clone(),
+                                        window,
+                                        cx,
+                                    );
                                 })
                         } else {
                             div()
@@ -446,11 +502,14 @@ impl Render for OpenTabsBar {
                                 .when(!is_preview_selected, |s| {
                                     s.invisible().group_hover("tab-item", |s| s.visible())
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     cx.stop_propagation();
-                                    state.update(cx, |state, cx| {
-                                        state.close_preview_tab(cx);
-                                    });
+                                    request_close_preview(
+                                        state.clone(),
+                                        preview_to_close.clone(),
+                                        window,
+                                        cx,
+                                    );
                                 })
                         };
 

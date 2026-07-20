@@ -94,7 +94,7 @@ impl ForgeController {
         event: super::mongosh::MongoshEvent,
         cx: &mut Context<ForgeView>,
     ) {
-        let Some((session_id, _, _)) =
+        let Ok(Some((session_id, _, _))) =
             super::runtime::active_forge_session_info(view.app_state.read(cx))
         else {
             return;

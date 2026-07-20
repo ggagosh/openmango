@@ -186,18 +186,15 @@ impl AppCommands {
     /// Drop a collection.
     pub fn drop_collection(
         state: Entity<AppState>,
+        connection_id: Uuid,
         database: String,
         collection: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).selected_connection_id();
-        if !Self::ensure_writable(&state, connection_id, cx) {
+        if !Self::ensure_writable(&state, Some(connection_id), cx) {
             return;
         }
-        let Some(conn_id) = connection_id else {
-            return;
-        };
-        let Some(client) = Self::active_client(&state, conn_id, cx) else {
+        let Some(client) = Self::active_client(&state, connection_id, cx) else {
             return;
         };
         let manager = state.read(cx).connection_manager();
@@ -217,21 +214,23 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let Some(conn_id) = connection_id else {
-                                return;
-                            };
-                            if let Some(conn) = state.active_connection_mut(conn_id)
+                            if let Some(conn) = state.active_connection_mut(connection_id)
                                 && let Some(entry) = conn.collections.get_mut(&database)
                             {
                                 entry.retain(|name| name != &collection);
                             }
-                            state.close_tabs_for_collection(conn_id, &database, &collection, cx);
+                            state.close_tabs_for_collection(
+                                connection_id,
+                                &database,
+                                &collection,
+                                cx,
+                            );
                             state.set_status_message(Some(StatusMessage::info(format!(
                                 "Dropped collection {database}.{collection}"
                             ))));
-                            if state.selected_connection_is(conn_id) {
+                            if state.selected_connection_is(connection_id) {
                                 let collections = state
-                                    .active_connection_by_id(conn_id)
+                                    .active_connection_by_id(connection_id)
                                     .and_then(|conn| conn.collections.get(&database))
                                     .cloned()
                                     .unwrap_or_default();

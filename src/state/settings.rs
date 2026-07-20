@@ -6,7 +6,7 @@ use super::app_state::{InsertMode, TransferFormat};
 use crate::ai::settings::AiSettings;
 
 /// Application settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
     pub appearance: AppearanceSettings,
@@ -14,10 +14,29 @@ pub struct AppSettings {
     pub transfer: TransferSettings,
     #[serde(default)]
     pub ai: AiSettings,
+    #[serde(default = "default_interactive_query_timeout_ms")]
+    pub interactive_query_timeout_ms: u64,
     #[serde(default = "default_current_version")]
     pub last_seen_version: String,
     #[serde(default = "default_true")]
     pub auto_update: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            appearance: AppearanceSettings::default(),
+            transfer: TransferSettings::default(),
+            ai: AiSettings::default(),
+            interactive_query_timeout_ms: default_interactive_query_timeout_ms(),
+            last_seen_version: default_current_version(),
+            auto_update: true,
+        }
+    }
+}
+
+fn default_interactive_query_timeout_ms() -> u64 {
+    30_000
 }
 
 fn default_current_version() -> String {
@@ -297,6 +316,7 @@ mod tests {
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
         assert!(!settings.ai.enabled);
         assert_eq!(settings.ai.model, "gemini-3-flash-preview");
+        assert_eq!(settings.interactive_query_timeout_ms, 30_000);
     }
 
     #[test]
@@ -324,6 +344,7 @@ mod tests {
 
         let settings: AppSettings = serde_json::from_str(raw).expect("should deserialize");
         assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
+        assert_eq!(settings.interactive_query_timeout_ms, 30_000);
     }
 
     #[test]

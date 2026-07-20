@@ -31,6 +31,10 @@ impl SessionStore {
         self.sessions.get_mut(key)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&SessionKey, &SessionState)> {
+        self.sessions.iter()
+    }
+
     pub fn ensure(&mut self, key: SessionKey) -> &mut SessionState {
         match self.sessions.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -124,6 +128,7 @@ impl AppState {
             page: session.data.page,
             per_page: session.data.per_page,
             is_loading: session.data.is_loading,
+            query_error: session.data.query_error.clone(),
             selected_doc,
             selected_docs,
             selected_count,

@@ -65,6 +65,15 @@ impl ConnectionManager {
         Ok((client, runtime_meta))
     }
 
+    /// Build a tool URI that reuses the transport of an active managed connection.
+    pub fn effective_uri_for_active_connection(
+        &self,
+        config: &SavedConnection,
+        runtime_meta: &ConnectionRuntimeMeta,
+    ) -> Result<String> {
+        effective_uri_from_runtime(config, runtime_meta)
+    }
+
     /// Disconnect runtime resources for a connection.
     pub fn disconnect(&self, connection_id: Uuid) {
         self.stop_tunnel(connection_id);
@@ -391,7 +400,7 @@ impl ConnectionManager {
             runtime_meta.proxy_active = true;
         }
 
-        log::debug!("effective URI: {}", redact_uri_password(&effective_uri));
+        log::debug!("effective URI: {}", crate::helpers::strip_uri_secrets(&effective_uri));
 
         Ok((effective_uri, runtime_meta, tunnel_handle))
     }
@@ -415,6 +424,63 @@ impl Default for ConnectionManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn effective_uri_from_runtime(
+    config: &SavedConnection,
+    runtime_meta: &ConnectionRuntimeMeta,
+) -> Result<String> {
+    if transport_combo_enabled(config) {
+        return Err(Error::Parse(SSH_PROXY_CONFLICT_ERROR.to_string()));
+    }
+
+    let mut uri = config.uri.clone();
+    if config.ssh.as_ref().is_some_and(|ssh| ssh.enabled) {
+        if !runtime_meta.ssh_tunnel_active {
+            return Err(Error::Parse(
+                "The active SSH transport is unavailable; reconnect before using Forge or BSON tools"
+                    .to_string(),
+            ));
+        }
+        let endpoint = runtime_meta.ssh_local_endpoint.as_deref().ok_or_else(|| {
+            Error::Parse(
+                "The active SSH tunnel endpoint is unavailable; reconnect before using Forge or BSON tools"
+                    .to_string(),
+            )
+        })?;
+        let (host, port) = endpoint.rsplit_once(':').ok_or_else(|| {
+            Error::Parse("The active SSH tunnel endpoint is invalid; reconnect".to_string())
+        })?;
+        let port = port.parse::<u16>().map_err(|_| {
+            Error::Parse("The active SSH tunnel endpoint is invalid; reconnect".to_string())
+        })?;
+        uri = set_query_param(&uri, "proxyHost", Some(host.to_string()))?;
+        uri = set_query_param(&uri, "proxyPort", Some(port.to_string()))?;
+        uri = set_query_param(&uri, "directConnection", Some("true".to_string()))?;
+        uri = set_query_param(&uri, "replicaSet", None)?;
+    } else if runtime_meta.ssh_tunnel_active {
+        return Err(Error::Parse(
+            "Active SSH transport metadata does not match the connection configuration".to_string(),
+        ));
+    }
+
+    if let Some(proxy) = config.proxy.as_ref().filter(|proxy| proxy.enabled) {
+        if !runtime_meta.proxy_active {
+            return Err(Error::Parse(
+                "The active SOCKS5 transport is unavailable; reconnect before using Forge or BSON tools"
+                    .to_string(),
+            ));
+        }
+        validate_proxy_config(proxy)?;
+        uri = apply_proxy_to_uri(&uri, proxy)?;
+    } else if runtime_meta.proxy_active {
+        return Err(Error::Parse(
+            "Active SOCKS5 transport metadata does not match the connection configuration"
+                .to_string(),
+        ));
+    }
+
+    Ok(uri)
 }
 
 fn validate_proxy_config(proxy: &ProxyConfig) -> Result<()> {
@@ -526,24 +592,6 @@ fn transport_combo_enabled(config: &SavedConnection) -> bool {
         && config.proxy.as_ref().is_some_and(|proxy| proxy.enabled)
 }
 
-fn redact_uri_password(uri: &str) -> String {
-    let Some(parts) = parse_uri_parts(uri).ok() else {
-        return "***".to_string();
-    };
-    // Mask the password portion of userinfo (user:pass@host)
-    let authority = if let Some((userinfo, hosts)) = parts.authority.split_once('@') {
-        if let Some((user, _password)) = userinfo.split_once(':') {
-            format!("{user}:***@{hosts}")
-        } else {
-            parts.authority.clone()
-        }
-    } else {
-        parts.authority.clone()
-    };
-    let redacted = UriParts { authority, ..parts };
-    redacted.to_uri()
-}
-
 /// Percent-encode a query parameter value per RFC 3986 §2.1.
 ///
 /// NOTE: This is only called for values that `set_query_param` *injects*
@@ -617,9 +665,14 @@ fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{SSH_PROXY_CONFLICT_ERROR, set_query_param, transport_combo_enabled};
+    use super::{
+        SSH_PROXY_CONFLICT_ERROR, effective_uri_from_runtime, set_query_param,
+        transport_combo_enabled,
+    };
     use crate::error::Error;
-    use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
+    use crate::models::{
+        ConnectionRuntimeMeta, ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig,
+    };
 
     #[test]
     fn set_query_param_percent_encodes_reserved_chars() {
@@ -627,6 +680,91 @@ mod tests {
         let updated = set_query_param(uri, "proxyPassword", Some("p@ss:word/with?chars&=".into()))
             .expect("query parameter should be set");
         assert!(updated.contains("proxyPassword=p%40ss%3Aword%2Fwith%3Fchars%26%3D"));
+    }
+
+    #[test]
+    fn ssh_only_tool_workflow_reuses_active_local_endpoint() {
+        let mut saved = SavedConnection::new(
+            "ssh".to_string(),
+            "mongodb://user:secret@db.internal:27017/admin?replicaSet=rs0&tls=true".to_string(),
+        );
+        saved.ssh = Some(SshConfig {
+            enabled: true,
+            host: "bastion".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth: SshAuth::Password,
+            password: Some("ssh-secret".to_string()),
+            identity_file: None,
+            identity_passphrase: None,
+            strict_host_key_checking: false,
+            local_bind_host: "127.0.0.1".to_string(),
+        });
+        let meta = ConnectionRuntimeMeta {
+            ssh_tunnel_active: true,
+            ssh_local_endpoint: Some("127.0.0.1:43123".to_string()),
+            proxy_active: false,
+        };
+
+        let uri = effective_uri_from_runtime(&saved, &meta).unwrap();
+
+        assert!(uri.contains("user:secret@db.internal:27017/admin"));
+        assert!(uri.contains("proxyHost=127.0.0.1"));
+        assert!(uri.contains("proxyPort=43123"));
+        assert!(uri.contains("directConnection=true"));
+        assert!(uri.contains("tls=true"));
+        assert!(!uri.to_ascii_lowercase().contains("replicaset="));
+    }
+
+    #[test]
+    fn socks_only_tool_workflow_reuses_proxy_auth_and_tls_options() {
+        let mut saved = SavedConnection::new(
+            "proxy".to_string(),
+            "mongodb://user:secret@db.internal:27017/admin?tls=true".to_string(),
+        );
+        saved.proxy = Some(ProxyConfig {
+            enabled: true,
+            kind: ProxyKind::Socks5,
+            host: "proxy.internal".to_string(),
+            port: 1081,
+            username: Some("proxy-user".to_string()),
+            password: Some("p@ss word".to_string()),
+        });
+        let meta = ConnectionRuntimeMeta {
+            ssh_tunnel_active: false,
+            ssh_local_endpoint: None,
+            proxy_active: true,
+        };
+
+        let uri = effective_uri_from_runtime(&saved, &meta).unwrap();
+
+        assert!(uri.contains("user:secret@db.internal:27017/admin"));
+        assert!(uri.contains("proxyHost=proxy.internal"));
+        assert!(uri.contains("proxyPort=1081"));
+        assert!(uri.contains("proxyUsername=proxy-user"));
+        assert!(uri.contains("proxyPassword=p%40ss%20word"));
+        assert!(uri.contains("tls=true"));
+    }
+
+    #[test]
+    fn tool_workflow_fails_closed_when_active_transport_is_missing() {
+        let mut saved = SavedConnection::new("ssh".to_string(), "mongodb://db:27017".to_string());
+        saved.ssh = Some(SshConfig {
+            enabled: true,
+            host: "bastion".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth: SshAuth::Password,
+            password: Some("ssh-secret".to_string()),
+            identity_file: None,
+            identity_passphrase: None,
+            strict_host_key_checking: false,
+            local_bind_host: "127.0.0.1".to_string(),
+        });
+
+        let error = effective_uri_from_runtime(&saved, &ConnectionRuntimeMeta::default())
+            .expect_err("missing active tunnel must fail");
+        assert!(error.to_string().contains("reconnect"));
     }
 
     #[test]

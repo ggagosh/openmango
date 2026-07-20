@@ -118,10 +118,13 @@ jobs:
         with:
           path: artifacts
 
-      - name: Prepare release files
+      - name: Prepare release files and checksums
         run: |
           mkdir -p release
           find artifacts -name "*.zip" -exec cp {} release/ \;
+          for file in release/*.zip; do
+            sha256sum "$file" | awk '{print $1}' > "$file.sha256"
+          done
           ls -la release/
 
       - name: Delete existing nightly release
@@ -136,7 +139,9 @@ jobs:
           tag_name: nightly
           name: Nightly Build
           prerelease: true
-          files: release/*.zip
+          files: |
+            release/*.zip
+            release/*.zip.sha256
           body: |
             Automated nightly build from main branch.
 

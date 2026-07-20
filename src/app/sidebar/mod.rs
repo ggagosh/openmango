@@ -7,7 +7,10 @@ use gpui_component::WindowExt as _;
 use gpui_component::input::InputState;
 use uuid::Uuid;
 
-use crate::components::{ConnectionDialog, ConnectionManager, open_confirm_dialog};
+use crate::components::{
+    ConnectionDialog, ConnectionManager, open_confirm_dialog, request_disconnect_connection,
+    request_preview_collection, request_remove_connection, request_unsaved_action,
+};
 use crate::keyboard::FocusContent;
 use crate::models::{ActiveConnection, SavedConnection, TreeNodeId};
 use crate::state::{
@@ -84,90 +87,105 @@ impl Sidebar {
         let mut subscriptions = vec![];
 
         // Subscribe to AppState events for targeted tree updates (Phase 5.5)
-        subscriptions.push(cx.subscribe(&state, move |this, _, event, cx| match event {
-            AppEvent::ConnectionAdded
-            | AppEvent::ConnectionUpdated
-            | AppEvent::ConnectionRemoved
-            | AppEvent::DatabasesLoaded(_) => {
-                this.refresh_tree(cx);
-            }
-            AppEvent::CollectionsLoaded(_) => {
-                this.model.loading_databases.clear();
-                this.refresh_tree(cx);
-            }
-            AppEvent::CollectionsFailed(_) => {
-                this.model.loading_databases.clear();
-                cx.notify();
-            }
-            AppEvent::Connecting(connection_id) => {
-                this.model.connecting_connection = Some(*connection_id);
-                cx.notify();
-            }
-            AppEvent::Connected(connection_id) => {
-                if this.model.connecting_connection == Some(*connection_id) {
+        subscriptions.push(cx.subscribe_in(&state, _window, move |this, _, event, window, cx| {
+            match event {
+                AppEvent::ConnectionAdded
+                | AppEvent::ConnectionUpdated
+                | AppEvent::ConnectionRemoved
+                | AppEvent::DatabasesLoaded(_) => {
+                    this.refresh_tree(cx);
+                }
+                AppEvent::CollectionsLoaded(_) => {
+                    this.model.loading_databases.clear();
+                    this.refresh_tree(cx);
+                }
+                AppEvent::CollectionsFailed(_) => {
+                    this.model.loading_databases.clear();
+                    cx.notify();
+                }
+                AppEvent::Connecting(connection_id) => {
+                    this.model.connecting_connection = Some(*connection_id);
+                    cx.notify();
+                }
+                AppEvent::Connected(connection_id) => {
+                    if this.model.connecting_connection == Some(*connection_id) {
+                        this.model.connecting_connection = None;
+                    }
+                    this.model.loading_databases.clear();
+                    if this.state.read(cx).workspace_restore_pending
+                        && this.state.read(cx).workspace.last_connection_id == Some(*connection_id)
+                    {
+                        let state = this.state.clone();
+                        let sidebar = cx.entity();
+                        request_unsaved_action(
+                            state.clone(),
+                            crate::state::UnsavedScope::Workspace,
+                            window,
+                            cx,
+                            move |_window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.restore_workspace_after_connect(cx);
+                                });
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.restore_workspace_expansion(cx);
+                                });
+                            },
+                        );
+                    }
+                    this.refresh_tree(cx);
+                }
+                AppEvent::Disconnected(connection_id) => {
+                    if this.model.connecting_connection == Some(*connection_id) {
+                        this.model.connecting_connection = None;
+                    }
+                    this.model.loading_databases.clear();
+                    this.model.clear_selection();
+                    this.refresh_tree(cx);
+                }
+                AppEvent::ConnectionFailed(_) => {
                     this.model.connecting_connection = None;
+                    this.model.loading_databases.clear();
+                    this.model.clear_selection();
+                    cx.notify();
                 }
-                this.model.loading_databases.clear();
-                if this.state.read(cx).workspace_restore_pending
-                    && this.state.read(cx).workspace.last_connection_id == Some(*connection_id)
-                {
-                    this.state.update(cx, |state, cx| {
-                        state.restore_workspace_after_connect(cx);
-                    });
-                    this.restore_workspace_expansion(cx);
+                AppEvent::DocumentsLoaded { .. }
+                | AppEvent::DocumentsLoadFailed { .. }
+                | AppEvent::DocumentInserted { .. }
+                | AppEvent::DocumentInsertFailed { .. }
+                | AppEvent::DocumentsInserted { .. }
+                | AppEvent::DocumentsInsertFailed { .. }
+                | AppEvent::DocumentSaved { .. }
+                | AppEvent::DocumentSaveFailed { .. }
+                | AppEvent::DocumentDeleted { .. }
+                | AppEvent::DocumentDeleteFailed { .. }
+                | AppEvent::DocumentsDeleted { .. }
+                | AppEvent::DocumentsDeleteFailed { .. }
+                | AppEvent::IndexesLoaded { .. }
+                | AppEvent::IndexesLoadFailed { .. }
+                | AppEvent::IndexDropped { .. }
+                | AppEvent::IndexDropFailed { .. }
+                | AppEvent::IndexCreated { .. }
+                | AppEvent::IndexCreateFailed { .. }
+                | AppEvent::DocumentsUpdated { .. }
+                | AppEvent::DocumentsUpdateFailed { .. }
+                | AppEvent::AggregationCompleted { .. }
+                | AppEvent::AggregationFailed { .. }
+                | AppEvent::ExplainStarted { .. }
+                | AppEvent::ExplainCompleted { .. }
+                | AppEvent::ExplainFailed { .. }
+                | AppEvent::TransferPreviewLoaded { .. }
+                | AppEvent::TransferStarted { .. }
+                | AppEvent::TransferCompleted { .. }
+                | AppEvent::TransferFailed { .. }
+                | AppEvent::TransferCancelled { .. }
+                | AppEvent::DatabaseTransferStarted { .. }
+                | AppEvent::CollectionProgressUpdate { .. }
+                | AppEvent::SchemaAnalyzed { .. }
+                | AppEvent::SchemaFailed { .. }
+                | AppEvent::UpdateAvailable { .. } => {}
+                AppEvent::ViewChanged => {
+                    this.sync_selection_from_state(cx);
                 }
-                this.refresh_tree(cx);
-            }
-            AppEvent::Disconnected(connection_id) => {
-                if this.model.connecting_connection == Some(*connection_id) {
-                    this.model.connecting_connection = None;
-                }
-                this.model.loading_databases.clear();
-                this.model.clear_selection();
-                this.refresh_tree(cx);
-            }
-            AppEvent::ConnectionFailed(_) => {
-                this.model.connecting_connection = None;
-                this.model.loading_databases.clear();
-                this.model.clear_selection();
-                cx.notify();
-            }
-            AppEvent::DocumentsLoaded { .. }
-            | AppEvent::DocumentInserted
-            | AppEvent::DocumentInsertFailed { .. }
-            | AppEvent::DocumentsInserted { .. }
-            | AppEvent::DocumentsInsertFailed { .. }
-            | AppEvent::DocumentSaved { .. }
-            | AppEvent::DocumentSaveFailed { .. }
-            | AppEvent::DocumentDeleted { .. }
-            | AppEvent::DocumentDeleteFailed { .. }
-            | AppEvent::DocumentsDeleted { .. }
-            | AppEvent::DocumentsDeleteFailed { .. }
-            | AppEvent::IndexesLoaded { .. }
-            | AppEvent::IndexesLoadFailed { .. }
-            | AppEvent::IndexDropped { .. }
-            | AppEvent::IndexDropFailed { .. }
-            | AppEvent::IndexCreated { .. }
-            | AppEvent::IndexCreateFailed { .. }
-            | AppEvent::DocumentsUpdated { .. }
-            | AppEvent::DocumentsUpdateFailed { .. }
-            | AppEvent::AggregationCompleted { .. }
-            | AppEvent::AggregationFailed { .. }
-            | AppEvent::ExplainStarted { .. }
-            | AppEvent::ExplainCompleted { .. }
-            | AppEvent::ExplainFailed { .. }
-            | AppEvent::TransferPreviewLoaded { .. }
-            | AppEvent::TransferStarted { .. }
-            | AppEvent::TransferCompleted { .. }
-            | AppEvent::TransferFailed { .. }
-            | AppEvent::TransferCancelled { .. }
-            | AppEvent::DatabaseTransferStarted { .. }
-            | AppEvent::CollectionProgressUpdate { .. }
-            | AppEvent::SchemaAnalyzed { .. }
-            | AppEvent::SchemaFailed { .. }
-            | AppEvent::UpdateAvailable { .. } => {}
-            AppEvent::ViewChanged => {
-                this.sync_selection_from_state(cx);
             }
         }));
 
@@ -584,7 +602,7 @@ impl Sidebar {
         }
     }
 
-    fn handle_open_preview(&mut self, cx: &mut Context<Self>) {
+    fn handle_open_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_keyboard_preview();
         let Some(node_id) = self.model.selected_tree_id.clone() else {
             return;
@@ -595,10 +613,14 @@ impl Sidebar {
                 node_id.collection_name().map(|col| col.to_string()),
             )
         {
-            self.state.update(cx, |state, cx| {
-                state.select_connection(Some(node_id.connection_id()), cx);
-                state.preview_collection(db, col, cx);
-            });
+            request_preview_collection(
+                self.state.clone(),
+                node_id.connection_id(),
+                db,
+                col,
+                window,
+                cx,
+            );
         }
     }
 
@@ -610,14 +632,14 @@ impl Sidebar {
         ConnectionManager::open_selected(self.state.clone(), connection_id, window, cx);
     }
 
-    fn handle_disconnect_connection(&mut self, cx: &mut Context<Self>) {
+    fn handle_disconnect_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(TreeNodeId::Connection(connection_id)) = self.model.selected_tree_id.clone()
         else {
             return;
         };
         let is_active = self.state.read(cx).is_connected(connection_id);
         if is_active {
-            AppCommands::disconnect(self.state.clone(), connection_id, cx);
+            request_disconnect_connection(self.state.clone(), connection_id, window, cx);
         }
     }
 
@@ -797,24 +819,22 @@ impl Sidebar {
                 let message = format!("Remove connection \"{name}\"? This cannot be undone.");
                 open_confirm_dialog(window, cx, "Remove connection", message, "Remove", true, {
                     let state = self.state.clone();
-                    move |_window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.remove_connection(connection_id, cx);
-                        });
+                    move |window, cx| {
+                        request_remove_connection(state.clone(), connection_id, window, cx);
                     }
                 });
             }
-            TreeNodeId::Database { database, .. } => {
+            TreeNodeId::Database { connection, database } => {
                 let message = format!("Drop database \"{database}\"? This cannot be undone.");
                 open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
                     let state = self.state.clone();
                     let database = database.clone();
                     move |_window, cx| {
-                        AppCommands::drop_database(state.clone(), database.clone(), cx);
+                        AppCommands::drop_database(state.clone(), connection, database.clone(), cx);
                     }
                 });
             }
-            TreeNodeId::Collection { database, collection, .. } => {
+            TreeNodeId::Collection { connection, database, collection } => {
                 let message =
                     format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
                 open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
@@ -824,6 +844,7 @@ impl Sidebar {
                     move |_window, cx| {
                         AppCommands::drop_collection(
                             state.clone(),
+                            connection,
                             database.clone(),
                             collection.clone(),
                             cx,
@@ -995,6 +1016,15 @@ impl Sidebar {
                             state.select_database(database, cx);
                         }
                         TreeNodeId::Collection { connection, database, collection } => {
+                            if let Some(preview) = state.preview_tab().cloned()
+                                && !state
+                                    .unsaved_inventory(&crate::state::UnsavedScope::Preview(
+                                        preview,
+                                    ))
+                                    .is_empty()
+                            {
+                                return;
+                            }
                             state.select_connection(Some(connection), cx);
                             state.preview_collection(database, collection, cx);
                         }

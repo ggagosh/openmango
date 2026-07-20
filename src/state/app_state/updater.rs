@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub enum UpdateStatus {
     Idle,
     Checking,
-    Available { version: String, download_url: String },
+    Available { version: String, download_url: String, checksum_url: String },
     Downloading { version: String, progress_pct: u8 },
     ReadyToInstall { version: String, zip_path: PathBuf },
     Failed(String),

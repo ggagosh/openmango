@@ -47,7 +47,7 @@ test-verbose:
     cargo test -- --nocapture
 
 unit-test:
-    cargo test --bin openmango -- --test-threads=1
+    cargo test --lib -- --test-threads=1
 
 # Maintenance
 udeps:

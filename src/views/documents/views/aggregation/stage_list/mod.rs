@@ -14,8 +14,8 @@ use gpui::*;
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::components::Button;
+use crate::state::SessionKey;
 use crate::state::app_state::PipelineState;
-use crate::state::{SessionKey, StatusMessage};
 use crate::theme::{islands, spacing};
 use crate::views::CollectionView;
 
@@ -136,110 +136,10 @@ impl CollectionView {
                     window.focus(&focus);
                 }
             })
-            .on_key_down({
-                let view = view.clone();
-                let session_key = session_key.clone();
-                move |event, _window, cx| {
-                    let Some(session_key) = session_key.clone() else {
-                        return;
-                    };
-                    let mut handled = false;
-                    view.update(cx, |this, cx| {
-                        handled = handle_stage_list_key(this, event, &session_key, cx);
-                        if handled {
-                            cx.stop_propagation();
-                        }
-                    });
-                }
-            })
             .child(header)
             .child(body)
             .into_any_element()
     }
-}
-
-fn handle_stage_list_key(
-    view: &mut CollectionView,
-    event: &KeyDownEvent,
-    session_key: &SessionKey,
-    cx: &mut Context<CollectionView>,
-) -> bool {
-    let pipeline =
-        view.state.read(cx).session_data(session_key).map(|data| data.aggregation.clone());
-    let Some(pipeline) = pipeline else {
-        return false;
-    };
-    let count = pipeline.stages.len();
-    if count == 0 {
-        return false;
-    }
-
-    let key = event.keystroke.key.to_ascii_lowercase();
-    let modifiers = event.keystroke.modifiers;
-    let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-
-    let mut handled = false;
-    match key.as_str() {
-        "up" if cmd_or_ctrl && modifiers.shift => {
-            let Some(selected) = pipeline.selected_stage else {
-                return handled;
-            };
-            if selected == 0 {
-                return handled;
-            }
-            view.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(session_key, selected, selected - 1);
-                state.set_status_message(Some(StatusMessage::info("Stage moved up")));
-                cx.notify();
-            });
-            handled = true;
-        }
-        "down" if cmd_or_ctrl && modifiers.shift => {
-            let Some(selected) = pipeline.selected_stage else {
-                return handled;
-            };
-            if selected + 1 >= count {
-                return handled;
-            }
-            view.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(session_key, selected, selected + 1);
-                state.set_status_message(Some(StatusMessage::info("Stage moved down")));
-                cx.notify();
-            });
-            handled = true;
-        }
-        "up" if !modifiers.modified() => {
-            let current = pipeline.selected_stage.unwrap_or(0);
-            let next = current.saturating_sub(1);
-            view.state.update(cx, |state, cx| {
-                state.set_pipeline_selected_stage(session_key, Some(next));
-                cx.notify();
-            });
-            handled = true;
-        }
-        "down" if !modifiers.modified() => {
-            let current = pipeline.selected_stage.unwrap_or(0);
-            let next = (current + 1).min(count.saturating_sub(1));
-            view.state.update(cx, |state, cx| {
-                state.set_pipeline_selected_stage(session_key, Some(next));
-                cx.notify();
-            });
-            handled = true;
-        }
-        "d" if cmd_or_ctrl => {
-            let Some(selected) = pipeline.selected_stage else {
-                return handled;
-            };
-            view.state.update(cx, |state, cx| {
-                state.duplicate_pipeline_stage(session_key, selected);
-                state.set_status_message(Some(StatusMessage::info("Stage duplicated")));
-                cx.notify();
-            });
-            handled = true;
-        }
-        _ => {}
-    }
-    handled
 }
 
 fn render_empty_state(

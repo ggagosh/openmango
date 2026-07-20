@@ -10,6 +10,7 @@ mod status;
 mod tabs;
 mod transfer;
 mod types;
+mod unsaved;
 pub mod updater;
 mod workspace;
 
@@ -17,7 +18,9 @@ pub(crate) use aggregation::{
     PipelineAnalysis, PipelineStage, PipelineState, StageDocCounts, StageStatsMode,
     default_stage_body,
 };
-pub(crate) use connection::write_conn_secrets;
+pub(crate) use connection::{
+    ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
+};
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub(crate) use sessions::SessionStore;
 pub use types::{
@@ -32,12 +35,14 @@ pub use types::{
     SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat, TransferMode,
     TransferScope, TransferTabKey, TransferTabState, View,
 };
+pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicU64};
 use std::time::Instant;
 
 use gpui::{Context, EventEmitter};
+use uuid::Uuid;
 
 use crate::ai::AiChatState;
 use crate::connection::ConnectionManager;
@@ -96,12 +101,17 @@ pub struct AppState {
     // View state
     pub current_view: View,
     status_message: Option<StatusMessage>,
+    unsaved_guard_active: bool,
+    invalid_inline_edits: HashSet<SessionKey>,
 
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
 
     // Config manager for persistence
     pub(crate) config: ConfigManager,
+    pub(crate) connections_persistence_blocked: bool,
+    connection_secret_sync_pending: bool,
+    connections_waiting_for_secret_sync: HashSet<Uuid>,
 
     // Workspace persistence
     pub workspace: WorkspaceState,
@@ -129,11 +139,17 @@ impl AppState {
     pub fn with_connection_manager(connection_manager: Arc<ConnectionManager>) -> Self {
         let config = ConfigManager::default();
 
-        // Load saved connections
-        let connections = config.load_connections().unwrap_or_else(|e| {
-            log::warn!("Failed to load connections: {}", e);
-            Vec::new()
-        });
+        // A malformed connection file must never be replaced with an empty list.
+        let (connections, connection_load_error) = match config.load_connections() {
+            Ok(connections) => (connections, None),
+            Err(error) => {
+                let message = format!(
+                    "Connections could not be loaded. The original file was preserved; fix or restore it before editing connections: {error}"
+                );
+                log::error!("{message}");
+                (Vec::new(), Some(message))
+            }
+        };
         let mut settings = config.load_settings().unwrap_or_else(|e| {
             log::warn!("Failed to load settings: {}", e);
             AppSettings::default()
@@ -172,9 +188,14 @@ impl AppState {
             collection_meta_inflight: HashSet::new(),
             ai_chat: AiChatState::default(),
             current_view: View::Welcome,
-            status_message: None,
+            status_message: connection_load_error.clone().map(StatusMessage::error),
+            unsaved_guard_active: false,
+            invalid_inline_edits: HashSet::new(),
             copied_tree_item: None,
             config,
+            connections_persistence_blocked: connection_load_error.is_some(),
+            connection_secret_sync_pending: false,
+            connections_waiting_for_secret_sync: HashSet::new(),
             workspace,
             workspace_restore_pending,
             changelog_pending: false,

@@ -79,6 +79,8 @@ impl ConnectionDraft {
             proxy_username_state: cx.new(|cx| InputState::new(window, cx).placeholder("username")),
             proxy_password_state: cx
                 .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
+            uri_secrets: crate::helpers::UriSecrets::default(),
+            internal_uri_value: None,
             read_only: false,
             direct_connection: false,
             tls: false,
@@ -141,6 +143,8 @@ impl ConnectionDraft {
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.proxy_password_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.uri_secrets = crate::helpers::UriSecrets::default();
+        self.internal_uri_value = None;
         self.read_only = false;
         self.direct_connection = false;
         self.tls = false;
@@ -168,8 +172,9 @@ impl ConnectionManager {
         subscriptions.push(cx.subscribe_in(
             &uri_state,
             window,
-            move |view, _state, event, _window, cx| {
+            move |view, _state, event, window, cx| {
                 if matches!(event, InputEvent::Change) {
+                    view.capture_uri_secrets(window, cx);
                     view.status = TestStatus::Idle;
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;

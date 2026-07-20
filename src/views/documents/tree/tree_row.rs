@@ -643,6 +643,8 @@ fn render_inline_editor(
                     move |checked, _window, cx| {
                         view.update(cx, |this, cx| {
                             this.view_model.set_inline_bool(*checked);
+                            let state = this.state.clone();
+                            this.view_model.sync_inline_edit_draft(&state, cx);
                             cx.notify();
                         });
                     }

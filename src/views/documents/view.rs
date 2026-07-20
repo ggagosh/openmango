@@ -12,6 +12,7 @@ use gpui_component::h_flex;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
+use crate::components::Button;
 use crate::components::filter_builder::FilterBuilderPanel;
 
 use super::CollectionView;
@@ -122,6 +123,7 @@ impl Render for CollectionView {
             page,
             per_page,
             is_loading,
+            query_error,
             selected_doc,
             selected_docs,
             selected_count,
@@ -154,6 +156,7 @@ impl Render for CollectionView {
                 snapshot.page,
                 snapshot.per_page,
                 snapshot.is_loading,
+                snapshot.query_error,
                 snapshot.selected_doc,
                 snapshot.selected_docs,
                 snapshot.selected_count,
@@ -187,6 +190,7 @@ impl Render for CollectionView {
                 0,
                 50,
                 false,
+                None::<String>,
                 None,
                 std::collections::HashSet::new(),
                 0,
@@ -308,6 +312,7 @@ impl Render for CollectionView {
                                 view.calendar_insert_offset = None;
                                 should_notify = true;
                             }
+                            view.persist_query_input_drafts(cx);
                             if should_notify {
                                 cx.notify();
                             }
@@ -480,6 +485,7 @@ impl Render for CollectionView {
                             } else {
                                 view.sort_error = next_error;
                             }
+                            view.persist_query_input_drafts(cx);
                         }
                         InputEvent::PressEnter { .. } => {
                             let raw = state.read(cx).value().to_string();
@@ -563,6 +569,7 @@ impl Render for CollectionView {
                         } else {
                             view.projection_error = next_error;
                         }
+                        view.persist_query_input_drafts(cx);
                     }
                     InputEvent::PressEnter { .. } => {
                         let raw = state.read(cx).value().to_string();
@@ -872,6 +879,78 @@ impl Render for CollectionView {
                 session_key.clone(),
                 cx,
             ),
+        };
+
+        let content = if subview == CollectionSubview::Documents {
+            if let Some(error) = query_error {
+                let retry_state = self.state.clone();
+                let retry_session = session_key.clone();
+                let details = error.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(
+                        div()
+                            .mx(spacing::md())
+                            .mt(spacing::sm())
+                            .p(spacing::sm())
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(spacing::md())
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(cx.theme().danger.opacity(0.4))
+                            .bg(cx.theme().danger.opacity(0.08))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_sm()
+                                    .text_color(cx.theme().danger_foreground)
+                                    .child(format!("Query failed: {error}")),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(spacing::xs())
+                                    .child(
+                                        Button::new("retry-document-query")
+                                            .compact()
+                                            .label("Retry")
+                                            .disabled(retry_session.is_none())
+                                            .on_click(move |_, _, cx| {
+                                                if let Some(session) = retry_session.clone() {
+                                                    AppCommands::load_documents_for_session(
+                                                        retry_state.clone(),
+                                                        session,
+                                                        cx,
+                                                    );
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("copy-document-query-error")
+                                            .ghost()
+                                            .compact()
+                                            .label("Copy Details")
+                                            .on_click(move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    details.clone(),
+                                                ));
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(content)
+                    .into_any_element()
+            } else {
+                content
+            }
+        } else {
+            content
         };
 
         let explain_layer =

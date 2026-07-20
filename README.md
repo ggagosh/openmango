@@ -26,7 +26,7 @@
 
 **[Download the latest release](https://github.com/ggagosh/openmango/releases/latest)** — signed and notarized for macOS (Apple Silicon & Intel).
 
-OpenMango includes a built-in auto-updater so you'll always be on the latest version.
+OpenMango can check for and download verified updates automatically; installation happens only when you choose **Restart to update**.
 
 <!--
 **Homebrew** (coming soon):
@@ -60,7 +60,7 @@ Filter, sort, project, and paginate documents. Edit fields inline in the tree vi
 
 ### Transfer System
 
-Import and export JSON, NDJSON, CSV, and BSON. Copy documents between collections or databases with progress tracking.
+Import JSON, NDJSON, CSV, and BSON; export those formats plus Excel (`.xlsx`). Excel exports flatten documents into worksheets, discover columns across the full result set, and fail rather than silently truncate rows, strings, or late-discovered fields. Copy documents between collections or databases with progress tracking.
 
 ### Explain Plan
 
@@ -68,7 +68,7 @@ Visualize the winning query plan, index usage, scanned-vs-returned doc counts, a
 
 ### Connectivity
 
-Standard connections, SRV records, SSH tunneling, and SOCKS5 proxy support. Connection import/export with optional encryption.
+Standard connections, SRV records, SSH tunneling, and SOCKS5 proxy support. Credentials are stored in macOS Keychain; connection import/export supports redacted or encrypted files.
 
 ### Keyboard-First
 
@@ -76,7 +76,7 @@ Standard connections, SRV records, SSH tunneling, and SOCKS5 proxy support. Conn
 
 ### Themes
 
-15 built-in themes — Vercel Dark, OpenMango Islands (Dark & Light), Darcula, Tokyo Night, Nord, One Dark, Catppuccin (Mocha & Latte), Solarized (Dark & Light), Ros&eacute; Pine (Dark & Dawn), and Gruvbox (Dark & Light).
+13 built-in themes — Vercel Dark, Darcula, Tokyo Night, Nord, One Dark, Catppuccin (Mocha & Latte), Solarized (Dark & Light), Ros&eacute; Pine (Dark & Dawn), and Gruvbox (Dark & Light). The Islands and segmented options are tab styles, not additional themes.
 
 See [`docs/features.md`](docs/features.md) for the complete feature matrix.
 

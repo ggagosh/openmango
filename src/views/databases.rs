@@ -4,7 +4,7 @@ use gpui_component::Sizable as _;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 
-use crate::components::Button;
+use crate::components::{Button, request_preview_collection};
 use crate::helpers::{format_bytes, format_number};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, View,
@@ -388,6 +388,7 @@ impl DatabaseView {
         let theme_text_primary = cx.theme().foreground;
         let theme_text_secondary = cx.theme().secondary_foreground;
 
+        let connection_id = database_key.map(|key| key.connection_id);
         let rows = collections
             .into_iter()
             .enumerate()
@@ -405,10 +406,18 @@ impl DatabaseView {
                     .border_color(theme_border_subtle)
                     .hover(move |s| s.bg(theme_list_hover))
                     .cursor_pointer()
-                    .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        state.update(cx, |state, cx| {
-                            state.preview_collection(database.clone(), collection_name.clone(), cx);
-                        });
+                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        let Some(connection_id) = connection_id else {
+                            return;
+                        };
+                        request_preview_collection(
+                            state.clone(),
+                            connection_id,
+                            database.clone(),
+                            collection_name.clone(),
+                            window,
+                            cx,
+                        );
                     })
                     .child(
                         div()

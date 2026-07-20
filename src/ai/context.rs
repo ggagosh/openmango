@@ -303,7 +303,8 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
     }
 
     // ── 6. Selected documents ──────────────────────────────────────────────
-    if let (Some(data), Some(view)) = (data, view)
+    if state.settings.ai.share_selected_documents
+        && let (Some(data), Some(view)) = (data, view)
         && !view.selected_docs.is_empty()
     {
         let mut buf = String::new();
@@ -333,7 +334,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
     };
 
     // ── 7. Diversity-sampled documents ─────────────────────────────────────
-    if !data.items.is_empty() {
+    if state.settings.ai.share_sample_documents && !data.items.is_empty() {
         let selected =
             select_diverse_docs(&data.items.iter().map(|d| &d.doc).collect::<Vec<_>>(), 5);
         if !selected.is_empty() {

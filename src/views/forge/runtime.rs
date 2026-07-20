@@ -38,25 +38,63 @@ impl ForgeRuntime {
     }
 }
 
-pub fn active_forge_session_info(state: &AppState) -> Option<(Uuid, String, String)> {
-    let key = state.active_forge_tab_key()?.clone();
-    let uri = state.connection_uri(key.connection_id)?;
-    Some((key.id, uri, key.database))
+pub fn active_forge_session_info(
+    state: &AppState,
+) -> crate::error::Result<Option<(Uuid, String, String)>> {
+    let Some(key) = state.active_forge_tab_key().cloned() else {
+        return Ok(None);
+    };
+    let uri = state.active_connection_tool_uri(key.connection_id)?;
+    Ok(Some((key.id, uri, key.database)))
+}
+
+const READ_ONLY_FORGE_ERROR: &str = "Forge execution is disabled for read-only connections. Use a writable connection or a server-enforced read-only MongoDB account.";
+
+fn ensure_forge_execution_allowed(read_only: bool) -> Result<(), crate::error::Error> {
+    if read_only {
+        Err(crate::error::Error::Parse(READ_ONLY_FORGE_ERROR.to_string()))
+    } else {
+        Ok(())
+    }
 }
 
 impl ForgeView {
     pub fn handle_execute_query(&mut self, text: &str, cx: &mut Context<Self>) {
         self.state.editor.current_text = text.to_string();
-        let (session_id, uri, database, runtime_handle) = {
+        let (session_id, uri, database, runtime_handle, read_only) = {
             let state_ref = self.app_state.read(cx);
-            let Some((session_id, uri, database)) = active_forge_session_info(state_ref) else {
-                self.state.output.last_error = Some("No active Forge session".to_string());
-                self.state.output.last_result = None;
-                super::controller::ForgeController::clear_result_pages(self, false);
-                return;
+            let (session_id, uri, database) = match active_forge_session_info(state_ref) {
+                Ok(Some(info)) => info,
+                Ok(None) => {
+                    self.state.output.last_error = Some("No active Forge session".to_string());
+                    self.state.output.last_result = None;
+                    super::controller::ForgeController::clear_result_pages(self, false);
+                    return;
+                }
+                Err(error) => {
+                    self.state.output.last_error = Some(error.to_string());
+                    self.state.output.last_result = None;
+                    super::controller::ForgeController::clear_result_pages(self, false);
+                    return;
+                }
             };
-            (session_id, uri, database, state_ref.connection_manager().runtime_handle())
+            let read_only = state_ref
+                .active_forge_tab_key()
+                .is_some_and(|key| state_ref.connection_read_only(key.connection_id));
+            (session_id, uri, database, state_ref.connection_manager().runtime_handle(), read_only)
         };
+
+        if let Err(error) = ensure_forge_execution_allowed(read_only) {
+            let message = error.to_string();
+            self.state.output.last_error = Some(message.clone());
+            self.state.output.last_result = None;
+            super::controller::ForgeController::clear_result_pages(self, false);
+            super::controller::ForgeController::sync_output_tab(self);
+            let run_id = self.ensure_system_run();
+            self.append_error_output(run_id, &message);
+            cx.notify();
+            return;
+        }
 
         let Some(bridge) = self.ensure_mongosh() else {
             super::controller::ForgeController::clear_result_pages(self, false);
@@ -178,12 +216,22 @@ impl ForgeView {
     pub fn restart_session(&mut self, cx: &mut Context<Self>) {
         let (session_id, uri, database, runtime_handle) = {
             let state_ref = self.app_state.read(cx);
-            let Some((session_id, uri, database)) = active_forge_session_info(state_ref) else {
-                self.state.output.last_error = Some("No active Forge session".to_string());
-                self.state.output.last_result = None;
-                super::controller::ForgeController::clear_result_pages(self, false);
-                cx.notify();
-                return;
+            let (session_id, uri, database) = match active_forge_session_info(state_ref) {
+                Ok(Some(info)) => info,
+                Ok(None) => {
+                    self.state.output.last_error = Some("No active Forge session".to_string());
+                    self.state.output.last_result = None;
+                    super::controller::ForgeController::clear_result_pages(self, false);
+                    cx.notify();
+                    return;
+                }
+                Err(error) => {
+                    self.state.output.last_error = Some(error.to_string());
+                    self.state.output.last_result = None;
+                    super::controller::ForgeController::clear_result_pages(self, false);
+                    cx.notify();
+                    return;
+                }
             };
             (session_id, uri, database, state_ref.connection_manager().runtime_handle())
         };
@@ -247,7 +295,7 @@ impl ForgeView {
 
         let (session_id, uri, database, runtime_handle) = {
             let state_ref = self.app_state.read(cx);
-            let Some((session_id, uri, database)) = active_forge_session_info(state_ref) else {
+            let Ok(Some((session_id, uri, database))) = active_forge_session_info(state_ref) else {
                 return;
             };
             (session_id, uri, database, state_ref.connection_manager().runtime_handle())
@@ -390,5 +438,17 @@ impl ForgeView {
             return None;
         }
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_forge_execution_allowed;
+
+    #[test]
+    fn read_only_connections_cannot_execute_forge() {
+        let error = ensure_forge_execution_allowed(true).expect_err("read-only Forge must fail");
+        assert!(error.to_string().contains("read-only"));
+        assert!(ensure_forge_execution_allowed(false).is_ok());
     }
 }

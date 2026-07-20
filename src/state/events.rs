@@ -29,8 +29,17 @@ pub enum AppEvent {
         session: SessionKey,
         total: u64,
     },
-    DocumentInserted,
+    DocumentsLoadFailed {
+        session: SessionKey,
+        error: String,
+    },
+    DocumentInserted {
+        session: SessionKey,
+        editor: Option<crate::state::EditorSessionId>,
+    },
     DocumentInsertFailed {
+        session: SessionKey,
+        editor: Option<crate::state::EditorSessionId>,
         error: String,
     },
     DocumentsInserted {
@@ -43,9 +52,12 @@ pub enum AppEvent {
     DocumentSaved {
         session: SessionKey,
         document: DocumentKey,
+        editor: Option<crate::state::EditorSessionId>,
     },
     DocumentSaveFailed {
         session: SessionKey,
+        document: DocumentKey,
+        editor: Option<crate::state::EditorSessionId>,
         error: String,
     },
     DocumentDeleted {

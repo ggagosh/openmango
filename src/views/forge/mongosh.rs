@@ -72,7 +72,12 @@ pub struct MongoshBridge {
 impl MongoshBridge {
     pub fn new() -> Result<Arc<Self>> {
         let sidecar = mongosh_sidecar_path().ok_or_else(|| {
-            Error::ToolNotFound("mongosh-sidecar not found. Run 'just build-sidecar'.".into())
+            #[cfg(debug_assertions)]
+            let guidance =
+                "mongosh-sidecar is missing. Run 'just build-sidecar', then restart OpenMango.";
+            #[cfg(not(debug_assertions))]
+            let guidance = "The bundled Forge runtime is missing. Reinstall OpenMango from the official release, then restart the app. If the problem persists, export a Support Bundle from Settings and include it in your report.";
+            Error::ToolNotFound(guidance.into())
         })?;
 
         let mut cmd = Command::new(sidecar);

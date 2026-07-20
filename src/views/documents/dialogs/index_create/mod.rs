@@ -10,9 +10,9 @@ use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::InputState;
 use mongodb::IndexModel;
-use mongodb::bson::{Bson, Document, to_bson};
+use mongodb::bson::{Bson, Document, doc, to_bson};
 
-use crate::bson::{document_to_shell_string, parse_document_from_json};
+use crate::bson::document_to_shell_string;
 use crate::state::{AppEvent, AppState, SessionKey};
 
 use key_rows::IndexKeyRow;
@@ -41,6 +41,7 @@ pub struct IndexCreateDialog {
     pub(super) error_message: Option<String>,
     pub(super) creating: bool,
     pub(super) edit_target: Option<IndexEditTarget>,
+    pub(super) preserved_options: Document,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -121,6 +122,7 @@ impl IndexCreateDialog {
             error_message: None,
             creating: false,
             edit_target: None,
+            preserved_options: Document::new(),
             _subscriptions: Vec::new(),
         };
 
@@ -177,6 +179,22 @@ impl IndexCreateDialog {
             .as_ref()
             .and_then(|options| options.name.clone())
             .unwrap_or_else(|| "unnamed".to_string());
+        let mut complete_index =
+            crate::connection::ops::indexes::index_model_to_create_document(&model)
+                .unwrap_or_else(|_| doc! { "key": model.keys.clone() });
+        self.preserved_options = complete_index.clone();
+        for field in [
+            "key",
+            "name",
+            "unique",
+            "sparse",
+            "hidden",
+            "expireAfterSeconds",
+            "partialFilterExpression",
+            "collation",
+        ] {
+            self.preserved_options.remove(field);
+        }
         self.edit_target = Some(IndexEditTarget { original_name: original_name.clone() });
 
         let mut found_keys = false;
@@ -236,38 +254,8 @@ impl IndexCreateDialog {
             }
         }
 
-        let mut json_doc = Document::new();
-        json_doc.insert("key", model.keys.clone());
-        json_doc.insert("name", original_name);
-        if self.unique {
-            json_doc.insert("unique", true);
-        }
-        if self.sparse {
-            json_doc.insert("sparse", true);
-        }
-        if self.hidden {
-            json_doc.insert("hidden", true);
-        }
-        let ttl_raw = self.ttl_state.read(cx).value().to_string();
-        if let Ok(ttl) = ttl_raw.trim().parse::<i64>()
-            && ttl > 0
-        {
-            json_doc.insert("expireAfterSeconds", ttl);
-        }
-        let partial_raw = self.partial_state.read(cx).value().to_string();
-        if let Ok(doc) = parse_document_from_json(partial_raw.trim())
-            && !doc.is_empty()
-        {
-            json_doc.insert("partialFilterExpression", doc);
-        }
-        let collation_raw = self.collation_state.read(cx).value().to_string();
-        if let Ok(doc) = parse_document_from_json(collation_raw.trim())
-            && !doc.is_empty()
-        {
-            json_doc.insert("collation", doc);
-        }
-
-        let json_text = document_to_shell_string(&json_doc);
+        complete_index.insert("name", original_name);
+        let json_text = document_to_shell_string(&complete_index);
         self.json_state.update(cx, |state, cx| {
             state.set_value(json_text, window, cx);
         });

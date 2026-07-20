@@ -12,7 +12,7 @@ use gpui_component::{Sizable as _, Size};
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
-use crate::components::Button;
+use crate::components::{Button, open_confirm_dialog, request_app_quit};
 use crate::state::{
     AiProvider, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS,
     InsertMode, TransferFormat,
@@ -58,6 +58,7 @@ pub struct SettingsView {
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
     batch_size_input_state: Option<Entity<InputState>>,
+    query_timeout_input_state: Option<Entity<InputState>>,
     ai_api_key_input_state: Option<Entity<InputState>>,
     ai_ollama_base_url_input_state: Option<Entity<InputState>>,
     ai_test_in_flight: bool,
@@ -84,6 +85,7 @@ impl SettingsView {
             active_subtab: SettingsSubtab::default(),
             template_input_state: None,
             batch_size_input_state: None,
+            query_timeout_input_state: None,
             ai_api_key_input_state: None,
             ai_ollama_base_url_input_state: None,
             ai_test_in_flight: false,
@@ -96,6 +98,7 @@ impl SettingsView {
     fn ensure_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.template_input_state.is_some()
             && self.batch_size_input_state.is_some()
+            && self.query_timeout_input_state.is_some()
             && self.ai_api_key_input_state.is_some()
             && self.ai_ollama_base_url_input_state.is_some()
         {
@@ -104,6 +107,7 @@ impl SettingsView {
 
         let template = self.state.read(cx).settings.transfer.export_filename_template.clone();
         let batch_size = self.state.read(cx).settings.transfer.default_batch_size;
+        let query_timeout = self.state.read(cx).settings.interactive_query_timeout_ms;
         let ai_api_key = self.state.read(cx).settings.ai.api_key.clone();
         let ai_ollama_base_url = self.state.read(cx).settings.ai.ollama_base_url.clone();
 
@@ -159,6 +163,31 @@ impl SettingsView {
         );
         self._subscriptions.push(batch_sub);
 
+        let query_timeout_input_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("30000").clean_on_escape();
+            state.set_value(query_timeout.to_string(), window, cx);
+            state
+        });
+        let state_for_timeout_sub = self.state.clone();
+        let timeout_sub = cx.subscribe_in(
+            &query_timeout_input_state,
+            window,
+            move |_view, state, event, _window, cx| {
+                if let InputEvent::Change = event {
+                    let new_text = state.read(cx).value().to_string();
+                    if let Ok(value) = new_text.parse::<u64>() {
+                        state_for_timeout_sub.update(cx, |app_state, cx| {
+                            app_state.settings.interactive_query_timeout_ms =
+                                value.clamp(100, 3_600_000);
+                            app_state.save_settings();
+                            cx.notify();
+                        });
+                    }
+                }
+            },
+        );
+        self._subscriptions.push(timeout_sub);
+
         let ai_api_key_input_state = cx.new(|cx| {
             let mut state =
                 InputState::new(window, cx).placeholder("API key (or use env var)").masked(true);
@@ -206,6 +235,7 @@ impl SettingsView {
 
         self.template_input_state = Some(template_input_state);
         self.batch_size_input_state = Some(batch_size_input_state);
+        self.query_timeout_input_state = Some(query_timeout_input_state);
         self.ai_api_key_input_state = Some(ai_api_key_input_state);
         self.ai_ollama_base_url_input_state = Some(ai_ollama_base_url_input_state);
     }
@@ -314,7 +344,9 @@ impl Render for SettingsView {
                 .flex_col()
                 .gap(spacing::lg())
                 .child(render_appearance_section(state.clone(), &settings, cx))
+                .child(render_query_section(self.query_timeout_input_state.clone().unwrap(), cx))
                 .child(render_updates_section(state.clone(), &settings, cx))
+                .child(render_support_section(state.clone(), cx))
                 .into_any_element(),
             SettingsSubtab::Transfer => div()
                 .flex()
@@ -418,7 +450,12 @@ fn render_appearance_section(
                                 "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
                                 "Restart now",
                                 false,
-                                |_window, cx| cx.quit(),
+                                {
+                                    let state = s.clone();
+                                    move |window, cx| {
+                                        request_app_quit(state.clone(), window, cx);
+                                    }
+                                },
                             );
                         }
                     }));
@@ -456,7 +493,12 @@ fn render_appearance_section(
                                         "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
                                         "Restart now",
                                         false,
-                                        |_window, cx| cx.quit(),
+                                        {
+                                            let state = s.clone();
+                                            move |window, cx| {
+                                                request_app_quit(state.clone(), window, cx);
+                                            }
+                                        },
                                     );
                                 }
                             },
@@ -500,7 +542,10 @@ fn render_appearance_section(
                     "Vibrancy changes require a restart to take effect.",
                     "Restart now",
                     false,
-                    |_window, cx| cx.quit(),
+                    {
+                        let state = state.clone();
+                        move |window, cx| request_app_quit(state.clone(), window, cx)
+                    },
                 );
             },
         )
@@ -529,6 +574,23 @@ fn render_appearance_section(
     )
 }
 
+fn render_query_section(
+    query_timeout_input_state: Entity<InputState>,
+    cx: &App,
+) -> impl IntoElement {
+    let timeout_input = NumberInput::new(&query_timeout_input_state).small().w(px(120.0));
+    section(
+        "Queries",
+        div().flex().flex_col().gap(spacing::md()).child(setting_row_with_description(
+            "Interactive query timeout (ms)",
+            "Server maxTimeMS for document count and find commands (100–3,600,000)",
+            timeout_input,
+            cx,
+        )),
+        cx,
+    )
+}
+
 fn render_updates_section(
     state: Entity<AppState>,
     settings: &AppSettings,
@@ -553,10 +615,81 @@ fn render_updates_section(
         "Updates",
         div().flex().flex_col().gap(spacing::md()).child(setting_row_with_description(
             "Automatic updates",
-            "Automatically download and install updates in the background",
+            "Automatically check for and download updates; restart to install",
             auto_update_checkbox,
             cx,
         )),
+        cx,
+    )
+}
+
+fn render_support_section(state: Entity<AppState>, cx: &App) -> impl IntoElement {
+    let log_path = crate::helpers::support::app_log_path();
+    let export_button = Button::new("export-support-bundle")
+        .compact()
+        .label("Export Support Bundle...")
+        .on_click(move |_, _, cx| {
+            let state = state.clone();
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                let path = crate::components::file_picker::open_file_dialog_async(
+                    crate::components::file_picker::FilePickerMode::Save,
+                    vec![crate::components::file_picker::FileFilter::new(
+                        "Support bundle",
+                        vec!["txt"],
+                    )],
+                    Some("OpenMango-support.txt".to_string()),
+                )
+                .await;
+                let Some(path) = path else {
+                    return;
+                };
+                let result = cx.update(|cx| {
+                    crate::helpers::support::export_support_bundle(state.read(cx), &path)
+                });
+                let _ = cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        match result {
+                            Ok(Ok(())) => {
+                                state.set_status_message(Some(crate::state::StatusMessage::info(
+                                    format!("Support bundle exported to {}", path.display()),
+                                )))
+                            }
+                            Ok(Err(error)) => {
+                                state.set_status_message(Some(crate::state::StatusMessage::error(
+                                    format!("Support bundle export failed: {error}"),
+                                )))
+                            }
+                            Err(error) => {
+                                state.set_status_message(Some(crate::state::StatusMessage::error(
+                                    format!("Support bundle export failed: {error}"),
+                                )))
+                            }
+                        }
+                        cx.notify();
+                    });
+                });
+            })
+            .detach();
+        });
+
+    section(
+        "Support",
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Log file",
+                &log_path.display().to_string(),
+                div().text_xs().text_color(cx.theme().muted_foreground).child("On disk"),
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Diagnostics",
+                "Exports redacted configuration, runtime details, and the recent log.",
+                export_button,
+                cx,
+            )),
         cx,
     )
 }
@@ -843,14 +976,71 @@ fn render_ai_section(
     let enabled_checkbox = {
         let state = state.clone();
         gpui_component::checkbox::Checkbox::new("ai-enabled").checked(ai_enabled).on_click(
-            move |_, _, cx| {
+            move |_, window, cx| {
+                if ai_enabled {
+                    state.update(cx, |state, cx| {
+                        state.settings.ai.enabled = false;
+                        state.save_settings();
+                        cx.notify();
+                    });
+                    return;
+                }
+                let provider = state.read(cx).settings.ai.provider.label();
+                let destination = if provider == "Ollama" {
+                    "your configured Ollama endpoint"
+                } else {
+                    provider
+                };
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Enable AI Assistant",
+                    format!(
+                        "AI requests are sent to {destination}. They include your chat messages and may include connection/database/collection names, active query text, schema summaries (including schema sample values), indexes, statistics, aggregation stages, and tool results. Credentials are not included. Selected document contents and automatic document samples remain excluded unless you enable those separate sharing options."
+                    ),
+                    "Enable AI",
+                    false,
+                    {
+                        let state = state.clone();
+                        move |_window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.settings.ai.enabled = true;
+                                state.save_settings();
+                                cx.notify();
+                            });
+                        }
+                    },
+                );
+            },
+        )
+    };
+
+    let selected_documents_checkbox = {
+        let state = state.clone();
+        let checked = settings.ai.share_selected_documents;
+        gpui_component::checkbox::Checkbox::new("ai-share-selected-documents")
+            .checked(checked)
+            .on_click(move |_, _, cx| {
                 state.update(cx, |state, cx| {
-                    state.settings.ai.enabled = !ai_enabled;
+                    state.settings.ai.share_selected_documents = !checked;
                     state.save_settings();
                     cx.notify();
                 });
-            },
-        )
+            })
+    };
+
+    let sample_documents_checkbox = {
+        let state = state.clone();
+        let checked = settings.ai.share_sample_documents;
+        gpui_component::checkbox::Checkbox::new("ai-share-sample-documents")
+            .checked(checked)
+            .on_click(move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.ai.share_sample_documents = !checked;
+                    state.save_settings();
+                    cx.notify();
+                });
+            })
     };
 
     let provider_dropdown = {
@@ -1077,6 +1267,35 @@ fn render_ai_section(
                             )
                             .child(model_status_badge),
                     ),
+                &settings.appearance,
+                cx,
+            ))
+            .child(group(
+                "Privacy",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "Every AI request includes chat messages and relevant workspace metadata such as names, active queries, schema summaries, indexes, statistics, aggregation stages, and tool results. Credentials are never included.",
+                            ),
+                    )
+                    .child(setting_row_with_description(
+                        "Share selected documents",
+                        "Include up to three selected document bodies in automatic AI context.",
+                        selected_documents_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row_with_description(
+                        "Share document samples",
+                        "Include up to five documents from the current result set in automatic AI context.",
+                        sample_documents_checkbox,
+                        cx,
+                    )),
                 &settings.appearance,
                 cx,
             ))

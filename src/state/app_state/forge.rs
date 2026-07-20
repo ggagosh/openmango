@@ -55,6 +55,7 @@ impl AppState {
     pub fn set_forge_tab_content(&mut self, id: Uuid, content: String) {
         if let Some(state) = self.forge_tabs.get_mut(&id) {
             state.content = content;
+            self.update_workspace_from_state_debounced();
         }
     }
 

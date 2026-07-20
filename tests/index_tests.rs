@@ -6,10 +6,140 @@ use common::{MongoTestContainer, fixtures};
 use futures::TryStreamExt;
 use mongodb::IndexModel;
 use mongodb::bson::{Document, doc};
+use openmango::connection::ConnectionManager;
 
 // =============================================================================
 // Index CRUD Tests
 // =============================================================================
+
+#[tokio::test]
+async fn test_same_name_index_replacement_keeps_final_name() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "replace_same_name");
+    collection.insert_one(doc! { "old": 1, "new": 1 }).await.unwrap();
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "old": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .name("replace_me".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_index(
+            &client,
+            &database,
+            "replace_same_name",
+            "replace_me",
+            doc! { "key": { "new": 1 }, "name": "replace_me" },
+        )
+    })
+    .await
+    .unwrap()
+    .expect("Replacement failed");
+
+    let indexes: Vec<IndexModel> =
+        collection.list_indexes().await.unwrap().try_collect().await.unwrap();
+    let replacement = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref()) == Some("replace_me")
+        })
+        .expect("Replacement index missing");
+    assert_eq!(replacement.keys, doc! { "new": 1 });
+    assert!(!indexes.iter().any(|index| {
+        index
+            .options
+            .as_ref()
+            .and_then(|options| options.name.as_deref())
+            .is_some_and(|name| name.starts_with("__openmango_validate_"))
+    }));
+}
+
+#[tokio::test]
+async fn test_failed_unique_replacement_preserves_original_index() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "replace_unique_failure");
+    collection.insert_many(vec![doc! { "email": "same" }, doc! { "email": "same" }]).await.unwrap();
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder().name("email_idx".to_string()).build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_index(
+            &client,
+            &database,
+            "replace_unique_failure",
+            "email_idx",
+            doc! { "key": { "email": 1 }, "name": "email_idx", "unique": true },
+        )
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+
+    let indexes: Vec<IndexModel> =
+        collection.list_indexes().await.unwrap().try_collect().await.unwrap();
+    let original = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref()) == Some("email_idx")
+        })
+        .expect("Original index was lost");
+    assert_ne!(original.options.as_ref().and_then(|options| options.unique), Some(true));
+}
+
+#[tokio::test]
+async fn test_invalid_replacement_preserves_original_index() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "replace_invalid");
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "value": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder().name("value_idx".to_string()).build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_index(
+            &client,
+            &database,
+            "replace_invalid",
+            "value_idx",
+            doc! { "name": "value_idx" },
+        )
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+
+    assert!(collection.list_index_names().await.unwrap().contains(&"value_idx".to_string()));
+}
 
 /// Test creating a simple single-field index.
 #[tokio::test]

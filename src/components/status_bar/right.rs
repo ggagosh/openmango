@@ -42,8 +42,22 @@ pub(crate) fn render_status_right(
                 AppCommands::install_update(state.clone(), cx);
             })
             .into_any_element(),
+        UpdateStatus::Failed(error) => {
+            let details = error.clone();
+            div()
+                .id("update-check-retry")
+                .cursor_pointer()
+                .text_xs()
+                .text_color(cx.theme().danger)
+                .child("Update check failed · Retry")
+                .tooltip(move |window, cx| Tooltip::new(details.clone()).build(window, cx))
+                .on_click(move |_, _window, cx| {
+                    AppCommands::check_for_updates(state.clone(), cx);
+                })
+                .into_any_element()
+        }
         _ => {
-            // Idle, Checking, Failed — show status message or version
+            // Idle or Checking — show status message or version
             match status_message {
                 Some(message) => match message.level {
                     StatusLevel::Info => div()

@@ -126,7 +126,7 @@ impl IndexCreateDialog {
             return None;
         }
 
-        let mut index_doc = Document::new();
+        let mut index_doc = self.preserved_options.clone();
         index_doc.insert("key", keys);
 
         let name = self.name_state.read(cx).value().to_string();

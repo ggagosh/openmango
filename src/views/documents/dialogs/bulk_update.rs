@@ -28,6 +28,7 @@ pub struct BulkUpdateDialog {
     update_state: Entity<InputState>,
     error_message: Option<String>,
     updating: bool,
+    cancellation: Option<crate::connection::types::CancellationToken>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -92,6 +93,7 @@ impl BulkUpdateDialog {
             update_state,
             error_message: None,
             updating: false,
+            cancellation: None,
             _subscriptions: Vec::new(),
         };
 
@@ -107,6 +109,7 @@ impl BulkUpdateDialog {
                         if session == &view.session_key && view.updating =>
                     {
                         view.updating = false;
+                        view.cancellation = None;
                         view.error_message = None;
                         window.close_dialog(cx);
                     }
@@ -114,6 +117,7 @@ impl BulkUpdateDialog {
                         if session == &view.session_key =>
                     {
                         view.updating = false;
+                        view.cancellation = None;
                         view.error_message = Some(error.clone());
                         cx.notify();
                     }
@@ -197,6 +201,36 @@ impl BulkUpdateDialog {
         self.state.read(cx).active_connection().map(|conn| conn.config.read_only).unwrap_or(false)
     }
 
+    fn start_operation(&mut self, filter: Document, update_doc: Document, cx: &mut Context<Self>) {
+        self.updating = true;
+        self.error_message = None;
+        match self.mode {
+            BulkUpdateMode::Update => {
+                self.cancellation = None;
+                AppCommands::update_documents_by_filter(
+                    self.state.clone(),
+                    self.session_key.clone(),
+                    filter,
+                    update_doc,
+                    cx,
+                );
+            }
+            BulkUpdateMode::Replace => {
+                let cancellation = crate::connection::types::CancellationToken::new();
+                self.cancellation = Some(cancellation.clone());
+                AppCommands::replace_documents_by_filter(
+                    self.state.clone(),
+                    self.session_key.clone(),
+                    filter,
+                    update_doc,
+                    cancellation,
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.updating {
             return;
@@ -237,34 +271,107 @@ impl BulkUpdateDialog {
         let mode = self.mode;
         let scope = self.scope;
         let title = format!("{} documents", mode.label());
-        let target = match scope {
-            BulkUpdateScope::SelectedDocument => "the selected document".to_string(),
-            BulkUpdateScope::FilteredQuery => "documents matching the current filter".to_string(),
-            BulkUpdateScope::AllDocuments => "all documents in this collection".to_string(),
-            BulkUpdateScope::CustomFilter => "documents matching the custom filter".to_string(),
-        };
-        let message = format!("{} {}? This cannot be undone.", mode.label(), target);
         let confirm_label = mode.label();
-
-        let state = self.state.clone();
         let session_key = self.session_key.clone();
-        let view = cx.entity();
-        open_confirm_dialog(window, cx, title, message, confirm_label, true, move |_window, cx| {
-            let filter = filter.clone();
-            let update_doc = update_doc.clone();
-            view.update(cx, |this, cx| {
-                this.updating = true;
-                this.error_message = None;
-                AppCommands::update_documents_by_filter(
-                    state.clone(),
-                    session_key.clone(),
-                    filter,
-                    update_doc,
-                    cx,
-                );
+
+        if scope == BulkUpdateScope::SelectedDocument {
+            let view = cx.entity();
+            let message = format!(
+                "{} 1 document in {}.{}? This cannot be undone.",
+                mode.label(),
+                session_key.database,
+                session_key.collection
+            );
+            open_confirm_dialog(
+                window,
+                cx,
+                title,
+                message,
+                confirm_label,
+                true,
+                move |_window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.start_operation(filter.clone(), update_doc.clone(), cx);
+                    });
+                },
+            );
+            return;
+        }
+
+        let (client, manager) = {
+            let state_ref = self.state.read(cx);
+            let Some(client) = state_ref.active_connection_client(self.session_key.connection_id)
+            else {
+                self.error_message = Some("Connection is not active.".to_string());
                 cx.notify();
-            });
+                return;
+            };
+            (client, state_ref.connection_manager())
+        };
+        self.updating = true;
+        cx.notify();
+
+        let database = self.session_key.database.clone();
+        let collection = self.session_key.collection.clone();
+        let task = cx.background_spawn({
+            let filter = filter.clone();
+            let database = database.clone();
+            let collection = collection.clone();
+            async move { manager.count_documents(&client, &database, &collection, filter) }
         });
+        let window_handle = window.window_handle();
+
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result: Result<u64, crate::error::Error> = task.await;
+            let _ = cx.update_window(window_handle, |_root, window, cx| match result {
+                Ok(0) => {
+                    let _ = view.update(cx, |this, cx| {
+                        this.updating = false;
+                        this.error_message = Some("No documents match this filter.".to_string());
+                        cx.notify();
+                    });
+                }
+                Ok(count) => {
+                    if view
+                        .update(cx, |this, cx| {
+                            this.updating = false;
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let confirm_view = view.clone();
+                    let filter_text = crate::bson::document_to_shell_string(&filter);
+                    let message = format!(
+                        "{} every document matching this filter in {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
+                        mode.label(),
+                        if count == 1 { "" } else { "s" }
+                    );
+                    open_confirm_dialog(
+                        window,
+                        cx,
+                        title,
+                        message,
+                        confirm_label,
+                        true,
+                        move |_window, cx| {
+                            let _ = confirm_view.update(cx, |this, cx| {
+                                this.start_operation(filter.clone(), update_doc.clone(), cx);
+                            });
+                        },
+                    );
+                }
+                Err(error) => {
+                    let _ = view.update(cx, |this, cx| {
+                        this.updating = false;
+                        this.error_message = Some(format!("Failed to count documents: {error}"));
+                        cx.notify();
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
     fn scope_button(
@@ -418,6 +525,23 @@ impl Render for BulkUpdateDialog {
         } else {
             "Update document"
         };
+        let cancel_control: AnyElement = if self.updating {
+            if let Some(cancellation) = self.cancellation.clone() {
+                Button::new("cancel-bulk-replace")
+                    .ghost()
+                    .label("Cancel operation")
+                    .on_click(move |_, _, _| cancellation.cancel())
+                    .into_any_element()
+            } else {
+                Button::new("cancel-bulk-update-disabled")
+                    .ghost()
+                    .label("Cancel")
+                    .disabled(true)
+                    .into_any_element()
+            }
+        } else {
+            cancel_button("cancel-bulk-update").into_any_element()
+        };
 
         div()
             .flex()
@@ -453,25 +577,20 @@ impl Render for BulkUpdateDialog {
                     .pt(spacing::xs())
                     .child(div().min_h(px(18.0)).text_sm().text_color(status.1).child(status.0))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
-                            .child(cancel_button("cancel-bulk-update"))
-                            .child(
-                                Button::new("apply-bulk-update")
-                                    .primary()
-                                    .label(self.mode.label())
-                                    .disabled(self.updating)
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| {
-                                                this.submit(window, cx);
-                                            });
-                                        }
-                                    }),
-                            ),
+                        div().flex().items_center().gap(spacing::sm()).child(cancel_control).child(
+                            Button::new("apply-bulk-update")
+                                .primary()
+                                .label(self.mode.label())
+                                .disabled(self.updating)
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| {
+                                            this.submit(window, cx);
+                                        });
+                                    }
+                                }),
+                        ),
                     ),
             )
     }

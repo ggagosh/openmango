@@ -18,7 +18,7 @@ Audience: power users and small engineering teams
 - Sort/projection/pagination/filter
 - Bulk document ops
 - Index create/list/drop
-- Transfer workflows (import/export/copy JSON/CSV/BSON, progress)
+- Transfer workflows (import JSON/CSV/BSON; export JSON/CSV/BSON/Excel; copy with progress)
 - Aggregation pipeline editor (stage flow, preview, results)
 - Forge query shell with completion/schema sampling
 - Tabbed workspace restore + keyboard-heavy navigation
@@ -49,8 +49,15 @@ Audience: power users and small engineering teams
 
 - [x] P0: Connection import/export (redacted + encrypted options)
 - [x] P1: SSH tunneling and proxy-aware connection flow
-- [ ] P1: Secrets integration (Keychain-backed storage policy)
+- [x] P1: Secrets integration (versioned Keychain-backed credential bundles)
 - [ ] P2: Field-level masking workflows for export/share
+
+### Transfer format notes
+
+- Excel export is available for collection results and multi-sheet reports.
+- Excel exports flatten nested fields into columns and inspect the complete result set before writing.
+- Unsupported Excel row/string sizes and fields discovered after schema inspection are reported as errors; data is not silently truncated.
+- BSON import/export requires MongoDB Database Tools and reuses the active SSH or SOCKS5 transport.
 
 ### Observability
 

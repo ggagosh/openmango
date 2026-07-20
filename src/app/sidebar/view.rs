@@ -94,14 +94,14 @@ impl Render for Sidebar {
             .on_action(cx.listener(|this, _: &OpenSelection, window, cx| {
                 this.handle_open_selection(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &OpenSelectionPreview, _window, cx| {
-                this.handle_open_preview(cx);
+            .on_action(cx.listener(|this, _: &OpenSelectionPreview, window, cx| {
+                this.handle_open_preview(window, cx);
             }))
             .on_action(cx.listener(|this, _: &EditConnection, window, cx| {
                 this.handle_edit_connection(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &DisconnectConnection, _window, cx| {
-                this.handle_disconnect_connection(cx);
+            .on_action(cx.listener(|this, _: &DisconnectConnection, window, cx| {
+                this.handle_disconnect_connection(window, cx);
             }))
             .on_action(cx.listener(|this, _: &CopySelectionName, _window, cx| {
                 this.handle_copy_selection_name(cx);

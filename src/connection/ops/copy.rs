@@ -4,7 +4,7 @@ use mongodb::Client;
 use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
-use crate::connection::types::CopyOptions;
+use crate::connection::types::{CopyOptions, TargetWriteMode};
 use crate::error::{Error, Result};
 
 impl ConnectionManager {
@@ -45,6 +45,60 @@ impl ConnectionManager {
         dest_collection: &str,
         options: CopyOptions,
     ) -> Result<u64> {
+        if options.batch_size == 0 {
+            return Err(Error::Parse("Copy batch size must be greater than zero".to_string()));
+        }
+        if options.target_write_mode == TargetWriteMode::Clear && options.copy_indexes {
+            return Err(Error::Parse(
+                "Clear preserves target indexes; disable Copy indexes or use Drop".to_string(),
+            ));
+        }
+
+        if options.target_write_mode != TargetWriteMode::Append {
+            let source_exists = {
+                let client = src_client.clone();
+                let database = src_database.to_string();
+                let collection = src_collection.to_string();
+                self.runtime.block_on(async move {
+                    Ok::<bool, Error>(
+                        client
+                            .database(&database)
+                            .list_collection_names()
+                            .await?
+                            .contains(&collection),
+                    )
+                })?
+            };
+            if !source_exists {
+                return Err(Error::Parse(format!(
+                    "Source collection {src_database}.{src_collection} does not exist"
+                )));
+            }
+
+            let target_write_mode = options.target_write_mode;
+            let cancellation = options.cancellation.clone();
+            let mut staged_options = options;
+            staged_options.target_write_mode = TargetWriteMode::Append;
+            return self.with_staged_collection(
+                dest_client,
+                dest_database,
+                dest_collection,
+                target_write_mode,
+                cancellation.as_ref(),
+                |staging_collection| {
+                    self.copy_collection_with_options(
+                        src_client,
+                        src_database,
+                        src_collection,
+                        dest_client,
+                        dest_database,
+                        staging_collection,
+                        staged_options,
+                    )
+                },
+            );
+        }
+
         use crate::connection::ops::import::import_batch_by_mode;
         use futures::TryStreamExt;
 
@@ -70,16 +124,28 @@ impl ConnectionManager {
             let mut batch: Vec<Document> = Vec::with_capacity(batch_size);
             let mut copied = 0u64;
 
-            while let Some(doc) = cursor.try_next().await? {
+            loop {
+                let next = cursor
+                    .try_next()
+                    .await
+                    .map_err(Error::from)
+                    .map_err(|error| error.with_processed(copied))?;
+                let Some(doc) = next else {
+                    break;
+                };
+
                 // Check cancellation
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(Error::Parse("Copy cancelled".to_string()));
+                    return Err(Error::Parse("Copy cancelled".to_string()).with_processed(copied));
                 }
 
                 batch.push(doc);
                 if batch.len() >= batch_size {
                     let docs = std::mem::take(&mut batch);
-                    copied += import_batch_by_mode(&dest_coll, &docs, insert_mode, ordered).await?;
+                    match import_batch_by_mode(&dest_coll, &docs, insert_mode, ordered).await {
+                        Ok(count) => copied += count,
+                        Err(error) => return Err(error.with_processed(copied)),
+                    }
 
                     // Report progress
                     if let Some(ref progress_fn) = progress {
@@ -90,7 +156,10 @@ impl ConnectionManager {
 
             // Flush remaining
             if !batch.is_empty() {
-                copied += import_batch_by_mode(&dest_coll, &batch, insert_mode, ordered).await?;
+                match import_batch_by_mode(&dest_coll, &batch, insert_mode, ordered).await {
+                    Ok(count) => copied += count,
+                    Err(error) => return Err(error.with_processed(copied)),
+                }
 
                 // Report final progress
                 if let Some(ref progress_fn) = progress {
@@ -103,7 +172,9 @@ impl ConnectionManager {
 
         // Copy indexes if requested (after documents are copied)
         if options.copy_indexes {
-            let indexes = self.list_indexes(&src_client, &src_database, &src_collection)?;
+            let indexes = self
+                .list_indexes(&src_client, &src_database, &src_collection)
+                .map_err(|error| error.with_processed(copied))?;
             let mut index_docs: Vec<Document> = Vec::new();
 
             for index in indexes {
@@ -118,35 +189,18 @@ impl ConnectionManager {
                     continue;
                 }
 
-                // Build index doc from IndexModel
-                let mut index_doc = doc! { "key": index.keys.clone() };
-                if let Some(opts) = &index.options {
-                    if let Some(n) = &opts.name {
-                        index_doc.insert("name", n.clone());
-                    }
-                    if let Some(u) = opts.unique {
-                        index_doc.insert("unique", u);
-                    }
-                    if let Some(s) = opts.sparse {
-                        index_doc.insert("sparse", s);
-                    }
-                    if let Some(exp) = opts.expire_after {
-                        index_doc.insert("expireAfterSeconds", exp.as_secs() as i64);
-                    }
-                    if let Some(bg) = opts.background {
-                        index_doc.insert("background", bg);
-                    }
-                }
-
-                index_docs.push(index_doc);
+                index_docs.push(
+                    crate::connection::ops::indexes::index_model_to_create_document(&index)
+                        .map_err(|error| error.with_processed(copied))?,
+                );
             }
 
             // Create all indexes in a single command
             if !index_docs.is_empty()
-                && let Err(e) =
+                && let Err(error) =
                     self.create_indexes(&dest_client, &dest_database, &dest_collection, index_docs)
             {
-                log::warn!("Failed to copy indexes: {}", e);
+                return Err(error.with_processed(copied));
             }
         }
 

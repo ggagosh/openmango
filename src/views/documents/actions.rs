@@ -158,7 +158,6 @@ impl CollectionView {
                     }
                 });
             } else {
-                let count = selected_docs.len();
                 let ids: Vec<Bson> = {
                     let state_ref = this.state.read(cx);
                     selected_docs
@@ -173,8 +172,10 @@ impl CollectionView {
                 if ids.is_empty() {
                     return;
                 }
+                let affected_count = ids.len();
                 let filter = doc! { "_id": { "$in": ids } };
-                let message = format!("Delete {} documents? This cannot be undone.", count);
+                let message =
+                    format!("Delete {} documents? This cannot be undone.", affected_count);
                 open_confirm_dialog(window, cx, "Delete documents", message, "Delete", true, {
                     let state = this.state.clone();
                     let session_key = session_key.clone();
@@ -201,6 +202,7 @@ impl CollectionView {
                 move |_window, cx| {
                     AppCommands::drop_collection(
                         state.clone(),
+                        session_key.connection_id,
                         session_key.database.clone(),
                         session_key.collection.clone(),
                         cx,
@@ -590,7 +592,7 @@ impl CollectionView {
                 cx.notify();
             });
         }))
-        .on_action(cx.listener(|this, _: &RunAggregation, _window, cx| {
+        .on_action(cx.listener(|this, _: &RunAggregation, window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -602,7 +604,7 @@ impl CollectionView {
             if subview != CollectionSubview::Aggregation {
                 return;
             }
-            AppCommands::run_aggregation(this.state.clone(), session_key, false, cx);
+            super::request_run_aggregation(this.state.clone(), session_key, false, window, cx);
         }))
         .on_action(cx.listener(|this, _: &FormatAggregationStage, window, cx| {
             let Some(session_key) = this.view_model.current_session() else {

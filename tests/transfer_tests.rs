@@ -11,7 +11,8 @@ use futures::TryStreamExt;
 use mongodb::bson::{Bson, Document, doc};
 use openmango::connection::ConnectionManager;
 use openmango::connection::types::{
-    CancellationToken, CopyOptions, JsonExportOptions, JsonImportOptions, JsonTransferFormat,
+    CancellationToken, CopyOptions, InsertMode, JsonExportOptions, JsonImportOptions,
+    JsonTransferFormat, TargetWriteMode,
 };
 use tempfile::TempDir;
 
@@ -544,6 +545,617 @@ async fn test_import_stop_on_error() {
 }
 
 // =============================================================================
+// Recoverable Import/Copy Tests
+// =============================================================================
+
+#[tokio::test]
+async fn recoverable_import_invalid_jsonl_preserves_clear_target() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_clear");
+    collection
+        .insert_one(doc! { "_id": "original", "name": "keep" })
+        .await
+        .expect("Failed to seed target");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("malformed.jsonl");
+    fs::write(&import_path, "{\"_id\":\"new\"}\n{not valid json}\n")
+        .expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_clear",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 1,
+                target_write_mode: TargetWriteMode::Clear,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err(), "malformed input must fail");
+    let original = collection
+        .find_one(doc! { "_id": "original" })
+        .await
+        .expect("Failed to read target")
+        .expect("Original target document was removed");
+    assert_eq!(original.get_str("name").unwrap(), "keep");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 1);
+    let collection_names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(
+        collection_names.iter().all(|name| !name.starts_with("__openmango_stage_")),
+        "failed imports must remove staging collections"
+    );
+}
+
+#[tokio::test]
+async fn recoverable_import_clear_replaces_target_and_preserves_indexes() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_clear_success");
+    collection
+        .insert_one(doc! { "_id": "old", "email": "old@example.com" })
+        .await
+        .expect("Failed to seed target");
+    collection
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create target index");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("valid.jsonl");
+    fs::write(&import_path, "{\"_id\":\"new\",\"email\":\"new@example.com\"}\n")
+        .expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let count = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_clear_success",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Clear,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("Import failed");
+
+    assert_eq!(count, 1);
+    assert!(collection.find_one(doc! { "_id": "old" }).await.unwrap().is_none());
+    assert!(collection.find_one(doc! { "_id": "new" }).await.unwrap().is_some());
+    assert!(
+        collection
+            .insert_one(doc! { "_id": "duplicate", "email": "new@example.com" })
+            .await
+            .is_err(),
+        "Clear replacement must preserve target indexes"
+    );
+    let names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(names.iter().all(|name| !name.starts_with("__openmango_stage_")));
+}
+
+#[tokio::test]
+async fn recoverable_import_drop_replaces_target_collection() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_drop");
+    collection
+        .insert_one(doc! { "_id": "old", "name": "old" })
+        .await
+        .expect("Failed to seed target");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("valid.jsonl");
+    fs::write(&import_path, "{\"_id\":\"new\",\"name\":\"new\"}\n")
+        .expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_drop",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Drop,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("Import failed");
+
+    assert!(collection.find_one(doc! { "_id": "old" }).await.unwrap().is_none());
+    assert!(collection.find_one(doc! { "_id": "new" }).await.unwrap().is_some());
+    let names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(names.iter().all(|name| !name.starts_with("__openmango_stage_")));
+}
+
+#[tokio::test]
+async fn recoverable_import_empty_drop_replaces_target_with_empty_collection() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_empty_drop");
+    collection
+        .insert_one(doc! { "_id": "old", "name": "old" })
+        .await
+        .expect("Failed to seed target");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("empty.jsonl");
+    fs::write(&import_path, "").expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let count = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_empty_drop",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Drop,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("Empty import failed");
+
+    assert_eq!(count, 0);
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn recoverable_import_cancelled_after_staging_preserves_target() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_cancelled");
+    collection
+        .insert_one(doc! { "_id": "old", "name": "keep" })
+        .await
+        .expect("Failed to seed target");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("valid.jsonl");
+    fs::write(&import_path, "{\"_id\":\"new\",\"name\":\"new\"}\n")
+        .expect("Failed to write fixture");
+
+    let token = CancellationToken::new();
+    let callback_token = token.clone();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_cancelled",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                batch_size: 1,
+                target_write_mode: TargetWriteMode::Clear,
+                progress: Some(std::sync::Arc::new(move |_| callback_token.cancel())),
+                cancellation: Some(token),
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("Cancelled staged import must fail");
+
+    assert!(error.to_string().contains("cancelled"));
+    let original = collection
+        .find_one(doc! { "_id": "old" })
+        .await
+        .unwrap()
+        .expect("Original target was replaced after cancellation");
+    assert_eq!(original.get_str("name").unwrap(), "keep");
+    let names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(names.iter().all(|name| !name.starts_with("__openmango_stage_")));
+}
+
+#[tokio::test]
+async fn recoverable_import_unordered_insert_reports_partial_success() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_insert_partial");
+    collection
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create target index");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("partial.jsonl");
+    fs::write(
+        &import_path,
+        concat!(
+            "{\"_id\":\"one\",\"email\":\"duplicate@example.com\"}\n",
+            "{\"_id\":\"two\",\"email\":\"duplicate@example.com\"}\n",
+            "{\"_id\":\"three\",\"email\":\"other@example.com\"}\n"
+        ),
+    )
+    .expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_insert_partial",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                insert_mode: InsertMode::Insert,
+                stop_on_error: false,
+                batch_size: 10,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("Unordered duplicate insert must report partial failure");
+
+    assert_eq!(error.processed_count(), 2);
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn recoverable_import_replace_failure_preserves_failed_original_and_reports_partial() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recoverable_import_replace");
+    collection
+        .insert_many(vec![
+            doc! { "_id": "one", "email": "original@example.com", "name": "original" },
+            doc! { "_id": "two", "email": "occupied@example.com" },
+        ])
+        .await
+        .expect("Failed to seed target");
+    collection
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create unique index");
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let import_path = temp_dir.path().join("replacement.jsonl");
+    fs::write(
+        &import_path,
+        concat!(
+            "{\"_id\":\"one\",\"email\":\"updated@example.com\",\"name\":\"replacement\"}\n",
+            "{\"_id\":\"two\",\"email\":\"updated@example.com\",\"name\":\"must-fail\"}\n"
+        ),
+    )
+    .expect("Failed to write fixture");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().import_collection_json_with_options(
+            &client,
+            &database,
+            "recoverable_import_replace",
+            &import_path,
+            JsonImportOptions {
+                format: JsonTransferFormat::JsonLines,
+                insert_mode: InsertMode::Replace,
+                stop_on_error: true,
+                batch_size: 10,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    let error = result.expect_err("conflicting replacement must fail");
+    assert_eq!(error.processed_count(), 1);
+
+    let replaced = collection
+        .find_one(doc! { "_id": "one" })
+        .await
+        .expect("Failed to read first target")
+        .expect("Successful replacement is missing");
+    assert_eq!(replaced.get_str("name").unwrap(), "replacement");
+    assert_eq!(replaced.get_str("email").unwrap(), "updated@example.com");
+
+    let preserved = collection
+        .find_one(doc! { "_id": "two" })
+        .await
+        .expect("Failed to read conflicting target")
+        .expect("Failed replacement deleted the original document");
+    assert_eq!(preserved.get_str("email").unwrap(), "occupied@example.com");
+}
+
+#[tokio::test]
+async fn recoverable_copy_clear_commit_failure_preserves_target() {
+    let mongo = MongoTestContainer::start().await;
+    let source = mongo.collection::<Document>("test_db", "recoverable_copy_source");
+    source
+        .insert_many(vec![
+            doc! { "_id": "source-one", "email": "duplicate@example.com" },
+            doc! { "_id": "source-two", "email": "duplicate@example.com" },
+        ])
+        .await
+        .expect("Failed to seed source");
+
+    let target = mongo.collection::<Document>("test_db", "recoverable_copy_target");
+    target
+        .insert_one(doc! { "_id": "target", "email": "keep@example.com" })
+        .await
+        .expect("Failed to seed target");
+    target
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create target index");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection_with_options(
+            &client,
+            &database,
+            "recoverable_copy_source",
+            &client,
+            &database,
+            "recoverable_copy_target",
+            CopyOptions {
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Clear,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err(), "commit must fail on the target unique index");
+    let original = target
+        .find_one(doc! { "_id": "target" })
+        .await
+        .expect("Failed to read target")
+        .expect("Original target was replaced");
+    assert_eq!(original.get_str("email").unwrap(), "keep@example.com");
+    assert_eq!(target.count_documents(doc! {}).await.unwrap(), 1);
+    let names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(names.iter().all(|name| !name.starts_with("__openmango_stage_")));
+}
+
+#[tokio::test]
+async fn recoverable_copy_replace_failure_reports_partial_and_preserves_failed_document() {
+    let mongo = MongoTestContainer::start().await;
+    let source = mongo.collection::<Document>("test_db", "recoverable_copy_replace_source");
+    source
+        .insert_many(vec![
+            doc! { "_id": "one", "email": "updated@example.com" },
+            doc! { "_id": "two", "email": "updated@example.com" },
+        ])
+        .await
+        .expect("Failed to seed source");
+
+    let target = mongo.collection::<Document>("test_db", "recoverable_copy_replace_target");
+    target
+        .insert_many(vec![
+            doc! { "_id": "one", "email": "one@example.com" },
+            doc! { "_id": "two", "email": "two@example.com" },
+        ])
+        .await
+        .expect("Failed to seed target");
+    target
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create target index");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection_with_options(
+            &client,
+            &database,
+            "recoverable_copy_replace_source",
+            &client,
+            &database,
+            "recoverable_copy_replace_target",
+            CopyOptions {
+                batch_size: 1,
+                insert_mode: InsertMode::Replace,
+                ordered: true,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("Conflicting replacements must fail");
+
+    assert_eq!(error.processed_count(), 1);
+    assert_eq!(target.count_documents(doc! {}).await.unwrap(), 2);
+    let documents: Vec<Document> = target.find(doc! {}).await.unwrap().try_collect().await.unwrap();
+    assert_eq!(
+        documents
+            .iter()
+            .filter(|document| document.get_str("email").unwrap() == "updated@example.com")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn recoverable_copy_unordered_upsert_reports_partial_success() {
+    let mongo = MongoTestContainer::start().await;
+    let source = mongo.collection::<Document>("test_db", "recoverable_copy_upsert_source");
+    source
+        .insert_many(vec![
+            doc! { "_id": "one", "email": "new@example.com" },
+            doc! { "_id": "two", "email": "occupied@example.com" },
+        ])
+        .await
+        .expect("Failed to seed source");
+
+    let target = mongo.collection::<Document>("test_db", "recoverable_copy_upsert_target");
+    target
+        .insert_one(doc! { "_id": "occupied", "email": "occupied@example.com" })
+        .await
+        .expect("Failed to seed target");
+    target
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .expect("Failed to create target index");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection_with_options(
+            &client,
+            &database,
+            "recoverable_copy_upsert_source",
+            &client,
+            &database,
+            "recoverable_copy_upsert_target",
+            CopyOptions {
+                batch_size: 10,
+                insert_mode: InsertMode::Upsert,
+                ordered: false,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("Conflicting unordered upsert must report partial failure");
+
+    assert_eq!(error.processed_count(), 1);
+    assert_eq!(target.count_documents(doc! {}).await.unwrap(), 2);
+    assert!(target.find_one(doc! { "_id": "one" }).await.unwrap().is_some());
+    assert!(target.find_one(doc! { "_id": "two" }).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn recoverable_copy_empty_drop_replaces_target_with_empty_collection() {
+    let mongo = MongoTestContainer::start().await;
+    mongo
+        .database("test_db")
+        .create_collection("recoverable_copy_empty_source")
+        .await
+        .expect("Failed to create empty source");
+    let target = mongo.collection::<Document>("test_db", "recoverable_copy_empty_target");
+    target.insert_one(doc! { "_id": "old", "name": "old" }).await.expect("Failed to seed target");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let count = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection_with_options(
+            &client,
+            &database,
+            "recoverable_copy_empty_source",
+            &client,
+            &database,
+            "recoverable_copy_empty_target",
+            CopyOptions {
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Drop,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("Empty copy failed");
+
+    assert_eq!(count, 0);
+    assert_eq!(target.count_documents(doc! {}).await.unwrap(), 0);
+    let names = mongo.database("test_db").list_collection_names().await.unwrap();
+    assert!(names.iter().all(|name| !name.starts_with("__openmango_stage_")));
+}
+
+#[tokio::test]
+async fn recoverable_copy_missing_source_preserves_drop_target() {
+    let mongo = MongoTestContainer::start().await;
+    let target = mongo.collection::<Document>("test_db", "recoverable_copy_missing_target");
+    target
+        .insert_one(doc! { "_id": "target", "name": "keep" })
+        .await
+        .expect("Failed to seed target");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection_with_options(
+            &client,
+            &database,
+            "recoverable_copy_missing_source",
+            &client,
+            &database,
+            "recoverable_copy_missing_target",
+            CopyOptions {
+                batch_size: 10,
+                target_write_mode: TargetWriteMode::Drop,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(result.is_err(), "missing source collection must fail");
+    let original = target
+        .find_one(doc! { "_id": "target" })
+        .await
+        .expect("Failed to read target")
+        .expect("Original target was dropped");
+    assert_eq!(original.get_str("name").unwrap(), "keep");
+}
+
+// =============================================================================
 // CSV Export/Import Tests
 // =============================================================================
 
@@ -1006,6 +1618,169 @@ async fn test_copy_collection_different_db() {
     let dest_collection = mongo.collection::<Document>("dest_db", "copy_dest");
     let dest_count = dest_collection.count_documents(doc! {}).await.expect("Failed to count");
     assert_eq!(dest_count, 15);
+}
+
+#[tokio::test]
+async fn test_copy_index_failure_reports_incomplete_transfer() {
+    let mongo = MongoTestContainer::start().await;
+    let source = mongo.collection::<Document>("test_db", "copy_index_failure_source");
+    source.insert_many(vec![doc! { "source": 1 }, doc! { "source": 2 }]).await.unwrap();
+    source
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "source": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .name("conflicting_name".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+    let destination = mongo.collection::<Document>("test_db", "copy_index_failure_destination");
+    destination
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "destination": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .name("conflicting_name".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection(
+            &client,
+            &database,
+            "copy_index_failure_source",
+            &client,
+            &database,
+            "copy_index_failure_destination",
+            100,
+            true,
+        )
+    })
+    .await
+    .unwrap();
+
+    let error = result.expect_err("Index conflict must make the copy incomplete");
+    assert_eq!(error.processed_count(), 2);
+    assert!(error.to_string().contains("Transfer failed after 2 document(s)"));
+}
+
+#[tokio::test]
+async fn test_copy_collection_preserves_index_metadata() {
+    let mongo = MongoTestContainer::start().await;
+    let source = mongo.collection::<Document>("test_db", "copy_index_metadata_source");
+    source
+        .insert_many(vec![
+            doc! { "status": "active", "title": "One", "details": { "public": true } },
+            doc! { "status": "inactive", "title": "Two", "details": { "public": false } },
+        ])
+        .await
+        .unwrap();
+    mongo
+        .client
+        .database(&mongo.db_name("test_db"))
+        .run_command(doc! {
+            "createIndexes": "copy_index_metadata_source",
+            "indexes": [
+                {
+                    "key": { "status": 1 },
+                    "name": "active_status",
+                    "partialFilterExpression": { "status": "active" },
+                    "collation": { "locale": "en", "strength": 2 },
+                    "hidden": true,
+                },
+                {
+                    "key": { "$**": 1 },
+                    "name": "public_details",
+                    "wildcardProjection": { "details.public": 1 },
+                },
+                {
+                    "key": { "title": "text" },
+                    "name": "title_text",
+                    "weights": { "title": 5 },
+                    "default_language": "english",
+                    "language_override": "language",
+                },
+            ],
+        })
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let source_database = mongo.db_name("test_db");
+    let destination_database = source_database.clone();
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().copy_collection(
+            &client,
+            &source_database,
+            "copy_index_metadata_source",
+            &client,
+            &destination_database,
+            "copy_index_metadata_destination",
+            100,
+            true,
+        )
+    })
+    .await
+    .unwrap()
+    .expect("Copy failed");
+
+    let indexes: Vec<mongodb::IndexModel> = mongo
+        .collection::<Document>("test_db", "copy_index_metadata_destination")
+        .list_indexes()
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    let active = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref())
+                == Some("active_status")
+        })
+        .unwrap()
+        .options
+        .as_ref()
+        .unwrap();
+    assert_eq!(active.partial_filter_expression, Some(doc! { "status": "active" }));
+    assert_eq!(active.hidden, Some(true));
+    assert_eq!(active.collation.as_ref().map(|collation| collation.locale.as_str()), Some("en"));
+
+    let wildcard = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref())
+                == Some("public_details")
+        })
+        .unwrap()
+        .options
+        .as_ref()
+        .unwrap();
+    assert_eq!(wildcard.wildcard_projection, Some(doc! { "details.public": 1 }));
+
+    let text = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref()) == Some("title_text")
+        })
+        .unwrap()
+        .options
+        .as_ref()
+        .unwrap();
+    assert_eq!(text.weights, Some(doc! { "title": 5 }));
+    assert_eq!(text.default_language.as_deref(), Some("english"));
+    assert_eq!(text.language_override.as_deref(), Some("language"));
 }
 
 /// Test copying a collection with indexes.

@@ -11,7 +11,7 @@ use openmango::state::ConfigManager;
 use openmango::theme;
 
 fn main() {
-    env_logger::init();
+    openmango::helpers::support::init_logging();
 
     Application::new().with_assets(Assets).run(|cx: &mut gpui::App| {
         // Initialize gpui-component library
@@ -72,21 +72,11 @@ fn main() {
                 let app_view = cx.new(|cx| AppRoot::new(window, cx));
                 let app_view_for_close = app_view.clone();
 
-                // Flush debounced workspace state and close all sub-windows before quitting.
                 window.on_window_should_close(cx, move |this_window, cx| {
                     app_view_for_close.update(cx, |view, cx| {
-                        view.flush_workspace_on_shutdown(cx);
+                        view.request_quit(this_window, cx);
                     });
-
-                    let this_id = this_window.window_handle();
-                    for w in cx.windows() {
-                        if w != this_id {
-                            w.update(cx, |_, win, _cx| win.remove_window()).ok();
-                        }
-                    }
-
-                    cx.quit();
-                    true
+                    false
                 });
 
                 cx.new(|cx| Root::new(app_view, window, cx))

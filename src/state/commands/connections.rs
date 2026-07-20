@@ -10,6 +10,16 @@ use super::AppCommands;
 impl AppCommands {
     /// Connect to a saved connection by ID.
     pub fn connect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
+        if !state.read(cx).connection_secrets_ready() {
+            state.update(cx, |state, cx| {
+                let message = "Connection credentials are still loading or require recovery.";
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.emit(AppEvent::ConnectionFailed(message.to_string()));
+                cx.notify();
+            });
+            return;
+        }
+
         // Find the connection config and get the manager
         let (saved, manager) = {
             let state = state.read(cx);

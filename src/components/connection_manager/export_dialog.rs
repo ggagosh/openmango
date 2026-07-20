@@ -202,19 +202,13 @@ impl Render for ExportDialogState {
                                 ExportMode::Encrypted,
                                 mode,
                                 view.clone(),
-                            ))
-                            .child(mode_button(
-                                "Plaintext",
-                                ExportMode::Plaintext,
-                                mode,
-                                view.clone(),
                             )),
                     )
                     .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
                         match mode {
                             ExportMode::Redacted => "Passwords replaced with *****, safe to share",
                             ExportMode::Encrypted => "Passwords encrypted with a passphrase",
-                            ExportMode::Plaintext => "Full URIs with passwords included",
+                            ExportMode::Plaintext => "Plaintext exports are disabled",
                         },
                     )),
             )

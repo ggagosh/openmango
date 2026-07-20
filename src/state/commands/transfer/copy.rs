@@ -8,7 +8,9 @@ use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::state::app_state::CollectionTransferStatus;
-use crate::state::{AppCommands, AppEvent, AppState, InsertMode, StatusMessage, TransferScope};
+use crate::state::{
+    AppCommands, AppEvent, AppState, InsertMode, StatusMessage, TargetWriteMode, TransferScope,
+};
 
 use super::{
     CollectionProgressMessage, CopyConfig, PARALLEL_COLLECTION_LIMIT, TransferProgressMessage,
@@ -70,8 +72,13 @@ impl AppCommands {
         let batch_size = config.batch_size as usize;
         let insert_mode = config.insert_mode;
         let stop_on_error = config.stop_on_error;
-        let drop_before = config.drop_before_import;
-        let clear_before = config.clear_before_import;
+        let target_write_mode = if config.drop_before_import {
+            TargetWriteMode::Drop
+        } else if config.clear_before_import {
+            TargetWriteMode::Clear
+        } else {
+            TargetWriteMode::Append
+        };
         let copy_indexes = config.copy_indexes;
         let exclude_collections = config.exclude_collections;
 
@@ -79,6 +86,7 @@ impl AppCommands {
 
         state.update(cx, |state, cx| {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                tab.runtime.transfer_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 tab.runtime.is_running = true;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
@@ -106,8 +114,7 @@ impl AppCommands {
                     copy_indexes,
                     insert_mode,
                     stop_on_error,
-                    drop_before,
-                    clear_before,
+                    target_write_mode,
                     cancellation_token,
                     cx,
                 );
@@ -253,6 +260,7 @@ impl AppCommands {
                                             copy_indexes,
                                             insert_mode,
                                             ordered: stop_on_error,
+                                            target_write_mode: TargetWriteMode::Append,
                                             progress: Some(progress_callback),
                                             cancellation: Some(cancellation_token.clone()),
                                         };
@@ -295,7 +303,7 @@ impl AppCommands {
                                                 status: CollectionTransferStatus::Failed(
                                                     e.to_string(),
                                                 ),
-                                                documents_processed: 0,
+                                                documents_processed: e.processed_count(),
                                                 documents_total: None,
                                             },
                                         );
@@ -310,8 +318,13 @@ impl AppCommands {
                         .await;
 
                 // Aggregate results
-                let total_copied: u64 =
-                    results.iter().filter_map(|(_, r)| r.as_ref().ok().copied()).sum();
+                let total_copied: u64 = results
+                    .iter()
+                    .map(|(_, result)| match result {
+                        Ok(count) => *count,
+                        Err(error) => error.processed_count(),
+                    })
+                    .sum();
                 let had_error = results.iter().any(|(_, r)| r.is_err());
 
                 // Send completion
@@ -337,6 +350,7 @@ impl AppCommands {
                         // Terminal events always notify immediately
                         TransferProgressMessage::Started { .. }
                         | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Cancelled { .. }
                         | TransferProgressMessage::Failed { .. } => true,
                         // Progress updates batch notify every BATCH_SIZE messages
                         TransferProgressMessage::CollectionProgress { .. } => {
@@ -373,15 +387,23 @@ impl AppCommands {
                                     cx.emit(event);
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
+                                    let failure_summary = state
+                                        .transfer_tab(transfer_id)
+                                        .and_then(|tab| tab.runtime.database_progress.as_ref())
+                                        .and_then(|progress| progress.failure_summary());
+                                    let failed_count = state
+                                        .transfer_tab(transfer_id)
+                                        .and_then(|tab| tab.runtime.database_progress.as_ref())
+                                        .map_or(0, |progress| progress.failed_count());
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count = total_count;
+                                        tab.runtime.error_message = failure_summary;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
                                             format!(
-                                                "Copy completed with errors: {} documents",
-                                                total_count
+                                                "Copy completed with errors: {failed_count} collection(s) failed; {total_count} documents processed"
                                             ),
                                         )));
                                     } else {
@@ -398,6 +420,7 @@ impl AppCommands {
                                         count: total_count,
                                     });
                                 }
+                                TransferProgressMessage::Cancelled { .. } => {}
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
@@ -436,8 +459,7 @@ impl AppCommands {
         copy_indexes: bool,
         insert_mode: InsertMode,
         stop_on_error: bool,
-        drop_before: bool,
-        clear_before: bool,
+        target_write_mode: TargetWriteMode,
         cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
@@ -451,18 +473,6 @@ impl AppCommands {
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             async move {
-                // Drop or clear destination collection before copy if requested
-                if drop_before {
-                    let _ = manager.drop_collection(&dest_client, &dest_database, &dest_collection);
-                } else if clear_before {
-                    let _ = manager.delete_documents(
-                        &dest_client,
-                        &dest_database,
-                        &dest_collection,
-                        mongodb::bson::doc! {},
-                    );
-                }
-
                 // Create progress callback that sends updates via channel
                 let progress_tx = tx.clone();
                 let progress_callback: ProgressCallback =
@@ -476,6 +486,7 @@ impl AppCommands {
                     copy_indexes,
                     insert_mode,
                     ordered: stop_on_error,
+                    target_write_mode,
                     progress: Some(progress_callback),
                     cancellation: Some(cancellation_token),
                 };
@@ -495,8 +506,11 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Completed(count));
                     }
                     Err(err) => {
-                        let _ =
-                            tx.unbounded_send(CollectionProgressMessage::Failed(err.to_string()));
+                        let processed = err.processed_count();
+                        let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
+                            error: err.to_string(),
+                            processed,
+                        });
                     }
                 }
             }
@@ -516,7 +530,7 @@ impl AppCommands {
                     let should_notify = match &msg {
                         // Terminal events always notify immediately
                         CollectionProgressMessage::Completed(_)
-                        | CollectionProgressMessage::Failed(_) => true,
+                        | CollectionProgressMessage::Failed { .. } => true,
                         // Progress updates batch notify every BATCH_SIZE messages
                         CollectionProgressMessage::Progress(_) => {
                             progress_count += 1;
@@ -545,9 +559,11 @@ impl AppCommands {
                                     state.set_status_message(Some(StatusMessage::info(message)));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed(error) => {
+                                CollectionProgressMessage::Failed { error, processed } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
+                                        tab.runtime.progress_count =
+                                            tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(

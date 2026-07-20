@@ -211,35 +211,8 @@ impl CompressionMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetWriteMode {
-    Append,
-    Clear,
-    Drop,
-}
-
-impl TargetWriteMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            TargetWriteMode::Append => "Append to target",
-            TargetWriteMode::Clear => "Clear target first",
-            TargetWriteMode::Drop => "Drop target first",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            TargetWriteMode::Append => "Keep existing documents and write incoming documents.",
-            TargetWriteMode::Clear => {
-                "Delete existing documents before writing incoming documents."
-            }
-            TargetWriteMode::Drop => "Drop the target collection or database before writing.",
-        }
-    }
-}
-
-// Encoding: canonical definition in crate::connection::types
-pub use crate::connection::Encoding;
+// TargetWriteMode and Encoding: canonical definitions in crate::connection::types
+pub use crate::connection::{Encoding, TargetWriteMode};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransferTabKey {
@@ -287,7 +260,7 @@ impl Default for ForgeTabState {
 // ============================================================================
 
 /// Core transfer configuration (mode, scope, source/destination)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferConfig {
     pub mode: TransferMode,
     pub scope: TransferScope,
@@ -302,7 +275,7 @@ pub struct TransferConfig {
 }
 
 /// Mode-specific transfer options
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferOptions {
     // Compression (all modes)
     pub compression: CompressionMode,
@@ -1110,6 +1083,8 @@ pub struct SessionData {
     pub is_loading: bool,
     pub loaded: bool,
     pub request_id: u64,
+    pub query_error: Option<String>,
+    pub query_cancellation: Option<crate::connection::types::CancellationToken>,
     pub filter_raw: String,
     pub filter: Option<Document>,
     pub sort_raw: String,
@@ -1141,6 +1116,8 @@ impl Default for SessionData {
             is_loading: false,
             loaded: false,
             request_id: 0,
+            query_error: None,
+            query_cancellation: None,
             filter_raw: String::new(),
             filter: None,
             sort_raw: String::new(),
@@ -1159,6 +1136,14 @@ impl Default for SessionData {
             schema: None,
             schema_loading: false,
             schema_error: None,
+        }
+    }
+}
+
+impl Drop for SessionData {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.query_cancellation.take() {
+            cancellation.cancel();
         }
     }
 }
@@ -1207,6 +1192,7 @@ pub struct SessionSnapshot {
     pub page: u64,
     pub per_page: i64,
     pub is_loading: bool,
+    pub query_error: Option<String>,
     pub selected_doc: Option<DocumentKey>,
     pub selected_docs: HashSet<DocumentKey>,
     pub selected_count: usize,
@@ -1441,6 +1427,29 @@ impl DatabaseTransferProgress {
             .filter(|c| matches!(c.status, CollectionTransferStatus::Completed))
             .count()
     }
+
+    pub fn failed_count(&self) -> usize {
+        self.collections
+            .iter()
+            .filter(|collection| matches!(collection.status, CollectionTransferStatus::Failed(_)))
+            .count()
+    }
+
+    pub fn failure_summary(&self) -> Option<String> {
+        let failures = self
+            .collections
+            .iter()
+            .filter_map(|collection| match &collection.status {
+                CollectionTransferStatus::Failed(error) => {
+                    Some(format!("{}: {error}", collection.name))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        (!failures.is_empty()).then(|| {
+            format!("{} collection(s) failed:\n- {}", failures.len(), failures.join("\n- "))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1470,6 +1479,42 @@ mod tests {
             cost_band: ExplainCostBand::Medium,
             severity: ExplainSeverity::Medium,
         }
+    }
+
+    #[test]
+    fn database_transfer_failure_summary_keeps_count_and_details() {
+        let progress = DatabaseTransferProgress {
+            collections: vec![
+                CollectionProgress {
+                    name: "users".to_string(),
+                    status: CollectionTransferStatus::Failed("duplicate key".to_string()),
+                    ..CollectionProgress::default()
+                },
+                CollectionProgress {
+                    name: "orders".to_string(),
+                    status: CollectionTransferStatus::Failed("timeout".to_string()),
+                    ..CollectionProgress::default()
+                },
+            ],
+            panel_expanded: true,
+        };
+
+        assert_eq!(progress.failed_count(), 2);
+        let summary = progress.failure_summary().unwrap();
+        assert!(summary.contains("2 collection(s) failed"));
+        assert!(summary.contains("users: duplicate key"));
+        assert!(summary.contains("orders: timeout"));
+    }
+
+    #[test]
+    fn dropping_session_data_cancels_its_active_query() {
+        let cancellation = crate::connection::types::CancellationToken::new();
+        let mut data = SessionData::default();
+        data.query_cancellation = Some(cancellation.clone());
+
+        drop(data);
+
+        assert!(cancellation.is_cancelled());
     }
 
     #[test]

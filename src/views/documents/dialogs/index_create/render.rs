@@ -388,10 +388,10 @@ impl Render for IndexCreateDialog {
                                 let state = self.state.clone();
                                 let session_key = self.session_key.clone();
                                 let view = view.clone();
-                                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                    view.update(cx, |this, cx| {
+                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    let prepared = view.update(cx, |this, cx| {
                                         if this.creating {
-                                            return;
+                                            return None;
                                         }
                                         let index_doc = match this.mode {
                                             IndexMode::Form => this.build_index_from_form(cx),
@@ -399,29 +399,58 @@ impl Render for IndexCreateDialog {
                                         };
                                         let Some(index_doc) = index_doc else {
                                             cx.notify();
-                                            return;
+                                            return None;
                                         };
                                         this.error_message = None;
-                                        this.creating = true;
-                                        cx.notify();
+                                        let original_name = this
+                                            .edit_target
+                                            .as_ref()
+                                            .map(|target| target.original_name.clone());
+                                        Some((index_doc, original_name))
+                                    });
+                                    let Some((index_doc, original_name)) = prepared else {
+                                        return;
+                                    };
 
-                                        if let Some(edit_target) = this.edit_target.as_ref() {
-                                            AppCommands::replace_collection_index(
-                                                state.clone(),
-                                                session_key.clone(),
-                                                edit_target.original_name.clone(),
-                                                index_doc,
-                                                cx,
-                                            );
-                                        } else {
+                                    if let Some(original_name) = original_name {
+                                        let confirm_view = view.clone();
+                                        let confirm_state = state.clone();
+                                        let confirm_session = session_key.clone();
+                                        crate::components::open_confirm_dialog(
+                                            window,
+                                            cx,
+                                            "Replace index",
+                                            format!(
+                                                "Replace index \"{original_name}\"? The existing index may be dropped during replacement."
+                                            ),
+                                            "Replace",
+                                            true,
+                                            move |_window, cx| {
+                                                confirm_view.update(cx, |this, cx| {
+                                                    this.creating = true;
+                                                    cx.notify();
+                                                    AppCommands::replace_collection_index(
+                                                        confirm_state.clone(),
+                                                        confirm_session.clone(),
+                                                        original_name.clone(),
+                                                        index_doc.clone(),
+                                                        cx,
+                                                    );
+                                                });
+                                            },
+                                        );
+                                    } else {
+                                        view.update(cx, |this, cx| {
+                                            this.creating = true;
+                                            cx.notify();
                                             AppCommands::create_collection_index(
                                                 state.clone(),
                                                 session_key.clone(),
                                                 index_doc,
                                                 cx,
                                             );
-                                        }
-                                    });
+                                        });
+                                    }
                                 }
                             })
                     }),

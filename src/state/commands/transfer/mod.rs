@@ -97,6 +97,8 @@ pub(super) enum TransferProgressMessage {
     },
     /// Transfer completed
     Completed { total_count: u64, had_error: bool },
+    /// Transfer was cancelled after terminating an external BSON tool.
+    Cancelled { termination_succeeded: bool },
     /// Transfer failed with error
     Failed { error: String },
 }
@@ -108,8 +110,21 @@ pub(super) enum CollectionProgressMessage {
     Progress(u64),
     /// Operation completed with final count
     Completed(u64),
-    /// Operation failed with error
-    Failed(String),
+    /// Operation failed with the number of documents completed before failure.
+    Failed { error: String, processed: u64 },
+}
+
+pub(super) fn transfer_message_matches_generation(
+    current_generation: u64,
+    operation_generation: u64,
+    cancellation_result: bool,
+) -> bool {
+    let expected = if cancellation_result {
+        operation_generation.wrapping_add(1)
+    } else {
+        operation_generation
+    };
+    current_generation == expected
 }
 
 impl AppCommands {
@@ -209,13 +224,52 @@ impl AppCommands {
     /// Execute the transfer operation for a transfer tab.
     /// Extracts only the needed fields to avoid cloning the entire TransferTabState.
     pub fn execute_transfer(state: Entity<AppState>, transfer_id: Uuid, cx: &mut App) {
-        let validation = {
+        Self::execute_transfer_with_confirmation(state, transfer_id, None, cx);
+    }
+
+    pub fn execute_confirmed_transfer(
+        state: Entity<AppState>,
+        transfer_id: Uuid,
+        confirmed_overwrite: Option<PathBuf>,
+        cx: &mut App,
+    ) {
+        Self::execute_transfer_with_confirmation(state, transfer_id, confirmed_overwrite, cx);
+    }
+
+    fn execute_transfer_with_confirmation(
+        state: Entity<AppState>,
+        transfer_id: Uuid,
+        confirmed_overwrite: Option<PathBuf>,
+        cx: &mut App,
+    ) {
+        let (validation, resolved_destination) = {
             let state_ref = state.read(cx);
             let Some(tab) = state_ref.transfer_tab(transfer_id) else {
                 return;
             };
-            validate_transfer(tab)
+            (validate_transfer(tab), crate::state::resolved_export_destination(tab))
         };
+
+        let confirmed_path_changed =
+            confirmed_overwrite.is_some() && resolved_destination != confirmed_overwrite;
+        let unconfirmed_overwrite =
+            resolved_destination.as_ref().is_some_and(|destination| destination.exists())
+                && resolved_destination != confirmed_overwrite;
+        if confirmed_path_changed || unconfirmed_overwrite {
+            let message = if confirmed_path_changed {
+                "The expanded export path changed after confirmation. Review and run again."
+            } else {
+                "The export destination exists. Confirm overwrite before running."
+            };
+            state.update(cx, |state, cx| {
+                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                    tab.runtime.error_message = Some(message.to_string());
+                }
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.notify();
+            });
+            return;
+        }
 
         if !validation.can_run() {
             let message = validation
@@ -245,7 +299,11 @@ impl AppCommands {
                     source_connection_id: tab.config.source_connection_id,
                     source_database: tab.config.source_database.clone(),
                     source_collection: tab.config.source_collection.clone(),
-                    file_path: tab.config.file_path.clone(),
+                    file_path: resolved_destination
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from(&tab.config.file_path))
+                        .to_string_lossy()
+                        .into_owned(),
                     format: tab.config.format,
                     scope: tab.config.scope,
                     json_mode: tab.options.json_mode,
@@ -303,6 +361,7 @@ impl AppCommands {
     /// Cancel a running transfer operation.
     pub fn cancel_transfer(state: Entity<AppState>, transfer_id: Uuid, cx: &mut App) {
         state.update(cx, |state, cx| {
+            let mut cancellation_message = "Transfer cancelled";
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 // Increment generation to invalidate any running operation
                 tab.runtime.transfer_generation.fetch_add(1, Ordering::SeqCst);
@@ -320,9 +379,13 @@ impl AppCommands {
                 }
 
                 tab.runtime.is_running = false;
-                tab.runtime.error_message = Some("Transfer cancelled".to_string());
+                if matches!(tab.config.format, TransferFormat::Bson) {
+                    cancellation_message =
+                        "Cancellation requested; waiting for the MongoDB tool to terminate";
+                }
+                tab.runtime.error_message = Some(cancellation_message.to_string());
             }
-            state.set_status_message(Some(StatusMessage::info("Transfer cancelled")));
+            state.set_status_message(Some(StatusMessage::info(cancellation_message)));
             cx.emit(AppEvent::TransferCancelled { transfer_id });
             cx.notify();
         });
@@ -478,5 +541,19 @@ pub(super) fn detect_format_from_path(path: &str) -> Option<TransferFormat> {
             detect_format_from_path(stem)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transfer_message_matches_generation;
+
+    #[test]
+    fn stale_completion_is_rejected_after_cancellation_or_restart() {
+        let operation = 7;
+        assert!(transfer_message_matches_generation(operation, operation, false));
+        assert!(!transfer_message_matches_generation(operation + 1, operation, false));
+        assert!(transfer_message_matches_generation(operation + 1, operation, true));
+        assert!(!transfer_message_matches_generation(operation + 2, operation, true));
     }
 }

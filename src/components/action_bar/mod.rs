@@ -70,7 +70,7 @@ impl ActionBar {
     fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open = true;
         self.selected_index = 0;
-        self.rebuild_actions(cx);
+        self.rebuild_actions(window, cx);
         self.filter_actions("");
 
         // Create fresh input state
@@ -131,7 +131,7 @@ impl ActionBar {
     fn switch_to_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = PaletteMode::Theme;
         self.original_theme = Some(self.state.read(cx).settings.appearance.theme);
-        self.rebuild_actions(cx);
+        self.rebuild_actions(window, cx);
         self.filter_actions("");
         self.selected_index = 0;
         self.scroll_offset = 0;
@@ -146,7 +146,7 @@ impl ActionBar {
 
     fn switch_to_connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = PaletteMode::Connect;
-        self.rebuild_actions(cx);
+        self.rebuild_actions(window, cx);
         self.filter_actions("");
         self.selected_index = 0;
         self.scroll_offset = 0;
@@ -161,7 +161,7 @@ impl ActionBar {
 
     fn switch_to_disconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = PaletteMode::Disconnect;
-        self.rebuild_actions(cx);
+        self.rebuild_actions(window, cx);
         self.filter_actions("");
         self.selected_index = 0;
         self.scroll_offset = 0;
@@ -190,15 +190,15 @@ impl ActionBar {
         cx.notify();
     }
 
-    fn rebuild_actions(&mut self, cx: &mut Context<Self>) {
+    fn rebuild_actions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
         self.all_actions = match self.mode {
             PaletteMode::All => {
                 let mut actions = Vec::new();
                 actions.extend(tab_actions(state));
-                actions.extend(command_actions(state));
+                actions.extend(command_actions(state, window));
                 actions.extend(navigation_actions(state));
-                actions.extend(view_actions(state));
+                actions.extend(view_actions(state, window));
                 actions
             }
             PaletteMode::Theme => theme_actions(state),

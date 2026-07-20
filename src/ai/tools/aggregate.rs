@@ -4,9 +4,11 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
+use crate::ai::safety::OperationPreview;
+
 use super::{
-    MAX_FIND_LIMIT, MAX_OUTPUT_BYTES, MongoContext, ToolError, doc_to_json, parse_json_to_doc,
-    resolve_collection, truncate_output,
+    MAX_FIND_LIMIT, MAX_OUTPUT_BYTES, MongoContext, ToolError, doc_to_json, ensure_writable,
+    parse_json_to_doc, require_confirmation, resolve_collection, truncate_output,
 };
 
 pub struct AggregateTool(MongoContext);
@@ -74,10 +76,30 @@ impl Tool for AggregateTool {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Force $limit if missing
-        let has_limit = pipeline.iter().any(|stage| stage.keys().any(|k| k == "$limit"));
-        if !has_limit {
-            pipeline.push(bson::doc! { "$limit": MAX_FIND_LIMIT });
+        if let Some((operator, target)) = output_stage(&pipeline, &self.0.database) {
+            ensure_writable(&self.0)?;
+            let preview = OperationPreview {
+                collection: target.clone(),
+                affected_count: 0,
+                sample_docs: vec![serde_json::json!({
+                    "operation": operator,
+                    "target": target,
+                })],
+                reason: Some(format!("{operator} writes aggregation results to a collection")),
+            };
+            let args_json = serde_json::to_string(&serde_json::json!({
+                "collection": col,
+                "pipeline": args.pipeline,
+                "output_stage": operator,
+            }))
+            .unwrap_or_default();
+            require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
+        } else {
+            // Bound read-only pipelines without changing output-stage ordering.
+            let has_limit = pipeline.iter().any(|stage| stage.keys().any(|k| k == "$limit"));
+            if !has_limit {
+                pipeline.push(bson::doc! { "$limit": MAX_FIND_LIMIT });
+            }
         }
 
         let collection =
@@ -91,5 +113,36 @@ impl Tool for AggregateTool {
             "results": json_docs,
         });
         Ok(truncate_output(result, MAX_OUTPUT_BYTES))
+    }
+}
+
+fn output_stage(
+    pipeline: &[bson::Document],
+    default_database: &str,
+) -> Option<(&'static str, String)> {
+    for stage in pipeline {
+        if let Some(target) = stage.get("$out") {
+            return Some(("$out", output_namespace(target, default_database)));
+        }
+        if let Some(target) = stage.get("$merge") {
+            let target = match target {
+                bson::Bson::Document(options) => options.get("into").unwrap_or(target),
+                _ => target,
+            };
+            return Some(("$merge", output_namespace(target, default_database)));
+        }
+    }
+    None
+}
+
+fn output_namespace(target: &bson::Bson, default_database: &str) -> String {
+    match target {
+        bson::Bson::String(collection) => format!("{default_database}.{collection}"),
+        bson::Bson::Document(namespace) => {
+            let database = namespace.get_str("db").unwrap_or(default_database);
+            let collection = namespace.get_str("coll").unwrap_or("<unknown>");
+            format!("{database}.{collection}")
+        }
+        _ => format!("{default_database}.<unknown>"),
     }
 }

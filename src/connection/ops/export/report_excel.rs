@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use futures::TryStreamExt;
@@ -8,7 +9,8 @@ use rust_xlsxwriter::{Format, Workbook};
 use crate::ai::blocks::ReportSheet;
 use crate::ai::tools::generate_report::parse_and_sanitize_pipeline;
 use crate::connection::ConnectionManager;
-use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
+use crate::connection::csv_utils::{collect_document_columns, flatten_document, order_columns};
+use crate::connection::ops::export::AtomicExportFile;
 use crate::error::{Error, Result};
 
 const EXCEL_MAX_ROWS: u32 = 1_048_576;
@@ -75,12 +77,19 @@ impl ConnectionManager {
                 }
             }
 
+            if !errors.is_empty() {
+                return Err(Error::Parse(format!(
+                    "Report export was not committed because sheet generation failed: {}",
+                    errors.join("; ")
+                )));
+            }
             if sheets_written == 0 {
-                let msg = errors.join("; ");
-                return Err(Error::Parse(format!("All sheets failed: {msg}")));
+                return Err(Error::Parse("Report contained no exportable sheets".to_string()));
             }
 
-            workbook.save(&path).map_err(|e| Error::Parse(e.to_string()))?;
+            let output = AtomicExportFile::new(&path)?;
+            workbook.save(output.temporary_path()).map_err(|e| Error::Parse(e.to_string()))?;
+            output.commit()?;
             on_progress(total_rows);
 
             Ok(ReportExportResult { total_rows, sheets_written, errors })
@@ -102,28 +111,28 @@ async fn write_single_sheet(
         parse_and_sanitize_pipeline(&sheet.pipeline).map_err(|e| Error::Parse(e.to_string()))?;
 
     let collection = client.database(database).collection::<Document>(&sheet.collection);
-    let mut cursor = collection.aggregate(pipeline).await?;
-
-    let mut buffered_docs: Vec<Document> = Vec::with_capacity(COLUMN_SAMPLE_SIZE);
-    while buffered_docs.len() < COLUMN_SAMPLE_SIZE {
-        match cursor.try_next().await? {
-            Some(doc) => buffered_docs.push(doc),
-            None => break,
+    let mut discovery_cursor = collection.aggregate(pipeline.clone()).await?;
+    let mut seen_columns = HashSet::new();
+    let mut detected = Vec::new();
+    let mut width_samples: Vec<Document> = Vec::with_capacity(COLUMN_SAMPLE_SIZE);
+    while let Some(doc) = discovery_cursor.try_next().await? {
+        collect_document_columns(&doc, &mut seen_columns, &mut detected);
+        if width_samples.len() < COLUMN_SAMPLE_SIZE {
+            width_samples.push(doc);
         }
     }
 
-    let detected = collect_columns(&buffered_docs);
-    if detected.is_empty() {
-        return Ok(0);
-    }
     let columns = order_columns(detected, &[]);
-
     let worksheet = workbook.add_worksheet_with_constant_memory();
     let sheet_name = sanitize_sheet_name(&sheet.name);
     worksheet.set_name(&sheet_name).map_err(|e| Error::Parse(e.to_string()))?;
+    if columns.is_empty() {
+        return Ok(0);
+    }
+    let mut cursor = collection.aggregate(pipeline).await?;
 
     for (col_idx, col_name) in columns.iter().enumerate() {
-        let estimated_width = estimate_column_width(col_name, &buffered_docs, col_idx);
+        let estimated_width = estimate_column_width(col_name, &width_samples, col_idx);
         worksheet
             .set_column_width_pixels(col_idx as u16, estimated_width)
             .map_err(|e| Error::Parse(e.to_string()))?;
@@ -143,25 +152,21 @@ async fn write_single_sheet(
 
     let mut count = 0u64;
 
-    for doc in buffered_docs {
-        let row = count as u32 + 1;
-        if row >= EXCEL_MAX_ROWS {
-            break;
-        }
-        let flat = flatten_document(&doc);
-        write_excel_row(worksheet, row, &columns, &flat)?;
-        count += 1;
-        if count.is_multiple_of(PROGRESS_INTERVAL) {
-            on_progress(rows_before + count);
-        }
-    }
-
     while let Some(doc) = cursor.try_next().await? {
         let row = count as u32 + 1;
         if row >= EXCEL_MAX_ROWS {
-            break;
+            return Err(Error::Parse(format!(
+                "Sheet '{}' exceeds Excel's {} row limit; no rows were skipped",
+                sheet.name,
+                EXCEL_MAX_ROWS - 1
+            )));
         }
         let flat = flatten_document(&doc);
+        if let Some(field) = flat.keys().find(|field| !seen_columns.contains(*field)) {
+            return Err(Error::Parse(format!(
+                "Report source changed while discovering columns; new field '{field}' was not skipped"
+            )));
+        }
         write_excel_row(worksheet, row, &columns, &flat)?;
         count += 1;
         if count.is_multiple_of(PROGRESS_INTERVAL) {
@@ -194,10 +199,10 @@ fn write_excel_row(
                 worksheet
                     .write_boolean(row, col, value == "true")
                     .map_err(|e| Error::Parse(e.to_string()))?;
-            } else if value.len() > EXCEL_MAX_STRING_LEN {
-                worksheet
-                    .write_string(row, col, &value[..EXCEL_MAX_STRING_LEN])
-                    .map_err(|e| Error::Parse(e.to_string()))?;
+            } else if value.chars().count() > EXCEL_MAX_STRING_LEN {
+                return Err(Error::Parse(format!(
+                    "Excel cell in column '{col_name}' exceeds the {EXCEL_MAX_STRING_LEN} character limit; value was not truncated"
+                )));
             } else {
                 worksheet.write_string(row, col, value).map_err(|e| Error::Parse(e.to_string()))?;
             }

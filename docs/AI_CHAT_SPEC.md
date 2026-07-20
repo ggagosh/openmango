@@ -1446,7 +1446,7 @@ src/ai/
 - [x] Implement `KeyStore` with macOS Keychain
 - [x] Build `ChatPanel` GPUI view with input bar and message list
 - [x] Implement `ChatBlock::Text` rendering with markdown
-- [x] Implement `ChatBlock::QueryPreview` with syntax highlighting
+- [ ] Implement a dedicated `ChatBlock::QueryPreview` component (queries currently render as markdown/tool metadata)
 - [x] Create tools: `run_find`, `run_aggregate`, `count_documents`
 - [x] Create tools: `list_collections`, `list_databases`, `get_schema`
 - [x] Implement basic agent loop (single iteration, no multi-turn yet)
@@ -1461,11 +1461,11 @@ src/ai/
 **Goal:** Full agent loop with multi-turn, all Gen UI components, explain/index tools.
 
 - [x] Implement full agent loop with multi-iteration support
-- [x] Implement `ChatBlock::ResultTable` with pagination and "Open in tab"
-- [x] Implement `ChatBlock::SchemaOutline`
-- [x] Implement `ChatBlock::StatsCard`
-- [x] Implement `ChatBlock::ExplainView` with performance analysis
-- [x] Implement `ChatBlock::IndexRecommendation`
+- [ ] Add pagination to native result tables (bounded inline `DataTable` results exist; cross-collection find results can open the collection)
+- [ ] Implement `ChatBlock::SchemaOutline`
+- [x] Implement native `Stats` cards
+- [ ] Implement `ChatBlock::ExplainView` with performance analysis
+- [ ] Implement `ChatBlock::IndexRecommendation`
 - [x] Create tools: `list_indexes`, `explain_query`
 - [x] Token budget management and conversation trimming
 - [x] Streaming text responses with incremental rendering

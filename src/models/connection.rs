@@ -127,6 +127,8 @@ pub struct SavedConnection {
     pub ssh: Option<SshConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_id: Option<Uuid>,
 }
 
 impl SavedConnection {
@@ -139,14 +141,15 @@ impl SavedConnection {
             read_only: false,
             ssh: None,
             proxy: None,
+            secret_id: None,
         }
     }
 
     /// Return a copy with all secrets removed (for disk persistence).
     pub fn with_secrets_stripped(&self) -> Self {
-        use crate::helpers::validate::redact_uri_password;
+        use crate::helpers::validate::strip_uri_secrets;
         let mut c = self.clone();
-        c.uri = redact_uri_password(&c.uri);
+        c.uri = strip_uri_secrets(&c.uri);
         if let Some(ssh) = &mut c.ssh {
             ssh.password = None;
             ssh.identity_passphrase = None;

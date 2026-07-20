@@ -1,6 +1,5 @@
 //! JSON/JSONL export operations for collections and databases.
 
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -10,6 +9,7 @@ use mongodb::Client;
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::connection::ConnectionManager;
+use crate::connection::ops::export::AtomicExportFile;
 use crate::connection::types::{
     ExportQueryOptions, ExtendedJsonMode, JsonExportOptions, JsonTransferFormat,
 };
@@ -81,7 +81,8 @@ impl ConnectionManager {
             find_options.sort = query.sort;
 
             let mut cursor = coll.find(filter).with_options(find_options).await?;
-            let file = File::create(&path)?;
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
 
             // Wrap writer with gzip encoder if compression is enabled
             let mut writer: Box<dyn Write> = if options.gzip {
@@ -144,6 +145,11 @@ impl ConnectionManager {
             }
 
             writer.flush()?;
+            drop(writer);
+            if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             Ok(count)
         })
     }
@@ -182,7 +188,8 @@ impl ConnectionManager {
             find_options.sort = query.sort;
 
             let mut cursor = coll.find(filter).with_options(find_options).await?;
-            let file = File::create(&path)?;
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
 
             let mut writer: Box<dyn Write> = if options.gzip {
                 Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
@@ -250,6 +257,11 @@ impl ConnectionManager {
             }
 
             writer.flush()?;
+            drop(writer);
+            if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             // Final progress report
             on_progress(count);
             Ok(count)
@@ -282,7 +294,8 @@ impl ConnectionManager {
             let coll = client.database(&database).collection::<Document>(&collection);
 
             let mut cursor = coll.find(doc! {}).await?;
-            let file = File::create(&path)?;
+            let output = AtomicExportFile::new(&path)?;
+            let file = output.reopen()?;
 
             let mut writer: Box<dyn Write> = if options.gzip {
                 Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
@@ -350,6 +363,11 @@ impl ConnectionManager {
             }
 
             writer.flush()?;
+            drop(writer);
+            if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             // Final progress report
             on_progress(count);
             Ok(count)
@@ -377,9 +395,15 @@ impl ConnectionManager {
         self.runtime.block_on(async move {
             let db = client.database(&database);
             let collections = db.list_collection_names().await?;
-
-            // Create directory if it doesn't exist
-            std::fs::create_dir_all(&directory)?;
+            let final_directory = directory;
+            let parent = final_directory
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let staging =
+                tempfile::Builder::new().prefix(".openmango-database-json-").tempdir_in(parent)?;
+            let directory = staging.path().join("export");
+            std::fs::create_dir(&directory)?;
 
             let mut total_count = 0u64;
 
@@ -405,7 +429,8 @@ impl ConnectionManager {
                 // Export this collection (inlined to avoid nested block_on)
                 let coll = client.database(&database).collection::<Document>(&coll_name);
                 let mut cursor = coll.find(doc! {}).await?;
-                let file = File::create(&file_path)?;
+                let output = AtomicExportFile::new(&file_path)?;
+                let file = output.reopen()?;
 
                 let mut writer: Box<dyn Write> = if options.gzip {
                     Box::new(BufWriter::new(GzEncoder::new(file, Compression::default())))
@@ -467,9 +492,18 @@ impl ConnectionManager {
                 }
 
                 writer.flush()?;
+                drop(writer);
+                if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                }
+                output.commit()?;
                 total_count += count;
             }
 
+            if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            crate::connection::ops::export::promote_export_directory(&directory, &final_directory)?;
             Ok(total_count)
         })
     }

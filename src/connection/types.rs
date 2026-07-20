@@ -70,6 +70,35 @@ impl InsertMode {
     }
 }
 
+/// How a transfer should update an existing target collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TargetWriteMode {
+    #[default]
+    Append,
+    Clear,
+    Drop,
+}
+
+impl TargetWriteMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            TargetWriteMode::Append => "Append to target",
+            TargetWriteMode::Clear => "Clear target first",
+            TargetWriteMode::Drop => "Drop target first",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            TargetWriteMode::Append => "Keep existing documents and write incoming documents.",
+            TargetWriteMode::Clear => {
+                "Atomically replace target documents while preserving target indexes."
+            }
+            TargetWriteMode::Drop => "Atomically replace the target collection.",
+        }
+    }
+}
+
 /// Text encoding for file imports
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Encoding {
@@ -102,6 +131,18 @@ impl BsonOutputFormat {
             BsonOutputFormat::Archive => "Archive (.archive)",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BsonToolRunOutcome {
+    Completed,
+    Cancelled { termination_succeeded: bool },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BulkReplaceResult {
+    pub matched_count: u64,
+    pub modified_count: u64,
 }
 
 /// Progress callback type for reporting operation progress.
@@ -157,6 +198,7 @@ pub struct JsonImportOptions {
     pub stop_on_error: bool,
     pub batch_size: usize,
     pub encoding: Encoding,
+    pub target_write_mode: TargetWriteMode,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }
@@ -169,6 +211,7 @@ impl std::fmt::Debug for JsonImportOptions {
             .field("stop_on_error", &self.stop_on_error)
             .field("batch_size", &self.batch_size)
             .field("encoding", &self.encoding)
+            .field("target_write_mode", &self.target_write_mode)
             .field("progress", &self.progress.is_some())
             .field("cancellation", &self.cancellation.is_some())
             .finish()
@@ -182,6 +225,7 @@ pub struct CsvImportOptions {
     pub stop_on_error: bool,
     pub batch_size: usize,
     pub encoding: Encoding,
+    pub target_write_mode: TargetWriteMode,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }
@@ -193,6 +237,7 @@ impl std::fmt::Debug for CsvImportOptions {
             .field("stop_on_error", &self.stop_on_error)
             .field("batch_size", &self.batch_size)
             .field("encoding", &self.encoding)
+            .field("target_write_mode", &self.target_write_mode)
             .field("progress", &self.progress.is_some())
             .field("cancellation", &self.cancellation.is_some())
             .finish()
@@ -214,6 +259,7 @@ pub struct CopyOptions {
     pub copy_indexes: bool,
     pub insert_mode: InsertMode,
     pub ordered: bool,
+    pub target_write_mode: TargetWriteMode,
     pub progress: Option<ProgressCallback>,
     pub cancellation: Option<CancellationToken>,
 }
@@ -231,6 +277,7 @@ impl std::fmt::Debug for CopyOptions {
             .field("copy_indexes", &self.copy_indexes)
             .field("insert_mode", &self.insert_mode)
             .field("ordered", &self.ordered)
+            .field("target_write_mode", &self.target_write_mode)
             .field("progress", &self.progress.is_some())
             .field("cancellation", &self.cancellation.is_some())
             .finish()
@@ -244,6 +291,8 @@ pub struct FindDocumentsOptions {
     pub projection: Option<mongodb::bson::Document>,
     pub skip: u64,
     pub limit: i64,
+    pub max_time: std::time::Duration,
+    pub cancellation: CancellationToken,
 }
 
 /// Progress information from mongodump/mongorestore tools.

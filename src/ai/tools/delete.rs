@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, doc_to_json, parse_json_to_doc, require_confirmation,
+    MongoContext, ToolError, doc_to_json, ensure_writable, parse_json_to_doc, require_confirmation,
     resolve_collection,
 };
 
@@ -55,6 +55,7 @@ impl Tool for DeleteDocumentsTool {
     }
 
     async fn call(&self, args: DeleteArgs) -> Result<serde_json::Value, ToolError> {
+        ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;
 

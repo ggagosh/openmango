@@ -9,7 +9,7 @@ use gpui_component::{Disableable as _, WindowExt as _};
 use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
-use crate::components::{Button, cancel_button};
+use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::spacing;
 use crate::views::documents::node_meta::NodeMeta;
@@ -384,7 +384,7 @@ impl PropertyActionDialog {
         }
     }
 
-    fn submit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.updating {
             return;
         }
@@ -399,11 +399,10 @@ impl PropertyActionDialog {
             }
         };
 
-        self.updating = true;
-        cx.notify();
-
         match self.effective_scope() {
             UpdateScope::CurrentDocument => {
+                self.updating = true;
+                cx.notify();
                 AppCommands::update_document_by_key(
                     self.state.clone(),
                     self.session_key.clone(),
@@ -413,25 +412,105 @@ impl PropertyActionDialog {
                 );
             }
             UpdateScope::MatchQuery => {
-                let filter = self.current_filter(cx);
-                AppCommands::update_documents_by_filter(
-                    self.state.clone(),
-                    self.session_key.clone(),
-                    filter,
-                    update_doc,
-                    cx,
-                );
+                self.confirm_bulk_update(self.current_filter(cx), update_doc, window, cx);
             }
             UpdateScope::AllDocuments => {
-                AppCommands::update_documents_by_filter(
-                    self.state.clone(),
-                    self.session_key.clone(),
-                    Document::new(),
-                    update_doc,
-                    cx,
-                );
+                self.confirm_bulk_update(Document::new(), update_doc, window, cx);
             }
         }
+    }
+
+    fn confirm_bulk_update(
+        &mut self,
+        filter: Document,
+        update_doc: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (client, manager) = {
+            let state = self.state.read(cx);
+            let Some(client) = state.active_connection_client(self.session_key.connection_id)
+            else {
+                self.error_message = Some("Connection is not active.".to_string());
+                cx.notify();
+                return;
+            };
+            (client, state.connection_manager())
+        };
+
+        self.updating = true;
+        cx.notify();
+        let database = self.session_key.database.clone();
+        let collection = self.session_key.collection.clone();
+        let task = cx.background_spawn({
+            let filter = filter.clone();
+            let database = database.clone();
+            let collection = collection.clone();
+            async move { manager.count_documents(&client, &database, &collection, filter) }
+        });
+        let window_handle = window.window_handle();
+        let state = self.state.clone();
+        let session_key = self.session_key.clone();
+
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result: Result<u64, crate::error::Error> = task.await;
+            let _ = cx.update_window(window_handle, |_root, window, cx| match result {
+                Ok(0) => {
+                    let _ = view.update(cx, |this, cx| {
+                        this.updating = false;
+                        this.error_message = Some("No documents match this scope.".to_string());
+                        cx.notify();
+                    });
+                }
+                Ok(count) => {
+                    if view
+                        .update(cx, |this, cx| {
+                            this.updating = false;
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let confirm_view = view.clone();
+                    let filter_text = crate::bson::document_to_shell_string(&filter);
+                    let message = format!(
+                        "Update every document matching this filter in {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
+                        if count == 1 { "" } else { "s" }
+                    );
+                    open_confirm_dialog(
+                        window,
+                        cx,
+                        "Confirm property update",
+                        message,
+                        "Update",
+                        true,
+                        move |_window, cx| {
+                            let _ = confirm_view.update(cx, |this, cx| {
+                                this.updating = true;
+                                this.error_message = None;
+                                AppCommands::update_documents_by_filter(
+                                    state.clone(),
+                                    session_key.clone(),
+                                    filter.clone(),
+                                    update_doc.clone(),
+                                    cx,
+                                );
+                                cx.notify();
+                            });
+                        },
+                    );
+                }
+                Err(error) => {
+                    let _ = view.update(cx, |this, cx| {
+                        this.updating = false;
+                        this.error_message = Some(format!("Failed to count documents: {error}"));
+                        cx.notify();
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
     fn effective_scope(&self) -> UpdateScope {

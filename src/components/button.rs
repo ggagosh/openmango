@@ -6,6 +6,10 @@ use std::rc::Rc;
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type TooltipAction = (Rc<Box<dyn Action>>, Option<SharedString>);
 
+fn is_activation_key(key: &str) -> bool {
+    matches!(key, "enter" | "return" | "space" | "spacebar" | " ")
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum ButtonVariant {
     #[default]
@@ -26,6 +30,7 @@ pub struct Button {
     disabled: bool,
     compact: bool,
     focus_handle: Option<FocusHandle>,
+    focusable: bool,
     tab_index: Option<isize>,
     tooltip: Option<(SharedString, Option<TooltipAction>)>,
     active_bg: Option<Hsla>,
@@ -43,6 +48,7 @@ impl Button {
             disabled: false,
             compact: false,
             focus_handle: None,
+            focusable: true,
             tab_index: None,
             tooltip: None,
             active_bg: None,
@@ -99,6 +105,12 @@ impl Button {
 
     pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
         self.focus_handle = Some(focus_handle.clone());
+        self
+    }
+
+    /// Opt out of keyboard focus for decorative or intentionally pointer-only controls.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
         self
     }
 
@@ -173,11 +185,19 @@ impl RenderOnce for Button {
         let text_size = if self.compact { typography::text_xs() } else { typography::text_sm() };
         // Keep buttons readable without feeling heavy in monospace UI fonts.
         let font_weight = FontWeight::NORMAL;
-        let focus_handle = self.focus_handle.clone();
-        let tab_index = self.tab_index;
+        let can_focus = self.focusable && !self.disabled && self.on_click.is_some();
+        let focus_handle = can_focus.then(|| {
+            self.focus_handle.clone().unwrap_or_else(|| {
+                window
+                    .use_keyed_state((self.id.clone(), "button-focus"), cx, |_window, cx| {
+                        cx.focus_handle()
+                    })
+                    .read(cx)
+                    .clone()
+            })
+        });
+        let tab_index = can_focus.then_some(self.tab_index.unwrap_or(0));
         let tooltip = self.tooltip.clone();
-        let is_focused =
-            focus_handle.as_ref().is_some_and(|focus_handle| focus_handle.is_focused(window));
 
         let mut el = div()
             .id(self.id)
@@ -196,20 +216,13 @@ impl RenderOnce for Button {
             .text_color(text_color);
 
         if let Some(focus_handle) = focus_handle {
-            let mut focus_handle = focus_handle;
-            if let Some(tab_index) = tab_index {
-                focus_handle = focus_handle.tab_index(tab_index);
-                focus_handle = focus_handle.tab_stop(true);
-            }
+            let focus_handle = focus_handle.tab_index(tab_index.unwrap_or(0)).tab_stop(true);
             el = el.track_focus(&focus_handle);
         }
 
         if let Some(tab_index) = tab_index {
-            el = el.tab_index(tab_index);
-        }
-
-        if is_focused && !self.disabled {
-            el = el.border_color(cx.theme().ring).shadow_xs();
+            let ring = cx.theme().ring;
+            el = el.tab_index(tab_index).focus(move |style| style.border_color(ring).shadow_xs());
         }
 
         if self.disabled {
@@ -222,7 +235,7 @@ impl RenderOnce for Button {
                     .on_click(move |event, window, cx| (handler)(event, window, cx))
                     .on_key_down(move |event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
-                        if key == "enter" || key == "return" || key == " " {
+                        if is_activation_key(key) {
                             cx.stop_propagation();
                             (key_handler)(&ClickEvent::default(), window, cx);
                         }
@@ -271,5 +284,34 @@ impl RenderOnce for Button {
         }
 
         el
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Button, is_activation_key};
+
+    #[test]
+    fn normal_buttons_are_focusable_by_default() {
+        let button = Button::new("test").on_click(|_, _, _| {});
+
+        assert!(button.focusable);
+        assert_eq!(button.tab_index, None);
+        assert!(!button.disabled);
+    }
+
+    #[test]
+    fn buttons_can_explicitly_opt_out_of_keyboard_focus() {
+        let button = Button::new("decorative").focusable(false).on_click(|_, _, _| {});
+
+        assert!(!button.focusable);
+    }
+
+    #[test]
+    fn enter_and_space_keys_activate_buttons() {
+        for key in ["enter", "return", "space", "spacebar", " "] {
+            assert!(is_activation_key(key));
+        }
+        assert!(!is_activation_key("escape"));
     }
 }

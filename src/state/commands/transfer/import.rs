@@ -8,13 +8,15 @@ use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::{
-    BsonToolProgress, CsvImportOptions, Encoding, InsertMode, JsonImportOptions, JsonTransferFormat,
+    BsonToolProgress, BsonToolRunOutcome, CsvImportOptions, Encoding, InsertMode,
+    JsonImportOptions, JsonTransferFormat, TargetWriteMode,
 };
 use crate::state::app_state::CollectionTransferStatus;
 use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
 
 use super::{
     CollectionProgressMessage, ImportConfig, TransferProgressMessage, detect_format_from_path,
+    transfer_message_matches_generation,
 };
 
 impl AppCommands {
@@ -36,9 +38,23 @@ impl AppCommands {
             return;
         }
 
-        // For BSON import, we need the connection string instead of client
+        // BSON tools must reuse the active SSH/SOCKS transport rather than the saved URI.
         let connection_uri = if matches!(config.format, TransferFormat::Bson) {
-            state.read(cx).connection_uri(connection_id)
+            match state.read(cx).active_connection_tool_uri(connection_id) {
+                Ok(uri) => Some(uri),
+                Err(error) => {
+                    state.update(cx, |state, cx| {
+                        state.set_status_message(Some(StatusMessage::error(error.to_string())));
+                        if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                            tab.runtime.is_running = false;
+                            tab.runtime.error_message = Some(error.to_string());
+                        }
+                        cx.emit(AppEvent::TransferFailed { transfer_id, error: error.to_string() });
+                        cx.notify();
+                    });
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -87,13 +103,25 @@ impl AppCommands {
         let stop_on_error = config.stop_on_error;
         let batch_size = config.batch_size as usize;
         let drop_before = config.drop_before_import;
-        let clear_before = config.clear_before_import;
+        let target_write_mode = if drop_before {
+            TargetWriteMode::Drop
+        } else if config.clear_before_import {
+            TargetWriteMode::Clear
+        } else {
+            TargetWriteMode::Append
+        };
         let encoding = config.encoding;
 
         let cancellation_token = crate::connection::types::CancellationToken::new();
 
-        state.update(cx, |state, cx| {
+        let operation_generation = state.update(cx, |state, cx| {
+            let mut operation_generation = 0;
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                operation_generation = tab
+                    .runtime
+                    .transfer_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
                 tab.runtime.is_running = true;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
@@ -102,6 +130,7 @@ impl AppCommands {
             state.set_status_message(Some(StatusMessage::info("Importing...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
             cx.notify();
+            operation_generation
         });
 
         // For collection-level JSON/CSV imports, use progress tracking via channel
@@ -122,8 +151,7 @@ impl AppCommands {
                 stop_on_error,
                 batch_size,
                 encoding,
-                drop_before,
-                clear_before,
+                target_write_mode,
                 cancellation_token,
                 cx,
             );
@@ -156,6 +184,8 @@ impl AppCommands {
                 database,
                 path,
                 drop_before,
+                cancellation_token,
+                operation_generation,
                 cx,
             );
             return;
@@ -172,6 +202,7 @@ impl AppCommands {
     }
 
     /// Execute BSON database import with progress tracking via mongorestore stderr parsing.
+    #[allow(clippy::too_many_arguments)]
     fn execute_bson_import_with_progress(
         state: Entity<AppState>,
         transfer_id: Uuid,
@@ -179,6 +210,8 @@ impl AppCommands {
         database: String,
         path: PathBuf,
         drop_before: bool,
+        cancellation_token: crate::connection::types::CancellationToken,
+        operation_generation: u64,
         cx: &mut App,
     ) {
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
@@ -199,6 +232,7 @@ impl AppCommands {
                     &database,
                     &path,
                     drop_before,
+                    cancellation_token,
                     move |progress| {
                         let msg = match progress {
                             BsonToolProgress::Started { collection } => {
@@ -232,10 +266,15 @@ impl AppCommands {
                 );
 
                 match result {
-                    Ok(()) => {
+                    Ok(BsonToolRunOutcome::Completed) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Completed {
                             total_count: 0, // mongorestore doesn't provide total count
                             had_error: false,
+                        });
+                    }
+                    Ok(BsonToolRunOutcome::Cancelled { termination_succeeded }) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Cancelled {
+                            termination_succeeded,
                         });
                     }
                     Err(e) => {
@@ -260,6 +299,7 @@ impl AppCommands {
                     let should_notify = match &msg {
                         TransferProgressMessage::Started { .. }
                         | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Cancelled { .. }
                         | TransferProgressMessage::Failed { .. } => true,
                         TransferProgressMessage::CollectionProgress { .. } => {
                             progress_count += 1;
@@ -269,6 +309,22 @@ impl AppCommands {
 
                     let _ = cx.update(|cx| {
                         state.update(cx, |state, cx| {
+                            let Some(tab) = state.transfer_tab(transfer_id) else {
+                                return;
+                            };
+                            let current_generation = tab
+                                .runtime
+                                .transfer_generation
+                                .load(std::sync::atomic::Ordering::SeqCst);
+                            let cancellation_result =
+                                matches!(&msg, TransferProgressMessage::Cancelled { .. });
+                            if !transfer_message_matches_generation(
+                                current_generation,
+                                operation_generation,
+                                cancellation_result,
+                            ) {
+                                return;
+                            }
                             match msg {
                                 TransferProgressMessage::Started { collections } => {
                                     let event = AppEvent::DatabaseTransferStarted {
@@ -298,6 +354,7 @@ impl AppCommands {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count = total_count;
+                                        tab.runtime.cancellation_token = None;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -313,9 +370,27 @@ impl AppCommands {
                                         count: total_count,
                                     });
                                 }
+                                TransferProgressMessage::Cancelled { termination_succeeded } => {
+                                    let message = if termination_succeeded {
+                                        "BSON import cancelled; mongorestore terminated successfully"
+                                    } else {
+                                        "BSON import cancellation requested, but mongorestore termination could not be confirmed"
+                                    };
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.cancellation_token = None;
+                                        tab.runtime.error_message = Some(message.to_string());
+                                    }
+                                    state.set_status_message(Some(if termination_succeeded {
+                                        StatusMessage::info(message)
+                                    } else {
+                                        StatusMessage::error(message)
+                                    }));
+                                }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
+                                        tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
@@ -350,8 +425,7 @@ impl AppCommands {
         stop_on_error: bool,
         batch_size: usize,
         encoding: Encoding,
-        drop_before: bool,
-        clear_before: bool,
+        target_write_mode: TargetWriteMode,
         cancellation_token: crate::connection::types::CancellationToken,
         cx: &mut App,
     ) {
@@ -365,18 +439,6 @@ impl AppCommands {
         // Spawn background task that does all blocking I/O
         cx.background_spawn({
             async move {
-                // Drop or clear collection before import if requested
-                if drop_before {
-                    let _ = manager.drop_collection(&client, &database, &collection);
-                } else if clear_before {
-                    let _ = manager.delete_documents(
-                        &client,
-                        &database,
-                        &collection,
-                        mongodb::bson::doc! {},
-                    );
-                }
-
                 // Create progress callback that sends updates via channel
                 let progress_tx = tx.clone();
                 let progress_callback: ProgressCallback =
@@ -402,6 +464,7 @@ impl AppCommands {
                                 stop_on_error,
                                 batch_size,
                                 encoding,
+                                target_write_mode,
                                 progress: Some(progress_callback),
                                 cancellation: Some(cancellation_token.clone()),
                             },
@@ -417,6 +480,7 @@ impl AppCommands {
                             stop_on_error,
                             batch_size,
                             encoding,
+                            target_write_mode,
                             progress: Some(progress_callback),
                             cancellation: Some(cancellation_token),
                         },
@@ -431,8 +495,11 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Completed(count));
                     }
                     Err(err) => {
-                        let _ =
-                            tx.unbounded_send(CollectionProgressMessage::Failed(err.to_string()));
+                        let processed = err.processed_count();
+                        let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
+                            error: err.to_string(),
+                            processed,
+                        });
                     }
                 }
             }
@@ -452,7 +519,7 @@ impl AppCommands {
                     let should_notify = match &msg {
                         // Terminal events always notify immediately
                         CollectionProgressMessage::Completed(_)
-                        | CollectionProgressMessage::Failed(_) => true,
+                        | CollectionProgressMessage::Failed { .. } => true,
                         // Progress updates batch notify every BATCH_SIZE messages
                         CollectionProgressMessage::Progress(_) => {
                             progress_count += 1;
@@ -481,9 +548,11 @@ impl AppCommands {
                                     state.set_status_message(Some(StatusMessage::info(message)));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed(error) => {
+                                CollectionProgressMessage::Failed { error, processed } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
+                                        tab.runtime.progress_count =
+                                            tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(

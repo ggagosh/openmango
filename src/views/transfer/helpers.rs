@@ -5,6 +5,7 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::{ActiveTheme as _, IconName};
 
 use crate::components::Button;
+use crate::state::parse_export_query_document;
 use crate::theme::{borders, spacing};
 
 use super::QueryEditField;
@@ -230,15 +231,26 @@ pub(super) fn render_query_field_row(
         None
     };
 
+    let validation_error = parse_export_query_document(value).err();
     form_row(
         label,
         div()
             .flex()
-            .items_center()
-            .gap(spacing::sm())
-            .child(value_box)
-            .child(edit_button)
-            .children(clear_button),
+            .flex_col()
+            .gap(spacing::xs())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(value_box)
+                    .child(edit_button)
+                    .children(clear_button),
+            )
+            .children(
+                validation_error
+                    .map(|error| div().text_xs().text_color(cx.theme().danger).child(error)),
+            ),
         cx,
     )
 }

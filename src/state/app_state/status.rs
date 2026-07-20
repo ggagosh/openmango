@@ -53,7 +53,12 @@ impl AppState {
                     "Loaded {total} documents"
                 ))));
             }
-            AppEvent::DocumentInserted => {
+            AppEvent::DocumentsLoadFailed { error, .. } => {
+                self.set_status_message(Some(StatusMessage::error(format!(
+                    "Query failed: {error}"
+                ))));
+            }
+            AppEvent::DocumentInserted { .. } => {
                 self.set_status_message(Some(StatusMessage::info("Document inserted")));
             }
             AppEvent::DocumentInsertFailed { error, .. } => {

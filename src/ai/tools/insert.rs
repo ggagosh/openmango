@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, require_confirmation, resolve_collection};
+use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
 
 pub struct InsertDocumentsTool(MongoContext);
 
@@ -53,6 +53,7 @@ impl Tool for InsertDocumentsTool {
     }
 
     async fn call(&self, args: InsertArgs) -> Result<serde_json::Value, ToolError> {
+        ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
 
         // Parse documents array

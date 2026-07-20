@@ -6,7 +6,10 @@ use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, parse_json_to_doc, require_confirmation, resolve_collection};
+use super::{
+    MongoContext, ToolError, ensure_writable, parse_json_to_doc, require_confirmation,
+    resolve_collection,
+};
 
 pub struct CreateIndexTool(MongoContext);
 
@@ -62,6 +65,7 @@ impl Tool for CreateIndexTool {
     }
 
     async fn call(&self, args: CreateIndexArgs) -> Result<serde_json::Value, ToolError> {
+        ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let keys = parse_json_to_doc(&args.keys)?;
 

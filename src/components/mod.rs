@@ -12,6 +12,7 @@ pub mod file_picker;
 pub mod filter_builder;
 pub mod form_field;
 mod status_bar;
+mod unsaved_guard;
 pub use button::Button;
 pub use confirm::open_confirm_dialog;
 pub use connection_dialog::ConnectionDialog;
@@ -21,3 +22,7 @@ pub use dialog_helpers::{cancel_button, primary_button};
 pub use filter_builder::FilterBuilderPanel;
 pub use form_field::FormField;
 pub use status_bar::StatusBar;
+pub use unsaved_guard::{
+    request_app_quit, request_disconnect_connection, request_preview_collection,
+    request_remove_connection, request_unsaved_action,
+};

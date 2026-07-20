@@ -13,8 +13,8 @@ use gpui_component::dialog::Dialog;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::tab::{Tab, TabBar};
 
-use crate::components::Button;
-use crate::state::AppCommands;
+use crate::components::{Button, request_unsaved_action};
+use crate::state::UnsavedScope;
 use crate::theme::{islands, sizing, spacing};
 
 use super::{ConnectionManager, ManagerTab, TestStatus};
@@ -235,12 +235,30 @@ impl ConnectionManager {
                         let view = view.clone();
                         let state = state.clone();
                         move |_, window, cx| {
-                            let mut saved_id = None;
-                            view.update(cx, |this, cx| {
-                                saved_id = this.save_connection(window, cx);
-                            });
-                            if let Some(connection_id) = saved_id {
-                                AppCommands::connect(state.clone(), connection_id, cx);
+                            let selected_id = view.read(cx).selected_id;
+                            let save_view = view.clone();
+                            let save_state = state.clone();
+                            let save = move |window: &mut Window, cx: &mut App| {
+                                let mut saved_id = None;
+                                save_view.update(cx, |this, cx| {
+                                    saved_id = this.save_connection(window, cx);
+                                });
+                                if let Some(connection_id) = saved_id {
+                                    save_state.update(cx, |state, cx| {
+                                        state.connect_when_secrets_ready(connection_id, cx);
+                                    });
+                                }
+                            };
+                            if let Some(connection_id) = selected_id {
+                                request_unsaved_action(
+                                    state.clone(),
+                                    UnsavedScope::Connection(connection_id),
+                                    window,
+                                    cx,
+                                    save,
+                                );
+                            } else {
+                                save(window, cx);
                             }
                         }
                     }),

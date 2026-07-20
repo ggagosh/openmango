@@ -24,8 +24,9 @@ use uuid::Uuid;
 
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::{
-    AppCommands, AppState, CompressionMode, TransferMode, TransferScope, TransferTabState,
-    available_transfer_formats, coerce_transfer_format, validate_transfer,
+    AppCommands, AppState, CompressionMode, InsertMode, StatusMessage, TargetWriteMode,
+    TransferMode, TransferScope, TransferTabState, available_transfer_formats,
+    coerce_transfer_format, resolved_export_destination, validate_transfer,
 };
 use crate::theme::{borders, colors, islands, sizing, spacing};
 
@@ -115,11 +116,23 @@ fn destructive_transfer_message(transfer_state: &TransferTabState) -> String {
         target_db.to_string()
     };
 
-    format!(
-        "{} will run before {}. Target: {target}. This cannot be undone.",
-        transfer_state.options.target_write_mode().label(),
-        transfer_state.config.mode.label().to_lowercase()
-    )
+    let mut effects = Vec::new();
+    if transfer_state.options.target_write_mode() != TargetWriteMode::Append {
+        effects.push(format!(
+            "{} will run before the transfer.",
+            transfer_state.options.target_write_mode().label()
+        ));
+    }
+    match transfer_state.options.insert_mode {
+        InsertMode::Insert => {}
+        InsertMode::Upsert => effects
+            .push("Upsert may update existing documents with matching _id values.".to_string()),
+        InsertMode::Replace => effects.push(
+            "Replace may fully replace existing documents with matching _id values.".to_string(),
+        ),
+    }
+    effects.push(format!("Target: {target}. This cannot be undone."));
+    effects.join(" ")
 }
 
 impl Render for TransferView {
@@ -541,8 +554,22 @@ impl Render for TransferView {
         // Run or Cancel button (depending on is_running state)
         let validation = validate_transfer(&transfer_state);
         let can_run = validation.can_run();
-        let requires_confirmation = validation.requires_confirmation;
-        let destructive_message = destructive_transfer_message(&transfer_state);
+        let resolved_export_destination = resolved_export_destination(&transfer_state);
+        let overwrite_destination =
+            resolved_export_destination.clone().filter(|destination| destination.exists());
+        let confirmed_overwrite_destination = resolved_export_destination;
+        let requires_confirmation =
+            validation.requires_confirmation || overwrite_destination.is_some();
+        let destructive_message = if let Some(destination) = overwrite_destination {
+            format!(
+                "The export destination '{}' already exists and will be replaced only after the export completes successfully.",
+                destination.display()
+            )
+        } else {
+            destructive_transfer_message(&transfer_state)
+        };
+        let confirmed_config = transfer_state.config.clone();
+        let confirmed_options = transfer_state.options.clone();
         let action_button = if transfer_state.runtime.is_running {
             let state = state.clone();
             Button::new("transfer-cancel")
@@ -562,6 +589,10 @@ impl Render for TransferView {
                 .disabled(!can_run)
                 .on_click(move |_, window, cx| {
                     if requires_confirmation {
+                        let expected_config = confirmed_config.clone();
+                        let expected_options = confirmed_options.clone();
+                        let confirmed_overwrite_destination =
+                            confirmed_overwrite_destination.clone();
                         open_confirm_dialog(
                             window,
                             cx,
@@ -572,7 +603,32 @@ impl Render for TransferView {
                             {
                                 let state = state.clone();
                                 move |_window, cx| {
-                                    AppCommands::execute_transfer(state.clone(), transfer_id, cx);
+                                    let unchanged = state
+                                        .read(cx)
+                                        .transfer_tab(transfer_id)
+                                        .is_some_and(|tab| {
+                                            tab.config == expected_config
+                                                && tab.options == expected_options
+                                        });
+                                    if !unchanged {
+                                        state.update(cx, |state, cx| {
+                                            let message = "Transfer options changed after confirmation. Review and run again.";
+                                            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                                tab.runtime.error_message = Some(message.to_string());
+                                            }
+                                            state.set_status_message(Some(StatusMessage::error(
+                                                message,
+                                            )));
+                                            cx.notify();
+                                        });
+                                        return;
+                                    }
+                                    AppCommands::execute_confirmed_transfer(
+                                        state.clone(),
+                                        transfer_id,
+                                        confirmed_overwrite_destination.clone(),
+                                        cx,
+                                    );
                                 }
                             },
                         );

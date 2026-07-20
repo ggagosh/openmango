@@ -63,6 +63,8 @@ struct ConnectionDraft {
     proxy_port_state: Entity<InputState>,
     proxy_username_state: Entity<InputState>,
     proxy_password_state: Entity<InputState>,
+    uri_secrets: crate::helpers::UriSecrets,
+    internal_uri_value: Option<String>,
     read_only: bool,
     direct_connection: bool,
     tls: bool,

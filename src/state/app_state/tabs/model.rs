@@ -152,6 +152,7 @@ impl AppState {
             || self.tabs.preview.as_ref() == Some(key);
         if !still_referenced {
             self.sessions.remove(key);
+            self.invalid_inline_edits.remove(key);
             // Drop per-collection metadata caches as well, so they don't
             // accumulate for every collection ever opened in a connection
             // (previously only freed when the whole connection was removed).
@@ -489,16 +490,17 @@ impl AppState {
     }
 
     /// Toggle the AI chat side panel open/closed.
-    pub fn toggle_ai_panel(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_ai_panel(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.ai_assistant_available() {
             self.ai_chat.panel_open = false;
             self.update_workspace_from_state_debounced();
             cx.notify();
-            return;
+            return false;
         }
         self.ai_chat.panel_open = !self.ai_chat.panel_open;
         self.update_workspace_from_state_debounced();
         cx.notify();
+        self.ai_chat.panel_open
     }
 
     /// Open changelog tab (singleton - only one changelog tab allowed)
@@ -558,6 +560,7 @@ impl AppState {
         let id = Uuid::new_v4();
         let key = ForgeTabKey { id, connection_id, database: database.clone() };
         let mut state = ForgeTabState::default();
+        let selected_collection = collection.clone();
         if let Some(collection) = collection {
             let escaped = collection.replace('"', "\\\"");
             let content = format!("db.getCollection(\"{}\").find({{}})", escaped);
@@ -570,7 +573,7 @@ impl AppState {
         self.set_active_index(self.tabs.open.len() - 1);
         self.set_selected_connection_internal(connection_id);
         self.conn.selected_database = Some(database);
-        self.conn.selected_collection = None;
+        self.conn.selected_collection = selected_collection;
         self.current_view = View::Forge;
         self.update_workspace_from_state_debounced();
         self.clear_error_status();

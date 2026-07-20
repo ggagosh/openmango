@@ -82,6 +82,19 @@ const ALWAYS_CONFIRM_TOOLS: &[&str] = &["update_documents", "delete_documents", 
 
 /// Classify a tool call by name and argument JSON.
 pub fn classify_tool_call(tool_name: &str, args_json: &str) -> SafetyClassification {
+    if tool_name == "aggregate"
+        && serde_json::from_str::<serde_json::Value>(args_json)
+            .ok()
+            .and_then(|args| args.get("output_stage").cloned())
+            .is_some()
+    {
+        return SafetyClassification {
+            tier: SafetyTier::AlwaysConfirm,
+            description: "Run aggregation output stage".to_string(),
+            reason: None,
+        };
+    }
+
     if AUTO_EXECUTE_TOOLS.contains(&tool_name) {
         return SafetyClassification {
             tier: SafetyTier::AutoExecute,

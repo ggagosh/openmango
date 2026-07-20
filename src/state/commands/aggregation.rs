@@ -21,6 +21,33 @@ impl AppCommands {
         preview: bool,
         cx: &mut App,
     ) {
+        Self::run_aggregation_internal(state, session_key, preview, None, cx);
+    }
+
+    pub fn run_aggregation_confirmed(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        preview: bool,
+        confirmed_stages: Vec<PipelineStage>,
+        confirmed_selected_stage: Option<usize>,
+        cx: &mut App,
+    ) {
+        Self::run_aggregation_internal(
+            state,
+            session_key,
+            preview,
+            Some((confirmed_stages, confirmed_selected_stage)),
+            cx,
+        );
+    }
+
+    fn run_aggregation_internal(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        preview: bool,
+        confirmed_pipeline: Option<(Vec<PipelineStage>, Option<usize>)>,
+        cx: &mut App,
+    ) {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
@@ -108,27 +135,38 @@ impl AppCommands {
 
         let has_write_stage = pipeline_has_write_stage(&stages, selected_stage);
         if has_write_stage && !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
-            state.update(cx, |state, cx| {
-                if let Some(session) = state.session_mut(&session_key) {
-                    session.data.aggregation.error = Some(
-                        "Write stages ($out/$merge) require a writable connection.".to_string(),
-                    );
-                    session.data.aggregation.results = None;
-                    session.data.aggregation.last_run_time_ms = None;
-                    session.data.aggregation.loading = false;
-                }
-                cx.notify();
-            });
-            let event = AppEvent::AggregationFailed {
-                session: session_key,
-                error: "Write stages require a writable connection.".to_string(),
-            };
-            state.update(cx, |state, cx| {
-                state.update_status_from_event(&event);
-                cx.emit(event);
-                cx.notify();
-            });
+            reject_aggregation_run(
+                &state,
+                session_key,
+                "Write stages ($out/$merge) require a writable connection.",
+                cx,
+            );
             return;
+        }
+        if has_write_stage {
+            match confirmed_pipeline {
+                None => {
+                    reject_aggregation_run(
+                        &state,
+                        session_key,
+                        "Write stages ($out/$merge) require explicit confirmation before execution.",
+                        cx,
+                    );
+                    return;
+                }
+                Some((confirmed_stages, confirmed_selected_stage))
+                    if confirmed_stages != stages || confirmed_selected_stage != selected_stage =>
+                {
+                    reject_aggregation_run(
+                        &state,
+                        session_key,
+                        "The aggregation pipeline changed after confirmation. Review and run it again.",
+                        cx,
+                    );
+                    return;
+                }
+                Some(_) => {}
+            }
         }
 
         let (request_id, run_generation_value) = state.update(cx, |state, cx| {
@@ -252,6 +290,27 @@ impl AppCommands {
         })
         .detach();
     }
+}
+
+fn reject_aggregation_run(
+    state: &Entity<AppState>,
+    session_key: SessionKey,
+    message: &str,
+    cx: &mut App,
+) {
+    let message = message.to_string();
+    state.update(cx, |state, cx| {
+        if let Some(session) = state.session_mut(&session_key) {
+            session.data.aggregation.error = Some(message.clone());
+            session.data.aggregation.results = None;
+            session.data.aggregation.last_run_time_ms = None;
+            session.data.aggregation.loading = false;
+        }
+        let event = AppEvent::AggregationFailed { session: session_key, error: message };
+        state.update_status_from_event(&event);
+        cx.emit(event);
+        cx.notify();
+    });
 }
 
 fn pipeline_has_write_stage(stages: &[PipelineStage], selected_stage: Option<usize>) -> bool {

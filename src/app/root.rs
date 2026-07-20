@@ -2,12 +2,16 @@ use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::tooltip::Tooltip;
+use uuid::Uuid;
 
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
-use crate::components::{ConnectionManager, ContentArea, StatusBar, open_confirm_dialog};
+use crate::components::{
+    ConnectionManager, ContentArea, StatusBar, open_confirm_dialog, request_app_quit,
+    request_disconnect_connection, request_remove_connection,
+};
 use crate::helpers::keystore::KeyStore;
-use crate::helpers::validate::{REDACTED_PASSWORD, extract_uri_password, inject_uri_password};
+use crate::helpers::validate::UriSecrets;
 use crate::keyboard::{
     CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
     DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
@@ -15,6 +19,9 @@ use crate::keyboard::{
     OpenSettings, PrevTab, QuitApp, RefreshView, ToggleAiPanel,
 };
 use crate::state::app_state::updater::UpdateStatus;
+use crate::state::app_state::{
+    ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
+};
 use crate::state::{AppCommands, AppState, CollectionSubview, View};
 use crate::theme::{borders, islands, spacing};
 use crate::views::AiView;
@@ -46,112 +53,255 @@ pub struct AppRoot {
     _subscriptions: Vec<Subscription>,
 }
 
+enum ConnectionSecretRead {
+    Bundle(Task<anyhow::Result<Option<String>>>),
+    Legacy(Vec<(&'static str, Task<anyhow::Result<Option<String>>>)>),
+}
+
+fn merge_legacy_secret(
+    secrets: &mut ConnectionSecrets,
+    kind: &str,
+    value: String,
+) -> anyhow::Result<()> {
+    match kind {
+        "uri" => secrets.uri.password = Some(value),
+        "uri-query" => {
+            let query: UriSecrets = serde_json::from_str(&value)?;
+            secrets.uri.tls_certificate_key_file_password = query.tls_certificate_key_file_password;
+            secrets.uri.proxy_password = query.proxy_password;
+            secrets.uri.aws_session_token = query.aws_session_token;
+        }
+        "ssh" => secrets.ssh_password = Some(value),
+        "ssh-passphrase" => secrets.ssh_identity_passphrase = Some(value),
+        "proxy" => secrets.proxy_password = Some(value),
+        _ => {}
+    }
+    Ok(())
+}
+
 impl AppRoot {
+    fn hydrate_connection_secrets(state: Entity<AppState>, cx: &mut App) {
+        if !state.read(cx).connection_secrets_ready() {
+            return;
+        }
+        let legacy_dev = match KeyStore::read_legacy_dev_credentials() {
+            Ok(credentials) => credentials.unwrap_or_default(),
+            Err(error) => {
+                state.update(cx, |state, cx| {
+                    state.finish_connection_secret_hydration(Err(error), cx);
+                });
+                return;
+            }
+        };
+        let provider = state.read(cx).settings.ai.provider.keystore_id().to_string();
+        let api_read = KeyStore::read(cx, &provider);
+        let legacy_api_reads: Vec<_> = legacy_dev
+            .iter()
+            .filter(|(key, _)| !key.starts_with("conn."))
+            .map(|(key, value)| (key.clone(), value.clone(), KeyStore::read(cx, key)))
+            .collect();
+        let mut reads = Vec::new();
+        for connection in state.read(cx).connections.iter().cloned() {
+            let source = if let Some(secret_id) = connection.secret_id {
+                ConnectionSecretRead::Bundle(KeyStore::read_conn(
+                    cx,
+                    connection.id,
+                    &connection_secret_bundle_key(secret_id),
+                ))
+            } else {
+                ConnectionSecretRead::Legacy(
+                    LEGACY_CONNECTION_SECRET_KEYS
+                        .iter()
+                        .map(|key| (*key, KeyStore::read_conn(cx, connection.id, key)))
+                        .collect(),
+                )
+            };
+            reads.push((connection, source));
+        }
+        state.update(cx, |state, _| state.begin_connection_secret_migration());
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let result: anyhow::Result<_> = async {
+                let mut hydrated = Vec::with_capacity(reads.len());
+                let mut migrated_ids = Vec::new();
+                for (mut connection, source) in reads {
+                    let secrets = match source {
+                        ConnectionSecretRead::Bundle(task) => {
+                            let payload = task.await?.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Credential bundle is missing for connection {}",
+                                    connection.name
+                                )
+                            })?;
+                            serde_json::from_str::<ConnectionSecrets>(&payload)?
+                        }
+                        ConnectionSecretRead::Legacy(tasks) => {
+                            let mut secrets = ConnectionSecrets::from_connection(&connection);
+                            for (kind, task) in tasks {
+                                match task.await? {
+                                    Some(value) => {
+                                        merge_legacy_secret(&mut secrets, kind, value)?;
+                                    }
+                                    None => {
+                                        if let Some(value) = legacy_dev
+                                            .get(&format!("conn.{}.{kind}", connection.id))
+                                        {
+                                            merge_legacy_secret(&mut secrets, kind, value.clone())?;
+                                        }
+                                    }
+                                }
+                            }
+                            connection.secret_id = Some(Uuid::new_v4());
+                            migrated_ids.push(connection.id);
+                            secrets
+                        }
+                    };
+                    secrets.apply_to(&mut connection);
+                    hydrated.push(connection);
+                }
+
+                let stored_api_key = api_read.await?;
+                let api_key = stored_api_key.clone().or_else(|| legacy_dev.get(&provider).cloned());
+                let mut legacy_api_writes = Vec::new();
+                for (legacy_provider, value, read) in legacy_api_reads {
+                    if read.await?.is_none() {
+                        legacy_api_writes.push((legacy_provider, value));
+                    }
+                }
+                let mut bundle_payloads = Vec::new();
+                for connection in &hydrated {
+                    if migrated_ids.contains(&connection.id) {
+                        let secret_id = connection.secret_id.expect("migration assigned secret id");
+                        bundle_payloads.push((
+                            connection.id,
+                            connection_secret_bundle_key(secret_id),
+                            serde_json::to_string(&ConnectionSecrets::from_connection(connection))?,
+                        ));
+                    }
+                }
+                let writes = cx.update(|cx| {
+                    let mut writes: Vec<Task<anyhow::Result<()>>> = bundle_payloads
+                        .iter()
+                        .map(|(id, key, payload)| KeyStore::write_conn(cx, *id, key, payload))
+                        .collect();
+                    for (legacy_provider, api_key) in &legacy_api_writes {
+                        writes.push(KeyStore::write(cx, legacy_provider, api_key));
+                    }
+                    writes
+                })?;
+                let mut write_failure = None;
+                for write in writes {
+                    if let Err(error) = write.await
+                        && write_failure.is_none()
+                    {
+                        write_failure = Some(error);
+                    }
+                }
+                if let Some(error) = write_failure {
+                    let cleanups = cx.update(|cx| {
+                        bundle_payloads
+                            .iter()
+                            .map(|(id, key, _)| KeyStore::delete_conn(cx, *id, key))
+                            .collect::<Vec<_>>()
+                    })?;
+                    for cleanup in cleanups {
+                        let _ = cleanup.await;
+                    }
+                    return Err(error);
+                }
+                let candidate_bundles = bundle_payloads
+                    .iter()
+                    .map(|(id, key, _)| (*id, key.clone()))
+                    .collect::<Vec<_>>();
+                Ok((hydrated, migrated_ids, candidate_bundles, api_key, !legacy_dev.is_empty()))
+            }
+            .await;
+
+            let _ = cx.update(|cx| match result {
+                Ok((hydrated, migrated_ids, candidate_bundles, api_key, had_legacy_dev)) => {
+                    let completed = state.update(cx, |state, cx| {
+                        state.complete_connection_secret_startup(hydrated, cx)
+                    });
+                    if !completed {
+                        let cleanups: Vec<_> = candidate_bundles
+                            .into_iter()
+                            .map(|(id, key)| KeyStore::delete_conn(cx, id, &key))
+                            .collect();
+                        let state_for_cleanup = state.clone();
+                        cx.spawn(async move |cx: &mut AsyncApp| {
+                            let mut first_error = None;
+                            for cleanup in cleanups {
+                                if let Err(error) = cleanup.await
+                                    && first_error.is_none()
+                                {
+                                    first_error = Some(error);
+                                }
+                            }
+                            if let Some(error) = first_error {
+                                let _ = cx.update(|cx| {
+                                    state_for_cleanup.update(cx, |state, cx| {
+                                        state.report_connection_secret_error(error, cx);
+                                    });
+                                });
+                            }
+                        })
+                        .detach();
+                        return;
+                    }
+                    if let Some(api_key) = api_key {
+                        state.update(cx, |state, _| {
+                            if state.settings.ai.api_key.is_empty() {
+                                state.settings.ai.api_key = api_key;
+                            }
+                        });
+                    }
+                    let mut cleanups = Vec::new();
+                    for id in migrated_ids {
+                        for key in LEGACY_CONNECTION_SECRET_KEYS {
+                            cleanups.push(KeyStore::delete_conn(cx, id, key));
+                        }
+                    }
+                    let state_for_cleanup = state.clone();
+                    cx.spawn(async move |cx: &mut AsyncApp| {
+                        let mut cleanup_error = None;
+                        for cleanup in cleanups {
+                            if let Err(error) = cleanup.await
+                                && cleanup_error.is_none()
+                            {
+                                cleanup_error = Some(error);
+                            }
+                        }
+                        if had_legacy_dev
+                            && let Err(error) = KeyStore::delete_legacy_dev_credentials()
+                            && cleanup_error.is_none()
+                        {
+                            cleanup_error = Some(error);
+                        }
+                        if let Some(error) = cleanup_error {
+                            let _ = cx.update(|cx| {
+                                state_for_cleanup.update(cx, |state, cx| {
+                                    state.report_connection_secret_error(error, cx);
+                                });
+                            });
+                        }
+                    })
+                    .detach();
+                }
+                Err(error) => {
+                    state.update(cx, |state, cx| {
+                        state.finish_connection_secret_hydration(Err(error), cx);
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Create the app state entity
         let state = cx.new(|_| AppState::new());
 
-        // Hydrate API key from keychain at startup
-        {
-            let provider = state.read(cx).settings.ai.provider.keystore_id();
-            let task = KeyStore::read(cx, provider);
-            let state_clone = state.clone();
-            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                if let Ok(Some(key)) = task.await {
-                    let _ = cx.update(|cx| {
-                        state_clone.update(cx, |s, _| {
-                            if s.settings.ai.api_key.is_empty() {
-                                s.settings.ai.api_key = key;
-                            }
-                        });
-                    });
-                }
-            })
-            .detach();
-        }
-
-        // Hydrate connection secrets from keychain (+ migrate legacy plaintext)
-        {
-            use crate::state::app_state::write_conn_secrets;
-
-            let conns: Vec<_> = state
-                .read(cx)
-                .connections
-                .iter()
-                .map(|c| (c.id, c.uri.clone(), c.ssh.clone(), c.proxy.clone()))
-                .collect();
-
-            // Check for legacy plaintext passwords still on disk
-            let has_legacy = conns.iter().any(|(_, uri, ssh, proxy)| {
-                extract_uri_password(uri).is_some_and(|p| p != REDACTED_PASSWORD)
-                    || ssh.as_ref().and_then(|s| s.password.as_ref()).is_some()
-                    || ssh.as_ref().and_then(|s| s.identity_passphrase.as_ref()).is_some()
-                    || proxy.as_ref().and_then(|p| p.password.as_ref()).is_some()
-            });
-
-            if has_legacy {
-                for conn in state.read(cx).connections.iter() {
-                    write_conn_secrets(cx, conn);
-                }
-                state.update(cx, |s, _| {
-                    s.save_connections();
-                });
-            }
-
-            // Hydrate: read secrets from keychain into in-memory state
-            let mut tasks = Vec::new();
-            for (id, _, _, _) in &conns {
-                for key in &["uri", "ssh", "ssh-passphrase", "proxy"] {
-                    tasks.push((*id, *key, KeyStore::read_conn(cx, *id, key)));
-                }
-            }
-
-            let state = state.clone();
-            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let mut secrets: Vec<(uuid::Uuid, &str, String)> = Vec::new();
-                for (id, kind, task) in tasks {
-                    if let Ok(Some(secret)) = task.await {
-                        secrets.push((id, kind, secret));
-                    }
-                }
-                if secrets.is_empty() {
-                    return;
-                }
-                let _ = cx.update(|cx| {
-                    state.update(cx, |s, _| {
-                        for conn in &mut s.connections {
-                            for (id, kind, secret) in &secrets {
-                                if conn.id != *id {
-                                    continue;
-                                }
-                                match *kind {
-                                    "uri" => {
-                                        conn.uri = inject_uri_password(&conn.uri, Some(secret));
-                                    }
-                                    "ssh" => {
-                                        if let Some(ssh) = &mut conn.ssh {
-                                            ssh.password = Some(secret.clone());
-                                        }
-                                    }
-                                    "ssh-passphrase" => {
-                                        if let Some(ssh) = &mut conn.ssh {
-                                            ssh.identity_passphrase = Some(secret.clone());
-                                        }
-                                    }
-                                    "proxy" => {
-                                        if let Some(proxy) = &mut conn.proxy {
-                                            proxy.password = Some(secret.clone());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    });
-                });
-            })
-            .detach();
-        }
+        Self::hydrate_connection_secrets(state.clone(), cx);
 
         // Create sidebar with state reference
         let sidebar = cx.new(|cx| Sidebar::new(state.clone(), window, cx));
@@ -187,9 +337,13 @@ impl AppRoot {
                 .unwrap_or(4 * 60 * 60);
             async move |_this: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
                 gpui::Timer::after(std::time::Duration::from_secs(startup_delay)).await;
-                let _ = cx.update(|cx| {
-                    AppCommands::check_for_updates(state.clone(), cx);
-                });
+                let should_check =
+                    cx.update(|cx| state.read(cx).settings.auto_update).unwrap_or(false);
+                if should_check {
+                    let _ = cx.update(|cx| {
+                        AppCommands::check_for_updates(state.clone(), cx);
+                    });
+                }
                 // Periodic re-check
                 loop {
                     gpui::Timer::after(std::time::Duration::from_secs(recheck_secs)).await;
@@ -248,7 +402,7 @@ impl AppRoot {
                 && !ks.modifiers.alt
                 && !ks.modifiers.shift;
             if is_close && event.action.is_none() {
-                this.handle_close_tab(cx);
+                this.handle_close_tab(window, cx);
                 window.focus(&this.focus_handle);
             }
         });
@@ -278,8 +432,13 @@ impl AppRoot {
 
     pub fn flush_workspace_on_shutdown(&mut self, cx: &mut App) {
         self.state.update(cx, |state, _cx| {
+            state.update_workspace_from_state();
             state.flush_workspace_now();
         });
+    }
+
+    pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        request_app_quit(self.state.clone(), window, cx);
     }
 
     pub fn close_all_editor_windows(&self, cx: &mut App) {
@@ -362,7 +521,7 @@ impl Render for AppRoot {
             .font_family(crate::theme::fonts::ui())
             .line_height(crate::theme::fonts::ui_line_height())
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.handle_close_tab(cx);
+                this.handle_close_tab(window, cx);
                 window.focus(&this.focus_handle);
             }))
             .on_action(cx.listener(|this, _: &NextTab, _window, cx| {
@@ -387,8 +546,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
                 this.handle_create_index(window, cx);
             }))
-            .on_action(cx.listener(|_this, _: &QuitApp, _window, cx| {
-                cx.quit();
+            .on_action(cx.listener(|this, _: &QuitApp, window, cx| {
+                this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DeleteDatabase, window, cx| {
                 let Some(database_key) = this.state.read(cx).current_database_key() else {
@@ -401,10 +560,12 @@ impl Render for AppRoot {
                     let database = database_key.database.clone();
                     let connection_id = database_key.connection_id;
                     move |_window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.select_connection(Some(connection_id), cx);
-                        });
-                        AppCommands::drop_database(state.clone(), database.clone(), cx);
+                        AppCommands::drop_database(
+                            state.clone(),
+                            connection_id,
+                            database.clone(),
+                            cx,
+                        );
                     }
                 });
             }))
@@ -425,18 +586,16 @@ impl Render for AppRoot {
                         true,
                         {
                             let state = this.state.clone();
-                            move |_window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.remove_connection(connection_id, cx);
-                                });
+                            move |window, cx| {
+                                request_remove_connection(state.clone(), connection_id, window, cx);
                             }
                         },
                     );
                 }
             }))
-            .on_action(cx.listener(|this, _: &DisconnectConnection, _window, cx| {
+            .on_action(cx.listener(|this, _: &DisconnectConnection, window, cx| {
                 if let Some(connection_id) = this.state.read(cx).selected_connection_id() {
-                    AppCommands::disconnect(this.state.clone(), connection_id, cx);
+                    request_disconnect_connection(this.state.clone(), connection_id, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &EditConnection, window, cx| {
@@ -480,17 +639,19 @@ impl Render for AppRoot {
                     state.open_settings_tab(cx);
                 });
             }))
-            .on_action(cx.listener(|this, _: &ToggleAiPanel, _window, cx| {
-                this.state.update(cx, |state, cx| {
-                    state.toggle_ai_panel(cx);
-                });
+            .on_action(cx.listener(|this, _: &ToggleAiPanel, window, cx| {
+                let opened = this.state.update(cx, |state, cx| state.toggle_ai_panel(cx));
+                if opened {
+                    this.ai_view.update(cx, |view, cx| view.focus_input(window, cx));
+                }
             }))
             .on_action(cx.listener(|this, _: &OpenForge, _window, cx| {
                 this.state.update(cx, |state, cx| {
                     let Some(key) = state.current_database_key() else {
                         return;
                     };
-                    state.open_forge_tab(key.connection_id, key.database, None, cx);
+                    let collection = state.selected_collection_name();
+                    state.open_forge_tab(key.connection_id, key.database, collection, cx);
                 });
             }))
             .on_action(cx.listener(|this, _: &FocusSidebar, window, cx| {

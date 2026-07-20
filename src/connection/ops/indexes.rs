@@ -5,7 +5,35 @@ use mongodb::IndexModel;
 use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
-use crate::error::Result;
+use crate::error::{Error, Result};
+
+pub(crate) fn index_model_to_create_document(index: &IndexModel) -> Result<Document> {
+    let mut document = mongodb::bson::to_document(index)
+        .map_err(|error| Error::Parse(format!("Invalid index metadata: {error}")))?;
+    // Returned by listIndexes for clustered indexes, but createIndexes rejects it.
+    document.remove("clustered");
+    Ok(document)
+}
+
+fn validate_index_document(index: &Document) -> Result<()> {
+    let keys = index
+        .get_document("key")
+        .map_err(|_| Error::Parse("Index specification requires a key document".to_string()))?;
+    if keys.is_empty() {
+        return Err(Error::Parse("Index key document cannot be empty".to_string()));
+    }
+    if let Ok(name) = index.get_str("name")
+        && name.trim().is_empty()
+    {
+        return Err(Error::Parse("Index name cannot be empty".to_string()));
+    }
+    for field in ["partialFilterExpression", "collation", "wildcardProjection", "weights"] {
+        if index.contains_key(field) && index.get_document(field).is_err() {
+            return Err(Error::Parse(format!("Index option {field} must be a document")));
+        }
+    }
+    Ok(())
+}
 
 impl ConnectionManager {
     /// List indexes for a collection (runs in Tokio runtime)
@@ -67,6 +95,90 @@ impl ConnectionManager {
         })
     }
 
+    /// Safely replace an index, retaining or restoring a working index on failure.
+    pub fn replace_index(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        old_name: &str,
+        replacement: Document,
+    ) -> Result<()> {
+        validate_index_document(&replacement)?;
+        let new_name = replacement
+            .get_str("name")
+            .map_err(|_| Error::Parse("Replacement index requires a name".to_string()))?
+            .to_string();
+
+        let indexes = self.list_indexes(client, database, collection)?;
+        let old_model = indexes
+            .iter()
+            .find(|index| {
+                index.options.as_ref().and_then(|options| options.name.as_deref()) == Some(old_name)
+            })
+            .ok_or_else(|| Error::Parse(format!("Index {old_name} no longer exists")))?;
+        let old_document = index_model_to_create_document(old_model)?;
+        let mut comparable_old = old_document.clone();
+        let mut comparable_replacement = replacement.clone();
+        comparable_old.remove("v");
+        comparable_replacement.remove("v");
+        if comparable_old == comparable_replacement {
+            return Ok(());
+        }
+
+        if new_name != old_name {
+            self.create_index(client, database, collection, replacement)?;
+            if let Err(error) = self.drop_index(client, database, collection, old_name) {
+                let cleanup = self.drop_index(client, database, collection, &new_name);
+                return Err(Error::Parse(match cleanup {
+                    Ok(()) => format!(
+                        "Created replacement index but could not drop {old_name}; the replacement was removed: {error}"
+                    ),
+                    Err(cleanup_error) => format!(
+                        "Created replacement index but could not drop {old_name}, and cleanup of {new_name} also failed: {error}; cleanup: {cleanup_error}"
+                    ),
+                }));
+            }
+            return Ok(());
+        }
+
+        let temporary_name = format!("__openmango_validate_{}", uuid::Uuid::new_v4().simple());
+        let mut temporary = replacement.clone();
+        temporary.insert("name", temporary_name.clone());
+
+        // Validate keys, options, and unique constraints while the original remains available.
+        // If MongoDB disallows the parallel build, fail closed and retain the original.
+        self.create_index(client, database, collection, temporary)?;
+        if let Err(error) = self.drop_index(client, database, collection, old_name) {
+            let _ = self.drop_index(client, database, collection, &temporary_name);
+            return Err(error);
+        }
+        if let Err(error) = self.drop_index(client, database, collection, &temporary_name) {
+            let rollback = self.create_index(client, database, collection, old_document.clone());
+            return Err(Error::Parse(match rollback {
+                Ok(()) => format!(
+                    "Replacement validation succeeded but temporary cleanup failed; {old_name} was restored: {error}"
+                ),
+                Err(rollback_error) => format!(
+                    "Replacement validation succeeded but temporary cleanup failed, and restoring {old_name} also failed: {error}; restore: {rollback_error}"
+                ),
+            }));
+        }
+
+        if let Err(error) = self.create_index(client, database, collection, replacement) {
+            let rollback = self.create_index(client, database, collection, old_document);
+            return Err(Error::Parse(match rollback {
+                Ok(()) => format!(
+                    "Replacement index creation failed; the original {old_name} index was restored: {error}"
+                ),
+                Err(rollback_error) => format!(
+                    "Replacement index creation failed and restoring {old_name} also failed: {error}; restore: {rollback_error}"
+                ),
+            }));
+        }
+        Ok(())
+    }
+
     /// Drop an index by name in a collection (runs in Tokio runtime)
     pub fn drop_index(
         &self,
@@ -85,5 +197,56 @@ impl ConnectionManager {
             coll.drop_index(name).await?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copied_index_document_preserves_supported_metadata() {
+        let source = doc! {
+            "key": { "$**": 1 },
+            "name": "searchable",
+            "unique": false,
+            "sparse": true,
+            "hidden": true,
+            "partialFilterExpression": { "active": true },
+            "collation": { "locale": "en", "strength": 2 },
+            "wildcardProjection": { "secret": 0 },
+            "weights": { "title": 5 },
+            "default_language": "english",
+            "language_override": "language",
+            "storageEngine": { "wiredTiger": { "configString": "block_compressor=zstd" } },
+        };
+        let model: IndexModel = mongodb::bson::from_document(source.clone()).unwrap();
+
+        let copied = index_model_to_create_document(&model).unwrap();
+
+        for field in [
+            "partialFilterExpression",
+            "collation",
+            "hidden",
+            "wildcardProjection",
+            "weights",
+            "default_language",
+            "language_override",
+            "storageEngine",
+        ] {
+            assert_eq!(copied.get(field), source.get(field), "lost option {field}");
+        }
+    }
+
+    #[test]
+    fn replacement_validation_rejects_invalid_shapes_before_server_work() {
+        assert!(validate_index_document(&doc! { "name": "missing_key" }).is_err());
+        assert!(validate_index_document(&doc! { "key": {}, "name": "empty" }).is_err());
+        assert!(
+            validate_index_document(
+                &doc! { "key": { "value": 1 }, "partialFilterExpression": "invalid" }
+            )
+            .is_err()
+        );
     }
 }

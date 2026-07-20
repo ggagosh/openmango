@@ -228,23 +228,16 @@ impl AppCommands {
         let manager = state.read(cx).connection_manager();
 
         let new_name = index_doc.get_str("name").ok().map(|value| value.to_string());
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            let old_name = old_name.clone();
-            let new_name = new_name.clone();
-            let index_doc = index_doc.clone();
-            async move {
-                if new_name.as_deref() == Some(old_name.as_str()) {
-                    manager.drop_index(&client, &database, &collection, &old_name)?;
-                    manager.create_index(&client, &database, &collection, index_doc)?;
-                } else {
-                    manager.create_index(&client, &database, &collection, index_doc)?;
-                    manager.drop_index(&client, &database, &collection, &old_name)?;
+        let task =
+            cx.background_spawn({
+                let database = database.clone();
+                let collection = collection.clone();
+                let old_name = old_name.clone();
+                let index_doc = index_doc.clone();
+                async move {
+                    manager.replace_index(&client, &database, &collection, &old_name, index_doc)
                 }
-                Ok::<(), crate::error::Error>(())
-            }
-        });
+            });
 
         cx.spawn({
             let state = state.clone();

@@ -284,6 +284,11 @@ impl AiView {
         cx.notify();
     }
 
+    pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.ensure_input_state(window, cx);
+        input.update(cx, |state, cx| state.focus(window, cx));
+    }
+
     fn ensure_input_state(
         &mut self,
         window: &mut Window,
@@ -307,6 +312,9 @@ impl AiView {
                     match event {
                         InputEvent::Change => {
                             let text = entity.read(cx).value().to_string();
+                            state.update(cx, |state, _| {
+                                state.ai_chat.draft_input = text.clone();
+                            });
                             let cursor = entity.read(cx).cursor();
 
                             // If mention popup was visible and whitespace was just
@@ -459,7 +467,6 @@ impl AiView {
             system_prompt.len(),
             history.len()
         );
-        log::debug!("[ai-chat] system_prompt:\n{system_prompt}");
         trim_history_for_context(&mut history, system_prompt.len(), None);
 
         let tool_ctx = {
@@ -468,7 +475,13 @@ impl AiView {
                 let client = s.active_connection_client(id)?;
                 let db = s.selected_database_name()?;
                 let col = s.selected_collection_name();
-                Some(MongoContext { client, database: db, collection: col, event_tx: None })
+                Some(MongoContext {
+                    client,
+                    database: db,
+                    collection: col,
+                    read_only: s.connection_read_only(id),
+                    event_tx: None,
+                })
             })
         };
 

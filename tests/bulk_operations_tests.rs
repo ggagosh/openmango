@@ -5,6 +5,7 @@ mod common;
 use common::{MongoTestContainer, fixtures};
 use futures::TryStreamExt;
 use mongodb::bson::{Document, doc};
+use openmango::connection::ConnectionManager;
 
 // =============================================================================
 // Bulk Insert Tests
@@ -160,6 +161,266 @@ async fn test_update_many_by_filter() {
     let updated_count =
         collection.count_documents(doc! { "updated": true }).await.expect("Failed to count");
     assert_eq!(updated_count, 10);
+}
+
+/// Count the exact frozen filter through OpenMango's public operation seam.
+#[tokio::test]
+async fn test_count_documents_for_bulk_confirmation() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "bulk_confirmation_count");
+    collection
+        .insert_many(fixtures::generate_test_documents(20))
+        .await
+        .expect("Failed to seed collection");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let count = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().count_documents(
+            &client,
+            &database,
+            "bulk_confirmation_count",
+            doc! { "category": "even" },
+        )
+    })
+    .await
+    .expect("Count task panicked")
+    .expect("Count failed");
+
+    assert_eq!(count, 10);
+}
+
+/// Conditional saves must reject a stale server baseline instead of overwriting it.
+#[tokio::test]
+async fn test_replace_document_if_current_rejects_conflicts() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "conditional_replace");
+    let baseline = doc! { "_id": 1, "value": "baseline", "nested": { "ok": true } };
+    collection.insert_one(baseline.clone()).await.expect("Failed to seed collection");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let expected = baseline.clone();
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_document_if_current(
+            &client,
+            &database,
+            "conditional_replace",
+            &mongodb::bson::Bson::Int32(1),
+            &expected,
+            doc! { "_id": 1, "value": "first save", "nested": { "ok": true } },
+        )
+    })
+    .await
+    .expect("Replace task panicked")
+    .expect("Matching baseline should save");
+
+    collection
+        .update_one(doc! { "_id": 1 }, doc! { "$set": { "value": "server edit" } })
+        .await
+        .expect("Failed to simulate concurrent server edit");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let stale = doc! { "_id": 1, "value": "first save", "nested": { "ok": true } };
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_document_if_current(
+            &client,
+            &database,
+            "conditional_replace",
+            &mongodb::bson::Bson::Int32(1),
+            &stale,
+            doc! { "_id": 1, "value": "stale overwrite", "nested": { "ok": true } },
+        )
+    })
+    .await
+    .expect("Replace task panicked");
+
+    assert!(result.is_err(), "stale baseline must fail closed");
+    let current = collection
+        .find_one(doc! { "_id": 1 })
+        .await
+        .expect("Failed to read final document")
+        .expect("Document should still exist");
+    assert_eq!(current.get_str("value").ok(), Some("server edit"));
+}
+
+#[tokio::test]
+async fn test_csv_export_discovers_columns_after_first_thousand_documents() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "csv_all_columns");
+    let mut documents: Vec<Document> =
+        (0..1000).map(|index| doc! { "_id": index, "common": true }).collect();
+    documents.push(doc! { "_id": 1000, "common": true, "late_field": "preserved" });
+    collection.insert_many(documents).await.expect("Failed to seed collection");
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("all-columns.csv");
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let path = destination.clone();
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().export_collection_csv_with_query(
+            &client,
+            &database,
+            "csv_all_columns",
+            &path,
+            false,
+            openmango::connection::ExportQueryOptions::default(),
+            None,
+        )
+    })
+    .await
+    .expect("Export task panicked")
+    .expect("CSV export failed");
+
+    let mut reader = csv::Reader::from_path(destination).unwrap();
+    assert!(reader.headers().unwrap().iter().any(|header| header == "late_field"));
+}
+
+#[tokio::test]
+async fn test_cancelled_json_export_preserves_existing_destination() {
+    let mongo = MongoTestContainer::start().await;
+    mongo
+        .collection::<Document>("test_db", "atomic_cancel")
+        .insert_one(doc! { "_id": 1, "value": "new" })
+        .await
+        .expect("Failed to seed collection");
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("atomic.jsonl");
+    std::fs::write(&destination, "existing\n").unwrap();
+    let cancellation = openmango::connection::types::CancellationToken::new();
+    cancellation.cancel();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let path = destination.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().export_collection_json_with_options(
+            &client,
+            &database,
+            "atomic_cancel",
+            &path,
+            openmango::connection::JsonExportOptions {
+                cancellation: Some(cancellation),
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .expect("Export task panicked");
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read_to_string(destination).unwrap(), "existing\n");
+}
+
+#[tokio::test]
+async fn test_bulk_replace_preserves_ids_and_replaces_entire_documents() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "bulk_replace");
+    collection
+        .insert_many(vec![
+            doc! { "_id": 1, "old": "one", "group": "target" },
+            doc! { "_id": 2, "old": "two", "group": "target" },
+        ])
+        .await
+        .expect("Failed to seed collection");
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_documents_by_filter(
+            &client,
+            &database,
+            "bulk_replace",
+            doc! { "group": "target" },
+            doc! { "replacement": true },
+            openmango::connection::types::CancellationToken::new(),
+        )
+    })
+    .await
+    .expect("Replace task panicked")
+    .expect("Bulk replacement failed");
+
+    assert_eq!(result.matched_count, 2);
+    let documents: Vec<Document> = collection
+        .find(doc! {})
+        .sort(doc! { "_id": 1 })
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        documents,
+        vec![doc! { "_id": 1, "replacement": true }, doc! { "_id": 2, "replacement": true },]
+    );
+}
+
+#[tokio::test]
+async fn test_bulk_replace_reports_duplicate_key_partial_execution() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "bulk_replace_duplicate");
+    collection
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "slug": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .unwrap();
+    collection
+        .insert_many(vec![doc! { "_id": 1, "slug": "a" }, doc! { "_id": 2, "slug": "b" }])
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_documents_by_filter(
+            &client,
+            &database,
+            "bulk_replace_duplicate",
+            doc! {},
+            doc! { "slug": "same" },
+            openmango::connection::types::CancellationToken::new(),
+        )
+    })
+    .await
+    .expect("Replace task panicked")
+    .expect_err("Unique conflict should fail");
+
+    assert!(error.to_string().contains("after replacing 1 of 2"));
+    assert_eq!(collection.count_documents(doc! { "slug": "same" }).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn test_bulk_replace_honors_preexisting_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "bulk_replace_cancel");
+    collection.insert_one(doc! { "_id": 1, "value": "original" }).await.unwrap();
+    let cancellation = openmango::connection::types::CancellationToken::new();
+    cancellation.cancel();
+
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().replace_documents_by_filter(
+            &client,
+            &database,
+            "bulk_replace_cancel",
+            doc! {},
+            doc! { "value": "replacement" },
+            cancellation,
+        )
+    })
+    .await
+    .expect("Replace task panicked");
+
+    assert!(result.is_err());
+    let current = collection.find_one(doc! { "_id": 1 }).await.unwrap().unwrap();
+    assert_eq!(current.get_str("value").unwrap(), "original");
 }
 
 /// Test update with various operators.

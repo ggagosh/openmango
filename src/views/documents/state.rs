@@ -17,7 +17,7 @@ use crate::components::filter_builder::FilterBuilderPanel;
 use crate::helpers::auto_pair::AutoPairState;
 use crate::perf::log_tabs_duration;
 use crate::state::{
-    AppCommands, AppEvent, AppState, CollectionSubview, SessionDocument, SessionKey, StatusMessage,
+    AppCommands, AppEvent, AppState, CollectionSubview, SessionDocument, SessionKey,
 };
 
 use super::node_meta::NodeMeta;
@@ -91,122 +91,8 @@ pub struct CollectionView {
     pub(crate) _subscriptions: Vec<Subscription>,
 }
 
-fn handle_aggregation_shortcut(
-    view: &mut CollectionView,
-    session_key: &SessionKey,
-    key: &str,
-    modifiers: Modifiers,
-    body_focused: bool,
-    window: &mut Window,
-    cx: &mut Context<CollectionView>,
-) -> bool {
-    let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-    if !cmd_or_ctrl {
-        return false;
-    }
-
-    let (selected_stage, stage_count) = {
-        let state_ref = view.state.read(cx);
-        let Some(session) = state_ref.session(session_key) else {
-            return false;
-        };
-        (session.data.aggregation.selected_stage, session.data.aggregation.stages.len())
-    };
-
-    match key {
-        "enter" | "return" => {
-            AppCommands::run_aggregation(view.state.clone(), session_key.clone(), false, cx);
-            true
-        }
-        "f" if modifiers.shift => {
-            let Some(body_state) = view.aggregation_stage_body_state.clone() else {
-                return false;
-            };
-            if !body_focused {
-                return false;
-            }
-            let raw = body_state.read(cx).value().to_string();
-            match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(value) => {
-                    if let Ok(formatted) = serde_json::to_string_pretty(&value) {
-                        body_state.update(cx, |state, cx| {
-                            state.set_value(formatted, window, cx);
-                        });
-                        true
-                    } else {
-                        false
-                    }
-                }
-                Err(err) => {
-                    view.state.update(cx, |state, cx| {
-                        state.set_status_message(Some(StatusMessage::error(format!(
-                            "Invalid JSON: {err}",
-                        ))));
-                        cx.notify();
-                    });
-                    true
-                }
-            }
-        }
-        "k" if modifiers.shift => {
-            if !body_focused {
-                return false;
-            }
-            let Some(index) = selected_stage else {
-                return false;
-            };
-            if let Some(body_state) = view.aggregation_stage_body_state.clone() {
-                body_state.update(cx, |state, cx| {
-                    state.set_value("{}".to_string(), window, cx);
-                });
-            }
-            view.state.update(cx, |state, cx| {
-                state.set_pipeline_stage_body(session_key, index, "{}".to_string());
-                cx.notify();
-            });
-            true
-        }
-        "d" if !modifiers.shift => {
-            let Some(index) = selected_stage else {
-                return false;
-            };
-            view.state.update(cx, |state, cx| {
-                state.duplicate_pipeline_stage(session_key, index);
-                state.set_status_message(Some(StatusMessage::info("Stage duplicated")));
-                cx.notify();
-            });
-            true
-        }
-        "up" if modifiers.shift => {
-            let Some(index) = selected_stage else {
-                return false;
-            };
-            if index == 0 {
-                return false;
-            }
-            view.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(session_key, index, index - 1);
-                state.set_status_message(Some(StatusMessage::info("Stage moved up")));
-                cx.notify();
-            });
-            true
-        }
-        "down" if modifiers.shift => {
-            let Some(index) = selected_stage else {
-                return false;
-            };
-            if index + 1 >= stage_count {
-                return false;
-            }
-            view.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(session_key, index, index + 1);
-                state.set_status_message(Some(StatusMessage::info("Stage moved down")));
-                cx.notify();
-            });
-            true
-        }
-        _ => false,
-    }
+fn defer_aggregation_shortcut_to_keymap(command: bool, is_aggregation: bool) -> bool {
+    command && is_aggregation
 }
 
 impl CollectionView {
@@ -236,12 +122,6 @@ impl CollectionView {
             view.update(cx, |this, cx| {
                 let mut handled = false;
 
-                if handled {
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
-
                 let save_selected_document = |this: &mut CollectionView, cx: &mut Context<Self>| {
                     let Some(session_key) = this.view_model.current_session() else {
                         return false;
@@ -260,29 +140,14 @@ impl CollectionView {
                     AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
                     true
                 };
-                let aggregation_context =
-                    this.view_model.current_session().and_then(|session_key| {
-                        let subview = this.state.read(cx).session_subview(&session_key);
-                        (subview == Some(CollectionSubview::Aggregation)).then_some(session_key)
-                    });
-                let body_focused =
-                    this.aggregation_stage_body_state.as_ref().is_some_and(|body_state| {
-                        body_state.read(cx).focus_handle(cx).is_focused(window)
-                    });
+                let is_aggregation = this
+                    .view_model
+                    .current_session()
+                    .and_then(|session_key| this.state.read(cx).session_subview(&session_key))
+                    .is_some_and(|subview| subview == CollectionSubview::Aggregation);
 
-                if let Some(session_key) = aggregation_context.clone()
-                    && cmd_or_ctrl
-                    && handle_aggregation_shortcut(
-                        this,
-                        &session_key,
-                        key.as_str(),
-                        modifiers,
-                        body_focused,
-                        window,
-                        cx,
-                    )
-                {
-                    cx.stop_propagation();
+                if defer_aggregation_shortcut_to_keymap(cmd_or_ctrl, is_aggregation) {
+                    // Aggregation shortcuts are owned by the context-aware keymap.
                     return;
                 }
                 if is_escape {
@@ -293,26 +158,19 @@ impl CollectionView {
                     if this.view_model.inline_state().is_some()
                         || this.view_model.editing_node_id().is_some()
                     {
-                        this.view_model.clear_inline_edit();
+                        let state = this.state.clone();
+                        this.view_model.cancel_inline_edit(&state, cx);
                         window.focus(&this.documents_focus);
                         handled = true;
                     }
-                    if !handled {
-                        let is_aggregation = this
-                            .view_model
-                            .current_session()
-                            .and_then(|session_key| {
-                                this.state.read(cx).session_subview(&session_key)
-                            })
-                            .is_some_and(|subview| subview == CollectionSubview::Aggregation);
-                        if is_aggregation
-                            && let Some(body_state) = this.aggregation_stage_body_state.clone()
-                        {
-                            let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
-                            if focused {
-                                window.focus(&this.aggregation_focus);
-                                handled = true;
-                            }
+                    if !handled
+                        && is_aggregation
+                        && let Some(body_state) = this.aggregation_stage_body_state.clone()
+                    {
+                        let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
+                        if focused {
+                            window.focus(&this.aggregation_focus);
+                            handled = true;
                         }
                     }
                 } else if is_enter {
@@ -436,7 +294,7 @@ impl CollectionView {
                 this.input_session = None;
                 cx.notify();
             }
-            AppEvent::DocumentSaved { session, document } => {
+            AppEvent::DocumentSaved { session, document, .. } => {
                 if !this.view_model.is_current_session(session) {
                     return;
                 }
@@ -584,7 +442,7 @@ impl CollectionView {
         }
     }
 
-    fn persist_query_input_drafts(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn persist_query_input_drafts(&mut self, cx: &mut Context<Self>) {
         let Some(session_key) = self.input_session.clone() else {
             return;
         };
@@ -1155,5 +1013,17 @@ impl SearchMatcher {
         } else {
             text.to_lowercase().contains(&self.query_lower)
         }
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::defer_aggregation_shortcut_to_keymap;
+
+    #[test]
+    fn aggregation_command_shortcuts_are_not_globally_intercepted() {
+        assert!(defer_aggregation_shortcut_to_keymap(true, true));
+        assert!(!defer_aggregation_shortcut_to_keymap(true, false));
+        assert!(!defer_aggregation_shortcut_to_keymap(false, true));
     }
 }

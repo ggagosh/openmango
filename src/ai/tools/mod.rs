@@ -24,6 +24,7 @@ pub struct MongoContext {
     pub client: mongodb::Client,
     pub database: String,
     pub collection: Option<String>,
+    pub read_only: bool,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
 }
 
@@ -65,8 +66,7 @@ pub enum StreamEvent {
 
 /// Build all available MongoDB tools for the given context.
 pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
-    vec![
-        // Read tools
+    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
         Box::new(find::FindDocumentsTool::new(ctx.clone())),
         Box::new(aggregate::AggregateTool::new(ctx.clone())),
         Box::new(count::CountDocumentsTool::new(ctx.clone())),
@@ -75,15 +75,31 @@ pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
         Box::new(schema::CollectionSchemaTool::new(ctx.clone())),
         Box::new(indexes::ListIndexesTool::new(ctx.clone())),
         Box::new(explain::ExplainQueryTool::new(ctx.clone())),
-        // Write tools
-        Box::new(insert::InsertDocumentsTool::new(ctx.clone())),
-        Box::new(update::UpdateDocumentsTool::new(ctx.clone())),
-        Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
-        Box::new(create_index::CreateIndexTool::new(ctx.clone())),
-        Box::new(self::drop_index::DropIndexTool::new(ctx.clone())),
         Box::new(sample_values::SampleFieldValuesTool::new(ctx.clone())),
-        Box::new(generate_report::GenerateReportTool::new(ctx)),
-    ]
+        Box::new(generate_report::GenerateReportTool::new(ctx.clone())),
+    ];
+
+    if !ctx.read_only {
+        tools.extend([
+            Box::new(insert::InsertDocumentsTool::new(ctx.clone())) as Box<dyn ToolDyn>,
+            Box::new(update::UpdateDocumentsTool::new(ctx.clone())),
+            Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
+            Box::new(create_index::CreateIndexTool::new(ctx.clone())),
+            Box::new(self::drop_index::DropIndexTool::new(ctx)),
+        ]);
+    }
+
+    tools
+}
+
+pub fn ensure_writable(ctx: &MongoContext) -> Result<(), ToolError> {
+    if ctx.read_only {
+        Err(ToolError::Rejected(
+            "This connection is read-only; AI write operations are disabled.".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// Request user confirmation for a write operation via the event channel.
@@ -96,6 +112,7 @@ pub async fn require_confirmation(
     args_json: &str,
     preview: OperationPreview,
 ) -> Result<(), ToolError> {
+    ensure_writable(ctx)?;
     let classification = classify_tool_call(tool_name, args_json);
     match classification.tier {
         SafetyTier::AutoExecute => Ok(()),
@@ -119,8 +136,9 @@ pub async fn require_confirmation(
                     Err(_) => Err(ToolError::Rejected("Operation cancelled".into())),
                 }
             } else {
-                // No event channel (non-streaming path) — skip confirmation
-                Ok(())
+                Err(ToolError::Rejected(
+                    "Write confirmation is unavailable; operation cancelled.".to_string(),
+                ))
             }
         }
     }

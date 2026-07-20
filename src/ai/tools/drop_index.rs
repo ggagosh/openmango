@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, require_confirmation, resolve_collection};
+use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
 
 pub struct DropIndexTool(MongoContext);
 
@@ -51,6 +51,7 @@ impl Tool for DropIndexTool {
     }
 
     async fn call(&self, args: DropIndexArgs) -> Result<serde_json::Value, ToolError> {
+        ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
 
         // Block dropping the _id_ index

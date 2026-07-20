@@ -45,7 +45,7 @@ jobs:
         run: ./scripts/check_mongosh_sidecar.sh
 
       - name: Run unit tests
-        run: cargo test --bin openmango -- --test-threads=1
+        run: cargo test --lib -- --test-threads=1
 
   integration-tests:
     runs-on: ubuntu-latest

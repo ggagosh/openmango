@@ -3,9 +3,10 @@ use std::process::Command;
 
 use gpui::{App, AppContext as _, Entity};
 
-use crate::state::AppState;
+use crate::components::request_unsaved_action;
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::events::AppEvent;
+use crate::state::{AppState, UnsavedScope};
 
 use super::AppCommands;
 
@@ -20,22 +21,41 @@ const GITHUB_API: &str = "https://api.github.com/repos/ggagosh/openmango/release
 struct ReleaseCandidate {
     version: String,
     download_url: String,
+    checksum_url: String,
 }
 
 /// Find the arch-matching zip asset from a release JSON.
-fn find_asset_url(release: &serde_json::Value) -> Option<String> {
-    release["assets"].as_array()?.iter().find_map(|a| {
-        let name = a["name"].as_str()?;
-        if name.contains(ARCH_SUFFIX) && name.ends_with(".zip") {
-            a["browser_download_url"].as_str().map(String::from)
-        } else {
-            None
-        }
+fn find_release_candidate(
+    release: &serde_json::Value,
+    version: String,
+) -> Option<ReleaseCandidate> {
+    let assets = release["assets"].as_array()?;
+    let zip = assets.iter().find(|asset| {
+        asset["name"]
+            .as_str()
+            .is_some_and(|name| name.contains(ARCH_SUFFIX) && name.ends_with(".zip"))
+    })?;
+    let zip_name = zip["name"].as_str()?;
+    let checksum_name = format!("{zip_name}.sha256");
+    let checksum = assets.iter().find(|asset| asset["name"].as_str() == Some(&checksum_name))?;
+    Some(ReleaseCandidate {
+        version,
+        download_url: zip["browser_download_url"].as_str()?.to_string(),
+        checksum_url: checksum["browser_download_url"].as_str()?.to_string(),
     })
 }
 
 /// Extract the commit SHA from a nightly release body.
 /// Body format: "...**Commit:** abc123def..."
+fn parse_sha256_checksum(body: &str) -> Result<String, anyhow::Error> {
+    let checksum =
+        body.split_whitespace().next().ok_or_else(|| anyhow::anyhow!("Checksum asset is empty"))?;
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("Checksum asset does not contain a valid SHA-256 digest");
+    }
+    Ok(checksum.to_ascii_lowercase())
+}
+
 fn parse_nightly_sha(body: &str) -> Option<&str> {
     let marker = "**Commit:** ";
     let start = body.find(marker)? + marker.len();
@@ -78,42 +98,36 @@ impl AppCommands {
                 );
 
                 // --- Stable channel ---
-                let stable = match stable_resp {
-                    Ok(r) if r.status().is_success() => {
-                        let json: serde_json::Value = r.json().await?;
-                        let tag = json["tag_name"].as_str().unwrap_or_default();
-                        let version_str = tag.strip_prefix('v').unwrap_or(tag);
-                        let remote: semver::Version =
-                            version_str.parse().ok().unwrap_or(semver::Version::new(0, 0, 0));
-                        let local: semver::Version = current_version.parse()?;
-                        if remote > local {
-                            find_asset_url(&json).map(|url| ReleaseCandidate {
-                                version: version_str.to_string(),
-                                download_url: url,
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
+                let stable_response = stable_resp?.error_for_status()?;
+                let stable_json: serde_json::Value = stable_response.json().await?;
+                let tag = stable_json["tag_name"].as_str().unwrap_or_default();
+                let version_str = tag.strip_prefix('v').unwrap_or(tag);
+                let remote: semver::Version =
+                    version_str.parse().ok().unwrap_or(semver::Version::new(0, 0, 0));
+                let local: semver::Version = current_version.parse()?;
+                let stable = if remote > local {
+                    Some(find_release_candidate(&stable_json, version_str.to_string()).ok_or_else(
+                        || anyhow::anyhow!("Release is missing its SHA-256 checksum asset"),
+                    )?)
+                } else {
+                    None
                 };
 
                 // If there's a newer stable release, always prefer it
                 if let Some(stable) = stable {
                     log::info!("Update found: stable v{}", stable.version);
-                    return Ok::<Option<(String, String)>, anyhow::Error>(Some((
+                    return Ok::<Option<(String, String, String)>, anyhow::Error>(Some((
                         stable.version,
                         stable.download_url,
+                        stable.checksum_url,
                     )));
                 }
 
                 // --- Nightly channel ---
-                // Only check nightly if we have a build SHA
-                if !current_sha.is_empty()
-                    && let Ok(r) = nightly_resp
-                    && r.status().is_success()
-                {
-                    let json: serde_json::Value = r.json().await?;
+                // Only check nightly if we have a build SHA.
+                if !current_sha.is_empty() {
+                    let response = nightly_resp?.error_for_status()?;
+                    let json: serde_json::Value = response.json().await?;
                     let body = json["body"].as_str().unwrap_or_default();
                     if let Some(remote_sha) = parse_nightly_sha(body) {
                         log::info!(
@@ -121,12 +135,21 @@ impl AppCommands {
                             &current_sha[..7.min(current_sha.len())],
                             &remote_sha[..7.min(remote_sha.len())]
                         );
-                        if remote_sha != current_sha
-                            && let Some(url) = find_asset_url(&json)
-                        {
+                        if remote_sha != current_sha {
                             let short_sha = &remote_sha[..7.min(remote_sha.len())];
+                            let candidate =
+                                find_release_candidate(&json, format!("nightly ({short_sha})"))
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "Nightly release is missing its SHA-256 checksum asset"
+                                        )
+                                    })?;
                             log::info!("Update found: nightly ({short_sha})");
-                            return Ok(Some((format!("nightly ({})", short_sha), url)));
+                            return Ok(Some((
+                                candidate.version,
+                                candidate.download_url,
+                                candidate.checksum_url,
+                            )));
                         }
                     }
                 }
@@ -138,12 +161,15 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<Option<(String, String)>, anyhow::Error> = task.await;
+                let result: Result<Option<(String, String, String)>, anyhow::Error> = task.await;
                 let _ = cx.update(|cx| match result {
-                    Ok(Some((version, download_url))) => {
+                    Ok(Some((version, download_url, checksum_url))) => {
                         state.update(cx, |state, cx| {
-                            state.update_status =
-                                UpdateStatus::Available { version: version.clone(), download_url };
+                            state.update_status = UpdateStatus::Available {
+                                version: version.clone(),
+                                download_url,
+                                checksum_url,
+                            };
                             let event = AppEvent::UpdateAvailable { version };
                             state.update_status_from_event(&event);
                             cx.emit(event);
@@ -160,10 +186,14 @@ impl AppCommands {
                             cx.notify();
                         });
                     }
-                    Err(e) => {
-                        log::debug!("Update check failed: {e}");
+                    Err(error) => {
+                        log::warn!("Update check failed: {error}");
                         state.update(cx, |state, cx| {
-                            state.update_status = UpdateStatus::Idle;
+                            let message = error.to_string();
+                            state.update_status = UpdateStatus::Failed(message.clone());
+                            state.set_status_message(Some(crate::state::StatusMessage::error(
+                                format!("Update check failed: {message}"),
+                            )));
                             cx.notify();
                         });
                     }
@@ -177,11 +207,11 @@ impl AppCommands {
     pub fn download_update(state: Entity<AppState>, cx: &mut App) {
         use futures::StreamExt as _;
 
-        let (version, download_url) = {
+        let (version, download_url, checksum_url) = {
             let s = state.read(cx);
             match &s.update_status {
-                UpdateStatus::Available { version, download_url } => {
-                    (version.clone(), download_url.clone())
+                UpdateStatus::Available { version, download_url, checksum_url } => {
+                    (version.clone(), download_url.clone(), checksum_url.clone())
                 }
                 _ => return,
             }
@@ -196,6 +226,7 @@ impl AppCommands {
         let (progress_tx, mut progress_rx) = futures::channel::mpsc::unbounded::<u8>();
 
         let download_url_clone = download_url.clone();
+        let checksum_url_clone = checksum_url.clone();
         let task = cx.background_spawn({
             let version = version.clone();
             async move {
@@ -205,26 +236,39 @@ impl AppCommands {
                             .user_agent(format!("OpenMango/{}", env!("CARGO_PKG_VERSION")))
                             .build()?;
 
+                        let checksum_text = client
+                            .get(&checksum_url_clone)
+                            .send()
+                            .await?
+                            .error_for_status()?
+                            .text()
+                            .await?;
+                        let expected_checksum = parse_sha256_checksum(&checksum_text)?;
                         let resp =
                             client.get(&download_url_clone).send().await?.error_for_status()?;
                         let total = resp.content_length().unwrap_or(0);
 
-                        // Prepare cache dir
+                        // Download separately and promote only after checksum verification.
                         let cache_dir = dirs::cache_dir()
                             .unwrap_or_else(|| PathBuf::from("/tmp"))
                             .join("com.openmango.app");
                         std::fs::create_dir_all(&cache_dir)?;
                         let zip_path = cache_dir.join("OpenMango-update.zip");
+                        let partial_path = cache_dir.join(".OpenMango-update.download");
+                        let _ = std::fs::remove_file(&partial_path);
 
                         let mut stream = resp.bytes_stream();
-                        let mut file = std::fs::File::create(&zip_path)?;
+                        let mut file = std::fs::File::create(&partial_path)?;
+                        let mut hasher = sha2::Sha256::new();
                         let mut downloaded: u64 = 0;
                         let mut last_pct: u8 = 0;
 
+                        use sha2::Digest as _;
                         use std::io::Write;
                         while let Some(chunk) = stream.next().await {
                             let chunk = chunk?;
                             file.write_all(&chunk)?;
+                            hasher.update(&chunk);
                             downloaded += chunk.len() as u64;
                             let pct = match total {
                                 0 => {
@@ -243,6 +287,18 @@ impl AppCommands {
                                 let _ = progress_tx.unbounded_send(pct);
                             }
                         }
+                        file.sync_all()?;
+                        let actual_checksum = format!("{:x}", hasher.finalize());
+                        if actual_checksum != expected_checksum {
+                            drop(file);
+                            let _ = std::fs::remove_file(&partial_path);
+                            anyhow::bail!(
+                                "Update checksum mismatch (expected {expected_checksum}, got {actual_checksum})"
+                            );
+                        }
+                        drop(file);
+                        let _ = std::fs::remove_file(&zip_path);
+                        std::fs::rename(&partial_path, &zip_path)?;
 
                         Ok::<(PathBuf, String), anyhow::Error>((zip_path, version))
                     },
@@ -289,14 +345,18 @@ impl AppCommands {
                         let cache_dir = dirs::cache_dir()
                             .unwrap_or_else(|| PathBuf::from("/tmp"))
                             .join("com.openmango.app");
-                        let _ = std::fs::remove_file(cache_dir.join("OpenMango-update.zip"));
+                        let _ = std::fs::remove_file(cache_dir.join(".OpenMango-update.download"));
 
                         let version = version_for_err.clone();
                         let url = download_url.clone();
+                        let checksum_url = checksum_url.clone();
                         state.update(cx, |state, cx| {
-                            // Set back to Available so user can retry
-                            state.update_status =
-                                UpdateStatus::Available { version, download_url: url };
+                            // Set back to Available so user can retry.
+                            state.update_status = UpdateStatus::Available {
+                                version,
+                                download_url: url,
+                                checksum_url,
+                            };
                             state.set_status_message(Some(crate::state::StatusMessage::error(
                                 format!("Update failed: {e}"),
                             )));
@@ -352,9 +412,37 @@ impl AppCommands {
                 let result: Result<(), anyhow::Error> = task.await;
                 match result {
                     Ok(()) => {
-                        // Relaunch and quit
-                        let _ = Command::new("open").arg("-n").arg(&app_bundle).spawn();
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| {
+                            let Some(handle) = cx.windows().into_iter().next() else {
+                                return;
+                            };
+                            let state_for_quit = state.clone();
+                            let bundle = app_bundle.clone();
+                            let _ = handle.update(cx, |_root, window, cx| {
+                                request_unsaved_action(
+                                    state.clone(),
+                                    UnsavedScope::App,
+                                    window,
+                                    cx,
+                                    move |window, cx| {
+                                        state_for_quit.update(cx, |state, _| {
+                                            state.update_workspace_from_state();
+                                            state.flush_workspace_now();
+                                        });
+                                        let _ = Command::new("open").arg("-n").arg(&bundle).spawn();
+                                        let this_window = window.window_handle();
+                                        for handle in cx.windows() {
+                                            if handle != this_window {
+                                                let _ = handle.update(cx, |_, window, _cx| {
+                                                    window.remove_window();
+                                                });
+                                            }
+                                        }
+                                        cx.quit();
+                                    },
+                                );
+                            });
+                        });
                     }
                     Err(e) => {
                         log::error!("Install failed: {e}");
@@ -402,6 +490,7 @@ impl AppCommands {
             let _ = std::fs::remove_dir_all(&temp_dir);
             anyhow::bail!("No .app found in extracted update");
         };
+        verify_app_code_signature(&extracted_app)?;
 
         // If existing .app exists, back it up first
         if app_bundle.exists() {
@@ -421,6 +510,25 @@ impl AppCommands {
                 let _ = std::fs::remove_dir_all(&temp_dir);
                 anyhow::bail!("Failed to move extracted app into place");
             }
+            if let Err(error) = verify_app_code_signature(app_bundle) {
+                let _ = std::fs::remove_dir_all(app_bundle);
+                let restore = Command::new("mv").arg(&backup).arg(app_bundle).output();
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                match restore {
+                    Ok(output) if output.status.success() => {
+                        anyhow::bail!(
+                            "Installed app signature verification failed; the previous app was restored: {error}"
+                        )
+                    }
+                    Ok(output) => anyhow::bail!(
+                        "Installed app signature verification failed and restoration failed: {error}; {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                    Err(restore_error) => anyhow::bail!(
+                        "Installed app signature verification failed and restoration could not start: {error}; {restore_error}"
+                    ),
+                }
+            }
 
             let _ = std::fs::remove_dir_all(&backup);
         } else {
@@ -429,6 +537,11 @@ impl AppCommands {
             if !mv_new.status.success() {
                 let _ = std::fs::remove_dir_all(&temp_dir);
                 anyhow::bail!("Failed to move app to {}", app_bundle.display());
+            }
+            if let Err(error) = verify_app_code_signature(app_bundle) {
+                let _ = std::fs::remove_dir_all(app_bundle);
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                anyhow::bail!("Installed app signature verification failed: {error}");
             }
         }
 
@@ -440,9 +553,68 @@ impl AppCommands {
     }
 }
 
+fn verify_app_code_signature(app_bundle: &std::path::Path) -> Result<(), anyhow::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict", "--verbose=2"])
+            .arg(app_bundle)
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Code signature verification failed for {}: {}",
+                app_bundle.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_bundle;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_sha256_checksum_assets() {
+        let digest = "A".repeat(64);
+        assert_eq!(
+            parse_sha256_checksum(&format!("{digest}  OpenMango.zip\n")).unwrap(),
+            digest.to_ascii_lowercase()
+        );
+        assert!(parse_sha256_checksum("not-a-checksum").is_err());
+        assert!(parse_sha256_checksum(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn release_candidate_requires_matching_checksum_asset() {
+        let release = serde_json::json!({
+            "assets": [
+                {
+                    "name": format!("OpenMango-1.2.3-{ARCH_SUFFIX}.zip"),
+                    "browser_download_url": "https://example.test/update.zip"
+                },
+                {
+                    "name": format!("OpenMango-1.2.3-{ARCH_SUFFIX}.zip.sha256"),
+                    "browser_download_url": "https://example.test/update.zip.sha256"
+                }
+            ]
+        });
+        let candidate = find_release_candidate(&release, "1.2.3".to_string()).unwrap();
+        assert_eq!(candidate.checksum_url, "https://example.test/update.zip.sha256");
+
+        let missing_checksum = serde_json::json!({
+            "assets": [{
+                "name": format!("OpenMango-1.2.3-{ARCH_SUFFIX}.zip"),
+                "browser_download_url": "https://example.test/update.zip"
+            }]
+        });
+        assert!(find_release_candidate(&missing_checksum, "1.2.3".to_string()).is_none());
+    }
 
     #[test]
     fn parse_nightly_sha_from_body() {

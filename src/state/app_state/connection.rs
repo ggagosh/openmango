@@ -2,45 +2,84 @@
 
 use std::collections::HashMap;
 
-use gpui::{App, Context};
+use anyhow::Result;
+use gpui::{App, AppContext as _, Context, Task};
 use uuid::Uuid;
 
 use super::AppState;
 use crate::helpers::keystore::KeyStore;
-use crate::helpers::validate::{REDACTED_PASSWORD, extract_uri_password};
+use crate::helpers::validate::{
+    UriSecrets, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
+};
 use crate::models::TreeNodeId;
 use crate::models::{ActiveConnection, SavedConnection};
 use crate::state::ActiveTab;
+use crate::state::AppCommands;
 use crate::state::View;
 use crate::state::events::AppEvent;
 
-pub(crate) fn write_conn_secrets(cx: &App, conn: &SavedConnection) {
-    if let Some(pwd) = extract_uri_password(&conn.uri)
-        && pwd != REDACTED_PASSWORD
-    {
-        KeyStore::write_conn(cx, conn.id, "uri", &pwd).detach();
+pub(crate) const LEGACY_CONNECTION_SECRET_KEYS: &[&str] =
+    &["uri", "uri-query", "ssh", "ssh-passphrase", "proxy"];
+const SECRET_BUNDLE_PREFIX: &str = "bundle-v1-";
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ConnectionSecrets {
+    #[serde(default)]
+    pub uri: UriSecrets,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_identity_passphrase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_password: Option<String>,
+}
+
+impl ConnectionSecrets {
+    pub(crate) fn from_connection(connection: &SavedConnection) -> Self {
+        Self {
+            uri: extract_uri_secrets(&connection.uri),
+            ssh_password: connection.ssh.as_ref().and_then(|ssh| ssh.password.clone()),
+            ssh_identity_passphrase: connection
+                .ssh
+                .as_ref()
+                .and_then(|ssh| ssh.identity_passphrase.clone()),
+            proxy_password: connection.proxy.as_ref().and_then(|proxy| proxy.password.clone()),
+        }
     }
-    if let Some(pwd) = conn.ssh.as_ref().and_then(|s| s.password.as_deref())
-        && !pwd.is_empty()
-    {
-        KeyStore::write_conn(cx, conn.id, "ssh", pwd).detach();
-    }
-    if let Some(pp) = conn.ssh.as_ref().and_then(|s| s.identity_passphrase.as_deref())
-        && !pp.is_empty()
-    {
-        KeyStore::write_conn(cx, conn.id, "ssh-passphrase", pp).detach();
-    }
-    if let Some(pwd) = conn.proxy.as_ref().and_then(|p| p.password.as_deref())
-        && !pwd.is_empty()
-    {
-        KeyStore::write_conn(cx, conn.id, "proxy", pwd).detach();
+
+    pub(crate) fn apply_to(&self, connection: &mut SavedConnection) {
+        connection.uri = inject_uri_secrets(&strip_uri_secrets(&connection.uri), &self.uri);
+        if let Some(ssh) = &mut connection.ssh {
+            ssh.password.clone_from(&self.ssh_password);
+            ssh.identity_passphrase.clone_from(&self.ssh_identity_passphrase);
+        }
+        if let Some(proxy) = &mut connection.proxy {
+            proxy.password.clone_from(&self.proxy_password);
+        }
     }
 }
 
-fn delete_conn_secrets(cx: &App, id: Uuid) {
-    for key in &["uri", "ssh", "ssh-passphrase", "proxy"] {
-        KeyStore::delete_conn(cx, id, key).detach();
-    }
+pub(crate) fn connection_secret_bundle_key(secret_id: Uuid) -> String {
+    format!("{SECRET_BUNDLE_PREFIX}{secret_id}")
+}
+
+fn write_conn_secret_bundle(cx: &App, connection: &SavedConnection) -> Task<Result<()>> {
+    let Some(secret_id) = connection.secret_id else {
+        return cx.spawn(async move |_cx| Err(anyhow::anyhow!("missing connection secret id")));
+    };
+    let payload = match serde_json::to_string(&ConnectionSecrets::from_connection(connection)) {
+        Ok(payload) => payload,
+        Err(error) => return cx.spawn(async move |_cx| Err(error.into())),
+    };
+    KeyStore::write_conn(cx, connection.id, &connection_secret_bundle_key(secret_id), &payload)
+}
+
+fn delete_conn_secret_bundle(cx: &App, connection_id: Uuid, secret_id: Uuid) -> Task<Result<()>> {
+    KeyStore::delete_conn(cx, connection_id, &connection_secret_bundle_key(secret_id))
+}
+
+fn delete_legacy_conn_secrets(cx: &App, id: Uuid) -> Vec<Task<Result<()>>> {
+    LEGACY_CONNECTION_SECRET_KEYS.iter().map(|key| KeyStore::delete_conn(cx, id, key)).collect()
 }
 
 impl AppState {
@@ -58,6 +97,14 @@ impl AppState {
 
     pub fn connection_uri(&self, connection_id: Uuid) -> Option<String> {
         self.connection_by_id(connection_id).map(|conn| conn.uri.clone())
+    }
+
+    pub fn active_connection_tool_uri(&self, connection_id: Uuid) -> crate::error::Result<String> {
+        let active = self.active_connection_by_id(connection_id).ok_or_else(|| {
+            crate::error::Error::Parse("The connection is not active".to_string())
+        })?;
+        self.connection_manager
+            .effective_uri_for_active_connection(&active.config, &active.runtime_meta)
     }
 
     pub fn active_connections_snapshot(&self) -> HashMap<Uuid, ActiveConnection> {
@@ -233,6 +280,7 @@ impl AppState {
 
         self.tabs.dirty.retain(|key| key.connection_id != connection_id);
         self.sessions.remove_connection(connection_id);
+        self.invalid_inline_edits.retain(|session_key| session_key.connection_id != connection_id);
         self.db_sessions.remove_connection(connection_id);
         self.forge_schema.retain(|k, _| k.connection_id != connection_id);
         self.forge_schema_inflight.retain(|k| k.connection_id != connection_id);
@@ -245,17 +293,51 @@ impl AppState {
         }
     }
 
-    /// Add a new connection and persist to disk
-    pub fn add_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
-        write_conn_secrets(cx, &connection);
-        self.connections.push(connection);
-        self.save_connections();
-        cx.emit(AppEvent::ConnectionAdded);
+    pub fn connect_when_secrets_ready(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
+        if self.connection_secret_sync_pending {
+            self.connections_waiting_for_secret_sync.insert(connection_id);
+            return;
+        }
+        AppCommands::connect(cx.entity(), connection_id, cx);
     }
 
-    pub fn update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
-        write_conn_secrets(cx, &connection);
+    /// Add connections in memory immediately, but persist only after keychain success.
+    pub fn add_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
+        self.add_connections(vec![connection], cx);
+    }
 
+    pub fn add_connections(
+        &mut self,
+        mut connections: Vec<SavedConnection>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_changes_allowed(cx) || connections.is_empty() {
+            return;
+        }
+        let rollback = self.connections.clone();
+        for connection in &mut connections {
+            connection.secret_id = Some(Uuid::new_v4());
+        }
+        let count = connections.len();
+        self.connections.extend(connections);
+        for _ in 0..count {
+            cx.emit(AppEvent::ConnectionAdded);
+        }
+        cx.notify();
+        self.sync_connection_secrets(rollback, cx);
+    }
+
+    pub fn update_connection(&mut self, mut connection: SavedConnection, cx: &mut Context<Self>) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let rollback = self.connections.clone();
+        connection.secret_id = Some(Uuid::new_v4());
+        self.finish_update_connection(connection, cx);
+        self.sync_connection_secrets(rollback, cx);
+    }
+
+    fn finish_update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
         let mut updated = false;
         let mut uri_changed = false;
         for existing in &mut self.connections {
@@ -268,7 +350,9 @@ impl AppState {
         }
 
         if !updated {
-            self.add_connection(connection, cx);
+            self.connections.push(connection);
+            cx.emit(AppEvent::ConnectionAdded);
+            cx.notify();
             return;
         }
 
@@ -288,7 +372,6 @@ impl AppState {
             }
         }
 
-        self.save_connections();
         let event = AppEvent::ConnectionUpdated;
         self.update_status_from_event(&event);
         cx.emit(event);
@@ -296,13 +379,215 @@ impl AppState {
         cx.notify();
     }
 
-    pub fn remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
-        delete_conn_secrets(cx, connection_id);
+    fn sync_connection_secrets(&mut self, rollback: Vec<SavedConnection>, cx: &mut Context<Self>) {
+        self.connection_secret_sync_pending = true;
+        let tasks: Vec<_> = self
+            .connections
+            .iter()
+            .map(|connection| write_conn_secret_bundle(cx, connection))
+            .collect();
+        let stale_bundles: Vec<_> = rollback
+            .iter()
+            .filter_map(|old| {
+                let old_secret = old.secret_id?;
+                let current_secret = self
+                    .connections
+                    .iter()
+                    .find(|connection| connection.id == old.id)
+                    .and_then(|connection| connection.secret_id);
+                (current_secret != Some(old_secret)).then_some((old.id, old_secret))
+            })
+            .collect();
+        let candidate_bundles: Vec<_> = self
+            .connections
+            .iter()
+            .filter_map(|connection| {
+                let secret_id = connection.secret_id?;
+                let old_secret = rollback
+                    .iter()
+                    .find(|old| old.id == connection.id)
+                    .and_then(|old| old.secret_id);
+                (old_secret != Some(secret_id)).then_some((connection.id, secret_id))
+            })
+            .collect();
+        let state = cx.entity();
+        cx.spawn(async move |_weak, cx| {
+            let mut result = Ok(());
+            for task in tasks {
+                if let Err(error) = task.await
+                    && result.is_ok()
+                {
+                    result = Err(error);
+                }
+            }
+            let _ = cx.update(|cx| {
+                let connection_ids = state.update(cx, |state, cx| match result {
+                    Ok(()) => match state.config.save_connections(&state.connections) {
+                        Ok(()) => {
+                            state.connection_secret_sync_pending = false;
+                            state.cleanup_secret_bundles(stale_bundles, cx);
+                            std::mem::take(&mut state.connections_waiting_for_secret_sync)
+                                .into_iter()
+                                .filter(|connection_id| {
+                                    state
+                                        .connections
+                                        .iter()
+                                        .any(|connection| connection.id == *connection_id)
+                                })
+                                .collect::<Vec<_>>()
+                        }
+                        Err(error) => {
+                            state.connection_secret_sync_pending = false;
+                            state.connections_waiting_for_secret_sync.clear();
+                            state.restore_connections_after_secret_failure(
+                                rollback,
+                                &candidate_bundles,
+                                cx,
+                            );
+                            state.cleanup_secret_bundles(candidate_bundles, cx);
+                            state.report_secret_store_error(error, cx);
+                            Vec::new()
+                        }
+                    },
+                    Err(error) => {
+                        state.connection_secret_sync_pending = false;
+                        state.connections_waiting_for_secret_sync.clear();
+                        state.restore_connections_after_secret_failure(
+                            rollback,
+                            &candidate_bundles,
+                            cx,
+                        );
+                        state.cleanup_secret_bundles(candidate_bundles, cx);
+                        state.report_secret_store_error(error, cx);
+                        Vec::new()
+                    }
+                });
+                for connection_id in connection_ids {
+                    AppCommands::connect(state.clone(), connection_id, cx);
+                }
+            });
+        })
+        .detach();
+    }
 
+    fn restore_connections_after_secret_failure(
+        &mut self,
+        rollback: Vec<SavedConnection>,
+        candidate_bundles: &[(Uuid, Uuid)],
+        cx: &mut Context<Self>,
+    ) {
+        for (connection_id, _) in candidate_bundles {
+            if self.conn.active.remove(connection_id).is_some() {
+                self.connection_manager().disconnect(*connection_id);
+                self.reset_connection_runtime_state(*connection_id, cx);
+                cx.emit(AppEvent::Disconnected(*connection_id));
+            }
+        }
+        self.connections = rollback;
+        if self
+            .conn
+            .selected_connection
+            .is_some_and(|selected| !self.connections.iter().any(|conn| conn.id == selected))
+        {
+            self.conn.selected_connection = None;
+            self.current_view = View::Welcome;
+            cx.emit(AppEvent::ViewChanged);
+        }
+        cx.notify();
+    }
+
+    fn cleanup_secret_bundles(&mut self, bundles: Vec<(Uuid, Uuid)>, cx: &mut Context<Self>) {
+        if bundles.is_empty() {
+            return;
+        }
+        let tasks: Vec<_> = bundles
+            .into_iter()
+            .map(|(connection_id, secret_id)| {
+                delete_conn_secret_bundle(cx, connection_id, secret_id)
+            })
+            .collect();
+        let state = cx.entity();
+        cx.spawn(async move |_weak, cx| {
+            let mut first_error = None;
+            for task in tasks {
+                if let Err(error) = task.await
+                    && first_error.is_none()
+                {
+                    first_error = Some(error);
+                }
+            }
+            if let Some(error) = first_error {
+                let _ = cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.report_secret_store_error(error, cx);
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn report_secret_store_error(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
+        let message = format!("Could not store connection credentials: {error}");
+        log::error!("{message}");
+        self.set_status_message(Some(crate::state::StatusMessage::error(message)));
+        cx.notify();
+    }
+
+    pub(crate) fn report_connection_secret_error(
+        &mut self,
+        error: anyhow::Error,
+        cx: &mut Context<Self>,
+    ) {
+        self.report_secret_store_error(error, cx);
+    }
+
+    pub fn remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let Some(connection) =
+            self.connections.iter().find(|conn| conn.id == connection_id).cloned()
+        else {
+            return;
+        };
+        let remaining: Vec<_> =
+            self.connections.iter().filter(|conn| conn.id != connection_id).cloned().collect();
+        if let Err(error) = self.config.save_connections(&remaining) {
+            self.report_secret_store_error(error, cx);
+            return;
+        }
+        self.finish_remove_connection(connection_id, cx);
+
+        let mut tasks = delete_legacy_conn_secrets(cx, connection_id);
+        if let Some(secret_id) = connection.secret_id {
+            tasks.push(delete_conn_secret_bundle(cx, connection_id, secret_id));
+        }
+        let state = cx.entity();
+        cx.spawn(async move |_weak, cx| {
+            let mut first_error = None;
+            for task in tasks {
+                if let Err(error) = task.await
+                    && first_error.is_none()
+                {
+                    first_error = Some(error);
+                }
+            }
+            if let Some(error) = first_error {
+                let _ = cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.report_secret_store_error(error, cx);
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn finish_remove_connection(&mut self, connection_id: Uuid, cx: &mut Context<Self>) {
         let was_active = self.conn.active.contains_key(&connection_id);
 
         self.connections.retain(|conn| conn.id != connection_id);
-        self.save_connections();
 
         if self.workspace.last_connection_id == Some(connection_id) {
             self.workspace.last_connection_id = None;
@@ -336,12 +621,93 @@ impl AppState {
         cx.notify();
     }
 
-    /// Save connections to disk
-    pub(crate) fn save_connections(&self) {
-        if let Err(e) = self.config.save_connections(&self.connections) {
-            log::error!("Failed to save connections: {}", e);
+    fn connection_changes_allowed(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.connections_persistence_blocked && !self.connection_secret_sync_pending {
+            return true;
+        }
+        self.set_status_message(Some(crate::state::StatusMessage::error(
+            "Connection changes are blocked until credential storage or config recovery finishes.",
+        )));
+        cx.notify();
+        false
+    }
+
+    pub(crate) fn begin_connection_secret_migration(&mut self) {
+        self.connections_persistence_blocked = true;
+    }
+
+    pub(crate) fn complete_connection_secret_startup(
+        &mut self,
+        connections: Vec<SavedConnection>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.config.save_connections(&connections) {
+            Ok(()) => {
+                self.connections = connections;
+                self.connections_persistence_blocked = false;
+                cx.notify();
+                true
+            }
+            Err(error) => {
+                self.connections_persistence_blocked = true;
+                self.report_secret_store_error(error, cx);
+                false
+            }
         }
     }
 
+    pub(crate) fn finish_connection_secret_hydration(
+        &mut self,
+        result: Result<()>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(()) => self.connections_persistence_blocked = false,
+            Err(error) => {
+                self.connections_persistence_blocked = true;
+                self.report_secret_store_error(error, cx);
+            }
+        }
+    }
+
+    pub(crate) fn connection_secrets_ready(&self) -> bool {
+        !self.connections_persistence_blocked && !self.connection_secret_sync_pending
+    }
+
     // Disconnect functionality is not wired yet.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_bundle_round_trips_all_connection_credentials() {
+        let mut connection = SavedConnection::new(
+            "bundle".into(),
+            "mongodb://user:*****@host/db?tlsCertificateKeyFilePassword=tls&proxyPassword=uri-proxy&authMechanismProperties=AWS_SESSION_TOKEN%3Aaws".into(),
+        );
+        connection.secret_id = Some(Uuid::new_v4());
+        connection.ssh = Some(crate::models::SshConfig {
+            password: Some("ssh".into()),
+            identity_passphrase: Some("identity".into()),
+            ..crate::models::SshConfig::default()
+        });
+        connection.proxy = Some(crate::models::ProxyConfig {
+            password: Some("modeled-proxy".into()),
+            ..crate::models::ProxyConfig::default()
+        });
+
+        let bundle = ConnectionSecrets::from_connection(&connection);
+        let mut persisted = connection.with_secrets_stripped();
+        assert_eq!(persisted.uri, "mongodb://user@host/db");
+        assert!(persisted.ssh.as_ref().unwrap().password.is_none());
+        assert!(persisted.proxy.as_ref().unwrap().password.is_none());
+
+        bundle.apply_to(&mut persisted);
+        assert_eq!(persisted.uri, connection.uri);
+        assert_eq!(persisted.ssh, connection.ssh);
+        assert_eq!(persisted.proxy, connection.proxy);
+        assert_eq!(persisted.secret_id, connection.secret_id);
+    }
 }

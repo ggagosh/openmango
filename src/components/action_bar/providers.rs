@@ -1,5 +1,9 @@
-use gpui::SharedString;
+use gpui::{Action, SharedString, Window};
 
+use crate::keyboard::{
+    CreateCollection, CreateDatabase, OpenSettings, RefreshView, ShowAggregationSubview,
+    ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview, ToggleAiPanel,
+};
 use crate::state::AppState;
 use crate::state::TabKey;
 use crate::state::app_state::updater::UpdateStatus;
@@ -122,8 +126,14 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
     actions
 }
 
+fn registered_shortcut(window: &Window, action: &dyn Action) -> Option<SharedString> {
+    let binding = window.highest_precedence_binding_for_action(action)?;
+    let label = binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
+    (!label.is_empty()).then(|| SharedString::from(label))
+}
+
 /// Commands: create, delete, refresh, disconnect, etc.
-pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
+pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     let has_connection = state.has_active_connections();
     let has_selected = state.selected_connection_id().is_some();
     let is_connected = has_selected
@@ -141,7 +151,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("cmd:create-database"),
             label: SharedString::from("Create Database"),
             category: ActionCategory::Command,
-            shortcut: Some(SharedString::from("Cmd+Shift+N")),
+            shortcut: registered_shortcut(window, &CreateDatabase),
             available: is_connected,
             priority: 10,
             ..Default::default()
@@ -150,7 +160,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("cmd:create-collection"),
             label: SharedString::from("Create Collection"),
             category: ActionCategory::Command,
-            shortcut: Some(SharedString::from("Cmd+N")),
+            shortcut: registered_shortcut(window, &CreateCollection),
             available: is_connected && state.selected_database().is_some(),
             priority: 11,
             ..Default::default()
@@ -159,7 +169,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("cmd:refresh"),
             label: SharedString::from("Refresh"),
             category: ActionCategory::Command,
-            shortcut: Some(SharedString::from("Cmd+R")),
+            shortcut: registered_shortcut(window, &RefreshView),
             available: has_connection,
             priority: 20,
             ..Default::default()
@@ -177,7 +187,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from("Settings"),
             detail: Some(SharedString::from("Application settings")),
             category: ActionCategory::Command,
-            shortcut: Some(SharedString::from("Cmd+,")),
+            shortcut: registered_shortcut(window, &OpenSettings),
             available: true,
             priority: 100,
             ..Default::default()
@@ -187,6 +197,7 @@ pub fn command_actions(state: &AppState) -> Vec<ActionItem> {
             label: SharedString::from("AI Assistant"),
             detail: Some(SharedString::from("Toggle assistant side panel")),
             category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &ToggleAiPanel),
             available: state.ai_assistant_available(),
             priority: 95,
             ..Default::default()
@@ -315,7 +326,7 @@ pub fn disconnect_actions(state: &AppState) -> Vec<ActionItem> {
 }
 
 /// View: subview toggles (documents/indexes/stats).
-pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
+pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     let has_collection = state.selected_collection().is_some();
 
     vec![
@@ -323,7 +334,7 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("view:documents"),
             label: SharedString::from("Show Documents"),
             category: ActionCategory::View,
-            shortcut: Some(SharedString::from("Cmd+Alt+1")),
+            shortcut: registered_shortcut(window, &ShowDocumentsSubview),
             available: has_collection,
             ..Default::default()
         },
@@ -331,7 +342,7 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("view:indexes"),
             label: SharedString::from("Show Indexes"),
             category: ActionCategory::View,
-            shortcut: Some(SharedString::from("Cmd+Alt+2")),
+            shortcut: registered_shortcut(window, &ShowIndexesSubview),
             available: has_collection,
             priority: 1,
             ..Default::default()
@@ -340,7 +351,7 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("view:stats"),
             label: SharedString::from("Show Stats"),
             category: ActionCategory::View,
-            shortcut: Some(SharedString::from("Cmd+Alt+3")),
+            shortcut: registered_shortcut(window, &ShowStatsSubview),
             available: has_collection,
             priority: 2,
             ..Default::default()
@@ -349,7 +360,7 @@ pub fn view_actions(state: &AppState) -> Vec<ActionItem> {
             id: SharedString::from("view:aggregation"),
             label: SharedString::from("Show Aggregation"),
             category: ActionCategory::View,
-            shortcut: Some(SharedString::from("Cmd+Alt+4")),
+            shortcut: registered_shortcut(window, &ShowAggregationSubview),
             available: has_collection,
             priority: 3,
             ..Default::default()

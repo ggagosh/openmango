@@ -156,10 +156,11 @@ impl CollectionView {
                                 let Some(session_key) = view.view_model.current_session() else {
                                     return;
                                 };
-                                AppCommands::run_aggregation(
+                                crate::views::documents::request_run_aggregation(
                                     view.state.clone(),
                                     session_key,
                                     false,
+                                    window,
                                     cx,
                                 );
                                 return;

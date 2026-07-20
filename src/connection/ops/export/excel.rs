@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use mongodb::Client;
 use mongodb::bson::Document;
 
 use crate::connection::ConnectionManager;
+use crate::connection::ops::export::AtomicExportFile;
 use crate::connection::types::{CancellationToken, ExportQueryOptions};
 use crate::error::Result;
 
@@ -25,7 +26,9 @@ impl ConnectionManager {
     where
         F: Fn(u64) + Send + 'static,
     {
-        use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
+        use crate::connection::csv_utils::{
+            collect_document_columns, flatten_document, order_columns,
+        };
         use futures::TryStreamExt;
         use rust_xlsxwriter::{Format, Workbook};
 
@@ -42,26 +45,19 @@ impl ConnectionManager {
             find_options.projection = query.projection;
             find_options.sort = query.sort;
 
-            let mut cursor = coll.find(filter).with_options(find_options).await?;
-
-            const SAMPLE_SIZE: usize = 1000;
-            let mut buffered_docs: Vec<Document> = Vec::with_capacity(SAMPLE_SIZE);
-
-            while buffered_docs.len() < SAMPLE_SIZE {
-                match cursor.try_next().await? {
-                    Some(doc) => buffered_docs.push(doc),
-                    None => break,
+            let mut discovery_cursor =
+                coll.find(filter.clone()).with_options(find_options.clone()).await?;
+            let mut seen_columns = HashSet::new();
+            let mut detected_columns = Vec::new();
+            while let Some(doc) = discovery_cursor.try_next().await? {
+                if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
                 }
-            }
-
-            let detected_columns = collect_columns(&buffered_docs);
-
-            if detected_columns.is_empty() {
-                on_progress(0);
-                return Ok(0);
+                collect_document_columns(&doc, &mut seen_columns, &mut detected_columns);
             }
 
             let columns = order_columns(detected_columns, &column_order);
+            let mut cursor = coll.find(filter).with_options(find_options).await?;
 
             let mut workbook = Workbook::new();
             let header_format = Format::new().set_bold();
@@ -87,28 +83,24 @@ impl ConnectionManager {
             let mut count = 0u64;
             const PROGRESS_INTERVAL: u64 = 1000;
 
-            for doc in buffered_docs {
-                if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
-                }
-
-                let row = count as u32 + 1;
-                let flat = flatten_document(&doc);
-                write_excel_row(worksheet, row, &columns, &flat)?;
-                count += 1;
-
-                if count.is_multiple_of(PROGRESS_INTERVAL) {
-                    on_progress(count);
-                }
-            }
-
             while let Some(doc) = cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                     return Err(crate::error::Error::Parse("Export cancelled".to_string()));
                 }
 
                 let row = count as u32 + 1;
+                if row >= EXCEL_MAX_ROWS {
+                    return Err(crate::error::Error::Parse(format!(
+                        "Excel export exceeds the {} row limit; no rows were skipped",
+                        EXCEL_MAX_ROWS - 1
+                    )));
+                }
                 let flat = flatten_document(&doc);
+                if let Some(field) = flat.keys().find(|field| !seen_columns.contains(*field)) {
+                    return Err(crate::error::Error::Parse(format!(
+                        "Export source changed while discovering columns; new field '{field}' was not skipped"
+                    )));
+                }
                 write_excel_row(worksheet, row, &columns, &flat)?;
                 count += 1;
 
@@ -117,13 +109,24 @@ impl ConnectionManager {
                 }
             }
 
-            workbook.save(&path).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            let output = AtomicExportFile::new(&path)?;
+            workbook
+                .save(output.temporary_path())
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+            }
+            output.commit()?;
             on_progress(count);
             Ok(count)
         })
     }
 }
 
+const EXCEL_MAX_ROWS: u32 = 1_048_576;
 const EXCEL_MAX_STRING_LEN: usize = 32_767;
 
 fn write_excel_row(
@@ -151,10 +154,10 @@ fn write_excel_row(
                 worksheet
                     .write_boolean(row, col, value == "true")
                     .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-            } else if value.len() > EXCEL_MAX_STRING_LEN {
-                worksheet
-                    .write_string(row, col, &value[..EXCEL_MAX_STRING_LEN])
-                    .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            } else if value.chars().count() > EXCEL_MAX_STRING_LEN {
+                return Err(crate::error::Error::Parse(format!(
+                    "Excel cell in column '{col_name}' exceeds the {EXCEL_MAX_STRING_LEN} character limit; value was not truncated"
+                )));
             } else {
                 worksheet
                     .write_string(row, col, value)

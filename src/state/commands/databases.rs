@@ -1,4 +1,5 @@
 use gpui::{App, AppContext as _, Entity};
+use uuid::Uuid;
 
 use crate::state::{
     AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, StatusMessage, View,
@@ -22,15 +23,16 @@ impl AppCommands {
     }
 
     /// Drop a database.
-    pub fn drop_database(state: Entity<AppState>, database: String, cx: &mut App) {
-        let connection_id = state.read(cx).selected_connection_id();
-        if !Self::ensure_writable(&state, connection_id, cx) {
+    pub fn drop_database(
+        state: Entity<AppState>,
+        connection_id: Uuid,
+        database: String,
+        cx: &mut App,
+    ) {
+        if !Self::ensure_writable(&state, Some(connection_id), cx) {
             return;
         }
-        let Some(conn_id) = connection_id else {
-            return;
-        };
-        let Some(client) = Self::active_client(&state, conn_id, cx) else {
+        let Some(client) = Self::active_client(&state, connection_id, cx) else {
             return;
         };
         let manager = state.read(cx).connection_manager();
@@ -48,15 +50,12 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let Some(conn_id) = connection_id else {
-                                return;
-                            };
-                            if let Some(conn) = state.active_connection_mut(conn_id) {
+                            if let Some(conn) = state.active_connection_mut(connection_id) {
                                 conn.databases.retain(|db| db != &database);
                                 conn.collections.remove(&database);
                             }
-                            state.close_tabs_for_database(conn_id, &database, cx);
-                            if state.selected_connection_is(conn_id)
+                            state.close_tabs_for_database(connection_id, &database, cx);
+                            if state.selected_connection_is(connection_id)
                                 && state.selected_database() == Some(database.as_str())
                             {
                                 state.set_selected_database_name(None);
@@ -67,9 +66,9 @@ impl AppCommands {
                             state.set_status_message(Some(StatusMessage::info(format!(
                                 "Dropped database {database}"
                             ))));
-                            if state.selected_connection_is(conn_id) {
+                            if state.selected_connection_is(connection_id) {
                                 let databases = state
-                                    .active_connection_by_id(conn_id)
+                                    .active_connection_by_id(connection_id)
                                     .map(|conn| conn.databases.clone())
                                     .unwrap_or_default();
                                 cx.emit(AppEvent::DatabasesLoaded(databases));

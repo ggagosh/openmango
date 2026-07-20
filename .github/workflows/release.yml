@@ -102,7 +102,15 @@ jobs:
           REQUIRE_BUNDLED_TOOLS: "1"
         run: scripts/release_macos.sh ${{ matrix.target }}
 
-      - name: Upload release asset
+      - name: Generate SHA-256 checksum
+        run: |
+          for file in dist/OpenMango-*-${{ matrix.suffix }}.zip; do
+            shasum -a 256 "$file" | awk '{print $1}' > "$file.sha256"
+          done
+
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/OpenMango-*-${{ matrix.suffix }}.zip
+          files: |
+            dist/OpenMango-*-${{ matrix.suffix }}.zip
+            dist/OpenMango-*-${{ matrix.suffix }}.zip.sha256

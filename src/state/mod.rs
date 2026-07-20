@@ -21,7 +21,8 @@ pub use app_state::{
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, InsertMode, SchemaAnalysis,
     SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument, SessionKey,
     SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    TransferScope, TransferTabKey, TransferTabState, UnsavedChange, UnsavedInventory, UnsavedScope,
+    View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;
@@ -36,6 +37,7 @@ pub use settings::{
 };
 pub use status::{StatusLevel, StatusMessage};
 pub use transfer_rules::{
-    TransferValidation, available_transfer_formats, coerce_transfer_format, validate_transfer,
+    TransferValidation, available_transfer_formats, coerce_transfer_format,
+    parse_export_query_document, resolved_export_destination, validate_transfer,
 };
 pub use workspace::{WindowMode, WindowState, WorkspaceState, WorkspaceTab, WorkspaceTabKind};

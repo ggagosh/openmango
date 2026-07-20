@@ -7,7 +7,7 @@ use gpui::AnyWindowHandle;
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
-use crate::bson::DocumentKey;
+use crate::bson::{DocumentKey, document_to_shell_string};
 use crate::state::app_state::SessionKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +37,8 @@ pub struct EditorSession {
     pub session_key: SessionKey,
     pub target: EditorSessionTarget,
     pub content: String,
+    pub save_in_flight: bool,
+    baseline_content: String,
 }
 
 impl EditorSession {
@@ -51,6 +53,10 @@ impl EditorSession {
             }
             EditorSessionTarget::Insert => format!("Insert {}", self.session_key.collection),
         }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.content != self.baseline_content
     }
 }
 
@@ -95,7 +101,9 @@ impl EditorSessionStore {
                 original_id: Box::new(original_id),
                 baseline_document: Box::new(baseline_document),
             },
+            baseline_content: content.clone(),
             content,
+            save_in_flight: false,
         };
         self.with_inner_mut(|inner| {
             inner.sessions.insert(id, session);
@@ -112,8 +120,14 @@ impl EditorSessionStore {
     ) -> EditorSessionId {
         let id = EditorSessionId::new();
         let key = EditorSessionKey::Insert { session_key: session_key.clone() };
-        let session =
-            EditorSession { id, session_key, target: EditorSessionTarget::Insert, content };
+        let session = EditorSession {
+            id,
+            session_key,
+            target: EditorSessionTarget::Insert,
+            baseline_content: content.clone(),
+            content,
+            save_in_flight: false,
+        };
         self.with_inner_mut(|inner| {
             inner.sessions.insert(id, session);
             inner.keys.insert(key.clone(), id);
@@ -126,12 +140,32 @@ impl EditorSessionStore {
         self.with_inner(|inner| inner.sessions.get(&id).cloned()).flatten()
     }
 
+    pub fn snapshots(&self) -> Vec<EditorSession> {
+        self.with_inner(|inner| inner.sessions.values().cloned().collect()).unwrap_or_default()
+    }
+
+    pub fn is_dirty(&self, id: EditorSessionId) -> bool {
+        self.with_inner(|inner| inner.sessions.get(&id).is_some_and(EditorSession::is_dirty))
+            .unwrap_or(false)
+    }
+
     pub fn update_content(&self, id: EditorSessionId, content: String) -> bool {
         self.with_inner_mut(|inner| {
             let Some(session) = inner.sessions.get_mut(&id) else {
                 return false;
             };
             session.content = content;
+            true
+        })
+        .unwrap_or(false)
+    }
+
+    pub fn set_save_in_flight(&self, id: EditorSessionId, save_in_flight: bool) -> bool {
+        self.with_inner_mut(|inner| {
+            let Some(session) = inner.sessions.get_mut(&id) else {
+                return false;
+            };
+            session.save_in_flight = save_in_flight;
             true
         })
         .unwrap_or(false)
@@ -151,6 +185,7 @@ impl EditorSessionStore {
             else {
                 return false;
             };
+            session.baseline_content = document_to_shell_string(&baseline_document);
             **current = baseline_document;
             true
         })
@@ -277,10 +312,15 @@ mod tests {
         let session_id = store
             .create_insert_session(SessionKey::new(Uuid::new_v4(), "db", "col"), "{}".to_string());
 
+        assert!(!store.snapshot(session_id).unwrap().is_dirty());
         let updated = store.update_content(session_id, "{\"name\":\"updated\"}".to_string());
         assert!(updated);
         let snapshot = store.snapshot(session_id).expect("session should exist");
         assert_eq!(snapshot.content, "{\"name\":\"updated\"}");
+        assert!(snapshot.is_dirty());
+        assert!(!snapshot.save_in_flight);
+        assert!(store.set_save_in_flight(session_id, true));
+        assert!(store.snapshot(session_id).unwrap().save_in_flight);
     }
 
     #[test]

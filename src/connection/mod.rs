@@ -19,7 +19,8 @@ pub use manager::ConnectionManager;
 pub use ops::export::generate_export_preview;
 pub use tools::tools_available;
 pub use types::{
-    AggregatePipelineError, BsonOutputFormat, BsonToolProgress, CopyOptions, CsvImportOptions,
-    Encoding, ExportQueryOptions, ExtendedJsonMode, FindDocumentsOptions, InsertMode,
-    JsonExportOptions, JsonImportOptions, JsonTransferFormat, ProgressCallback,
+    AggregatePipelineError, BsonOutputFormat, BsonToolProgress, BsonToolRunOutcome,
+    BulkReplaceResult, CancellationToken, CopyOptions, CsvImportOptions, Encoding,
+    ExportQueryOptions, ExtendedJsonMode, FindDocumentsOptions, InsertMode, JsonExportOptions,
+    JsonImportOptions, JsonTransferFormat, ProgressCallback, TargetWriteMode,
 };

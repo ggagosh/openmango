@@ -1,7 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
-use crate::state::{AppEvent, AppState, SessionKey};
+use crate::state::{AppEvent, AppState, EditorSessionId, SessionKey};
 
 use crate::state::AppCommands;
 
@@ -11,6 +11,26 @@ impl AppCommands {
         state: Entity<AppState>,
         session_key: SessionKey,
         document: Document,
+        cx: &mut App,
+    ) {
+        Self::insert_document_internal(state, session_key, document, None, cx);
+    }
+
+    pub fn insert_document_for_editor(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        document: Document,
+        editor: EditorSessionId,
+        cx: &mut App,
+    ) {
+        Self::insert_document_internal(state, session_key, document, Some(editor), cx);
+    }
+
+    fn insert_document_internal(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        document: Document,
+        editor: Option<EditorSessionId>,
         cx: &mut App,
     ) {
         if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
@@ -38,7 +58,8 @@ impl AppCommands {
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            let event = AppEvent::DocumentInserted;
+                            let event =
+                                AppEvent::DocumentInserted { session: session_key.clone(), editor };
                             state.update_status_from_event(&event);
                             cx.emit(event);
                             cx.notify();
@@ -52,7 +73,11 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to insert document: {}", e);
                         state.update(cx, |state, cx| {
-                            let event = AppEvent::DocumentInsertFailed { error: e.to_string() };
+                            let event = AppEvent::DocumentInsertFailed {
+                                session: session_key.clone(),
+                                editor,
+                                error: e.to_string(),
+                            };
                             state.update_status_from_event(&event);
                             cx.emit(event);
                             cx.notify();

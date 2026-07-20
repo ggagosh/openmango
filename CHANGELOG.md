@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Shared unsaved-change protection across tabs, detached editors, connection changes, workspace restore, app quit, theme restart, and updater relaunch
+- Query failures now stay visible per tab with Retry and Copy Details actions while preserving the last successful result
+- Configurable `maxTimeMS` and real cancellation for interactive document queries
+- Settings now show the log location and can export a redacted support bundle with runtime diagnostics
+- AI privacy controls for selected-document and automatic sample sharing, both disabled by default
+- Keyboard-operable app buttons with focus rings and Enter, Return, and Space activation
+- Accessibility QA documentation and focus restoration for searches and confirmation dialogs
 - Table view for documents — browse collections in a spreadsheet-style grid with sortable, resizable, and pinnable columns
 - Per-page selector in the pagination bar — choose between 10, 25, 50, or 100 documents per page
 - Islands tab style — choose between Islands, Segmented, or Underline tab appearance in Settings
@@ -20,6 +27,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Import and copy Clear/Drop operations now stage changes before atomic promotion, and Replace preserves failed originals while reporting partial progress
+- Application read-only mode now blocks every app-owned write path, including AI and Forge, while destructive operations require frozen, revalidated confirmations
+- Connection credentials now use versioned Keychain bundles; saved configuration and process arguments no longer expose URI secrets
+- BSON import/export cancellation now terminates and waits for `mongodump` or `mongorestore`, and stale transfer completions are ignored
+- Transfer filter, projection, and sort parsing now fails closed with field-specific errors instead of silently broadening queries
+- JSON, CSV, Excel, report, aggregation, database-scope, and BSON exports now stage output atomically and preserve existing destinations on failure or cancellation
+- CSV and Excel exports discover the complete schema and report late fields, row limits, string limits, and failed batches instead of silently dropping data
+- Bulk Replace now performs ordered per-document replacements, preserves `_id`, supports cancellation, and reports exact partial execution
+- Index replacement validates before dropping, restores the previous index on failure, and collection copy preserves supported index metadata
+- Forge and BSON tools now reuse active SSH and SOCKS5 transports with their TLS and authentication options
+- Query refresh now cancels actual client/server work rather than relying only on stale request IDs
+- Numbered-tab, content-focus, document, and aggregation shortcuts no longer conflict; palette and menu shortcuts come from registered actions
+- Palette Refresh now follows the same context-sensitive path as Cmd/Ctrl+R, AI opening focuses its input, and Forge preserves the selected collection
+- Unit-test CI now runs the library tests instead of the zero-test binary target
 - Search in JSON editors now wraps correctly in both directions — pressing Enter cycles forward through all matches, Shift+Enter cycles backward
 - Detached editor windows now inherit the vibrancy setting from the main window instead of always appearing opaque
 - Closing the main window now also closes all detached editor windows
@@ -40,10 +61,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
+- Updates now require published SHA-256 assets, verify the downloaded archive and macOS code signature, respect the automatic-update preference, and install only after Restart to Update
+- Update-check failures remain visible with Retry instead of silently returning to idle
+- AI enablement now discloses the workspace metadata sent to the selected provider, and complete system prompts are no longer written to debug logs
+- Transfer jobs that continue after errors retain failure counts, per-collection details, and processed-document totals
+- Release workflows now publish per-archive SHA-256 checksum assets
 - Filter bar redesigned — filter stays primary with parsed readback chips, while sort and projection live in the Options panel
 - AI chat panel moved out of the documents view into its own dedicated space
 - Close buttons on tabs now only appear on hover (except the active tab)
 - Tab bar styling updated with padding and theme-aware background
+
+### Security
+- Existing files, collections, and databases remain unchanged until destructive imports, copies, and exports complete successfully
+- Write confirmations include the exact connection, namespace, filter or pipeline, current count, and frozen options being approved
+- Plaintext credential export is disabled; connection export is redacted or passphrase-encrypted
+- Update archives and final app bundles are verified before replacing the installed application
 
 ### Performance
 - Document tree (JSON view) expands and scrolls much faster on large or deeply nested documents — removed a quadratic dirty-check and the redundant full-tree clones that ran on every interaction

@@ -6,6 +6,7 @@ use gpui_component::{ActiveTheme as _, IconName};
 
 use crate::bson::{format_relaxed_json_compact, parse_value_from_relaxed_json};
 use crate::components::Button;
+use crate::state::parse_export_query_document;
 use crate::theme::{borders, spacing};
 
 use super::TransferView;
@@ -142,8 +143,8 @@ impl TransferView {
         };
 
         let current_text = input_state.read(cx).value().to_string();
-        let is_valid =
-            current_text.is_empty() || parse_value_from_relaxed_json(&current_text).is_ok();
+        let validation_error = parse_export_query_document(&current_text).err();
+        let is_valid = validation_error.is_none();
 
         let view = cx.entity();
         let view_save = view.clone();
@@ -218,7 +219,11 @@ impl TransferView {
                             } else {
                                 cx.theme().danger
                             })
-                            .child(if is_valid { "✓ Valid JSON" } else { "✗ Invalid JSON" }),
+                            .child(if let Some(error) = validation_error {
+                                format!("✗ {error}")
+                            } else {
+                                "✓ Valid query document".to_string()
+                            }),
                     )
                     // Footer buttons
                     .child(

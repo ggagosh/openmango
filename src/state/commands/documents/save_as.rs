@@ -163,6 +163,7 @@ impl AppCommands {
                                 &path,
                                 false,
                                 query,
+                                Some(cancellation_for_task),
                                 move |count| {
                                     let _ = tx.unbounded_send(count);
                                 },
@@ -344,7 +345,8 @@ fn write_documents_to_file(
 
     match format {
         FileExportFormat::JsonArray => {
-            let file = std::fs::File::create(path)?;
+            let output = crate::connection::ops::export::AtomicExportFile::new(path)?;
+            let file = output.reopen()?;
             let mut writer = BufWriter::new(file);
             writer.write_all(b"[\n")?;
             for (i, doc) in documents.iter().enumerate() {
@@ -358,9 +360,12 @@ fn write_documents_to_file(
             }
             writer.write_all(b"]")?;
             writer.flush()?;
+            drop(writer);
+            output.commit()?;
         }
         FileExportFormat::JsonLines => {
-            let file = std::fs::File::create(path)?;
+            let output = crate::connection::ops::export::AtomicExportFile::new(path)?;
+            let file = output.reopen()?;
             let mut writer = BufWriter::new(file);
             for doc in documents {
                 let json = Bson::Document(doc.clone()).into_relaxed_extjson();
@@ -369,16 +374,20 @@ fn write_documents_to_file(
                 writer.write_all(b"\n")?;
             }
             writer.flush()?;
+            drop(writer);
+            output.commit()?;
         }
         FileExportFormat::Csv => {
             use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
 
             let detected = collect_columns(documents);
             let columns = order_columns(detected, &column_order);
+            let output = crate::connection::ops::export::AtomicExportFile::new(path)?;
             if columns.is_empty() {
+                output.commit()?;
                 return Ok(0);
             }
-            let file = std::fs::File::create(path)?;
+            let file = output.reopen()?;
             let mut csv_writer = csv::Writer::from_writer(file);
             csv_writer.write_record(&columns)?;
             for doc in documents {
@@ -388,6 +397,8 @@ fn write_documents_to_file(
                 csv_writer.write_record(&row)?;
             }
             csv_writer.flush()?;
+            drop(csv_writer);
+            output.commit()?;
         }
         FileExportFormat::Excel => {
             use crate::connection::csv_utils::{collect_columns, flatten_document, order_columns};
@@ -395,10 +406,15 @@ fn write_documents_to_file(
 
             let detected = collect_columns(documents);
             let columns = order_columns(detected, &column_order);
+            let output = crate::connection::ops::export::AtomicExportFile::new(path)?;
+            let mut workbook = Workbook::new();
             if columns.is_empty() {
+                workbook
+                    .save(output.temporary_path())
+                    .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+                output.commit()?;
                 return Ok(0);
             }
-            let mut workbook = Workbook::new();
             let header_format = Format::new().set_bold();
             let worksheet = workbook.add_worksheet_with_constant_memory();
 
@@ -418,6 +434,12 @@ fn write_documents_to_file(
 
             for (row_idx, doc) in documents.iter().enumerate() {
                 let row = (row_idx as u32) + 1;
+                if row >= EXCEL_MAX_ROWS {
+                    return Err(crate::error::Error::Parse(format!(
+                        "Excel export exceeds the {} row limit; no rows were skipped",
+                        EXCEL_MAX_ROWS - 1
+                    )));
+                }
                 let flat = flatten_document(doc);
                 for (col_idx, col_name) in columns.iter().enumerate() {
                     let col = col_idx as u16;
@@ -437,10 +459,10 @@ fn write_documents_to_file(
                             worksheet
                                 .write_boolean(row, col, value == "true")
                                 .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
-                        } else if value.len() > EXCEL_MAX_STRING_LEN {
-                            worksheet
-                                .write_string(row, col, &value[..EXCEL_MAX_STRING_LEN])
-                                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+                        } else if value.chars().count() > EXCEL_MAX_STRING_LEN {
+                            return Err(crate::error::Error::Parse(format!(
+                                "Excel cell in column '{col_name}' exceeds the {EXCEL_MAX_STRING_LEN} character limit; value was not truncated"
+                            )));
                         } else {
                             worksheet
                                 .write_string(row, col, value)
@@ -450,13 +472,17 @@ fn write_documents_to_file(
                 }
             }
 
-            workbook.save(path).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            workbook
+                .save(output.temporary_path())
+                .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
+            output.commit()?;
         }
     }
 
     Ok(count)
 }
 
+const EXCEL_MAX_ROWS: u32 = 1_048_576;
 const EXCEL_MAX_STRING_LEN: usize = 32_767;
 
 #[derive(Clone)]

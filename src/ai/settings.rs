@@ -127,6 +127,10 @@ pub struct AiSettings {
     pub api_key: String,
     #[serde(default = "default_ollama_base_url")]
     pub ollama_base_url: String,
+    #[serde(default)]
+    pub share_selected_documents: bool,
+    #[serde(default)]
+    pub share_sample_documents: bool,
 }
 
 impl Default for AiSettings {
@@ -138,6 +142,8 @@ impl Default for AiSettings {
             model: provider.default_model().to_string(),
             api_key: String::new(),
             ollama_base_url: default_ollama_base_url(),
+            share_selected_documents: false,
+            share_sample_documents: false,
         }
     }
 }
@@ -263,6 +269,7 @@ mod tests {
             model: "qwen3:32b".to_string(),
             api_key: String::new(),
             ollama_base_url: "http://localhost:11434".to_string(),
+            ..AiSettings::default()
         };
         let result = settings.validate_for_request();
         assert!(result.is_ok());
@@ -279,6 +286,20 @@ mod tests {
         settings.set_provider(AiProvider::Ollama);
         assert_eq!(settings.model, AiProvider::Ollama.default_model());
         assert!(!settings.ollama_base_url.is_empty());
+    }
+
+    #[test]
+    fn document_content_sharing_requires_explicit_consent() {
+        let defaults = AiSettings::default();
+        assert!(!defaults.share_selected_documents);
+        assert!(!defaults.share_sample_documents);
+
+        let legacy: AiSettings = serde_json::from_str(
+            r#"{"enabled":true,"provider":"ollama","model":"qwen3:32b","api_key":"","ollama_base_url":"http://localhost:11434"}"#,
+        )
+        .unwrap();
+        assert!(!legacy.share_selected_documents);
+        assert!(!legacy.share_sample_documents);
     }
 
     #[test]
@@ -301,6 +322,7 @@ mod tests {
             model: "qwen3:32b".to_string(),
             api_key: String::new(),
             ollama_base_url: "http://localhost:11434".to_string(),
+            ..AiSettings::default()
         };
         assert!(ollama.assistant_available());
     }

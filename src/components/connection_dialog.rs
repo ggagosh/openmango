@@ -6,13 +6,13 @@ use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::switch::Switch;
 
-use crate::components::{Button, cancel_button};
+use crate::components::{Button, cancel_button, request_unsaved_action};
 use crate::helpers::{
-    REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
-    redact_uri_password, validate_mongodb_uri,
+    UriSecrets, extract_host_from_uri, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
+    validate_mongodb_uri,
 };
 use crate::models::SavedConnection;
-use crate::state::{AppCommands, AppState};
+use crate::state::{AppState, UnsavedScope};
 use crate::theme::spacing;
 
 #[derive(Clone, Debug)]
@@ -28,6 +28,8 @@ pub struct ConnectionDialog {
     name_state: Entity<InputState>,
     uri_state: Entity<InputState>,
     password_state: Entity<InputState>,
+    uri_secrets: UriSecrets,
+    sanitizing_uri: bool,
     read_only: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
@@ -58,6 +60,26 @@ impl ConnectionDialog {
         });
     }
 
+    fn capture_uri_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sanitizing_uri {
+            self.sanitizing_uri = false;
+            return;
+        }
+        let uri = self.uri_state.read(cx).value().to_string();
+        let secrets = extract_uri_secrets(&uri);
+        self.password_state.update(cx, |state, cx| {
+            state.set_value(secrets.password.clone().unwrap_or_default(), window, cx);
+        });
+        self.uri_secrets = UriSecrets { password: None, ..secrets };
+        let sanitized = strip_uri_secrets(&uri);
+        if sanitized != uri {
+            self.sanitizing_uri = true;
+            self.uri_state.update(cx, |state, cx| {
+                state.set_value(sanitized, window, cx);
+            });
+        }
+    }
+
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("My MongoDB").default_value(""));
@@ -81,19 +103,7 @@ impl ConnectionDialog {
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;
 
-                    let uri = view.uri_state.read(cx).value().to_string();
-                    if let Some(password) = extract_uri_password(&uri)
-                        && password != REDACTED_PASSWORD
-                    {
-                        view.password_state.update(cx, |state, cx| {
-                            state.set_value(password, window, cx);
-                        });
-                        let redacted = redact_uri_password(&uri);
-                        view.uri_state.update(cx, |state, cx| {
-                            state.set_value(redacted, window, cx);
-                        });
-                    }
-
+                    view.capture_uri_secrets(window, cx);
                     cx.notify();
                 }
             },
@@ -104,6 +114,8 @@ impl ConnectionDialog {
             name_state,
             uri_state,
             password_state,
+            uri_secrets: UriSecrets::default(),
+            sanitizing_uri: false,
             read_only: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
@@ -126,8 +138,8 @@ impl ConnectionDialog {
                 .default_value(existing.name.clone())
         });
 
-        let extracted_password = extract_uri_password(&existing.uri);
-        let redacted_default = redact_uri_password(&existing.uri);
+        let extracted_secrets = extract_uri_secrets(&existing.uri);
+        let redacted_default = strip_uri_secrets(&existing.uri);
 
         let uri_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -137,7 +149,7 @@ impl ConnectionDialog {
 
         let password_state = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("password").masked(true);
-            if let Some(ref pw) = extracted_password {
+            if let Some(ref pw) = extracted_secrets.password {
                 s = s.default_value(pw.clone());
             }
             s
@@ -153,29 +165,20 @@ impl ConnectionDialog {
                     view.last_tested_uri = None;
                     view.pending_test_uri = None;
 
-                    let uri = view.uri_state.read(cx).value().to_string();
-                    if let Some(password) = extract_uri_password(&uri)
-                        && password != REDACTED_PASSWORD
-                    {
-                        view.password_state.update(cx, |state, cx| {
-                            state.set_value(password, window, cx);
-                        });
-                        let redacted = redact_uri_password(&uri);
-                        view.uri_state.update(cx, |state, cx| {
-                            state.set_value(redacted, window, cx);
-                        });
-                    }
-
+                    view.capture_uri_secrets(window, cx);
                     cx.notify();
                 }
             },
         ));
 
+        let uri_secrets = UriSecrets { password: None, ..extracted_secrets };
         Self {
             state,
             name_state,
             uri_state,
             password_state,
+            uri_secrets,
+            sanitizing_uri: false,
             read_only: existing.read_only,
             status: TestStatus::Success,
             last_tested_uri: Some(redacted_default),
@@ -187,16 +190,10 @@ impl ConnectionDialog {
 
     fn real_uri(&self, cx: &App) -> String {
         let uri = self.uri_state.read(cx).value().to_string();
-        if let Some(existing_pw) = extract_uri_password(&uri)
-            && existing_pw == REDACTED_PASSWORD
-        {
-            let real_pw = self.password_state.read(cx).value().to_string();
-            let real_pw = real_pw.trim();
-            if !real_pw.is_empty() {
-                return inject_uri_password(&uri, Some(real_pw));
-            }
-        }
-        uri
+        let password = self.password_state.read(cx).value().trim().to_string();
+        let mut secrets = self.uri_secrets.clone();
+        secrets.password = (!password.is_empty()).then_some(password);
+        inject_uri_secrets(&strip_uri_secrets(&uri), &secrets)
     }
 
     fn start_test(view: Entity<ConnectionDialog>, cx: &mut App) {
@@ -388,29 +385,21 @@ impl Render for ConnectionDialog {
                                 let name_state = self.name_state.clone();
                                 let uri_state = self.uri_state.clone();
                                 let password_state = self.password_state.clone();
+                                let uri_secrets = self.uri_secrets.clone();
                                 let read_only = self.read_only;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
                                     let display_uri = uri_state.read(cx).value().to_string();
 
-                                    // Inject real password if the URI has a redacted placeholder
-                                    let uri = if let Some(pw) = extract_uri_password(&display_uri) {
-                                        if pw == REDACTED_PASSWORD {
-                                            let real_pw =
-                                                password_state.read(cx).value().to_string();
-                                            let real_pw = real_pw.trim();
-                                            if !real_pw.is_empty() {
-                                                inject_uri_password(&display_uri, Some(real_pw))
-                                            } else {
-                                                display_uri
-                                            }
-                                        } else {
-                                            display_uri
-                                        }
-                                    } else {
-                                        display_uri
-                                    };
+                                    let password =
+                                        password_state.read(cx).value().trim().to_string();
+                                    let mut secrets = uri_secrets.clone();
+                                    secrets.password = (!password.is_empty()).then_some(password);
+                                    let uri = inject_uri_secrets(
+                                        &strip_uri_secrets(&display_uri),
+                                        &secrets,
+                                    );
 
                                     if validate_mongodb_uri(&uri).is_err() {
                                         return;
@@ -423,31 +412,52 @@ impl Render for ConnectionDialog {
                                         name_input.trim().to_string()
                                     };
 
-                                    let mut connection_id = None;
-                                    state.update(cx, |state, cx| {
-                                        if let Some(existing) = existing.clone() {
-                                            connection_id = Some(existing.id);
-                                            let connection = SavedConnection {
-                                                id: existing.id,
-                                                name,
-                                                uri,
-                                                last_connected: existing.last_connected,
-                                                read_only,
-                                                ssh: existing.ssh.clone(),
-                                                proxy: existing.proxy.clone(),
-                                            };
-                                            state.update_connection(connection, cx);
-                                        } else {
-                                            let mut connection = SavedConnection::new(name, uri);
-                                            connection.read_only = read_only;
-                                            connection_id = Some(connection.id);
-                                            state.add_connection(connection, cx);
+                                    let existing_id =
+                                        existing.as_ref().map(|connection| connection.id);
+                                    let existing_for_save = existing.clone();
+                                    let save_state = state.clone();
+                                    let save = move |window: &mut Window, cx: &mut App| {
+                                        let mut connection_id = None;
+                                        save_state.update(cx, |state, cx| {
+                                            if let Some(existing) = existing_for_save {
+                                                connection_id = Some(existing.id);
+                                                let connection = SavedConnection {
+                                                    id: existing.id,
+                                                    name,
+                                                    uri,
+                                                    last_connected: existing.last_connected,
+                                                    read_only,
+                                                    ssh: existing.ssh,
+                                                    proxy: existing.proxy,
+                                                    secret_id: existing.secret_id,
+                                                };
+                                                state.update_connection(connection, cx);
+                                            } else {
+                                                let mut connection =
+                                                    SavedConnection::new(name, uri);
+                                                connection.read_only = read_only;
+                                                connection_id = Some(connection.id);
+                                                state.add_connection(connection, cx);
+                                            }
+                                        });
+                                        if let Some(id) = connection_id {
+                                            save_state.update(cx, |state, cx| {
+                                                state.connect_when_secrets_ready(id, cx);
+                                            });
                                         }
-                                    });
-                                    if let Some(id) = connection_id {
-                                        AppCommands::connect(state.clone(), id, cx);
+                                        window.close_dialog(cx);
+                                    };
+                                    if let Some(connection_id) = existing_id {
+                                        request_unsaved_action(
+                                            state.clone(),
+                                            UnsavedScope::Connection(connection_id),
+                                            window,
+                                            cx,
+                                            save,
+                                        );
+                                    } else {
+                                        save(window, cx);
                                     }
-                                    window.close_dialog(cx);
                                 }
                             }),
                     ),

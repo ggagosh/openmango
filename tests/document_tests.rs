@@ -2,8 +2,123 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::{MongoTestContainer, fixtures, test_document};
-use mongodb::bson::doc;
+use mongodb::bson::{Document, doc};
+use openmango::connection::{CancellationToken, ConnectionManager, FindDocumentsOptions};
+
+#[tokio::test]
+async fn test_find_documents_honors_preexisting_cancellation() {
+    let mongo = MongoTestContainer::start().await;
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+
+    let error = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().find_documents(
+            &client,
+            &database,
+            "cancelled_query",
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 50,
+                max_time: Duration::from_secs(30),
+                cancellation,
+            },
+        )
+    })
+    .await
+    .expect("Query task panicked")
+    .expect_err("Cancelled query should fail");
+
+    assert!(error.to_string().contains("Query cancelled"));
+}
+
+#[tokio::test]
+async fn test_find_documents_returns_server_query_errors() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "failed_query");
+    collection.insert_one(doc! { "value": 1 }).await.unwrap();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+
+    let result = tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().find_documents(
+            &client,
+            &database,
+            "failed_query",
+            FindDocumentsOptions {
+                filter: Some(doc! { "$expr": { "$divide": [1, 0] } }),
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 50,
+                max_time: Duration::from_secs(30),
+                cancellation: CancellationToken::new(),
+            },
+        )
+    })
+    .await
+    .expect("Query task panicked");
+
+    assert!(result.is_err(), "server query error must not become an empty result");
+}
+
+#[tokio::test]
+async fn test_find_documents_sends_configured_max_time_to_server() {
+    let mongo = MongoTestContainer::start().await;
+    let database = mongo.db_name("test_db");
+    let db = mongo.client.database(&database);
+    db.run_command(doc! { "profile": 2 }).await.expect("Failed to enable profiler");
+    db.collection::<Document>("profiled_query").insert_one(doc! { "value": 1 }).await.unwrap();
+    let client = mongo.client.clone();
+    let query_database = database.clone();
+
+    tokio::task::spawn_blocking(move || {
+        ConnectionManager::new().find_documents(
+            &client,
+            &query_database,
+            "profiled_query",
+            FindDocumentsOptions {
+                filter: None,
+                sort: None,
+                projection: None,
+                skip: 0,
+                limit: 50,
+                max_time: Duration::from_millis(12_345),
+                cancellation: CancellationToken::new(),
+            },
+        )
+    })
+    .await
+    .expect("Query task panicked")
+    .expect("Query failed");
+
+    let profile = db.collection::<Document>("system.profile");
+    let profiled_find = profile
+        .find_one(doc! {
+            "command.find": "profiled_query",
+            "command.maxTimeMS": 12_345_i64,
+        })
+        .await
+        .expect("Find profile lookup failed");
+    assert!(profiled_find.is_some(), "find command did not receive configured maxTimeMS");
+
+    // The driver implements count_documents with an aggregate command on modern MongoDB.
+    let profiled_count = profile
+        .find_one(doc! {
+            "command.aggregate": "profiled_query",
+            "command.maxTimeMS": 12_345_i64,
+        })
+        .await
+        .expect("Count profile lookup failed");
+    assert!(profiled_count.is_some(), "count command did not receive configured maxTimeMS");
+}
 
 /// Test inserting and retrieving a single document.
 #[tokio::test]

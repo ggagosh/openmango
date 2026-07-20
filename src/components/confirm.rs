@@ -14,6 +14,17 @@ struct ConfirmDialogState {
     focused_once: bool,
 }
 
+fn close_dialog_and_restore_focus(
+    window: &mut Window,
+    cx: &mut App,
+    previous_focus: Option<FocusHandle>,
+) {
+    window.close_dialog(cx);
+    if let Some(previous_focus) = previous_focus {
+        window.defer(cx, move |window, _cx| window.focus(&previous_focus));
+    }
+}
+
 pub fn open_confirm_dialog(
     window: &mut Window,
     cx: &mut App,
@@ -27,6 +38,7 @@ pub fn open_confirm_dialog(
     let message: SharedString = message.into();
     let confirm_label: SharedString = confirm_label.into();
     let on_confirm = Rc::new(RefCell::new(Some(on_confirm)));
+    let previous_focus = window.focused(cx);
     let cancel_focus = cx.focus_handle().tab_index(0).tab_stop(true);
     let confirm_focus = cx.focus_handle().tab_index(1).tab_stop(true);
 
@@ -36,13 +48,14 @@ pub fn open_confirm_dialog(
         });
         let key_cancel_focus = cancel_focus.clone();
         let key_confirm_focus = confirm_focus.clone();
+        let key_previous_focus = previous_focus.clone();
         let key_on_confirm = on_confirm.clone();
 
         let key_handler = move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
             let key = event.keystroke.key.to_ascii_lowercase();
             if key == "escape" {
                 cx.stop_propagation();
-                window.close_dialog(cx);
+                close_dialog_and_restore_focus(window, cx, key_previous_focus.clone());
                 return;
             }
             if key == "enter" || key == "return" {
@@ -52,7 +65,7 @@ pub fn open_confirm_dialog(
                 {
                     on_confirm(window, cx);
                 }
-                window.close_dialog(cx);
+                close_dialog_and_restore_focus(window, cx, key_previous_focus.clone());
             }
         };
 
@@ -64,11 +77,12 @@ pub fn open_confirm_dialog(
                 .tab_index(1)
                 .on_click({
                     let on_confirm = on_confirm.clone();
+                    let previous_focus = previous_focus.clone();
                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         if let Some(on_confirm) = on_confirm.borrow_mut().take() {
                             on_confirm(window, cx);
                         }
-                        window.close_dialog(cx);
+                        close_dialog_and_restore_focus(window, cx, previous_focus.clone());
                     }
                 })
         } else {
@@ -79,11 +93,12 @@ pub fn open_confirm_dialog(
                 .tab_index(1)
                 .on_click({
                     let on_confirm = on_confirm.clone();
+                    let previous_focus = previous_focus.clone();
                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         if let Some(on_confirm) = on_confirm.borrow_mut().take() {
                             on_confirm(window, cx);
                         }
-                        window.close_dialog(cx);
+                        close_dialog_and_restore_focus(window, cx, previous_focus.clone());
                     }
                 })
         };
@@ -121,8 +136,15 @@ pub fn open_confirm_dialog(
                                 .label("Cancel")
                                 .track_focus(&key_cancel_focus)
                                 .tab_index(0)
-                                .on_click(|_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    window.close_dialog(cx);
+                                .on_click({
+                                    let previous_focus = previous_focus.clone();
+                                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        close_dialog_and_restore_focus(
+                                            window,
+                                            cx,
+                                            previous_focus.clone(),
+                                        );
+                                    }
                                 }),
                         )
                         .child(confirm_button),

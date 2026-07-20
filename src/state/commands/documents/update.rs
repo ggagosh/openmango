@@ -2,7 +2,7 @@ use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
 use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
-use crate::state::{AppEvent, AppState, SessionKey, StatusMessage};
+use crate::state::{AppEvent, AppState, EditorSessionId, SessionKey, StatusMessage};
 
 use crate::state::AppCommands;
 
@@ -13,6 +13,38 @@ impl AppCommands {
         session_key: SessionKey,
         doc_key: DocumentKey,
         updated: Document,
+        cx: &mut App,
+    ) {
+        Self::save_document_internal(state, session_key, doc_key, updated, None, None, cx);
+    }
+
+    pub fn save_document_for_editor(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        doc_key: DocumentKey,
+        updated: Document,
+        baseline_document: Document,
+        editor: EditorSessionId,
+        cx: &mut App,
+    ) {
+        Self::save_document_internal(
+            state,
+            session_key,
+            doc_key,
+            updated,
+            Some(baseline_document),
+            Some(editor),
+            cx,
+        );
+    }
+
+    fn save_document_internal(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        doc_key: DocumentKey,
+        updated: Document,
+        baseline_document: Option<Document>,
+        editor: Option<EditorSessionId>,
         cx: &mut App,
     ) {
         if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
@@ -58,13 +90,24 @@ impl AppCommands {
             let database = database.clone();
             let collection = collection.clone();
             async move {
-                manager.replace_document(
-                    &client,
-                    &database,
-                    &collection,
-                    &original_id,
-                    updated_for_task,
-                )
+                if let Some(baseline_document) = baseline_document {
+                    manager.replace_document_if_current(
+                        &client,
+                        &database,
+                        &collection,
+                        &original_id,
+                        &baseline_document,
+                        updated_for_task,
+                    )
+                } else {
+                    manager.replace_document(
+                        &client,
+                        &database,
+                        &collection,
+                        &original_id,
+                        updated_for_task,
+                    )
+                }
             }
         });
 
@@ -80,6 +123,8 @@ impl AppCommands {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
+                                let draft_unchanged =
+                                    session.view.drafts.get(&doc_key) == Some(&updated);
                                 let index = doc_index.or_else(|| {
                                     session.data.items.iter().position(|item| item.key == doc_key)
                                 });
@@ -88,13 +133,16 @@ impl AppCommands {
                                 {
                                     existing.doc = updated;
                                 }
-                                session.view.drafts.remove(&doc_key);
-                                session.view.dirty.remove(&doc_key);
+                                if draft_unchanged {
+                                    session.view.drafts.remove(&doc_key);
+                                    session.view.dirty.remove(&doc_key);
+                                }
                                 session.generation = session.generation.wrapping_add(1);
                             }
                             let event = AppEvent::DocumentSaved {
                                 session: session_key.clone(),
                                 document: doc_key.clone(),
+                                editor,
                             };
                             state.update_status_from_event(&event);
                             cx.emit(event);
@@ -113,6 +161,8 @@ impl AppCommands {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentSaveFailed {
                                 session: session_key.clone(),
+                                document: doc_key.clone(),
+                                editor,
                                 error: e.to_string(),
                             };
                             state.update_status_from_event(&event);

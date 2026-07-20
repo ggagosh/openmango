@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, doc_to_json, parse_json_to_doc, require_confirmation,
+    MongoContext, ToolError, doc_to_json, ensure_writable, parse_json_to_doc, require_confirmation,
     resolve_collection,
 };
 
@@ -65,6 +65,7 @@ impl Tool for UpdateDocumentsTool {
     }
 
     async fn call(&self, args: UpdateArgs) -> Result<serde_json::Value, ToolError> {
+        ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;
         let update = parse_json_to_doc(&args.update)?;
@@ -73,14 +74,16 @@ impl Tool for UpdateDocumentsTool {
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
 
         // Build preview: count + sample docs matching filter
-        let count = collection.count_documents(filter.clone()).await?;
-        let cursor = collection.find(filter.clone()).limit(3).await?;
+        let many = args.many.unwrap_or(true);
+        let matching_count = collection.count_documents(filter.clone()).await?;
+        let affected_count = if many { matching_count } else { matching_count.min(1) };
+        let cursor = collection.find(filter.clone()).limit(if many { 3 } else { 1 }).await?;
         let sample_bson: Vec<bson::Document> = cursor.try_collect().await?;
         let sample_docs: Vec<serde_json::Value> = sample_bson.iter().map(doc_to_json).collect();
 
         let preview = OperationPreview {
             collection: col_name.clone(),
-            affected_count: count,
+            affected_count,
             sample_docs,
             reason: None,
         };
@@ -88,12 +91,12 @@ impl Tool for UpdateDocumentsTool {
         let args_json = serde_json::to_string(&serde_json::json!({
             "filter": args.filter,
             "update": args.update,
+            "many": many,
         }))
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
         // Execute
-        let many = args.many.unwrap_or(true);
         let result = if many {
             let r = collection.update_many(filter, update).await?;
             serde_json::json!({

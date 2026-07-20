@@ -89,6 +89,9 @@ actions!(
     ]
 );
 
+const DOCUMENT_EDIT_CONTEXT: &str = "Documents && !Input && !Aggregation";
+const FOCUS_CONTENT_KEYS: [&str; 2] = ["cmd-shift-1", "ctrl-shift-1"];
+
 pub fn bind_default_keymap(cx: &mut App) {
     cx.bind_keys(default_keybindings());
 }
@@ -218,10 +221,10 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-e", EditDocumentJson, Some("Documents && !Input")),
         KeyBinding::new("cmd-shift-j", CopyDocumentJson, Some("Documents && !Input")),
         KeyBinding::new("ctrl-shift-j", CopyDocumentJson, Some("Documents && !Input")),
-        KeyBinding::new("cmd-d", DuplicateDocument, Some("Documents && !Input")),
-        KeyBinding::new("ctrl-d", DuplicateDocument, Some("Documents && !Input")),
-        KeyBinding::new("backspace", DeleteDocument, Some("Documents && !Input")),
-        KeyBinding::new("delete", DeleteDocument, Some("Documents && !Input")),
+        KeyBinding::new("cmd-d", DuplicateDocument, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("ctrl-d", DuplicateDocument, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("backspace", DeleteDocument, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("delete", DeleteDocument, Some(DOCUMENT_EDIT_CONTEXT)),
         KeyBinding::new("cmd-shift-backspace", DeleteCollection, Some("Documents && !Input")),
         KeyBinding::new("ctrl-shift-backspace", DeleteCollection, Some("Documents && !Input")),
         KeyBinding::new("backspace", DeleteDatabase, Some("Database && !Input")),
@@ -261,8 +264,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-l", ToggleAiPanel, Some("Workspace")),
         KeyBinding::new("cmd-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new("ctrl-0", FocusSidebar, Some("Workspace")),
-        KeyBinding::new("cmd-1", FocusContent, Some("Workspace")),
-        KeyBinding::new("ctrl-1", FocusContent, Some("Workspace")),
+        KeyBinding::new(FOCUS_CONTENT_KEYS[0], FocusContent, Some("Workspace")),
+        KeyBinding::new(FOCUS_CONTENT_KEYS[1], FocusContent, Some("Workspace")),
         KeyBinding::new("f3", NextSearchMatch, Some("Documents")),
         KeyBinding::new("shift-f3", PrevSearchMatch, Some("Documents")),
         KeyBinding::new("cmd-g", NextSearchMatch, Some("Documents")),
@@ -349,4 +352,29 @@ fn default_keybindings() -> Vec<KeyBinding> {
             Some("Documents && Aggregation"),
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{KeyBindingContextPredicate, KeyContext};
+
+    use super::{DOCUMENT_EDIT_CONTEXT, FOCUS_CONTENT_KEYS};
+
+    #[test]
+    fn document_duplicate_and_delete_do_not_match_aggregation() {
+        let document = KeyBindingContextPredicate::parse(DOCUMENT_EDIT_CONTEXT).unwrap();
+        let aggregation =
+            KeyBindingContextPredicate::parse("Documents && Aggregation && !Input").unwrap();
+        let contexts = [KeyContext::parse("Documents Aggregation").unwrap()];
+
+        assert!(document.depth_of(&contexts).is_none());
+        assert!(aggregation.depth_of(&contexts).is_some());
+    }
+
+    #[test]
+    fn focus_content_no_longer_conflicts_with_numbered_tab_selection() {
+        assert!(!FOCUS_CONTENT_KEYS.contains(&"cmd-1"));
+        assert!(!FOCUS_CONTENT_KEYS.contains(&"ctrl-1"));
+        assert_eq!(FOCUS_CONTENT_KEYS, ["cmd-shift-1", "ctrl-shift-1"]);
+    }
 }

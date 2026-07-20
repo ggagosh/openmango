@@ -84,6 +84,14 @@ pub fn collect_columns(docs: &[Document]) -> Vec<String> {
 
 /// Extract flattened keys from a document without computing values.
 /// More efficient than flatten_document when only keys are needed.
+pub fn collect_document_columns(
+    doc: &Document,
+    seen: &mut HashSet<String>,
+    order: &mut Vec<String>,
+) {
+    collect_keys_from_doc(doc, "", seen, order);
+}
+
 fn collect_keys_from_doc(
     doc: &Document,
     prefix: &str,

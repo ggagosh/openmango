@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::types::DocumentViewMode;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PipelineStage {
     pub operator: String,
     pub body: String,

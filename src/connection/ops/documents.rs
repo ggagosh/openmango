@@ -22,25 +22,66 @@ impl ConnectionManager {
         let client = client.clone();
         let database = database.to_string();
         let collection = collection.to_string();
-        let filter = opts.filter.unwrap_or_default();
+        let crate::connection::types::FindDocumentsOptions {
+            filter,
+            sort,
+            projection,
+            skip,
+            limit,
+            max_time,
+            cancellation,
+        } = opts;
+        let filter = filter.unwrap_or_default();
 
         self.runtime.block_on(async {
             let coll = client.database(&database).collection::<Document>(&collection);
+            let cancelled = || async {
+                while !cancellation.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            };
 
-            // Get total count (with filter)
-            let total = coll.count_documents(filter.clone()).await?;
+            // Apply maxTimeMS to both server commands and drop in-flight driver futures on cancel.
+            let total = tokio::select! {
+                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+                result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
+            };
 
-            // Fetch documents with pagination
             let mut options = mongodb::options::FindOptions::default();
-            options.skip = Some(opts.skip);
-            options.limit = Some(opts.limit);
-            options.sort = opts.sort;
-            options.projection = opts.projection;
+            options.skip = Some(skip);
+            options.limit = Some(limit);
+            options.sort = sort;
+            options.projection = projection;
+            options.max_time = Some(max_time);
 
-            let cursor = coll.find(filter).with_options(options).await?;
-            let documents: Vec<Document> = cursor.try_collect().await?;
+            let cursor = tokio::select! {
+                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+                result = coll.find(filter).with_options(options) => result?,
+            };
+            let documents: Vec<Document> = tokio::select! {
+                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+                result = cursor.try_collect() => result?,
+            };
 
             Ok((documents, total))
+        })
+    }
+
+    /// Count documents matching an exact filter (runs in Tokio runtime).
+    pub fn count_documents(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        filter: Document,
+    ) -> Result<u64> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            Ok(coll.count_documents(filter).await?)
         })
     }
 
@@ -205,6 +246,108 @@ impl ConnectionManager {
         self.runtime.block_on(async {
             let coll = client.database(&database).collection::<Document>(&collection);
             coll.replace_one(doc! { "_id": id }, replacement).await?;
+            Ok(())
+        })
+    }
+
+    /// Replace every document matching a frozen filter while preserving each `_id`.
+    /// Replacements are ordered so duplicate-key failures report an exact partial count.
+    pub fn replace_documents_by_filter(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        filter: Document,
+        replacement: Document,
+        cancellation: crate::connection::types::CancellationToken,
+    ) -> Result<crate::connection::types::BulkReplaceResult> {
+        use futures::TryStreamExt as _;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async move {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let mut cursor = coll
+                .find(filter)
+                .projection(doc! { "_id": 1 })
+                .sort(doc! { "_id": 1 })
+                .await?;
+            let mut ids = Vec::new();
+            while let Some(document) = cursor.try_next().await? {
+                if cancellation.is_cancelled() {
+                    return Err(crate::error::Error::Parse(
+                        "Bulk replacement cancelled before any documents were replaced".to_string(),
+                    ));
+                }
+                let Some(id) = document.get("_id").cloned() else {
+                    return Err(crate::error::Error::Parse(
+                        "Matched document is missing _id; no replacements were started".to_string(),
+                    ));
+                };
+                ids.push(id);
+            }
+
+            let matched_count = ids.len() as u64;
+            let mut modified_count = 0u64;
+            for (replaced_count, id) in ids.into_iter().enumerate() {
+                let replaced_count = replaced_count as u64;
+                if cancellation.is_cancelled() {
+                    return Err(crate::error::Error::Parse(format!(
+                        "Bulk replacement cancelled after replacing {replaced_count} of {matched_count} matched documents"
+                    )));
+                }
+                let mut document = replacement.clone();
+                document.insert("_id", id.clone());
+                let result = coll.replace_one(doc! { "_id": id }, document).await.map_err(|error| {
+                    crate::error::Error::Parse(format!(
+                        "Bulk replacement failed after replacing {replaced_count} of {matched_count} matched documents: {error}"
+                    ))
+                })?;
+                if result.matched_count != 1 {
+                    return Err(crate::error::Error::Parse(format!(
+                        "Bulk replacement stopped after replacing {replaced_count} of {matched_count} matched documents because a document disappeared"
+                    )));
+                }
+                modified_count += result.modified_count;
+            }
+
+            Ok(crate::connection::types::BulkReplaceResult {
+                matched_count,
+                modified_count,
+            })
+        })
+    }
+
+    /// Replace only when the server document still matches the expected baseline.
+    pub fn replace_document_if_current(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+        expected: &Document,
+        replacement: Document,
+    ) -> Result<()> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+        let expected = expected.clone();
+        let filter = doc! {
+            "_id": id,
+            "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
+        };
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let result = coll.replace_one(filter, replacement).await?;
+            if result.matched_count == 0 {
+                return Err(crate::error::Error::Parse(
+                    "Document changed on the server; reload before saving.".to_string(),
+                ));
+            }
             Ok(())
         })
     }

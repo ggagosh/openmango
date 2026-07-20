@@ -160,9 +160,12 @@ fn render_delete_menu(
                                 if ids.is_empty() {
                                     return;
                                 }
+                                let affected_count = ids.len();
                                 let filter = mongodb::bson::doc! { "_id": { "$in": ids } };
-                                let message =
-                                    format!("Delete {} documents? This cannot be undone.", count);
+                                let message = format!(
+                                    "Delete {} documents? This cannot be undone.",
+                                    affected_count
+                                );
                                 open_confirm_dialog(
                                     window,
                                     cx,
@@ -205,27 +208,14 @@ fn render_delete_menu(
                             if filter.is_empty() {
                                 return;
                             }
-                            open_confirm_dialog(
-                        window,
-                        cx,
-                        "Delete filtered documents",
-                        "Delete all documents matching the current filter? This cannot be undone."
-                            .to_string(),
-                        "Delete",
-                        true,
-                        {
-                            let state_for_delete = state_for_delete.clone();
-                            let session_key = session_key.clone();
-                            move |_window, cx| {
-                                AppCommands::delete_documents_by_filter(
-                                    state_for_delete.clone(),
-                                    session_key.clone(),
-                                    filter.clone(),
-                                    cx,
-                                );
-                            }
-                        },
-                    );
+                            crate::views::documents::request_delete_confirmation(
+                                state_for_delete.clone(),
+                                session_key,
+                                filter,
+                                "currently filtered",
+                                window,
+                                cx,
+                            );
                         }
                     }),
             )
@@ -237,26 +227,13 @@ fn render_delete_menu(
                         let Some(session_key) = session_key.clone() else {
                             return;
                         };
-                        open_confirm_dialog(
+                        crate::views::documents::request_delete_confirmation(
+                            state_for_delete.clone(),
+                            session_key,
+                            Document::new(),
+                            "collection",
                             window,
                             cx,
-                            "Delete all documents",
-                            "Delete all documents in this collection? This cannot be undone."
-                                .to_string(),
-                            "Delete",
-                            true,
-                            {
-                                let state_for_delete = state_for_delete.clone();
-                                let session_key = session_key.clone();
-                                move |_window, cx| {
-                                    AppCommands::delete_documents_by_filter(
-                                        state_for_delete.clone(),
-                                        session_key.clone(),
-                                        Document::new(),
-                                        cx,
-                                    );
-                                }
-                            },
                         );
                     }
                 }),
@@ -1256,11 +1233,17 @@ pub fn render_aggregation_actions(
                 .on_click({
                     let session_key = session_key.clone();
                     let state = state.clone();
-                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         let Some(session_key) = session_key.clone() else {
                             return;
                         };
-                        AppCommands::run_aggregation(state.clone(), session_key, false, cx);
+                        crate::views::documents::request_run_aggregation(
+                            state.clone(),
+                            session_key,
+                            false,
+                            window,
+                            cx,
+                        );
                     }
                 }),
         )

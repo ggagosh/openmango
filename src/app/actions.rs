@@ -1,19 +1,28 @@
 use gpui::*;
 use uuid::Uuid;
 
-use crate::components::ConnectionDialog;
 use crate::components::action_bar::ActionExecution;
+use crate::components::{ConnectionDialog, request_disconnect_connection, request_unsaved_action};
+use crate::keyboard::RefreshView;
 use crate::state::settings::AppTheme;
-use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, View};
+use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, UnsavedScope, View};
 use crate::views::CollectionView;
 
 use super::AppRoot;
 use super::dialogs::{open_create_collection_dialog, open_create_database_dialog};
 
+fn numbered_tab_index(key: &str, command: bool, alt: bool, shift: bool) -> Option<usize> {
+    if !command || alt || shift || key.len() != 1 {
+        return None;
+    }
+    let digit = key.chars().next()?.to_digit(10)?;
+    (1..=9).contains(&digit).then(|| (digit - 1) as usize)
+}
+
 impl AppRoot {
     pub(super) fn install_global_shortcuts(cx: &mut Context<Self>) -> Subscription {
         let weak_view = cx.entity().downgrade();
-        cx.intercept_keystrokes(move |event, window, cx| {
+        cx.intercept_keystrokes(move |event, _window, cx| {
             let Some(view) = weak_view.upgrade() else {
                 return;
             };
@@ -29,46 +38,9 @@ impl AppRoot {
                 let alt = modifiers.alt;
                 let shift = modifiers.shift;
 
-                if cmd_or_ctrl && !alt && !shift && key == "q" {
-                    cx.quit();
-                    cx.stop_propagation();
-                    return;
-                }
-
-                if cmd_or_ctrl && !alt && !shift && key == "k" {
-                    this.action_bar.update(
-                        cx,
-                        |bar: &mut crate::components::action_bar::ActionBar, cx| {
-                            bar.toggle(window, cx);
-                        },
-                    );
-                    cx.stop_propagation();
-                    return;
-                }
-
-                if cmd_or_ctrl && !alt && !shift && key == "," {
-                    this.state.update(cx, |state, cx| {
-                        state.open_settings_tab(cx);
-                    });
-                    cx.stop_propagation();
-                    return;
-                }
-
-                if cmd_or_ctrl && !alt && !shift && key == "r" {
-                    this.handle_refresh(window, cx);
-                    cx.stop_propagation();
-                    return;
-                }
-
-                // Cmd+1-9: switch to tab by index
-                if cmd_or_ctrl
-                    && !alt
-                    && !shift
-                    && key.len() == 1
-                    && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
-                    && (1..=9).contains(&digit)
-                {
-                    let tab_index = (digit - 1) as usize;
+                // Cmd+1-9: switch to tab by index. Other global shortcuts are handled by
+                // the context-aware keymap so each keystroke has a single dispatch path.
+                if let Some(tab_index) = numbered_tab_index(&key, cmd_or_ctrl, alt, shift) {
                     this.state.update(cx, |state, cx| {
                         state.select_tab(tab_index, cx);
                     });
@@ -126,11 +98,40 @@ impl AppRoot {
         CollectionView::open_index_create_dialog(self.state.clone(), session_key, window, cx);
     }
 
-    pub(super) fn handle_close_tab(&mut self, cx: &mut App) {
-        self.state.update(cx, |state, cx| match state.active_tab() {
-            ActiveTab::Preview => state.close_preview_tab(cx),
-            ActiveTab::Index(index) => state.close_tab(index, cx),
-            ActiveTab::None => {}
+    pub(super) fn handle_close_tab(&mut self, window: &mut Window, cx: &mut App) {
+        let target = {
+            let state = self.state.read(cx);
+            match state.active_tab() {
+                ActiveTab::Preview => state
+                    .preview_tab()
+                    .cloned()
+                    .map(|key| (UnsavedScope::Preview(key.clone()), None, Some(key))),
+                ActiveTab::Index(index) => state
+                    .open_tabs()
+                    .get(index)
+                    .cloned()
+                    .map(|tab| (UnsavedScope::Tab(tab.clone()), Some(tab), None)),
+                ActiveTab::None => None,
+            }
+        };
+        let Some((scope, tab, preview)) = target else {
+            return;
+        };
+        let state = self.state.clone();
+        request_unsaved_action(self.state.clone(), scope, window, cx, move |_window, cx| {
+            state.update(cx, |state, cx| {
+                if let Some(tab) = &tab {
+                    if let Some(index) =
+                        state.open_tabs().iter().position(|candidate| candidate == tab)
+                    {
+                        state.close_tab(index, cx);
+                    }
+                } else if let Some(preview) = &preview
+                    && state.preview_tab() == Some(preview)
+                {
+                    state.close_preview_tab(cx);
+                }
+            });
         });
     }
 
@@ -194,7 +195,7 @@ impl AppRoot {
         // Disconnect actions
         if let Some(conn_str) = id.strip_prefix("disconnect:") {
             if let Ok(conn_id) = Uuid::parse_str(conn_str) {
-                AppCommands::disconnect(state.clone(), conn_id, cx);
+                request_disconnect_connection(state.clone(), conn_id, window, cx);
             }
             return;
         }
@@ -221,7 +222,12 @@ impl AppRoot {
                         "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
                         "Restart now",
                         false,
-                        |_window, cx| cx.quit(),
+                        {
+                            let state = state.clone();
+                            move |window, cx| {
+                                crate::components::request_app_quit(state.clone(), window, cx);
+                            }
+                        },
                     );
                 }
             }
@@ -271,12 +277,7 @@ impl AppRoot {
                 open_create_collection_dialog(state.clone(), database, window, cx);
             }
             "cmd:refresh" => {
-                let state_ref = state.read(cx);
-                if let Some(conn_id) = state_ref.selected_connection_id()
-                    && state_ref.is_connected(conn_id)
-                {
-                    AppCommands::refresh_databases(state.clone(), conn_id, cx);
-                }
+                window.dispatch_action(Box::new(RefreshView), cx);
             }
             "cmd:disconnect" => {
                 // Handled as two-step in ActionBar (switches to Disconnect mode)
@@ -425,5 +426,20 @@ fn format_keystroke(event: &KeystrokeEvent) -> String {
     } else {
         parts.push(&key);
         parts.join("-")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::numbered_tab_index;
+
+    #[test]
+    fn numbered_tabs_own_unshifted_command_digits() {
+        assert_eq!(numbered_tab_index("1", true, false, false), Some(0));
+        assert_eq!(numbered_tab_index("9", true, false, false), Some(8));
+        assert_eq!(numbered_tab_index("1", true, false, true), None);
+        assert_eq!(numbered_tab_index("1", true, true, false), None);
+        assert_eq!(numbered_tab_index("1", false, false, false), None);
+        assert_eq!(numbered_tab_index("0", true, false, false), None);
     }
 }

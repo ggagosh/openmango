@@ -127,8 +127,8 @@ impl ConfigManager {
         Ok(AppSettings::default())
     }
 
-    /// Save application settings to disk. The API key is never persisted —
-    /// it lives in the OS keychain (release) or dev credentials file (debug).
+    /// Save application settings to disk. The API key is never persisted here;
+    /// it lives in the OS keychain.
     pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
         let mut to_save = settings.clone();
         to_save.ai.api_key.clear();
@@ -164,6 +164,55 @@ mod tests {
         fn with_config_dir(config_dir: PathBuf) -> Self {
             Self { config_dir }
         }
+    }
+
+    #[test]
+    fn save_connections_strips_all_credentials_from_disk() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+        let mut connection = SavedConnection::new(
+            "secret matrix".to_string(),
+            "mongodb://user:authority-secret@host/db?tlsCertificateKeyFilePassword=tls-secret&proxyPassword=proxy-secret&authMechanismProperties=SERVICE_NAME%3Amongodb%2CAWS_SESSION_TOKEN%3Aaws-secret"
+                .into(),
+        );
+        connection.ssh = Some(crate::models::SshConfig {
+            password: Some("ssh-secret".into()),
+            identity_passphrase: Some("identity-secret".into()),
+            ..crate::models::SshConfig::default()
+        });
+        connection.proxy = Some(crate::models::ProxyConfig {
+            password: Some("modeled-proxy-secret".into()),
+            ..crate::models::ProxyConfig::default()
+        });
+
+        manager.save_connections(&[connection]).expect("failed to save connections");
+        let raw = fs::read_to_string(temp_dir.path().join(ConfigManager::CONNECTIONS_FILE))
+            .expect("failed to read connections");
+
+        for secret in [
+            "authority-secret",
+            "tls-secret",
+            "proxy-secret",
+            "aws-secret",
+            "ssh-secret",
+            "identity-secret",
+            "modeled-proxy-secret",
+        ] {
+            assert!(!raw.contains(secret), "connections.json leaked {secret}");
+        }
+        assert!(raw.contains("SERVICE_NAME%3Amongodb"));
+    }
+
+    #[test]
+    fn malformed_connections_file_is_left_untouched() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+        let path = temp_dir.path().join(ConfigManager::CONNECTIONS_FILE);
+        let malformed = r#"[{"name":"recover-me","uri":"mongodb://user:secret@host""#;
+        fs::write(&path, malformed).expect("failed to write malformed fixture");
+
+        assert!(manager.load_connections().is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), malformed);
     }
 
     #[test]

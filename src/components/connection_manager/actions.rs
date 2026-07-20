@@ -9,10 +9,10 @@ use gpui_component::input::{Input, InputState, Position};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::components::{Button, cancel_button, open_confirm_dialog};
+use crate::components::{Button, cancel_button, open_confirm_dialog, request_remove_connection};
 use crate::helpers::{
-    REDACTED_PASSWORD, extract_host_from_uri, extract_uri_password, inject_uri_password,
-    redact_uri_password, validate_mongodb_uri,
+    UriSecrets, extract_host_from_uri, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
+    validate_mongodb_uri,
 };
 use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
 use crate::state::AppState;
@@ -22,6 +22,11 @@ use super::uri::{bool_to_query, parse_bool, parse_uri, value_or_none};
 use super::{ConnectionManager, TestStatus};
 
 const TEST_CONNECTION_TIMEOUT_SECS: u64 = 30;
+
+fn non_empty_value(state: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = state.read(cx).value().trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
 
 impl ConnectionManager {
     pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
@@ -76,13 +81,9 @@ impl ConnectionManager {
             self.draft
                 .name_state
                 .update(cx, |state, cx| state.set_value(connection.name.clone(), window, cx));
-            self.draft.uri_state.update(cx, |state, cx| {
-                state.set_value(connection.uri.clone(), window, cx);
-                state.set_cursor_position(Position::new(0, 0), window, cx);
-            });
             self.draft.read_only = connection.read_only;
             self.load_transport_settings(&connection, window, cx);
-            self.import_from_uri(window, cx);
+            self.import_uri(connection.uri.clone(), window, cx);
         } else {
             self.selected_id = None;
             self.draft.reset(window, cx);
@@ -269,30 +270,61 @@ impl ConnectionManager {
         Ok((ssh, proxy))
     }
 
+    pub(super) fn capture_uri_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let uri = self.draft.uri_state.read(cx).value().to_string();
+        if self.draft.internal_uri_value.as_deref() == Some(uri.as_str()) {
+            self.draft.internal_uri_value = None;
+            return;
+        }
+        let secrets = extract_uri_secrets(&uri);
+        self.draft.password_state.update(cx, |state, cx| {
+            state.set_value(secrets.password.clone().unwrap_or_default(), window, cx)
+        });
+        self.draft.tls_cert_key_password_state.update(cx, |state, cx| {
+            state.set_value(
+                secrets.tls_certificate_key_file_password.clone().unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+        self.draft.uri_secrets = UriSecrets {
+            password: None,
+            tls_certificate_key_file_password: None,
+            proxy_password: secrets.proxy_password,
+            aws_session_token: secrets.aws_session_token,
+        };
+        let sanitized = strip_uri_secrets(&uri);
+        if sanitized != uri {
+            self.draft.internal_uri_value = Some(sanitized.clone());
+            self.draft.uri_state.update(cx, |state, cx| state.set_value(sanitized, window, cx));
+        }
+    }
+
     pub(super) fn real_uri(&self, cx: &App) -> String {
         let uri = self.draft.uri_state.read(cx).value().to_string();
-        if let Some(existing_pw) = extract_uri_password(&uri)
-            && existing_pw == REDACTED_PASSWORD
-        {
-            let real_pw = self.draft.password_state.read(cx).value().to_string();
-            let real_pw = real_pw.trim();
-            if !real_pw.is_empty() {
-                return inject_uri_password(&uri, Some(real_pw));
-            }
-        }
-        uri
+        let mut secrets = self.draft.uri_secrets.clone();
+        secrets.password = non_empty_value(&self.draft.password_state, cx);
+        secrets.tls_certificate_key_file_password =
+            non_empty_value(&self.draft.tls_cert_key_password_state, cx);
+        inject_uri_secrets(&strip_uri_secrets(&uri), &secrets)
     }
 
     pub(super) fn import_from_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let uri = self.draft.uri_state.read(cx).value().to_string();
-        match parse_uri(&uri) {
+        self.import_uri(uri, window, cx);
+    }
+
+    fn import_uri(&mut self, uri: String, window: &mut Window, cx: &mut Context<Self>) {
+        let uri_secrets = extract_uri_secrets(&uri);
+        let sanitized_uri = strip_uri_secrets(&uri);
+        match parse_uri(&sanitized_uri) {
             Ok(parts) => {
-                let (user, password) = parts.userinfo();
+                let (user, _redacted_password) = parts.userinfo();
                 self.draft
                     .username_state
                     .update(cx, |state, cx| state.set_value(user.unwrap_or_default(), window, cx));
                 self.draft.password_state.update(cx, |state, cx| {
-                    state.set_value(password.unwrap_or_default(), window, cx)
+                    state.set_value(uri_secrets.password.clone().unwrap_or_default(), window, cx)
                 });
                 self.draft.app_name_state.update(cx, |state, cx| {
                     state.set_value(parts.get_query("appName"), window, cx)
@@ -346,16 +378,26 @@ impl ConnectionManager {
                     state.set_value(parts.get_query("tlsCertificateKeyFile"), window, cx)
                 });
                 self.draft.tls_cert_key_password_state.update(cx, |state, cx| {
-                    state.set_value(parts.get_query("tlsCertificateKeyFilePassword"), window, cx)
+                    state.set_value(
+                        uri_secrets.tls_certificate_key_file_password.clone().unwrap_or_default(),
+                        window,
+                        cx,
+                    )
                 });
                 self.draft.direct_connection = parse_bool(parts.get_query("directConnection"));
                 self.draft.tls = parse_bool(parts.get_query("tls"));
                 self.draft.tls_insecure = parse_bool(parts.get_query("tlsInsecure"));
                 self.parse_error = None;
 
-                let redacted = redact_uri_password(&uri);
+                self.draft.uri_secrets = UriSecrets {
+                    password: None,
+                    tls_certificate_key_file_password: None,
+                    proxy_password: uri_secrets.proxy_password,
+                    aws_session_token: uri_secrets.aws_session_token,
+                };
+                self.draft.internal_uri_value = Some(sanitized_uri.clone());
                 self.draft.uri_state.update(cx, |state, cx| {
-                    state.set_value(redacted, window, cx);
+                    state.set_value(sanitized_uri, window, cx);
                     state.set_cursor_position(Position::new(0, 0), window, cx);
                 });
             }
@@ -411,15 +453,21 @@ impl ConnectionManager {
             "tlsCertificateKeyFile",
             value_or_none(&self.draft.tls_cert_key_file_state, cx),
         );
-        parts.set_query(
-            "tlsCertificateKeyFilePassword",
-            value_or_none(&self.draft.tls_cert_key_password_state, cx),
-        );
+        parts.set_query("tlsCertificateKeyFilePassword", None);
         parts.set_query("directConnection", bool_to_query(self.draft.direct_connection));
         parts.set_query("tls", bool_to_query(self.draft.tls));
         parts.set_query("tlsInsecure", bool_to_query(self.draft.tls_insecure));
 
-        let updated = redact_uri_password(&parts.to_uri());
+        let rebuilt = parts.to_uri();
+        let extracted = extract_uri_secrets(&rebuilt);
+        if extracted.aws_session_token.is_some() {
+            self.draft.uri_secrets.aws_session_token = extracted.aws_session_token;
+        }
+        if extracted.proxy_password.is_some() {
+            self.draft.uri_secrets.proxy_password = extracted.proxy_password;
+        }
+        let updated = strip_uri_secrets(&rebuilt);
+        self.draft.internal_uri_value = Some(updated.clone());
         self.draft.uri_state.update(cx, |state, cx| {
             state.set_value(updated, window, cx);
             state.set_cursor_position(Position::new(0, 0), window, cx);
@@ -595,6 +643,7 @@ impl ConnectionManager {
                         read_only,
                         ssh: ssh.clone(),
                         proxy: proxy.clone(),
+                        secret_id: existing.secret_id,
                     };
                     state.update_connection(connection.clone(), cx);
                     saved_connection = Some(connection);
@@ -629,10 +678,8 @@ impl ConnectionManager {
             "Remove this connection? This cannot be undone.".to_string(),
             "Remove",
             true,
-            move |_window, cx| {
-                state.update(cx, |state, cx| {
-                    state.remove_connection(connection_id, cx);
-                });
+            move |window, cx| {
+                request_remove_connection(state.clone(), connection_id, window, cx);
             },
         );
     }

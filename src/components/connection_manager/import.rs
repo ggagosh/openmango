@@ -162,9 +162,7 @@ fn finish_import(
         let count = imported.len();
         let is_redacted = file.mode == ExportMode::Redacted;
 
-        for conn in imported {
-            state.add_connection(conn, cx);
-        }
+        state.add_connections(imported, cx);
 
         let message = if is_redacted {
             format!(

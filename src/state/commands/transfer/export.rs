@@ -8,14 +8,19 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::bson::parse_document_from_json;
 use crate::connection::{
-    BsonOutputFormat, BsonToolProgress, ExportQueryOptions, ExtendedJsonMode, JsonExportOptions,
+    BsonOutputFormat, BsonToolProgress, BsonToolRunOutcome, ExportQueryOptions, ExtendedJsonMode,
+    JsonExportOptions,
 };
 use crate::state::app_state::CollectionTransferStatus;
-use crate::state::{AppCommands, AppEvent, AppState, StatusMessage, TransferFormat};
+use crate::state::{
+    AppCommands, AppEvent, AppState, StatusMessage, TransferFormat, parse_export_query_document,
+};
 
-use super::{CollectionProgressMessage, ExportConfig, TransferProgressMessage};
+use super::{
+    CollectionProgressMessage, ExportConfig, TransferProgressMessage,
+    transfer_message_matches_generation,
+};
 
 /// Maximum number of collections to process concurrently for database-scope operations.
 const PARALLEL_COLLECTION_LIMIT: usize = 4;
@@ -37,9 +42,23 @@ impl AppCommands {
             return;
         };
 
-        // For BSON export, we need the connection string instead of client
+        // BSON tools must reuse the active SSH/SOCKS transport rather than the saved URI.
         let connection_uri = if matches!(config.format, TransferFormat::Bson) {
-            state.read(cx).connection_uri(connection_id)
+            match state.read(cx).active_connection_tool_uri(connection_id) {
+                Ok(uri) => Some(uri),
+                Err(error) => {
+                    state.update(cx, |state, cx| {
+                        state.set_status_message(Some(StatusMessage::error(error.to_string())));
+                        if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                            tab.runtime.is_running = false;
+                            tab.runtime.error_message = Some(error.to_string());
+                        }
+                        cx.emit(AppEvent::TransferFailed { transfer_id, error: error.to_string() });
+                        cx.notify();
+                    });
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -66,10 +85,8 @@ impl AppCommands {
         let database = config.source_database;
         let collection = config.source_collection;
 
-        // Expand placeholders in file path (e.g., ${datetime}, ${database}, ${collection})
-        let expanded_path =
-            crate::state::expand_filename_template(&config.file_path, &database, &collection);
-        let path = PathBuf::from(&expanded_path);
+        // `execute_transfer_with_confirmation` resolves templates once and freezes the exact path.
+        let path = PathBuf::from(&config.file_path);
         let format = config.format;
         let scope = config.scope;
         let json_mode = config.json_mode;
@@ -86,8 +103,14 @@ impl AppCommands {
 
         let cancellation_token = crate::connection::types::CancellationToken::new();
 
-        state.update(cx, |state, cx| {
+        let operation_generation = state.update(cx, |state, cx| {
+            let mut operation_generation = 0;
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                operation_generation = tab
+                    .runtime
+                    .transfer_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
                 tab.runtime.is_running = true;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
@@ -97,6 +120,7 @@ impl AppCommands {
             state.set_status_message(Some(StatusMessage::info("Exporting...")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
             cx.notify();
+            operation_generation
         });
 
         // For database scope with JSON/CSV formats, use progress tracking
@@ -173,6 +197,8 @@ impl AppCommands {
                 bson_output,
                 gzip,
                 exclude_collections,
+                cancellation_token,
+                operation_generation,
                 cx,
             );
             return;
@@ -233,10 +259,29 @@ impl AppCommands {
                     collections: collections.clone(),
                 });
 
-                // Create output directory
-                if let Err(e) = std::fs::create_dir_all(&path) {
-                    let _ =
-                        tx.unbounded_send(TransferProgressMessage::Failed { error: e.to_string() });
+                // Stage the complete database export beside the destination. The existing
+                // destination is promoted only after every collection succeeds.
+                let parent = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let staging = match tempfile::Builder::new()
+                    .prefix(".openmango-database-export-")
+                    .tempdir_in(parent)
+                {
+                    Ok(staging) => staging,
+                    Err(error) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                            error: error.to_string(),
+                        });
+                        return;
+                    }
+                };
+                let staging_path = staging.path().join("export");
+                if let Err(error) = std::fs::create_dir(&staging_path) {
+                    let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                        error: error.to_string(),
+                    });
                     return;
                 }
 
@@ -250,7 +295,7 @@ impl AppCommands {
                             let tx = tx.clone();
                             let client = client.clone();
                             let database = database.clone();
-                            let path = path.clone();
+                            let path = staging_path.clone();
                             let handle = runtime_handle.clone();
                             let manager = manager.clone();
                             let cancellation_token = cancellation_token.clone();
@@ -369,7 +414,22 @@ impl AppCommands {
                     }
                 }
 
-                // Send completed message
+                if cancellation_token.is_cancelled() {
+                    had_error = true;
+                }
+                if !had_error
+                    && let Err(error) = crate::connection::ops::export::promote_export_directory(
+                        &staging_path,
+                        &path,
+                    )
+                {
+                    let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                        error: format!("Could not finalize database export: {error}"),
+                    });
+                    return;
+                }
+
+                // Dropping `staging` removes every partial file after failure/cancellation.
                 let _ = tx.unbounded_send(TransferProgressMessage::Completed {
                     total_count,
                     had_error,
@@ -390,6 +450,7 @@ impl AppCommands {
                     let should_notify = match &msg {
                         TransferProgressMessage::Started { .. }
                         | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Cancelled { .. }
                         | TransferProgressMessage::Failed { .. } => true,
                         TransferProgressMessage::CollectionProgress { .. } => {
                             progress_count += 1;
@@ -425,13 +486,24 @@ impl AppCommands {
                                     cx.emit(event);
                                 }
                                 TransferProgressMessage::Completed { total_count, had_error } => {
+                                    let failure_summary = state
+                                        .transfer_tab(transfer_id)
+                                        .and_then(|tab| tab.runtime.database_progress.as_ref())
+                                        .and_then(|progress| progress.failure_summary());
+                                    let failed_count = state
+                                        .transfer_tab(transfer_id)
+                                        .and_then(|tab| tab.runtime.database_progress.as_ref())
+                                        .map_or(0, |progress| progress.failed_count());
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count = total_count;
+                                        tab.runtime.error_message = failure_summary;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
-                                            "Export completed with errors".to_string(),
+                                            format!(
+                                                "Export completed with errors: {failed_count} collection(s) failed; {total_count} documents processed"
+                                            ),
                                         )));
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
@@ -443,6 +515,7 @@ impl AppCommands {
                                         count: total_count,
                                     });
                                 }
+                                TransferProgressMessage::Cancelled { .. } => {}
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
@@ -476,6 +549,8 @@ impl AppCommands {
         output_format: BsonOutputFormat,
         gzip: bool,
         exclude_collections: Vec<String>,
+        cancellation_token: crate::connection::types::CancellationToken,
+        operation_generation: u64,
         cx: &mut App,
     ) {
         let (tx, rx) = mpsc::unbounded::<TransferProgressMessage>();
@@ -491,14 +566,45 @@ impl AppCommands {
                     collections: vec![], // Will be discovered during export
                 });
 
+                let final_path = match output_format {
+                    BsonOutputFormat::Archive
+                        if path.extension().is_none_or(|extension| extension != "archive") =>
+                    {
+                        path.with_extension("archive")
+                    }
+                    _ => path.clone(),
+                };
+                let parent = final_path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let staging = match tempfile::Builder::new()
+                    .prefix(".openmango-bson-export-")
+                    .tempdir_in(parent)
+                {
+                    Ok(staging) => staging,
+                    Err(error) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                            error: error.to_string(),
+                        });
+                        return;
+                    }
+                };
+                let staged_path = staging.path().join(match output_format {
+                    BsonOutputFormat::Archive => "export.archive",
+                    BsonOutputFormat::Folder => "export",
+                });
+
                 let progress_tx = tx.clone();
+                let cancellation_for_tool = cancellation_token.clone();
                 let result = manager.export_database_bson_with_progress(
                     &connection_uri,
                     &database,
                     output_format,
-                    &path,
+                    &staged_path,
                     gzip,
                     &exclude_collections,
+                    cancellation_for_tool,
                     move |progress| {
                         let msg = match progress {
                             BsonToolProgress::Started { collection } => {
@@ -531,10 +637,30 @@ impl AppCommands {
                 );
 
                 match result {
-                    Ok(()) => {
+                    Ok(BsonToolRunOutcome::Completed) => {
+                        if cancellation_token.is_cancelled() {
+                            let _ = tx.unbounded_send(TransferProgressMessage::Cancelled {
+                                termination_succeeded: true,
+                            });
+                            return;
+                        }
+                        if let Err(error) = crate::connection::ops::export::promote_export_path(
+                            &staged_path,
+                            &final_path,
+                        ) {
+                            let _ = tx.unbounded_send(TransferProgressMessage::Failed {
+                                error: format!("Could not finalize BSON export: {error}"),
+                            });
+                            return;
+                        }
                         let _ = tx.unbounded_send(TransferProgressMessage::Completed {
                             total_count: 0, // mongodump doesn't provide total count
                             had_error: false,
+                        });
+                    }
+                    Ok(BsonToolRunOutcome::Cancelled { termination_succeeded }) => {
+                        let _ = tx.unbounded_send(TransferProgressMessage::Cancelled {
+                            termination_succeeded,
                         });
                     }
                     Err(e) => {
@@ -559,6 +685,7 @@ impl AppCommands {
                     let should_notify = match &msg {
                         TransferProgressMessage::Started { .. }
                         | TransferProgressMessage::Completed { .. }
+                        | TransferProgressMessage::Cancelled { .. }
                         | TransferProgressMessage::Failed { .. } => true,
                         TransferProgressMessage::CollectionProgress { .. } => {
                             progress_count += 1;
@@ -568,6 +695,22 @@ impl AppCommands {
 
                     let _ = cx.update(|cx| {
                         state.update(cx, |state, cx| {
+                            let Some(tab) = state.transfer_tab(transfer_id) else {
+                                return;
+                            };
+                            let current_generation = tab
+                                .runtime
+                                .transfer_generation
+                                .load(std::sync::atomic::Ordering::SeqCst);
+                            let cancellation_result =
+                                matches!(&msg, TransferProgressMessage::Cancelled { .. });
+                            if !transfer_message_matches_generation(
+                                current_generation,
+                                operation_generation,
+                                cancellation_result,
+                            ) {
+                                return;
+                            }
                             match msg {
                                 TransferProgressMessage::Started { collections } => {
                                     let event = AppEvent::DatabaseTransferStarted {
@@ -597,6 +740,7 @@ impl AppCommands {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count = total_count;
+                                        tab.runtime.cancellation_token = None;
                                     }
                                     if had_error {
                                         state.set_status_message(Some(StatusMessage::error(
@@ -612,9 +756,27 @@ impl AppCommands {
                                         count: total_count,
                                     });
                                 }
+                                TransferProgressMessage::Cancelled { termination_succeeded } => {
+                                    let message = if termination_succeeded {
+                                        "BSON export cancelled; mongodump terminated successfully"
+                                    } else {
+                                        "BSON export cancellation requested, but mongodump termination could not be confirmed"
+                                    };
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.cancellation_token = None;
+                                        tab.runtime.error_message = Some(message.to_string());
+                                    }
+                                    state.set_status_message(Some(if termination_succeeded {
+                                        StatusMessage::info(message)
+                                    } else {
+                                        StatusMessage::error(message)
+                                    }));
+                                }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
+                                        tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
@@ -657,22 +819,35 @@ impl AppCommands {
         // Create channel for progress updates from background thread
         let (tx, rx) = mpsc::unbounded::<CollectionProgressMessage>();
 
-        // Parse query options
-        let filter = if export_filter.trim().is_empty() || export_filter.trim() == "{}" {
-            None
-        } else {
-            parse_document_from_json(&export_filter).ok()
-        };
-        let projection = if export_projection.trim().is_empty() || export_projection.trim() == "{}"
-        {
-            None
-        } else {
-            parse_document_from_json(&export_projection).ok()
-        };
-        let sort = if export_sort.trim().is_empty() || export_sort.trim() == "{}" {
-            None
-        } else {
-            parse_document_from_json(&export_sort).ok()
+        // Parse query options without ever broadening an invalid query to `None`.
+        let parsed = [
+            ("Filter", export_filter.as_str()),
+            ("Projection", export_projection.as_str()),
+            ("Sort", export_sort.as_str()),
+        ]
+        .map(|(label, value)| {
+            parse_export_query_document(value).map_err(|error| format!("{label}: {error}"))
+        });
+        let [filter, projection, sort] = parsed;
+        let (filter, projection, sort) = match (filter, projection, sort) {
+            (Ok(filter), Ok(projection), Ok(sort)) => (filter, projection, sort),
+            (filter, projection, sort) => {
+                let error = filter
+                    .err()
+                    .or_else(|| projection.err())
+                    .or_else(|| sort.err())
+                    .unwrap_or_else(|| "Invalid export query options".to_string());
+                state.update(cx, |state, cx| {
+                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                        tab.runtime.is_running = false;
+                        tab.runtime.error_message = Some(error.clone());
+                    }
+                    state.set_status_message(Some(StatusMessage::error(error.clone())));
+                    cx.emit(AppEvent::TransferFailed { transfer_id, error });
+                    cx.notify();
+                });
+                return;
+            }
         };
 
         let query_options = if filter.is_some() || projection.is_some() || sort.is_some() {
@@ -759,7 +934,10 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Completed(count));
                     }
                     Err(e) => {
-                        let _ = tx.unbounded_send(CollectionProgressMessage::Failed(e.to_string()));
+                        let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
+                            error: e.to_string(),
+                            processed: 0,
+                        });
                     }
                 }
 
@@ -779,7 +957,7 @@ impl AppCommands {
                 while let Some(msg) = rx.next().await {
                     let should_notify = match &msg {
                         CollectionProgressMessage::Completed(_)
-                        | CollectionProgressMessage::Failed(_) => true,
+                        | CollectionProgressMessage::Failed { .. } => true,
                         CollectionProgressMessage::Progress(_) => {
                             progress_count += 1;
                             progress_count.is_multiple_of(BATCH_SIZE)
@@ -804,9 +982,11 @@ impl AppCommands {
                                     ))));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed(error) => {
+                                CollectionProgressMessage::Failed { error, processed } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
+                                        tab.runtime.progress_count =
+                                            tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
                                     state.set_status_message(Some(StatusMessage::error(format!(
