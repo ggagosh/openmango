@@ -11,7 +11,8 @@ use gpui_component::input::Input;
 use gpui_component::switch::Switch;
 
 use crate::components::Button;
-use crate::theme::spacing;
+use crate::models::ConnectionColor;
+use crate::theme::{colors, spacing};
 
 use super::ConnectionManager;
 
@@ -24,6 +25,42 @@ impl ConnectionManager {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
+        let selected_color = self.draft.color;
+        let mut no_color_button =
+            Button::new("connection-color-none").compact().label("None").on_click({
+                let view = view.clone();
+                move |_, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.draft.color = None;
+                        cx.notify();
+                    });
+                }
+            });
+        if selected_color.is_none() {
+            no_color_button = no_color_button.primary();
+        }
+        let color_buttons = ConnectionColor::ALL
+            .into_iter()
+            .map(|color| {
+                let accent = colors::connection_accent(color, cx);
+                let view = view.clone();
+                let mut button = Button::new(("connection-color", color as usize))
+                    .compact()
+                    .icon(div().size(px(12.0)).rounded_full().bg(accent))
+                    .tooltip(color.label())
+                    .on_click(move |_, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.draft.color = Some(color);
+                            cx.notify();
+                        });
+                    });
+                if selected_color == Some(color) {
+                    button = button.primary();
+                }
+                button.into_any_element()
+            })
+            .collect::<Vec<_>>();
+
         div()
             .flex()
             .flex_col()
@@ -36,6 +73,31 @@ impl ConnectionManager {
                     .gap(spacing::xs())
                     .child(div().text_sm().text_color(cx.theme().foreground).child("Name"))
                     .child(Input::new(&self.draft.name_state)),
+            )
+            // Connection color
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .child(
+                        div().text_sm().text_color(cx.theme().foreground).child("Connection color"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .child(no_color_button)
+                            .children(color_buttons),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Accents this connection in the sidebar and tabs."),
+                    ),
             )
             // URI
             .child(

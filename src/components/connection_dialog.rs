@@ -424,6 +424,7 @@ impl Render for ConnectionDialog {
                                                 let connection = SavedConnection {
                                                     id: existing.id,
                                                     name,
+                                                    color: existing.color,
                                                     uri,
                                                     last_connected: existing.last_connected,
                                                     read_only,

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::helpers::{
     UriSecrets, extract_uri_secrets, inject_uri_password, inject_uri_secrets, strip_uri_secrets,
 };
-use crate::models::{ProxyConfig, SavedConnection, SshConfig};
+use crate::models::{ConnectionColor, ProxyConfig, SavedConnection, SshConfig};
 
 use super::crypto;
 
@@ -24,6 +24,8 @@ pub enum ExportMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportedConnection {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ConnectionColor>,
     pub uri: String,
     #[serde(default)]
     pub read_only: bool,
@@ -95,6 +97,7 @@ pub fn build_export(
         let entry = match mode {
             ExportMode::Redacted => ExportedConnection {
                 name: conn.name.clone(),
+                color: conn.color,
                 uri: strip_uri_secrets(&conn.uri),
                 read_only: conn.read_only,
                 encrypted_password: None,
@@ -117,6 +120,7 @@ pub fn build_export(
                 };
                 ExportedConnection {
                     name: conn.name.clone(),
+                    color: conn.color,
                     uri: strip_uri_secrets(&conn.uri),
                     read_only: conn.read_only,
                     encrypted_password: encrypted,
@@ -186,6 +190,7 @@ pub fn resolve_import(
                 ec.name.clone()
             };
             let mut conn = SavedConnection::new(name, ec.uri.clone());
+            conn.color = ec.color;
             conn.read_only = ec.read_only;
             conn.ssh = ec.ssh.clone();
             conn.proxy = ec.proxy.clone();
@@ -251,6 +256,7 @@ mod tests {
             SavedConnection {
                 id: Uuid::new_v4(),
                 name: "Local".into(),
+                color: Some(ConnectionColor::Red),
                 uri: "mongodb://admin:secret@localhost:27017/?tlsCertificateKeyFilePassword=tls-secret&proxyPassword=uri-proxy-secret&authMechanismProperties=SERVICE_NAME%3Amongodb%2CAWS_SESSION_TOKEN%3Aaws-secret".into(),
                 last_connected: None,
                 read_only: false,
@@ -279,6 +285,7 @@ mod tests {
             SavedConnection {
                 id: Uuid::new_v4(),
                 name: "Atlas".into(),
+                color: None,
                 uri: "mongodb+srv://user:pass@cluster0.abc.mongodb.net/mydb".into(),
                 last_connected: Some(Utc::now()),
                 read_only: true,
@@ -401,6 +408,7 @@ mod tests {
         let existing = vec![SavedConnection {
             id: Uuid::new_v4(),
             name: "Local".into(),
+            color: None,
             uri: "mongodb://localhost:27017".into(),
             last_connected: None,
             read_only: false,
@@ -417,6 +425,7 @@ mod tests {
             connections: vec![
                 ExportedConnection {
                     name: "Local".into(),
+                    color: Some(ConnectionColor::Blue),
                     uri: "mongodb://localhost:27017".into(),
                     read_only: false,
                     encrypted_password: None,
@@ -426,6 +435,7 @@ mod tests {
                 },
                 ExportedConnection {
                     name: "Atlas".into(),
+                    color: None,
                     uri: "mongodb+srv://cluster0.abc.mongodb.net".into(),
                     read_only: true,
                     encrypted_password: None,
@@ -439,6 +449,7 @@ mod tests {
         let resolved = resolve_import(&file, &existing);
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].name, "Local (imported)");
+        assert_eq!(resolved[0].color, Some(ConnectionColor::Blue));
         assert_eq!(resolved[1].name, "Atlas");
         // New UUIDs
         assert_ne!(resolved[0].id, existing[0].id);
@@ -449,6 +460,7 @@ mod tests {
         let conns = vec![SavedConnection {
             id: Uuid::new_v4(),
             name: "NoAuth".into(),
+            color: None,
             uri: "mongodb://localhost:27017".into(),
             last_connected: None,
             read_only: false,

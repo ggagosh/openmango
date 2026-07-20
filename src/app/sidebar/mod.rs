@@ -8,7 +8,7 @@ use gpui_component::input::InputState;
 use uuid::Uuid;
 
 use crate::components::{
-    ConnectionDialog, ConnectionManager, open_confirm_dialog, request_disconnect_connection,
+    ConnectionManager, open_confirm_dialog, request_disconnect_connection,
     request_preview_collection, request_remove_connection, request_unsaved_action,
 };
 use crate::keyboard::FocusContent;
@@ -117,20 +117,22 @@ impl Sidebar {
                     {
                         let state = this.state.clone();
                         let sidebar = cx.entity();
-                        request_unsaved_action(
-                            state.clone(),
-                            crate::state::UnsavedScope::Workspace,
-                            window,
-                            cx,
-                            move |_window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.restore_workspace_after_connect(cx);
-                                });
-                                sidebar.update(cx, |sidebar, cx| {
-                                    sidebar.restore_workspace_expansion(cx);
-                                });
-                            },
-                        );
+                        window.defer(cx, move |window, cx| {
+                            request_unsaved_action(
+                                state.clone(),
+                                crate::state::UnsavedScope::Workspace,
+                                window,
+                                cx,
+                                move |_window, cx| {
+                                    state.update(cx, |state, cx| {
+                                        state.restore_workspace_after_connect(cx);
+                                    });
+                                    sidebar.update(cx, |sidebar, cx| {
+                                        sidebar.restore_workspace_expansion(cx);
+                                    });
+                                },
+                            );
+                        });
                     }
                     this.refresh_tree(cx);
                 }
@@ -519,7 +521,7 @@ impl Sidebar {
     }
 
     fn open_add_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
-        ConnectionDialog::open(state, window, cx);
+        ConnectionManager::open_new(state, window, cx);
     }
 
     fn handle_open_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {

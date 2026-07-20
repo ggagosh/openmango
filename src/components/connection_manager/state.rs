@@ -81,6 +81,7 @@ impl ConnectionDraft {
                 .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
             uri_secrets: crate::helpers::UriSecrets::default(),
             internal_uri_value: None,
+            color: None,
             read_only: false,
             direct_connection: false,
             tls: false,
@@ -145,6 +146,7 @@ impl ConnectionDraft {
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.uri_secrets = crate::helpers::UriSecrets::default();
         self.internal_uri_value = None;
+        self.color = None;
         self.read_only = false;
         self.direct_connection = false;
         self.tls = false;

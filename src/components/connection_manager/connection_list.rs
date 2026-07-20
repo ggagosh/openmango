@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::components::Button;
 use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
-use crate::theme::{borders, sizing, spacing};
+use crate::theme::{borders, colors, sizing, spacing};
 
 use super::export_dialog::open_export_dialog;
 use super::import::open_import_flow;
@@ -167,6 +167,7 @@ impl ConnectionManager {
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| "Never".to_string());
         let read_only = conn.read_only;
+        let accent = conn.color.map(|color| colors::connection_accent(color, cx));
 
         div()
             .flex()
@@ -186,7 +187,19 @@ impl ConnectionManager {
                     .items_center()
                     .justify_between()
                     .child(
-                        div().text_sm().text_color(cx.theme().foreground).child(conn.name.clone()),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .when_some(accent, |this, color| {
+                                this.child(div().size(px(8.0)).rounded_full().bg(color))
+                            })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child(conn.name.clone()),
+                            ),
                     )
                     .when(read_only, |s| {
                         s.child(

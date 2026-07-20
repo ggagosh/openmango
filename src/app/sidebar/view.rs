@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _};
 use gpui::*;
 use gpui_component::ActiveTheme as _;
@@ -17,7 +20,7 @@ use crate::keyboard::{
 };
 use crate::models::TreeNodeId;
 use crate::state::{AppCommands, TransferMode};
-use crate::theme::{borders, islands, sizing, spacing};
+use crate::theme::{borders, colors, islands, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
 use super::super::sidebar_model::SidebarModel;
@@ -29,6 +32,16 @@ impl Render for Sidebar {
 
         let active_connections = self.cached_active.clone();
         let connecting_id = self.model.connecting_connection;
+        let connection_accents = Rc::new(
+            self.cached_connections
+                .iter()
+                .filter_map(|connection| {
+                    connection
+                        .color
+                        .map(|color| (connection.id, colors::connection_accent(color, cx)))
+                })
+                .collect::<HashMap<_, _>>(),
+        );
 
         let disconnected_connections: Vec<_> = self
             .cached_connections
@@ -51,7 +64,9 @@ impl Render for Sidebar {
             let connection_id = entry.id.connection_id();
             let is_connected = active_connections.contains_key(&connection_id);
             let is_connecting = connecting_id == Some(connection_id);
-            Some((idx, entry.label.clone(), connection_id, is_connected, is_connecting))
+            let accent =
+                connection_accents.get(&connection_id).copied().unwrap_or(cx.theme().foreground);
+            Some((idx, entry.label.clone(), connection_id, is_connected, is_connecting, accent))
         });
 
         let search_query = self.search_state.read(cx).value().to_string();
@@ -453,6 +468,7 @@ impl Render for Sidebar {
                         uniform_list("sidebar-rows", self.model.entries.len(), {
                             let state_clone = state_for_tree.clone();
                             let sidebar_entity = sidebar_entity.clone();
+                            let connection_accents = connection_accents.clone();
                             cx.processor(
                                 move |sidebar,
                                       visible_range: std::ops::Range<usize>,
@@ -478,6 +494,14 @@ impl Render for Sidebar {
                                         let is_collection = node_id.is_collection();
 
                                         let connection_id = node_id.connection_id();
+                                        let connection_accent = connection_accents
+                                            .get(&connection_id)
+                                            .copied();
+                                        let row_accent = if is_connection {
+                                            connection_accent.unwrap_or(theme_primary)
+                                        } else {
+                                            theme_primary
+                                        };
                                         let is_connecting =
                                             is_connection && connecting_id == Some(connection_id);
                                         let is_loading_db =
@@ -532,7 +556,7 @@ impl Render for Sidebar {
                                             })
                                             .when(selected, |s| {
                                                 s.bg(theme_list_active)
-                                                    .border_color(theme_primary)
+                                                    .border_color(row_accent)
                                                     .hover(|s| s.bg(theme_list_active))
                                             })
                                             .cursor_pointer()
@@ -643,7 +667,7 @@ impl Render for Sidebar {
                                                 this.child(
                                                     Icon::new(IconName::Globe)
                                                         .size(sizing::icon_md())
-                                                        .text_color(theme_primary),
+                                                        .text_color(connection_accent.unwrap_or(theme_primary)),
                                                 )
                                             })
                                             // Database: dashboard icon (blue)
@@ -766,7 +790,7 @@ impl Render for Sidebar {
                     }),
                     )
                     // Sticky connection header overlay
-                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting)| {
+                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting, accent)| {
                         let scroll_handle = self.scroll_handle.clone();
                         let sidebar_entity = sidebar_entity.clone();
                         let sticky_bg = opaque_color(cx.theme().sidebar);
@@ -805,7 +829,7 @@ impl Render for Sidebar {
                                 .child(
                                     Icon::new(IconName::Globe)
                                         .size(sizing::icon_md())
-                                        .text_color(cx.theme().foreground),
+                                        .text_color(accent),
                                 )
                                 // Label
                                 .child(

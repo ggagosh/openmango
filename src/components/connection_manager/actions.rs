@@ -30,7 +30,11 @@ fn non_empty_value(state: &Entity<InputState>, cx: &App) -> Option<String> {
 
 impl ConnectionManager {
     pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
-        Self::open_with_selected(state, None, window, cx);
+        Self::open_with_selected(state, None, false, window, cx);
+    }
+
+    pub fn open_new(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
+        Self::open_with_selected(state, None, true, window, cx);
     }
 
     pub fn open_selected(
@@ -39,17 +43,23 @@ impl ConnectionManager {
         window: &mut Window,
         cx: &mut App,
     ) {
-        Self::open_with_selected(state, Some(connection_id), window, cx);
+        Self::open_with_selected(state, Some(connection_id), false, window, cx);
     }
 
     pub(super) fn open_with_selected(
         state: Entity<AppState>,
         selected_id: Option<Uuid>,
+        creating_new: bool,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let dialog_view =
-            cx.new(|cx| ConnectionManager::new(state.clone(), selected_id, window, cx));
+        let dialog_view = cx.new(|cx| {
+            let mut manager = ConnectionManager::new(state.clone(), selected_id, window, cx);
+            if creating_new {
+                manager.load_connection(None, window, cx);
+            }
+            manager
+        });
         window.open_dialog(cx, move |dialog: Dialog, window: &mut Window, _cx: &mut App| {
             let vp = window.viewport_size();
             let w = (vp.width - px(200.0)).max(px(800.0)).min(px(1200.0));
@@ -81,6 +91,7 @@ impl ConnectionManager {
             self.draft
                 .name_state
                 .update(cx, |state, cx| state.set_value(connection.name.clone(), window, cx));
+            self.draft.color = connection.color;
             self.draft.read_only = connection.read_only;
             self.load_transport_settings(&connection, window, cx);
             self.import_uri(connection.uri.clone(), window, cx);
@@ -620,6 +631,7 @@ impl ConnectionManager {
             name_input.trim().to_string()
         };
 
+        let color = self.draft.color;
         let read_only = self.draft.read_only;
         let (ssh, proxy) = match self.build_transport_settings(cx) {
             Ok(settings) => settings,
@@ -638,6 +650,7 @@ impl ConnectionManager {
                     let connection = SavedConnection {
                         id: existing_id,
                         name: name.clone(),
+                        color,
                         uri: uri.clone(),
                         last_connected: existing.last_connected,
                         read_only,
@@ -650,6 +663,7 @@ impl ConnectionManager {
                 }
             } else {
                 let mut connection = SavedConnection::new(name.clone(), uri.clone());
+                connection.color = color;
                 connection.read_only = read_only;
                 connection.ssh = ssh.clone();
                 connection.proxy = proxy.clone();

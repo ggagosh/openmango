@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Optional connection colors that accent connections in the sidebar, connection manager, and tabs, and survive connection import/export
 - Shared unsaved-change protection across tabs, detached editors, connection changes, workspace restore, app quit, theme restart, and updater relaunch
 - Query failures now stay visible per tab with Retry and Copy Details actions while preserving the last successful result
 - Configurable `maxTimeMS` and real cancellation for interactive document queries
@@ -27,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Workspace restore no longer crashes by re-entering the sidebar while a connection event is being handled
 - Workspace restore now waits for saved connection credentials to finish loading from Keychain before reconnecting
 - Import and copy Clear/Drop operations now stage changes before atomic promotion, and Replace preserves failed originals while reporting partial progress
 - Application read-only mode now blocks every app-owned write path, including AI and Forge, while destructive operations require frozen, revalidated confirmations

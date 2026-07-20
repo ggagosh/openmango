@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::scroll::ScrollbarHandle as _;
@@ -9,7 +11,7 @@ use crate::state::{
     ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, SessionKey, TabKey, UnsavedScope,
     View,
 };
-use crate::theme::{borders, islands, spacing};
+use crate::theme::{borders, colors, islands, spacing};
 use crate::views::{
     ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
 };
@@ -140,7 +142,15 @@ impl OpenTabsBar {
 
 impl Render for OpenTabsBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (appearance, tabs, active_tab, preview_tab, dirty_tabs, current_view) = {
+        let (
+            appearance,
+            tabs,
+            active_tab,
+            preview_tab,
+            dirty_tabs,
+            current_view,
+            connection_colors,
+        ) = {
             let state_ref = self.state.read(cx);
             (
                 state_ref.settings.appearance.clone(),
@@ -149,6 +159,11 @@ impl Render for OpenTabsBar {
                 state_ref.preview_tab().cloned(),
                 state_ref.dirty_tabs().clone(),
                 state_ref.current_view,
+                state_ref
+                    .connections_snapshot()
+                    .into_iter()
+                    .filter_map(|connection| connection.color.map(|color| (connection.id, color)))
+                    .collect::<HashMap<_, _>>(),
             )
         };
         let islands_tab_variant = appearance.islands.tab_style == IslandsTabStyle::Islands;
@@ -244,6 +259,15 @@ impl Render for OpenTabsBar {
                             TabKey::Settings => IconName::Settings,
                             TabKey::Changelog => IconName::BookOpen,
                         };
+                        let connection_id = match tab {
+                            TabKey::Collection(tab) => Some(tab.connection_id),
+                            TabKey::Database(tab) => Some(tab.connection_id),
+                            TabKey::Transfer(tab) => tab.connection_id,
+                            TabKey::Forge(tab) => Some(tab.connection_id),
+                            TabKey::Settings | TabKey::Changelog => None,
+                        };
+                        let connection_color =
+                            connection_id.and_then(|id| connection_colors.get(&id)).copied();
                         let is_selected = selected_index == index;
                         let state = self.state.clone();
                         let tab_to_close = tab.clone();
@@ -313,11 +337,15 @@ impl Render for OpenTabsBar {
                             dirty_dot = dirty_dot.mr(px(2.0));
                         }
 
-                        let icon_color = if is_selected {
-                            cx.theme().primary
-                        } else {
-                            cx.theme().muted_foreground
-                        };
+                        let icon_color = connection_color
+                            .map(|color| colors::connection_accent(color, cx))
+                            .unwrap_or_else(|| {
+                                if is_selected {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().muted_foreground
+                                }
+                            });
                         let icon_el =
                             Icon::new(icon_name).with_size(px(14.0)).text_color(icon_color);
                         let prefix: AnyElement = if is_dirty {
@@ -519,11 +547,17 @@ impl Render for OpenTabsBar {
                             dirty_dot = dirty_dot.mr(px(2.0));
                         }
 
-                        let icon_color = if is_preview_selected {
-                            cx.theme().primary
-                        } else {
-                            cx.theme().muted_foreground
-                        };
+                        let icon_color = connection_colors
+                            .get(&tab.connection_id)
+                            .copied()
+                            .map(|color| colors::connection_accent(color, cx))
+                            .unwrap_or_else(|| {
+                                if is_preview_selected {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().muted_foreground
+                                }
+                            });
                         let icon_el =
                             Icon::new(IconName::Braces).with_size(px(14.0)).text_color(icon_color);
                         let prefix: AnyElement = if is_dirty {

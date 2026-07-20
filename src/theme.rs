@@ -87,6 +87,19 @@ pub mod colors {
     use gpui::{App, Hsla};
     use gpui_component::ActiveTheme as _;
 
+    use crate::models::ConnectionColor;
+
+    pub fn connection_accent(color: ConnectionColor, cx: &App) -> Hsla {
+        match color {
+            ConnectionColor::Red => cx.theme().red,
+            ConnectionColor::Yellow => cx.theme().yellow,
+            ConnectionColor::Green => cx.theme().green,
+            ConnectionColor::Cyan => cx.theme().cyan,
+            ConnectionColor::Blue => cx.theme().blue,
+            ConnectionColor::Magenta => cx.theme().magenta,
+        }
+    }
+
     // BSON Syntax Highlighting — reads from active theme's base colors
     pub fn syntax_key(cx: &App) -> Hsla {
         cx.theme().blue

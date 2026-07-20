@@ -114,11 +114,40 @@ pub struct ConnectionRuntimeMeta {
     pub proxy_active: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionColor {
+    Red,
+    Yellow,
+    Green,
+    Cyan,
+    Blue,
+    Magenta,
+}
+
+impl ConnectionColor {
+    pub const ALL: [Self; 6] =
+        [Self::Red, Self::Yellow, Self::Green, Self::Cyan, Self::Blue, Self::Magenta];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Yellow => "Yellow",
+            Self::Green => "Green",
+            Self::Cyan => "Cyan",
+            Self::Blue => "Blue",
+            Self::Magenta => "Magenta",
+        }
+    }
+}
+
 /// A saved connection configuration (persisted to disk)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedConnection {
     pub id: Uuid,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ConnectionColor>,
     pub uri: String,
     pub last_connected: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -136,6 +165,7 @@ impl SavedConnection {
         Self {
             id: Uuid::new_v4(),
             name,
+            color: None,
             uri,
             last_connected: None,
             read_only: false,
