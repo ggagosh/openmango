@@ -9,7 +9,7 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, document_to_shell_string, parse_document_from_json};
-use crate::components::{Button, cancel_button, open_confirm_dialog};
+use crate::components::{Button, WriteConfirmation, cancel_button, request_connection_write};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::spacing;
 
@@ -198,7 +198,7 @@ impl BulkUpdateDialog {
     }
 
     fn is_read_only(&self, cx: &mut Context<Self>) -> bool {
-        self.state.read(cx).active_connection().map(|conn| conn.config.read_only).unwrap_or(false)
+        self.state.read(cx).connection_read_only(self.session_key.connection_id)
     }
 
     fn start_operation(&mut self, filter: Document, update_doc: Document, cx: &mut Context<Self>) {
@@ -282,16 +282,25 @@ impl BulkUpdateDialog {
                 session_key.database,
                 session_key.collection
             );
-            open_confirm_dialog(
+            let state = self.state.clone();
+            request_connection_write(
+                state,
+                crate::components::WriteRequest::new(
+                    session_key.connection_id,
+                    session_key.namespace(),
+                    format!("{} one document", mode.label()),
+                    Some(WriteConfirmation {
+                        title,
+                        message,
+                        confirm_label: confirm_label.to_string(),
+                        destructive: true,
+                    }),
+                ),
                 window,
                 cx,
-                title,
-                message,
-                confirm_label,
-                true,
                 move |_window, cx| {
                     view.update(cx, |this, cx| {
-                        this.start_operation(filter.clone(), update_doc.clone(), cx);
+                        this.start_operation(filter, update_doc, cx);
                     });
                 },
             );
@@ -321,6 +330,7 @@ impl BulkUpdateDialog {
         });
         let window_handle = window.window_handle();
 
+        let state = self.state.clone();
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result: Result<u64, crate::error::Error> = task.await;
             let _ = cx.update_window(window_handle, |_root, window, cx| match result {
@@ -348,16 +358,24 @@ impl BulkUpdateDialog {
                         mode.label(),
                         if count == 1 { "" } else { "s" }
                     );
-                    open_confirm_dialog(
+                    request_connection_write(
+                        state.clone(),
+                        crate::components::WriteRequest::new(
+                            session_key.connection_id,
+                            session_key.namespace(),
+                            format!("{} {count} documents", mode.label()),
+                            Some(WriteConfirmation {
+                            title,
+                            message,
+                            confirm_label: confirm_label.to_string(),
+                            destructive: true,
+                        }),
+                        ),
                         window,
                         cx,
-                        title,
-                        message,
-                        confirm_label,
-                        true,
                         move |_window, cx| {
                             let _ = confirm_view.update(cx, |this, cx| {
-                                this.start_operation(filter.clone(), update_doc.clone(), cx);
+                                this.start_operation(filter, update_doc, cx);
                             });
                         },
                     );
@@ -548,6 +566,12 @@ impl Render for BulkUpdateDialog {
             .flex_col()
             .gap(spacing::sm())
             .p(spacing::md())
+            .child(crate::components::connection_identity_for(
+                &self.state,
+                self.session_key.connection_id,
+                true,
+                cx,
+            ))
             .child(scope_row)
             .child(custom_filter_row)
             .child(

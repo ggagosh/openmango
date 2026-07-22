@@ -8,8 +8,9 @@ use gpui_component::input::InputState;
 use uuid::Uuid;
 
 use crate::components::{
-    ConnectionManager, open_confirm_dialog, request_disconnect_connection,
-    request_preview_collection, request_remove_connection, request_unsaved_action,
+    ConnectionManager, WriteConfirmation, open_confirm_dialog, request_connection_write,
+    request_disconnect_connection, request_preview_collection, request_remove_connection,
+    request_unsaved_action,
 };
 use crate::keyboard::FocusContent;
 use crate::models::{ActiveConnection, SavedConnection, TreeNodeId};
@@ -837,31 +838,58 @@ impl Sidebar {
             }
             TreeNodeId::Database { connection, database } => {
                 let message = format!("Drop database \"{database}\"? This cannot be undone.");
-                open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
-                    let state = self.state.clone();
-                    let database = database.clone();
+                let state = self.state.clone();
+                let state_for_write = state.clone();
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        connection,
+                        database.clone(),
+                        "Drop a database",
+                        Some(WriteConfirmation {
+                            title: "Drop database".into(),
+                            message,
+                            confirm_label: "Drop".into(),
+                            destructive: true,
+                        }),
+                    ),
+                    window,
+                    cx,
                     move |_window, cx| {
-                        AppCommands::drop_database(state.clone(), connection, database.clone(), cx);
-                    }
-                });
+                        AppCommands::drop_database(state_for_write, connection, database, cx);
+                    },
+                );
             }
             TreeNodeId::Collection { connection, database, collection } => {
                 let message =
                     format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
-                open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
-                    let state = self.state.clone();
-                    let database = database.clone();
-                    let collection = collection.clone();
+                let state = self.state.clone();
+                let state_for_write = state.clone();
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        connection,
+                        format!("{database}.{collection}"),
+                        "Drop a collection",
+                        Some(WriteConfirmation {
+                            title: "Drop collection".into(),
+                            message,
+                            confirm_label: "Drop".into(),
+                            destructive: true,
+                        }),
+                    ),
+                    window,
+                    cx,
                     move |_window, cx| {
                         AppCommands::drop_collection(
-                            state.clone(),
+                            state_for_write,
                             connection,
-                            database.clone(),
-                            collection.clone(),
+                            database,
+                            collection,
                             cx,
                         );
-                    }
-                });
+                    },
+                );
             }
         }
     }

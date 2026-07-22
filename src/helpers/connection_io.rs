@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::helpers::{
     UriSecrets, extract_uri_secrets, inject_uri_password, inject_uri_secrets, strip_uri_secrets,
 };
-use crate::models::{ConnectionColor, ProxyConfig, SavedConnection, SshConfig};
+use crate::models::{
+    ConnectionColor, ConnectionEnvironment, ProxyConfig, SavedConnection, SshConfig,
+};
 
 use super::crypto;
 
@@ -26,6 +28,10 @@ pub struct ExportedConnection {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ConnectionColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ConnectionEnvironment>,
+    #[serde(default)]
+    pub confirm_production_writes: bool,
     pub uri: String,
     #[serde(default)]
     pub read_only: bool,
@@ -98,6 +104,8 @@ pub fn build_export(
             ExportMode::Redacted => ExportedConnection {
                 name: conn.name.clone(),
                 color: conn.color,
+                environment: conn.environment,
+                confirm_production_writes: conn.confirm_production_writes,
                 uri: strip_uri_secrets(&conn.uri),
                 read_only: conn.read_only,
                 encrypted_password: None,
@@ -121,6 +129,8 @@ pub fn build_export(
                 ExportedConnection {
                     name: conn.name.clone(),
                     color: conn.color,
+                    environment: conn.environment,
+                    confirm_production_writes: conn.confirm_production_writes,
                     uri: strip_uri_secrets(&conn.uri),
                     read_only: conn.read_only,
                     encrypted_password: encrypted,
@@ -191,6 +201,8 @@ pub fn resolve_import(
             };
             let mut conn = SavedConnection::new(name, ec.uri.clone());
             conn.color = ec.color;
+            conn.environment = ec.environment;
+            conn.confirm_production_writes = ec.confirm_production_writes;
             conn.read_only = ec.read_only;
             conn.ssh = ec.ssh.clone();
             conn.proxy = ec.proxy.clone();
@@ -257,6 +269,8 @@ mod tests {
                 id: Uuid::new_v4(),
                 name: "Local".into(),
                 color: Some(ConnectionColor::Red),
+                environment: Some(ConnectionEnvironment::Production),
+                confirm_production_writes: true,
                 uri: "mongodb://admin:secret@localhost:27017/?tlsCertificateKeyFilePassword=tls-secret&proxyPassword=uri-proxy-secret&authMechanismProperties=SERVICE_NAME%3Amongodb%2CAWS_SESSION_TOKEN%3Aaws-secret".into(),
                 last_connected: None,
                 read_only: false,
@@ -286,6 +300,8 @@ mod tests {
                 id: Uuid::new_v4(),
                 name: "Atlas".into(),
                 color: None,
+                environment: Some(ConnectionEnvironment::Staging),
+                confirm_production_writes: false,
                 uri: "mongodb+srv://user:pass@cluster0.abc.mongodb.net/mydb".into(),
                 last_connected: Some(Utc::now()),
                 read_only: true,
@@ -302,6 +318,8 @@ mod tests {
         let file = build_export(&conns, ExportMode::Redacted, None).unwrap();
         assert_eq!(file.mode, ExportMode::Redacted);
         assert_eq!(file.connections.len(), 2);
+        assert_eq!(file.connections[0].environment, Some(ConnectionEnvironment::Production));
+        assert!(file.connections[0].confirm_production_writes);
         for ec in &file.connections {
             assert!(!ec.uri.contains("secret"));
             assert!(!ec.uri.contains("pass"));
@@ -334,6 +352,8 @@ mod tests {
         let passphrase = "test-passphrase";
         let mut file = build_export(&conns, ExportMode::Encrypted, Some(passphrase)).unwrap();
         assert_eq!(file.mode, ExportMode::Encrypted);
+        assert_eq!(file.connections[0].environment, Some(ConnectionEnvironment::Production));
+        assert!(file.connections[0].confirm_production_writes);
         for ec in &file.connections {
             assert!(ec.encrypted_password.is_some());
             assert!(!ec.uri.contains("secret"));
@@ -409,6 +429,8 @@ mod tests {
             id: Uuid::new_v4(),
             name: "Local".into(),
             color: None,
+            environment: None,
+            confirm_production_writes: false,
             uri: "mongodb://localhost:27017".into(),
             last_connected: None,
             read_only: false,
@@ -426,6 +448,8 @@ mod tests {
                 ExportedConnection {
                     name: "Local".into(),
                     color: Some(ConnectionColor::Blue),
+                    environment: Some(ConnectionEnvironment::Production),
+                    confirm_production_writes: true,
                     uri: "mongodb://localhost:27017".into(),
                     read_only: false,
                     encrypted_password: None,
@@ -436,6 +460,8 @@ mod tests {
                 ExportedConnection {
                     name: "Atlas".into(),
                     color: None,
+                    environment: None,
+                    confirm_production_writes: false,
                     uri: "mongodb+srv://cluster0.abc.mongodb.net".into(),
                     read_only: true,
                     encrypted_password: None,
@@ -450,6 +476,8 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].name, "Local (imported)");
         assert_eq!(resolved[0].color, Some(ConnectionColor::Blue));
+        assert_eq!(resolved[0].environment, Some(ConnectionEnvironment::Production));
+        assert!(resolved[0].confirm_production_writes);
         assert_eq!(resolved[1].name, "Atlas");
         // New UUIDs
         assert_ne!(resolved[0].id, existing[0].id);
@@ -461,6 +489,8 @@ mod tests {
             id: Uuid::new_v4(),
             name: "NoAuth".into(),
             color: None,
+            environment: None,
+            confirm_production_writes: false,
             uri: "mongodb://localhost:27017".into(),
             last_connected: None,
             read_only: false,

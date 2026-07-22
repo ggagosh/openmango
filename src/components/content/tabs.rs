@@ -6,7 +6,7 @@ use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
-use crate::components::request_unsaved_action;
+use crate::components::{ConnectionIdentity, connection_identity_badge, request_unsaved_action};
 use crate::keyboard::FocusContent;
 use crate::state::{
     ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, SessionKey, TabKey, UnsavedScope,
@@ -150,7 +150,7 @@ impl Render for OpenTabsBar {
             preview_tab,
             dirty_tabs,
             current_view,
-            connection_colors,
+            connection_identities,
         ) = {
             let state_ref = self.state.read(cx);
             (
@@ -163,7 +163,7 @@ impl Render for OpenTabsBar {
                 state_ref
                     .connections_snapshot()
                     .into_iter()
-                    .filter_map(|connection| connection.color.map(|color| (connection.id, color)))
+                    .map(|connection| (connection.id, ConnectionIdentity::from(&connection)))
                     .collect::<HashMap<_, _>>(),
             )
         };
@@ -268,8 +268,10 @@ impl Render for OpenTabsBar {
                             TabKey::Forge(tab) => Some(tab.connection_id),
                             TabKey::Settings | TabKey::Changelog => None,
                         };
+                        let connection_identity =
+                            connection_id.and_then(|id| connection_identities.get(&id));
                         let connection_color =
-                            connection_id.and_then(|id| connection_colors.get(&id)).copied();
+                            connection_identity.and_then(|identity| identity.color);
                         let is_selected = selected_index == index;
                         let state = self.state.clone();
                         let tab_to_close = tab.clone();
@@ -372,7 +374,15 @@ impl Render for OpenTabsBar {
                         let tab_view = Tab::new()
                             .max_w(px(OPEN_TAB_MAX_WIDTH))
                             .child(
-                                div().max_w(px(OPEN_TAB_LABEL_MAX_WIDTH)).truncate().child(label),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
+                                    .child(div().min_w(px(0.0)).truncate().child(label))
+                                    .when_some(connection_identity, |content, identity| {
+                                        content.child(connection_identity_badge(identity, true, cx))
+                                    }),
                             )
                             .prefix(prefix);
 
@@ -549,9 +559,9 @@ impl Render for OpenTabsBar {
                             dirty_dot = dirty_dot.mr(px(2.0));
                         }
 
-                        let icon_color = connection_colors
-                            .get(&tab.connection_id)
-                            .copied()
+                        let preview_identity = connection_identities.get(&tab.connection_id);
+                        let icon_color = preview_identity
+                            .and_then(|identity| identity.color)
                             .map(|color| colors::connection_accent(color, cx))
                             .unwrap_or_else(|| {
                                 if is_preview_selected {
@@ -584,11 +594,21 @@ impl Render for OpenTabsBar {
                             .max_w(px(OPEN_TAB_MAX_WIDTH))
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
                                     .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
-                                    .truncate()
-                                    .italic()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(label),
+                                    .child(
+                                        div()
+                                            .min_w(px(0.0))
+                                            .truncate()
+                                            .italic()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(label),
+                                    )
+                                    .when_some(preview_identity, |content, identity| {
+                                        content.child(connection_identity_badge(identity, true, cx))
+                                    }),
                             )
                             .prefix(prefix)
                             .suffix(close_button)

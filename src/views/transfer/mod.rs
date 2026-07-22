@@ -22,12 +22,13 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, Size};
 use uuid::Uuid;
 
-use crate::components::{Button, open_confirm_dialog};
+use crate::components::{Button, WriteConfirmation, open_confirm_dialog, request_connection_write};
 use crate::keyboard::{CancelTransfer, CloseTransferQueryModal, RunTransfer, SaveTransferQuery};
 use crate::state::{
     AppCommands, AppState, CompressionMode, InsertMode, StatusMessage, TargetWriteMode,
     TransferMode, TransferScope, TransferTabState, available_transfer_formats,
-    coerce_transfer_format, resolved_export_destination, validate_transfer,
+    coerce_transfer_format, resolved_export_destination, transfer_write_connection,
+    validate_transfer,
 };
 use crate::theme::{borders, colors, islands, sizing, spacing};
 
@@ -60,7 +61,7 @@ pub struct TransferView {
     export_path_input_state: Option<Entity<InputState>>,
 
     // Track previous items to avoid resetting search state on every render
-    prev_conn_ids: Vec<Uuid>,
+    prev_connections: Vec<(Uuid, crate::components::ConnectionIdentity)>,
     prev_db_names: Vec<String>,
     prev_coll_names: Vec<String>,
     prev_dest_db_names: Vec<String>,
@@ -93,7 +94,7 @@ impl TransferView {
             dest_coll_input_state: None,
             exclude_coll_state: None,
             export_path_input_state: None,
-            prev_conn_ids: Vec::new(),
+            prev_connections: Vec::new(),
             prev_db_names: Vec::new(),
             prev_coll_names: Vec::new(),
             prev_dest_db_names: Vec::new(),
@@ -174,7 +175,11 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
     let overwrite_destination =
         resolved_destination.clone().filter(|destination| destination.exists());
     let requires_confirmation = validation.requires_confirmation || overwrite_destination.is_some();
-    if !requires_confirmation {
+    let write_connection = transfer_write_connection(&transfer_state);
+    let production_confirmation = write_connection.is_some_and(|connection_id| {
+        state.read(cx).connection_requires_production_write_confirmation(connection_id)
+    });
+    if !requires_confirmation && !production_confirmation {
         AppCommands::execute_transfer(state, transfer_id, cx);
         return;
     }
@@ -190,37 +195,75 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
     );
     let expected_config = transfer_state.config.clone();
     let expected_options = transfer_state.options.clone();
-    open_confirm_dialog(
-        window,
-        cx,
-        "Confirm destructive transfer",
-        message,
-        "Run Transfer",
-        true,
-        move |_window, cx| {
-            let unchanged = state.read(cx).transfer_tab(transfer_id).is_some_and(|tab| {
-                tab.config == expected_config && tab.options == expected_options
+    let target_database = if transfer_state.config.destination_database.is_empty() {
+        transfer_state.config.source_database.clone()
+    } else {
+        transfer_state.config.destination_database.clone()
+    };
+    let target_collection = if transfer_state.config.destination_collection.is_empty() {
+        transfer_state.config.source_collection.clone()
+    } else {
+        transfer_state.config.destination_collection.clone()
+    };
+    let target = if transfer_state.config.scope == TransferScope::Collection {
+        format!("{target_database}.{target_collection}")
+    } else {
+        target_database
+    };
+    let state_for_run = state.clone();
+    let run = move |_window: &mut Window, cx: &mut App| {
+        let unchanged = state_for_run
+            .read(cx)
+            .transfer_tab(transfer_id)
+            .is_some_and(|tab| tab.config == expected_config && tab.options == expected_options);
+        if !unchanged {
+            state_for_run.update(cx, |state, cx| {
+                let message = "Transfer options changed after confirmation. Review and run again.";
+                if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                    tab.runtime.error_message = Some(message.to_string());
+                }
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.notify();
             });
-            if !unchanged {
-                state.update(cx, |state, cx| {
-                    let message =
-                        "Transfer options changed after confirmation. Review and run again.";
-                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                        tab.runtime.error_message = Some(message.to_string());
-                    }
-                    state.set_status_message(Some(StatusMessage::error(message)));
-                    cx.notify();
-                });
-                return;
-            }
-            AppCommands::execute_confirmed_transfer(
-                state.clone(),
-                transfer_id,
-                resolved_destination.clone(),
-                cx,
-            );
-        },
-    );
+            return;
+        }
+        AppCommands::execute_confirmed_transfer(
+            state_for_run.clone(),
+            transfer_id,
+            resolved_destination.clone(),
+            cx,
+        );
+    };
+    if let Some(connection_id) = write_connection {
+        let ordinary = requires_confirmation.then(|| WriteConfirmation {
+            title: "Confirm destructive transfer".to_string(),
+            message,
+            confirm_label: "Run Transfer".to_string(),
+            destructive: true,
+        });
+        request_connection_write(
+            state.clone(),
+            crate::components::WriteRequest::new(
+                connection_id,
+                target,
+                "Run a data transfer that writes to MongoDB",
+                ordinary,
+            ),
+            window,
+            cx,
+            run,
+        );
+    } else {
+        open_confirm_dialog(
+            window,
+            cx,
+            "Confirm destructive transfer",
+            message,
+            "Run Transfer",
+            true,
+            run,
+        );
+    }
 }
 
 fn cancel_active_transfer(state: Entity<AppState>, cx: &mut App) {
@@ -262,8 +305,14 @@ impl Render for TransferView {
             let transfer = state_ref.transfer_tab(id).cloned().unwrap_or_default();
 
             let active = state_ref.active_connections_snapshot();
-            let connections: Vec<(Uuid, String)> =
-                active.iter().map(|(id, conn)| (*id, conn.config.name.clone())).collect();
+            let connections: Vec<(Uuid, crate::components::ConnectionIdentity)> = active
+                .keys()
+                .filter_map(|id| {
+                    state_ref.connection_by_id(*id).map(|connection| {
+                        (*id, crate::components::ConnectionIdentity::from(connection))
+                    })
+                })
+                .collect();
 
             let databases: Vec<String> = transfer
                 .config
@@ -318,12 +367,13 @@ impl Render for TransferView {
         let conn_ids: Vec<Uuid> = connections.iter().map(|(id, _)| *id).collect();
 
         // Update connection items if changed
-        if conn_ids != self.prev_conn_ids {
+        if connections != self.prev_connections {
             let conn_items: Vec<ConnectionItem> = connections
                 .iter()
-                .map(|(id, name)| ConnectionItem {
+                .map(|(id, identity)| ConnectionItem {
                     id: *id,
-                    name: SharedString::from(name.clone()),
+                    name: SharedString::from(identity.display_name()),
+                    identity: identity.clone(),
                 })
                 .collect();
 
@@ -337,7 +387,7 @@ impl Render for TransferView {
                     s.set_items(SearchableVec::new(conn_items), window, cx);
                 });
             }
-            self.prev_conn_ids = conn_ids.clone();
+            self.prev_connections = connections.clone();
         }
 
         // Sync source connection selected value
@@ -728,25 +778,21 @@ impl Render for TransferView {
                 (source_panel, destination_panel)
             };
 
-        let source_conn_name = transfer_state
-            .config
-            .source_connection_id
-            .and_then(|id| {
-                connections.iter().find(|(cid, _)| *cid == id).map(|(_, name)| name.clone())
-            })
-            .unwrap_or_else(|| "Select connection".to_string());
+        let source_identity = transfer_state.config.source_connection_id.and_then(|id| {
+            connections
+                .iter()
+                .find(|(connection_id, _)| *connection_id == id)
+                .map(|(_, identity)| identity)
+        });
+        let destination_identity = transfer_state.config.destination_connection_id.and_then(|id| {
+            connections
+                .iter()
+                .find(|(connection_id, _)| *connection_id == id)
+                .map(|(_, identity)| identity)
+        });
 
-        let dest_conn_name = transfer_state
-            .config
-            .destination_connection_id
-            .and_then(|id| {
-                connections.iter().find(|(cid, _)| *cid == id).map(|(_, name)| name.clone())
-            })
-            .unwrap_or_else(|| "Select connection".to_string());
-
-        // Summary panel (now inline)
         let summary_panel =
-            render_summary_panel(&transfer_state, &source_conn_name, &dest_conn_name, cx);
+            render_summary_panel(&transfer_state, source_identity, destination_identity, cx);
 
         // Progress panel
         let progress_panel: AnyElement =

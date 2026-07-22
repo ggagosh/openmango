@@ -61,6 +61,11 @@ impl FileFilter {
         Self::new("OpenMango Connections", vec!["json"])
     }
 
+    /// OpenMango Query Library (.json)
+    pub fn query_library_json() -> Self {
+        Self::new("OpenMango Query Library", vec!["json"])
+    }
+
     /// All files
     pub fn all() -> Self {
         Self::new("All Files", vec!["*"])

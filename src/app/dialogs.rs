@@ -3,9 +3,22 @@ use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::InputState;
 
-use crate::components::{FormField, cancel_button, primary_button};
+use crate::components::{
+    ConnectionIdentity, FormField, cancel_button, connection_identity_badge, primary_button,
+    request_connection_write,
+};
 use crate::state::{AppCommands, AppState};
 use crate::theme::spacing;
+
+fn selected_connection_identity(state: &Entity<AppState>, cx: &App) -> AnyElement {
+    state
+        .read(cx)
+        .selected_connection_id()
+        .and_then(|id| state.read(cx).connection_by_id(id))
+        .map(ConnectionIdentity::from)
+        .map(|identity| connection_identity_badge(&identity, true, cx))
+        .unwrap_or_else(|| div().into_any_element())
+}
 
 pub(crate) fn open_create_database_dialog(
     state: Entity<AppState>,
@@ -30,6 +43,7 @@ pub(crate) fn open_create_database_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
+                    .child(selected_connection_identity(&state, cx))
                     .child(FormField::new("Database name", &db_state).render(cx))
                     .child(FormField::new("Initial collection", &col_state).render(cx)),
             )
@@ -49,13 +63,28 @@ pub(crate) fn open_create_database_dialog(
                             if db.trim().is_empty() || col.trim().is_empty() {
                                 return;
                             }
-                            AppCommands::create_database(
+                            let Some(connection_id) = state.read(cx).selected_connection_id()
+                            else {
+                                return;
+                            };
+                            let db = db.trim().to_string();
+                            let col = col.trim().to_string();
+                            let state_for_write = state.clone();
+                            request_connection_write(
                                 state.clone(),
-                                db.trim().to_string(),
-                                col.trim().to_string(),
+                                crate::components::WriteRequest::new(
+                                    connection_id,
+                                    format!("{db}.{col}"),
+                                    "Create a database and its initial collection",
+                                    None,
+                                ),
+                                window,
                                 cx,
+                                move |window, cx| {
+                                    window.close_dialog(cx);
+                                    AppCommands::create_database(state_for_write, db, col, cx);
+                                },
                             );
-                            window.close_dialog(cx);
                         }),
                     ]
                 }
@@ -82,6 +111,7 @@ pub(crate) fn open_create_collection_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
+                    .child(selected_connection_identity(&state, cx))
                     .child(FormField::new("Collection name", &col_state).render(cx)),
             )
             .footer({
@@ -99,13 +129,34 @@ pub(crate) fn open_create_collection_dialog(
                             if col.trim().is_empty() {
                                 return;
                             }
-                            AppCommands::create_collection(
+                            let Some(connection_id) = state.read(cx).selected_connection_id()
+                            else {
+                                return;
+                            };
+                            let collection = col.trim().to_string();
+                            let state_for_write = state.clone();
+                            let database_for_write = database.clone();
+                            let target = format!("{database}.{collection}");
+                            request_connection_write(
                                 state.clone(),
-                                database.clone(),
-                                col.trim().to_string(),
+                                crate::components::WriteRequest::new(
+                                    connection_id,
+                                    target,
+                                    "Create a collection",
+                                    None,
+                                ),
+                                window,
                                 cx,
+                                move |window, cx| {
+                                    window.close_dialog(cx);
+                                    AppCommands::create_collection(
+                                        state_for_write,
+                                        database_for_write,
+                                        collection,
+                                        cx,
+                                    );
+                                },
                             );
-                            window.close_dialog(cx);
                         }),
                     ]
                 }
@@ -134,6 +185,7 @@ pub(crate) fn open_rename_collection_dialog(
                     .flex_col()
                     .gap(spacing::md())
                     .p(spacing::md())
+                    .child(selected_connection_identity(&state, cx))
                     .child(FormField::new("New collection name", &name_state).render(cx)),
             )
             .footer({
@@ -154,14 +206,36 @@ pub(crate) fn open_rename_collection_dialog(
                             if new_name.is_empty() || new_name == collection.as_str() {
                                 return;
                             }
-                            AppCommands::rename_collection(
+                            let Some(connection_id) = state.read(cx).selected_connection_id()
+                            else {
+                                return;
+                            };
+                            let new_name = new_name.to_string();
+                            let state_for_write = state.clone();
+                            let database_for_write = database.clone();
+                            let collection_for_write = collection.clone();
+                            let target = format!("{database}.{collection} → {database}.{new_name}");
+                            request_connection_write(
                                 state.clone(),
-                                database.clone(),
-                                collection.clone(),
-                                new_name.to_string(),
+                                crate::components::WriteRequest::new(
+                                    connection_id,
+                                    target,
+                                    "Rename a collection",
+                                    None,
+                                ),
+                                window,
                                 cx,
+                                move |window, cx| {
+                                    window.close_dialog(cx);
+                                    AppCommands::rename_collection(
+                                        state_for_write,
+                                        database_for_write,
+                                        collection_for_write,
+                                        new_name,
+                                        cx,
+                                    );
+                                },
                             );
-                            window.close_dialog(cx);
                         }),
                     ]
                 }

@@ -72,16 +72,25 @@ pub(crate) fn request_run_aggregation(
     } else {
         format!("$merge will write pipeline output into {target} using the configured merge rules.")
     };
-    crate::components::open_confirm_dialog(
+    let state_for_write = state.clone();
+    crate::components::request_connection_write(
+        state,
+        crate::components::WriteRequest::new(
+            session_key.connection_id,
+            target,
+            format!("Run an aggregation {operator} write stage"),
+            Some(crate::components::WriteConfirmation {
+                title: "Run aggregation write stage".into(),
+                message: format!("{semantics}\n\nRun this write operation?"),
+                confirm_label: "Run write stage".into(),
+                destructive: true,
+            }),
+        ),
         window,
         cx,
-        "Run aggregation write stage",
-        format!("{semantics}\n\nRun this write operation?"),
-        "Run write stage",
-        true,
         move |_window, cx| {
             AppCommands::run_aggregation_confirmed(
-                state,
+                state_for_write,
                 session_key,
                 preview,
                 confirmed_stages,
@@ -147,18 +156,27 @@ pub(crate) fn request_delete_confirmation(
                     "Delete every {scope_label} document matching this filter from {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
                     if count == 1 { "" } else { "s" }
                 );
-                crate::components::open_confirm_dialog(
+                let state_for_write = state.clone();
+                crate::components::request_connection_write(
+                    state.clone(),
+                    crate::components::WriteRequest::new(
+                        session_key.connection_id,
+                        session_key.namespace(),
+                        format!("Delete {count} documents"),
+                        Some(crate::components::WriteConfirmation {
+                        title: "Delete documents".into(),
+                        message,
+                        confirm_label: "Delete".into(),
+                        destructive: true,
+                    }),
+                    ),
                     window,
                     cx,
-                    "Delete documents",
-                    message,
-                    "Delete",
-                    true,
                     move |_window, cx| {
                         AppCommands::delete_documents_by_filter(
-                            state.clone(),
-                            session_key.clone(),
-                            filter.clone(),
+                            state_for_write,
+                            session_key,
+                            filter,
                             cx,
                         );
                     },

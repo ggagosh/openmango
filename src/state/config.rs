@@ -248,6 +248,38 @@ mod tests {
     }
 
     #[test]
+    fn legacy_query_library_defaults_saved_metadata() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+        let now = chrono::Utc::now();
+        let fixture = serde_json::json!({
+            "history": [],
+            "saved": [{
+                "id": uuid::Uuid::new_v4(),
+                "name": "Legacy",
+                "created_at": now,
+                "updated_at": now,
+                "definition": {
+                    "connection_id": uuid::Uuid::new_v4(),
+                    "database": "app",
+                    "content": { "type": "forge", "query": { "statement": "db.users.find({})" } }
+                }
+            }]
+        });
+        fs::write(
+            temp_dir.path().join(ConfigManager::QUERY_LIBRARY_FILE),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = manager.load_query_library().unwrap();
+        assert_eq!(loaded.saved().len(), 1);
+        assert_eq!(loaded.saved()[0].description, "");
+        assert!(loaded.saved()[0].tags.is_empty());
+        assert_eq!(loaded.saved()[0].scope, crate::state::SavedQueryScope::Connection);
+    }
+
+    #[test]
     fn malformed_query_library_is_left_untouched() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
@@ -265,8 +297,10 @@ mod tests {
         let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
         fs::create_dir_all(temp_dir.path()).expect("failed to create config dir");
 
-        let connection =
+        let mut connection =
             SavedConnection::new("json".to_string(), "mongodb://localhost:27017".into());
+        connection.environment = Some(crate::models::ConnectionEnvironment::Production);
+        connection.confirm_production_writes = true;
         fs::write(
             temp_dir.path().join(ConfigManager::CONNECTIONS_FILE),
             serde_json::to_string_pretty(&vec![connection.clone()])
@@ -277,5 +311,7 @@ mod tests {
         let loaded = manager.load_connections().expect("failed to load json connections");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, connection.name);
+        assert_eq!(loaded[0].environment, connection.environment);
+        assert!(loaded[0].confirm_production_writes);
     }
 }

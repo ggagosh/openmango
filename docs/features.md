@@ -1,6 +1,6 @@
 # OpenMango Features & Roadmap
 
-Snapshot date: 2026-02-21
+Snapshot date: 2026-07-22
 Audience: power users and small engineering teams
 
 ## Priority Legend
@@ -29,8 +29,8 @@ Audience: power users and small engineering teams
 
 - [x] P0: Explain plan UI (winning plan, scanned docs, stage costs)
 - [ ] P0: Index hinting and "why query is slow" diagnostics
-- [ ] P1: Query history (per tab/session) with restore
-- [ ] P1: Saved query snippets/templates
+- [x] P1: Query history across Documents, Aggregation, and Forge with restore
+- [x] P1: Saved query snippets with metadata, tags, global scope, and portable import/export
 
 ### Schema & Data Quality
 
@@ -50,6 +50,7 @@ Audience: power users and small engineering teams
 - [x] P0: Connection import/export (redacted + encrypted options)
 - [x] P1: SSH tunneling and proxy-aware connection flow
 - [x] P1: Secrets integration (versioned Keychain-backed credential bundles)
+- [x] P1: Explicit connection environments with optional Production write confirmation
 - [ ] P2: Field-level masking workflows for export/share
 
 ### Transfer format notes
@@ -69,4 +70,4 @@ Audience: power users and small engineering teams
 
 - [ ] P1: Split view (side-by-side tabs/collections)
 - [ ] P1: Tab pinning/grouping and better large-workspace ergonomics
-- [ ] P2: Keymap customization and command palette expansion
+- [x] P2: Keymap customization and command palette expansion

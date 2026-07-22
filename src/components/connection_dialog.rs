@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
@@ -11,7 +12,7 @@ use crate::helpers::{
     UriSecrets, extract_host_from_uri, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
     validate_mongodb_uri,
 };
-use crate::models::SavedConnection;
+use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::{AppState, UnsavedScope};
 use crate::theme::spacing;
 
@@ -30,6 +31,8 @@ pub struct ConnectionDialog {
     password_state: Entity<InputState>,
     uri_secrets: UriSecrets,
     sanitizing_uri: bool,
+    environment: Option<ConnectionEnvironment>,
+    confirm_production_writes: bool,
     read_only: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
@@ -116,6 +119,8 @@ impl ConnectionDialog {
             password_state,
             uri_secrets: UriSecrets::default(),
             sanitizing_uri: false,
+            environment: None,
+            confirm_production_writes: false,
             read_only: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
@@ -179,6 +184,8 @@ impl ConnectionDialog {
             password_state,
             uri_secrets,
             sanitizing_uri: false,
+            environment: existing.environment,
+            confirm_production_writes: existing.confirm_production_writes,
             read_only: existing.read_only,
             status: TestStatus::Success,
             last_tested_uri: Some(redacted_default),
@@ -272,6 +279,46 @@ impl Render for ConnectionDialog {
         let is_edit = self.existing.is_some();
         let is_connected =
             self.existing.as_ref().is_some_and(|e| self.state.read(cx).is_connected(e.id));
+        let selected_environment = self.environment;
+        let view = cx.entity();
+        let mut no_environment = Button::new("simple-environment-none")
+            .compact()
+            .label(if selected_environment.is_none() { "✓ Not set" } else { "Not set" })
+            .on_click({
+                let view = view.clone();
+                move |_, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.environment = None;
+                        cx.notify();
+                    });
+                }
+            });
+        if selected_environment.is_none() {
+            no_environment = no_environment.primary();
+        }
+        let environments = ConnectionEnvironment::ALL
+            .into_iter()
+            .map(|environment| {
+                let view = view.clone();
+                let mut button = Button::new(("simple-environment", environment as usize))
+                    .compact()
+                    .label(if selected_environment == Some(environment) {
+                        format!("✓ {}", environment.label())
+                    } else {
+                        environment.label().to_string()
+                    })
+                    .on_click(move |_, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.environment = Some(environment);
+                            cx.notify();
+                        });
+                    });
+                if selected_environment == Some(environment) {
+                    button = button.primary();
+                }
+                button.into_any_element()
+            })
+            .collect::<Vec<_>>();
         let save_label = if is_edit {
             if is_connected { "Update & Reconnect" } else { "Update & Connect" }
         } else {
@@ -319,6 +366,50 @@ impl Render for ConnectionDialog {
                     .child(div().text_sm().text_color(cx.theme().foreground).child("Password"))
                     .child(Input::new(&self.password_state).mask_toggle()),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Environment"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(spacing::xs())
+                            .child(no_environment)
+                            .children(environments),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Explicit identity; never inferred from the URI."),
+                    ),
+            )
+            .when(self.environment == Some(ConnectionEnvironment::Production), |content| {
+                content.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(
+                            Switch::new("simple-confirm-production-writes")
+                                .checked(self.confirm_production_writes)
+                                .small()
+                                .on_click({
+                                    let view = view.clone();
+                                    move |checked, _window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.confirm_production_writes = *checked;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                        )
+                        .child("Confirm Production writes and Forge"),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -386,6 +477,8 @@ impl Render for ConnectionDialog {
                                 let uri_state = self.uri_state.clone();
                                 let password_state = self.password_state.clone();
                                 let uri_secrets = self.uri_secrets.clone();
+                                let environment = self.environment;
+                                let confirm_production_writes = self.confirm_production_writes;
                                 let read_only = self.read_only;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
@@ -425,6 +518,8 @@ impl Render for ConnectionDialog {
                                                     id: existing.id,
                                                     name,
                                                     color: existing.color,
+                                                    environment,
+                                                    confirm_production_writes,
                                                     uri,
                                                     last_connected: existing.last_connected,
                                                     read_only,
@@ -436,6 +531,9 @@ impl Render for ConnectionDialog {
                                             } else {
                                                 let mut connection =
                                                     SavedConnection::new(name, uri);
+                                                connection.environment = environment;
+                                                connection.confirm_production_writes =
+                                                    confirm_production_writes;
                                                 connection.read_only = read_only;
                                                 connection_id = Some(connection.id);
                                                 state.add_connection(connection, cx);

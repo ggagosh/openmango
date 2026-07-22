@@ -8,7 +8,7 @@ use mongodb::bson::Document;
 use gpui_component::ActiveTheme as _;
 
 use crate::bson::bson_value_preview;
-use crate::components::{Button, open_confirm_dialog};
+use crate::components::{Button, WriteConfirmation, request_connection_write};
 use crate::state::{AppCommands, SessionKey};
 use crate::theme::spacing;
 
@@ -246,25 +246,30 @@ impl CollectionView {
                                                         "Drop index {}? This cannot be undone.",
                                                         drop_name
                                                     );
-                                                    open_confirm_dialog(
+                                                    let state_for_write = state.clone();
+                                                    let target = session_key.namespace();
+                                                    request_connection_write(
+                                                        state.clone(),
+                                                        crate::components::WriteRequest::new(
+                                                            session_key.connection_id,
+                                                            target,
+                                                            "Drop an index",
+                                                            Some(WriteConfirmation {
+                                                            title: "Drop index".into(),
+                                                            message,
+                                                            confirm_label: "Drop".into(),
+                                                            destructive: true,
+                                                        }),
+                                                        ),
                                                         window,
                                                         cx,
-                                                        "Drop index",
-                                                        message,
-                                                        "Drop",
-                                                        true,
-                                                        {
-                                                            let state = state.clone();
-                                                            let session_key = session_key.clone();
-                                                            let drop_name = drop_name.clone();
-                                                            move |_window, cx| {
-                                                                AppCommands::drop_collection_index(
-                                                                    state.clone(),
-                                                                    session_key.clone(),
-                                                                    drop_name.clone(),
-                                                                    cx,
-                                                                );
-                                                            }
+                                                        move |_window, cx| {
+                                                            AppCommands::drop_collection_index(
+                                                                state_for_write,
+                                                                session_key,
+                                                                drop_name,
+                                                                cx,
+                                                            );
                                                         },
                                                     );
                                                 }

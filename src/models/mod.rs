@@ -5,7 +5,7 @@ pub mod connection;
 mod tree_node_id;
 
 pub use connection::{
-    ActiveConnection, ConnectionColor, ConnectionRuntimeMeta, ProxyConfig, ProxyKind,
-    SavedConnection, SshAuth, SshConfig,
+    ActiveConnection, ConnectionColor, ConnectionEnvironment, ConnectionRuntimeMeta,
+    ConnectionWriteIdentity, ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig,
 };
 pub use tree_node_id::TreeNodeId;

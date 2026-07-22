@@ -84,6 +84,10 @@ impl SessionKey {
     ) -> Self {
         Self { connection_id, database: database.into(), collection: collection.into() }
     }
+
+    pub fn namespace(&self) -> String {
+        format!("{}.{}", self.database, self.collection)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

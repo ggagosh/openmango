@@ -11,7 +11,7 @@ use gpui_component::input::Input;
 use gpui_component::switch::Switch;
 
 use crate::components::Button;
-use crate::models::ConnectionColor;
+use crate::models::{ConnectionColor, ConnectionEnvironment};
 use crate::theme::{colors, spacing};
 
 use super::ConnectionManager;
@@ -60,6 +60,45 @@ impl ConnectionManager {
                 button.into_any_element()
             })
             .collect::<Vec<_>>();
+        let selected_environment = self.draft.environment;
+        let mut no_environment_button = Button::new("connection-environment-none")
+            .compact()
+            .label(if selected_environment.is_none() { "✓ Not set" } else { "Not set" })
+            .on_click({
+                let view = view.clone();
+                move |_, _window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.draft.environment = None;
+                        cx.notify();
+                    });
+                }
+            });
+        if selected_environment.is_none() {
+            no_environment_button = no_environment_button.primary();
+        }
+        let environment_buttons = ConnectionEnvironment::ALL
+            .into_iter()
+            .map(|environment| {
+                let view = view.clone();
+                let mut button = Button::new(("connection-environment", environment as usize))
+                    .compact()
+                    .label(if selected_environment == Some(environment) {
+                        format!("✓ {}", environment.label())
+                    } else {
+                        environment.label().to_string()
+                    })
+                    .on_click(move |_, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.draft.environment = Some(environment);
+                            cx.notify();
+                        });
+                    });
+                if selected_environment == Some(environment) {
+                    button = button.primary();
+                }
+                button.into_any_element()
+            })
+            .collect::<Vec<_>>();
 
         div()
             .flex()
@@ -99,6 +138,69 @@ impl ConnectionManager {
                             .child("Accents this connection in the sidebar and tabs."),
                     ),
             )
+            // Environment identity
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .child(div().text_sm().text_color(cx.theme().foreground).child("Environment"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .child(no_environment_button)
+                            .children(environment_buttons),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Selected explicitly; OpenMango never infers Production from a hostname."),
+                    ),
+            )
+            .when(self.draft.environment == Some(ConnectionEnvironment::Production), |content| {
+                content.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(
+                            Switch::new("confirm-production-writes")
+                                .checked(self.draft.confirm_production_writes)
+                                .small()
+                                .on_click({
+                                    let view = view.clone();
+                                    move |checked, _window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.draft.confirm_production_writes = *checked;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .child("Confirm Production writes and Forge"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().secondary_foreground)
+                                        .child("Require an additional review before writes and Forge execution."),
+                                ),
+                        ),
+                )
+            })
             // URI
             .child(
                 div()

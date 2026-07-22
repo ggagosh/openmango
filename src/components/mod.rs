@@ -5,6 +5,7 @@ pub mod ai_blocks;
 pub mod button;
 pub mod confirm;
 pub mod connection_dialog;
+pub mod connection_identity;
 pub mod connection_manager;
 mod content;
 pub mod dialog_helpers;
@@ -15,8 +16,12 @@ pub mod query_library;
 mod status_bar;
 mod unsaved_guard;
 pub use button::Button;
-pub use confirm::open_confirm_dialog;
+pub(crate) use confirm::with_scoped_production_authorizations;
+pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
 pub use connection_dialog::ConnectionDialog;
+pub use connection_identity::{
+    ConnectionIdentity, connection_identity_badge, connection_identity_for,
+};
 pub use connection_manager::ConnectionManager;
 pub use content::ContentArea;
 pub use dialog_helpers::{cancel_button, primary_button};

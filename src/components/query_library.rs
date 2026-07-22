@@ -11,11 +11,14 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use uuid::Uuid;
 
-use crate::components::Button;
+use crate::components::file_picker::{FileFilter, FilePickerMode, open_file_dialog_async};
+use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
+use crate::helpers::query_library_io;
 use crate::keyboard::RunForgeAll;
 use crate::state::{
     AppCommands, AppState, CollectionSubview, DocumentQuery, ForgeTabKey, QueryContent,
-    QueryDefinition, QueryKind, QueryLibraryPersistenceError, SessionKey, StatusMessage, View,
+    QueryDefinition, QueryKind, QueryLibraryPersistenceError, SavedQueryInput, SavedQueryScope,
+    SessionKey, StatusMessage, View,
 };
 use crate::theme::spacing;
 use crate::views::documents::compile_filter_input;
@@ -40,6 +43,13 @@ impl QueryLibraryTarget {
             }
             View::Forge => state.active_forge_tab_key().cloned().map(Self::Forge),
             _ => None,
+        }
+    }
+
+    fn connection_id(&self) -> Uuid {
+        match self {
+            Self::Documents(key) | Self::Aggregation(key) => key.connection_id,
+            Self::Forge(key) => key.connection_id,
         }
     }
 
@@ -68,6 +78,16 @@ impl QueryLibraryTarget {
             Self::Forge(key) => {
                 definition.matches_scope(QueryKind::Forge, key.connection_id, &key.database, None)
             }
+        }
+    }
+
+    fn identity_label(&self, state: &AppState) -> String {
+        let connection = connection_label(state, self.connection_id());
+        match self {
+            Self::Documents(key) | Self::Aggregation(key) => {
+                format!("{connection} / {}.{}", key.database, key.collection)
+            }
+            Self::Forge(key) => format!("{connection} / {}", key.database),
         }
     }
 
@@ -124,7 +144,7 @@ enum LibraryMode {
 #[derive(Clone)]
 enum EditIntent {
     Save(QueryDefinition),
-    RenameSaved(Uuid),
+    EditSaved(Uuid),
 }
 
 #[derive(Clone)]
@@ -132,9 +152,27 @@ struct LibraryItem {
     id: Uuid,
     saved: bool,
     name: Option<String>,
+    description: String,
+    tags: Vec<String>,
+    scope: SavedQueryScope,
     timestamp: DateTime<Utc>,
     connection_name: String,
     definition: QueryDefinition,
+}
+
+struct EditValues {
+    name: String,
+    description: String,
+    tags: Vec<String>,
+    scope: SavedQueryScope,
+}
+
+#[derive(Clone)]
+struct PendingImport {
+    inputs: Vec<SavedQueryInput>,
+    global: usize,
+    connection: usize,
+    renamed: usize,
 }
 
 pub struct QueryLibraryDialog {
@@ -142,9 +180,15 @@ pub struct QueryLibraryDialog {
     target: QueryLibraryTarget,
     search_state: Entity<InputState>,
     name_state: Entity<InputState>,
+    description_state: Entity<InputState>,
+    tags_state: Entity<InputState>,
+    import_focus: FocusHandle,
+    edit_scope: SavedQueryScope,
     mode: LibraryMode,
     show_all: bool,
     editing: Option<EditIntent>,
+    pending_import: Option<PendingImport>,
+    file_busy: bool,
     confirm_clear: bool,
     confirm_delete: Option<Uuid>,
     error: Option<String>,
@@ -196,11 +240,17 @@ impl QueryLibraryDialog {
     ) -> Self {
         let search_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search query text, name, or namespace")
+                .placeholder("Search name, description, tags, query, or namespace")
                 .clean_on_escape()
         });
         let name_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("Query name").clean_on_escape());
+        let description_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Description (optional)").clean_on_escape()
+        });
+        let tags_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Tags, separated by commas").clean_on_escape()
+        });
 
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.subscribe_in(&search_state, window, |view, _, event, window, cx| {
@@ -215,11 +265,24 @@ impl QueryLibraryDialog {
                 _ => {}
             }
         }));
-        subscriptions.push(cx.subscribe_in(&name_state, window, |view, _, event, _window, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                view.commit_edit(cx);
+        subscriptions.push(cx.subscribe_in(&name_state, window, |view, _, event, window, cx| {
+            match event {
+                InputEvent::Change => {
+                    view.error = None;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => view.commit_edit(window, cx),
+                _ => {}
             }
         }));
+        for input in [&description_state, &tags_state] {
+            subscriptions.push(cx.subscribe_in(input, window, |view, _, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.error = None;
+                    cx.notify();
+                }
+            }));
+        }
         subscriptions.push(cx.observe(&state, |_, _, cx| cx.notify()));
 
         Self {
@@ -227,9 +290,15 @@ impl QueryLibraryDialog {
             target,
             search_state,
             name_state,
+            description_state,
+            tags_state,
+            import_focus: cx.focus_handle(),
+            edit_scope: SavedQueryScope::Connection,
             mode: LibraryMode::History,
             show_all: false,
             editing: None,
+            pending_import: None,
+            file_busy: false,
             confirm_clear: false,
             confirm_delete: None,
             error: None,
@@ -248,6 +317,9 @@ impl QueryLibraryDialog {
                     id: entry.id,
                     saved: false,
                     name: None,
+                    description: String::new(),
+                    tags: Vec::new(),
+                    scope: SavedQueryScope::Connection,
                     timestamp: entry.executed_at,
                     connection_name: connection_label(state, entry.definition.connection_id),
                     definition: entry.definition.clone(),
@@ -260,6 +332,9 @@ impl QueryLibraryDialog {
                     id: entry.id,
                     saved: true,
                     name: Some(entry.name.clone()),
+                    description: entry.description.clone(),
+                    tags: entry.tags.clone(),
+                    scope: entry.scope,
                     timestamp: entry.updated_at,
                     connection_name: connection_label(state, entry.definition.connection_id),
                     definition: entry.definition.clone(),
@@ -267,14 +342,20 @@ impl QueryLibraryDialog {
                 .collect::<Vec<_>>(),
         };
         items.retain(|item| {
-            (self.show_all || self.target.matches_scope(&item.definition))
+            let in_scope = if item.saved && item.scope == SavedQueryScope::Global {
+                item.definition.kind() == self.target.kind()
+            } else {
+                self.target.matches_scope(&item.definition)
+            };
+            let matches_saved = item.saved
+                && state
+                    .saved_queries()
+                    .iter()
+                    .find(|saved| saved.id == item.id)
+                    .is_some_and(|saved| saved.matches_search(&query));
+            (self.show_all || in_scope)
                 && (query.is_empty()
-                    || item
-                        .name
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_ascii_lowercase()
-                        .contains(&query)
+                    || matches_saved
                     || item.connection_name.to_ascii_lowercase().contains(&query)
                     || item.definition.namespace().to_ascii_lowercase().contains(&query)
                     || item.definition.content.copy_text().to_ascii_lowercase().contains(&query))
@@ -282,10 +363,12 @@ impl QueryLibraryDialog {
         items
     }
 
+    fn item_applicable(&self, item: &LibraryItem) -> bool {
+        query_applicable(&self.target, item.saved, item.scope, &item.definition)
+    }
+
     fn activate_first(&mut self, run: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) =
-            self.items(cx).into_iter().find(|item| item.definition.kind() == self.target.kind())
-        else {
+        let Some(item) = self.items(cx).into_iter().find(|item| self.item_applicable(item)) else {
             self.error =
                 Some(format!("No {} queries match this search.", self.target.kind().label()));
             cx.notify();
@@ -301,14 +384,31 @@ impl QueryLibraryDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if item.definition.kind() != self.target.kind() {
-            self.error =
-                Some(format!("Open {} to restore this query.", item.definition.kind().label()));
+        if !self.item_applicable(&item) {
+            self.error = Some(if item.definition.kind() != self.target.kind() {
+                format!("Open {} to restore this query.", item.definition.kind().label())
+            } else {
+                "This connection-specific query can only be restored in its saved namespace."
+                    .to_string()
+            });
             cx.notify();
             return;
         }
 
         let target = self.target.clone();
+        let is_global = item.saved && item.scope == SavedQueryScope::Global;
+        let target_identity = target.identity_label(self.state.read(cx));
+        let status = if is_global {
+            if run {
+                format!("Global query restored to {target_identity} and started")
+            } else {
+                format!("Global query restored to {target_identity}")
+            }
+        } else if run {
+            "Query restored and started".to_string()
+        } else {
+            "Query restored".to_string()
+        };
         let definition = item.definition.clone();
         let result = self.state.update(cx, |state, cx| {
             let result = match &target {
@@ -321,11 +421,7 @@ impl QueryLibraryDialog {
                 QueryLibraryTarget::Forge(key) => state.restore_forge_query(key, &definition),
             };
             if result.is_ok() {
-                state.set_status_message(Some(StatusMessage::info(if run {
-                    "Query restored and started"
-                } else {
-                    "Query restored"
-                })));
+                state.set_status_message(Some(StatusMessage::info(status)));
                 cx.notify();
             }
             result
@@ -357,28 +453,55 @@ impl QueryLibraryDialog {
     fn start_edit(
         &mut self,
         intent: EditIntent,
-        value: String,
+        values: EditValues,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.editing = Some(intent);
+        self.edit_scope = values.scope;
         self.error = None;
         self.name_state.update(cx, |input, cx| {
-            input.set_value(value, window, cx);
+            input.set_value(values.name, window, cx);
             input.focus(window, cx);
+        });
+        self.description_state.update(cx, |input, cx| {
+            input.set_value(values.description, window, cx);
+        });
+        self.tags_state.update(cx, |input, cx| {
+            input.set_value(values.tags.join(", "), window, cx);
         });
         cx.notify();
     }
 
-    fn commit_edit(&mut self, cx: &mut Context<Self>) {
+    fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_state.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    fn commit_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(intent) = self.editing.clone() else {
             return;
         };
         let name = self.name_state.read(cx).value().to_string();
+        let description = self.description_state.read(cx).value().to_string();
+        let tags =
+            self.tags_state.read(cx).value().split(',').map(str::to_string).collect::<Vec<_>>();
+        let scope = self.edit_scope;
         let result = self.state.update(cx, |state, cx| {
-            let result = match intent {
-                EditIntent::Save(definition) => state.save_query(definition, &name).map(|_| ()),
-                EditIntent::RenameSaved(id) => state.rename_saved_query(id, &name),
+            let (id, definition) = match intent {
+                EditIntent::Save(definition) => (None, definition),
+                EditIntent::EditSaved(id) => {
+                    let Some(saved) = state.saved_queries().iter().find(|saved| saved.id == id)
+                    else {
+                        return Err(anyhow::anyhow!("That saved query no longer exists."));
+                    };
+                    (Some(id), saved.definition.clone())
+                }
+            };
+            let input = SavedQueryInput { name, description, tags, scope, definition };
+            let result = if let Some(id) = id {
+                state.edit_saved_query(id, input)
+            } else {
+                state.save_query_input(input).map(|_| ())
             };
             if result.is_ok() {
                 cx.notify();
@@ -389,15 +512,167 @@ impl QueryLibraryDialog {
             Ok(()) => {
                 self.editing = None;
                 self.error = None;
+                self.focus_search(window, cx);
             }
             Err(error) => {
                 if error.downcast_ref::<QueryLibraryPersistenceError>().is_some() {
                     self.editing = None;
+                    self.focus_search(window, cx);
                 }
                 self.error = Some(error.to_string());
             }
         }
         cx.notify();
+    }
+
+    fn start_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_busy {
+            return;
+        }
+        let window_handle = window.window_handle();
+        let connection_id = self.target.connection_id();
+        self.file_busy = true;
+        self.pending_import = None;
+        self.error = None;
+        cx.notify();
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let path = open_file_dialog_async(
+                FilePickerMode::Open,
+                vec![FileFilter::query_library_json(), FileFilter::all()],
+                None,
+            )
+            .await;
+            let result = path.map(|path| query_library_io::read_import(&path));
+            let _ = cx.update_window(window_handle, |_root, window, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.file_busy = false;
+                    match result {
+                        None => this.focus_search(window, cx),
+                        Some(Err(error)) => {
+                            this.error =
+                                Some(format!("Saved queries could not be imported: {error}"));
+                            this.focus_search(window, cx);
+                        }
+                        Some(Ok(file)) => {
+                            let inputs = file
+                                .queries
+                                .into_iter()
+                                .map(|query| query.into_input(connection_id))
+                                .collect::<anyhow::Result<Vec<_>>>();
+                            match inputs.and_then(|inputs| {
+                                let report =
+                                    this.state.read(cx).preview_saved_query_import(&inputs)?;
+                                Ok((inputs, report))
+                            }) {
+                                Ok((inputs, report)) => {
+                                    this.pending_import = Some(PendingImport {
+                                        inputs,
+                                        global: report.global,
+                                        connection: report.connection,
+                                        renamed: report.renamed,
+                                    });
+                                    let focus = this.import_focus.clone();
+                                    window.defer(cx, move |window, _cx| window.focus(&focus));
+                                }
+                                Err(error) => {
+                                    this.error = Some(format!(
+                                        "Saved queries could not be imported: {error}"
+                                    ));
+                                    this.focus_search(window, cx);
+                                }
+                            }
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn confirm_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_import.clone() else {
+            return;
+        };
+        let result =
+            self.state.update(cx, |state, cx| match state.import_saved_queries(pending.inputs) {
+                Ok(report) => {
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Imported {} saved queries ({} renamed)",
+                        report.imported, report.renamed
+                    ))));
+                    cx.notify();
+                    Ok(report)
+                }
+                Err(error) => Err(error),
+            });
+        match result {
+            Ok(_) => {
+                self.pending_import = None;
+                self.mode = LibraryMode::Saved;
+                self.show_all = true;
+                self.error = None;
+                self.focus_search(window, cx);
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                window.focus(&self.import_focus);
+            }
+        }
+        cx.notify();
+    }
+
+    fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_busy {
+            return;
+        }
+        let file = match query_library_io::build_export(self.state.read(cx).saved_queries()) {
+            Ok(file) => file,
+            Err(error) => {
+                self.error = Some(format!("Saved queries could not be exported: {error}"));
+                self.focus_search(window, cx);
+                cx.notify();
+                return;
+            }
+        };
+        let count = file.queries.len();
+        let state = self.state.clone();
+        let window_handle = window.window_handle();
+        self.file_busy = true;
+        self.error = None;
+        cx.notify();
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let path = open_file_dialog_async(
+                FilePickerMode::Save,
+                vec![FileFilter::query_library_json(), FileFilter::all()],
+                Some("openmango-query-library.json".to_string()),
+            )
+            .await;
+            let result = path.map(|path| query_library_io::write_export(&path, &file));
+            let _ = cx.update_window(window_handle, |_root, window, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.file_busy = false;
+                    match result {
+                        None => {}
+                        Some(Ok(())) => {
+                            state.update(cx, |state, cx| {
+                                state.set_status_message(Some(StatusMessage::info(format!(
+                                    "Exported {count} saved queries"
+                                ))));
+                                cx.notify();
+                            });
+                        }
+                        Some(Err(error)) => {
+                            this.error =
+                                Some(format!("Saved queries could not be exported: {error}"));
+                        }
+                    }
+                    this.focus_search(window, cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     fn mutate_library(
@@ -422,8 +697,24 @@ impl QueryLibraryDialog {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let compatible = item.definition.kind() == self.target.kind();
+        let applicable = self.item_applicable(&item);
+        let target_identity = self.target.identity_label(self.state.read(cx));
         let namespace = item.definition.namespace();
         let connection_name = item.connection_name.clone();
+        let identity = if item.saved && item.scope == SavedQueryScope::Global {
+            div()
+                .px(px(5.0))
+                .py(px(1.0))
+                .rounded(px(3.0))
+                .bg(cx.theme().secondary)
+                .text_color(cx.theme().secondary_foreground)
+                .child("Global")
+                .into_any_element()
+        } else {
+            div().child(connection_name.clone()).into_any_element()
+        };
+        let description = item.description.clone();
+        let tags = item.tags.clone();
         let preview = item.definition.content.preview();
         let kind = item.definition.kind().label();
         let timestamp = format_timestamp(item.timestamp);
@@ -491,6 +782,19 @@ impl QueryLibraryDialog {
                                 .child(name),
                         )
                     })
+                    .when(!description.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().secondary_foreground)
+                                .child(description),
+                        )
+                    })
+                    .when(!tags.is_empty(), |this| {
+                        this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                            tags.iter().map(|tag| format!("#{tag}")).collect::<Vec<_>>().join("  "),
+                        ))
+                    })
                     .child(
                         div()
                             .text_sm()
@@ -512,7 +816,7 @@ impl QueryLibraryDialog {
                             .text_color(cx.theme().muted_foreground)
                             .child(kind)
                             .child("·")
-                            .child(connection_name)
+                            .child(identity)
                             .child("·")
                             .child(namespace)
                             .child("·")
@@ -530,11 +834,18 @@ impl QueryLibraryDialog {
                         Button::new(("query-restore", index))
                             .compact()
                             .label("Restore")
-                            .disabled(!compatible)
-                            .tooltip(if compatible {
-                                "Restore without running"
+                            .disabled(!applicable)
+                            .tooltip(if applicable {
+                                if item.saved && item.scope == SavedQueryScope::Global {
+                                    format!("Restore into {target_identity}")
+                                } else {
+                                    "Restore without running".to_string()
+                                }
+                            } else if compatible {
+                                "Open this query's saved connection and namespace to restore"
+                                    .to_string()
                             } else {
-                                "Open the matching editor to restore"
+                                "Open the matching editor to restore".to_string()
                             })
                             .on_click({
                                 let item = item.clone();
@@ -551,8 +862,15 @@ impl QueryLibraryDialog {
                             .compact()
                             .primary()
                             .label("Run")
-                            .disabled(!compatible)
-                            .tooltip("Restore and run")
+                            .disabled(!applicable)
+                            .tooltip(if applicable {
+                                format!("Restore and run in {target_identity}")
+                            } else if compatible {
+                                "Open this query's saved connection and namespace to run"
+                                    .to_string()
+                            } else {
+                                "Open the matching editor to run".to_string()
+                            })
                             .on_click({
                                 let item = item.clone();
                                 let view = view.clone();
@@ -571,7 +889,12 @@ impl QueryLibraryDialog {
                                     view.update(cx, |this, cx| {
                                         this.start_edit(
                                             EditIntent::Save(save_definition.clone()),
-                                            String::new(),
+                                            EditValues {
+                                                name: String::new(),
+                                                description: String::new(),
+                                                tags: Vec::new(),
+                                                scope: SavedQueryScope::Connection,
+                                            },
                                             window,
                                             cx,
                                         );
@@ -582,29 +905,34 @@ impl QueryLibraryDialog {
                     })
                     .when(item.saved, |this| {
                         let name = item.name.clone().unwrap_or_default();
+                        let description = item.description.clone();
+                        let tags = item.tags.clone();
+                        let scope = item.scope;
                         this.child(
-                            Button::new(("query-rename", index))
-                                .compact()
-                                .label("Rename")
-                                .on_click({
-                                    let view = view.clone();
-                                    move |_, window, cx| {
-                                        view.update(cx, |this, cx| {
-                                            this.start_edit(
-                                                EditIntent::RenameSaved(item.id),
-                                                name.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                }),
+                            Button::new(("query-edit", index)).compact().label("Edit").on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.start_edit(
+                                            EditIntent::EditSaved(item.id),
+                                            EditValues {
+                                                name: name.clone(),
+                                                description: description.clone(),
+                                                tags: tags.clone(),
+                                                scope,
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }),
                         )
                         .child(
                             Button::new(("query-update", index))
                                 .compact()
                                 .label("Update")
-                                .disabled(!compatible || !can_update)
+                                .disabled(!applicable || !can_update)
                                 .tooltip("Replace this saved query with the current editor content")
                                 .on_click({
                                     let view = view.clone();
@@ -663,6 +991,11 @@ impl Render for QueryLibraryDialog {
         let current_definition = self.target.definition(self.state.read(cx));
         let can_save_current =
             current_definition.as_ref().is_some_and(|definition| !definition.content.is_empty());
+        let identity = self
+            .state
+            .read(cx)
+            .connection_by_id(self.target.connection_id())
+            .map(ConnectionIdentity::from);
         let view = cx.entity();
 
         let mut history_button = Button::new("query-library-history")
@@ -674,6 +1007,7 @@ impl Render for QueryLibraryDialog {
                     view.update(cx, |this, cx| {
                         this.mode = LibraryMode::History;
                         this.editing = None;
+                        this.pending_import = None;
                         this.confirm_clear = false;
                         this.confirm_delete = None;
                         cx.notify();
@@ -703,7 +1037,7 @@ impl Render for QueryLibraryDialog {
         }
 
         let mut current_button =
-            Button::new("query-library-current").compact().label("Current namespace").on_click({
+            Button::new("query-library-current").compact().label("Applicable here").on_click({
                 let view = view.clone();
                 move |_, _window, cx| {
                     view.update(cx, |this, cx| {
@@ -733,52 +1067,229 @@ impl Render for QueryLibraryDialog {
         let edit_panel = self.editing.as_ref().map(|intent| {
             let label = match intent {
                 EditIntent::Save(_) => "Save query",
-                EditIntent::RenameSaved(_) => "Rename query",
+                EditIntent::EditSaved(_) => "Edit saved query",
             };
+            let connection_selected = self.edit_scope == SavedQueryScope::Connection;
+            let global_selected = self.edit_scope == SavedQueryScope::Global;
+            let mut connection_scope = Button::new("query-scope-connection")
+                .compact()
+                .label(if connection_selected { "✓ This connection" } else { "This connection" })
+                .on_click({
+                    let view = view.clone();
+                    move |_, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.edit_scope = SavedQueryScope::Connection;
+                            cx.notify();
+                        });
+                    }
+                });
+            let mut global_scope = Button::new("query-scope-global")
+                .compact()
+                .label(if global_selected { "✓ Global" } else { "Global" })
+                .tooltip("Available in any compatible editor")
+                .on_click({
+                    let view = view.clone();
+                    move |_, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.edit_scope = SavedQueryScope::Global;
+                            cx.notify();
+                        });
+                    }
+                });
+            if self.edit_scope == SavedQueryScope::Connection {
+                connection_scope = connection_scope.primary();
+            } else {
+                global_scope = global_scope.primary();
+            }
             div()
                 .flex()
-                .items_end()
+                .flex_col()
                 .gap(spacing::sm())
                 .px(spacing::md())
                 .py(spacing::sm())
                 .bg(cx.theme().secondary.opacity(0.25))
                 .border_b_1()
                 .border_color(cx.theme().border)
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label))
+                .child(
+                    div()
+                        .flex()
+                        .gap(spacing::sm())
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Name"),
+                                )
+                                .child(Input::new(&self.name_state).w_full()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Description"),
+                                )
+                                .child(Input::new(&self.description_state).w_full()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_end()
+                        .gap(spacing::sm())
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Tags"),
+                                )
+                                .child(Input::new(&self.tags_state).w_full()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Scope"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(spacing::xs())
+                                        .child(connection_scope)
+                                        .child(global_scope),
+                                ),
+                        )
+                        .child(
+                            Button::new("query-name-save")
+                                .compact()
+                                .primary()
+                                .label("Save")
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| this.commit_edit(window, cx));
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("query-name-cancel").compact().label("Cancel").on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.editing = None;
+                                        this.error = None;
+                                        this.focus_search(window, cx);
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                        ),
+                )
+        });
+
+        let import_panel = self.pending_import.as_ref().map(|pending| {
+            let total = pending.inputs.len();
+            let connection_name =
+                connection_label(self.state.read(cx), self.target.connection_id());
+            div()
+                .track_focus(&self.import_focus)
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(spacing::md())
+                .px(spacing::md())
+                .py(spacing::sm())
+                .bg(cx.theme().warning.opacity(0.08))
+                .border_b_1()
+                .border_color(cx.theme().warning.opacity(0.35))
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .flex_1()
-                        .gap(spacing::xs())
-                        .child(div().text_sm().text_color(cx.theme().foreground).child(label))
-                        .child(Input::new(&self.name_state).w_full()),
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(format!("Import {total} saved queries?")),
+                        )
+                        .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(
+                            format!(
+                                "{} global · {} bound to {} · {} name collisions renamed",
+                                pending.global,
+                                pending.connection,
+                                connection_name,
+                                pending.renamed
+                            ),
+                        )),
                 )
                 .child(
-                    Button::new("query-name-save")
-                        .compact()
-                        .primary()
-                        .label("Save query")
-                        .on_click({
-                            let view = view.clone();
-                            move |_, _window, cx| {
-                                view.update(cx, |this, cx| this.commit_edit(cx));
-                            }
-                        }),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(spacing::xs())
+                        .child(
+                            Button::new("query-import-confirm")
+                                .compact()
+                                .primary()
+                                .label("Import")
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.confirm_import(window, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("query-import-cancel").compact().label("Cancel").on_click(
+                                {
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.pending_import = None;
+                                            this.focus_search(window, cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ),
+                        ),
                 )
-                .child(Button::new("query-name-cancel").compact().label("Cancel").on_click({
-                    let view = view.clone();
-                    move |_, _window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.editing = None;
-                            this.error = None;
-                            cx.notify();
-                        });
-                    }
-                }))
         });
 
         let body = if items.is_empty() {
-            let message = if self.search_state.read(cx).value().trim().is_empty() {
+            let total = match self.mode {
+                LibraryMode::History => history_count,
+                LibraryMode::Saved => saved_count,
+            };
+            let searching = !self.search_state.read(cx).value().trim().is_empty();
+            let message = if total == 0 {
                 match self.mode {
                     LibraryMode::History => {
                         "No query history yet. Run a document query, aggregation, or Forge statement."
@@ -787,9 +1298,14 @@ impl Render for QueryLibraryDialog {
                         "No saved queries yet. Save the current editor or a useful History entry."
                     }
                 }
-            } else {
+            } else if searching {
                 "No queries match this search."
+            } else if self.show_all {
+                "No queries are compatible with this editor."
+            } else {
+                "No queries are applicable here."
             };
+            let show_all_offer = total > 0 && !self.show_all;
             div()
                 .flex()
                 .flex_col()
@@ -812,6 +1328,17 @@ impl Render for QueryLibraryDialog {
                         .text_color(cx.theme().muted_foreground)
                         .child("Query text stays local and entries that may contain credentials are not recorded."),
                 )
+                .when(show_all_offer, |empty| {
+                    empty.child(Button::new("query-empty-show-all").compact().label("Show all").on_click({
+                        let view = view.clone();
+                        move |_, _window, cx| {
+                            view.update(cx, |this, cx| {
+                                this.show_all = true;
+                                cx.notify();
+                            });
+                        }
+                    }))
+                })
                 .into_any_element()
         } else {
             div()
@@ -857,7 +1384,10 @@ impl Render for QueryLibraryDialog {
                         div()
                             .flex()
                             .items_center()
-                            .gap(spacing::xs())
+                            .gap(spacing::sm())
+                            .when_some(identity, |row, identity| {
+                                row.child(connection_identity_badge(&identity, true, cx))
+                            })
                             .child(current_button)
                             .child(all_button),
                     ),
@@ -877,6 +1407,33 @@ impl Render for QueryLibraryDialog {
                             .min_w(px(0.0))
                             .child(Input::new(&self.search_state).w_full()),
                     )
+                    .when(self.mode == LibraryMode::Saved, |row| {
+                        row.child(
+                            Button::new("query-library-import")
+                                .compact()
+                                .label(if self.file_busy { "Working…" } else { "Import…" })
+                                .disabled(self.file_busy)
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| this.start_import(window, cx));
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("query-library-export")
+                                .compact()
+                                .label("Export all…")
+                                .disabled(self.file_busy || saved_count == 0)
+                                .tooltip("Export all saved queries as portable JSON")
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| this.start_export(window, cx));
+                                    }
+                                }),
+                        )
+                    })
                     .child(
                         Button::new("query-save-current")
                             .compact()
@@ -891,7 +1448,12 @@ impl Render for QueryLibraryDialog {
                                     view.update(cx, |this, cx| {
                                         this.start_edit(
                                             EditIntent::Save(definition),
-                                            String::new(),
+                                            EditValues {
+                                                name: String::new(),
+                                                description: String::new(),
+                                                tags: Vec::new(),
+                                                scope: SavedQueryScope::Connection,
+                                            },
                                             window,
                                             cx,
                                         );
@@ -901,6 +1463,7 @@ impl Render for QueryLibraryDialog {
                     ),
             )
             .children(edit_panel)
+            .children(import_panel)
             .when_some(self.error.clone(), |this, error| {
                 this.child(
                     div()
@@ -986,6 +1549,16 @@ impl Render for QueryLibraryDialog {
                 )
             })
     }
+}
+
+fn query_applicable(
+    target: &QueryLibraryTarget,
+    saved: bool,
+    scope: SavedQueryScope,
+    definition: &QueryDefinition,
+) -> bool {
+    definition.kind() == target.kind()
+        && (saved && scope == SavedQueryScope::Global || target.matches_scope(definition))
 }
 
 fn parse_optional_document(raw: &str) -> Result<Option<mongodb::bson::Document>, String> {

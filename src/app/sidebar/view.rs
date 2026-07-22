@@ -12,7 +12,7 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{Icon, IconName, Sizable as _};
 
-use crate::components::ConnectionManager;
+use crate::components::{ConnectionIdentity, ConnectionManager, connection_identity_badge};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenSelection,
@@ -56,6 +56,13 @@ impl Render for Sidebar {
                 .collect::<HashMap<_, _>>(),
         );
 
+        let connection_identities = Rc::new(
+            self.cached_connections
+                .iter()
+                .map(|connection| (connection.id, ConnectionIdentity::from(connection)))
+                .collect::<HashMap<_, _>>(),
+        );
+
         let disconnected_connections: Vec<_> = self
             .cached_connections
             .iter()
@@ -79,7 +86,16 @@ impl Render for Sidebar {
             let is_connecting = connecting_id == Some(connection_id);
             let accent =
                 connection_accents.get(&connection_id).copied().unwrap_or(cx.theme().foreground);
-            Some((idx, entry.label.clone(), connection_id, is_connected, is_connecting, accent))
+            let identity = connection_identities.get(&connection_id).cloned();
+            Some((
+                idx,
+                entry.label.clone(),
+                connection_id,
+                is_connected,
+                is_connecting,
+                accent,
+                identity,
+            ))
         });
 
         let search_query = self.search_state.read(cx).value().to_string();
@@ -492,11 +508,12 @@ impl Render for Sidebar {
                             let state_clone = state_for_tree.clone();
                             let sidebar_entity = sidebar_entity.clone();
                             let connection_accents = connection_accents.clone();
+                            let connection_identities = connection_identities.clone();
                             cx.processor(
                                 move |sidebar,
                                       visible_range: std::ops::Range<usize>,
                                       _window,
-                                      _cx| {
+                                      cx| {
                                     let visible_start = visible_range.start;
                                     let mut items = Vec::with_capacity(visible_range.len());
                                     let connecting_id = connecting_id;
@@ -520,6 +537,8 @@ impl Render for Sidebar {
                                         let connection_accent = connection_accents
                                             .get(&connection_id)
                                             .copied();
+                                        let connection_identity =
+                                            connection_identities.get(&connection_id);
                                         let row_accent = if is_connection {
                                             connection_accent.unwrap_or(theme_primary)
                                         } else {
@@ -723,6 +742,14 @@ impl Render for Sidebar {
                                                     .truncate()
                                                     .child(label.clone()),
                                             )
+                                            .when_some(
+                                                is_connection.then_some(connection_identity).flatten(),
+                                                |this, identity| {
+                                                    this.child(connection_identity_badge(
+                                                        identity, false, cx,
+                                                    ))
+                                                },
+                                            )
                                             .when(is_connecting || is_loading_db, |this| {
                                                 this.child(Spinner::new().xsmall())
                                             });
@@ -813,7 +840,7 @@ impl Render for Sidebar {
                     }),
                     )
                     // Sticky connection header overlay
-                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting, accent)| {
+                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting, accent, identity)| {
                         let scroll_handle = self.scroll_handle.clone();
                         let sidebar_entity = sidebar_entity.clone();
                         let sticky_bg = opaque_color(cx.theme().sidebar);
@@ -863,7 +890,10 @@ impl Render for Sidebar {
                                         .text_color(cx.theme().foreground)
                                         .truncate()
                                         .child(label),
-                                ),
+                                )
+                                .when_some(identity, |header, identity| {
+                                    header.child(connection_identity_badge(&identity, false, cx))
+                                }),
                         )
                     })
                     // Typeahead query indicator

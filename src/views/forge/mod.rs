@@ -25,7 +25,9 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Icon, IconName, Sizable};
 
-use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
+use crate::components::{
+    Button, ConnectionIdentity, QueryLibraryDialog, QueryLibraryTarget, connection_identity_badge,
+};
 use crate::state::{AppEvent, AppState, View};
 use crate::theme::{fonts, islands, spacing};
 use controller::ForgeController;
@@ -80,6 +82,12 @@ impl ForgeView {
             .as_ref()
             .map(|key| key.database.clone())
             .unwrap_or_else(|| "Unknown".to_string());
+        let identity = target.as_ref().and_then(|key| {
+            self.app_state
+                .read(cx)
+                .connection_by_id(key.connection_id)
+                .map(ConnectionIdentity::from)
+        });
 
         div()
             .flex()
@@ -99,6 +107,9 @@ impl ForgeView {
                             .text_color(cx.theme().foreground)
                             .child("Forge"),
                     )
+                    .when_some(identity, |header, identity| {
+                        header.child(connection_identity_badge(&identity, true, cx))
+                    })
                     .child(div().text_xs().text_color(cx.theme().muted_foreground).child(database)),
             )
             .child(

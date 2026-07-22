@@ -110,6 +110,7 @@ pub struct AppState {
     keybinding_capture: Option<KeybindingCapture>,
     unsaved_guard_active: bool,
     invalid_inline_edits: HashSet<SessionKey>,
+    production_write_authorizations: HashMap<Uuid, usize>,
 
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
@@ -217,6 +218,7 @@ impl AppState {
             keybinding_capture: None,
             unsaved_guard_active: false,
             invalid_inline_edits: HashSet::new(),
+            production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
             config,
             connections_persistence_blocked: connection_load_error.is_some(),

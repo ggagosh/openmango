@@ -14,7 +14,7 @@ use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
-use crate::components::{Button, open_confirm_dialog};
+use crate::components::{Button, WriteConfirmation, request_connection_write};
 use crate::keyboard::RunAggregation;
 use crate::state::{
     AppCommands, AppState, DocumentViewMode, SessionKey, TransferMode, TransferScope,
@@ -125,24 +125,29 @@ fn render_delete_menu(
                                 let doc_key = selected_docs[0].clone();
                                 let message =
                                     format!("Delete document {}? This cannot be undone.", doc_key);
-                                open_confirm_dialog(
+                                let state_for_write = state_for_delete.clone();
+                                request_connection_write(
+                                    state_for_delete.clone(),
+                                    crate::components::WriteRequest::new(
+                                        session_key.connection_id,
+                                        session_key.namespace(),
+                                        "Delete a document",
+                                        Some(WriteConfirmation {
+                                            title: "Delete document".into(),
+                                            message,
+                                            confirm_label: "Delete".into(),
+                                            destructive: true,
+                                        }),
+                                    ),
                                     window,
                                     cx,
-                                    "Delete document",
-                                    message,
-                                    "Delete",
-                                    true,
-                                    {
-                                        let state_for_delete = state_for_delete.clone();
-                                        let session_key = session_key.clone();
-                                        move |_window, cx| {
-                                            AppCommands::delete_document(
-                                                state_for_delete.clone(),
-                                                session_key.clone(),
-                                                doc_key.clone(),
-                                                cx,
-                                            );
-                                        }
+                                    move |_window, cx| {
+                                        AppCommands::delete_document(
+                                            state_for_write,
+                                            session_key,
+                                            doc_key,
+                                            cx,
+                                        );
                                     },
                                 );
                             } else {
@@ -166,24 +171,29 @@ fn render_delete_menu(
                                     "Delete {} documents? This cannot be undone.",
                                     affected_count
                                 );
-                                open_confirm_dialog(
+                                let state_for_write = state_for_delete.clone();
+                                request_connection_write(
+                                    state_for_delete.clone(),
+                                    crate::components::WriteRequest::new(
+                                        session_key.connection_id,
+                                        session_key.namespace(),
+                                        format!("Delete {affected_count} documents"),
+                                        Some(WriteConfirmation {
+                                            title: "Delete documents".into(),
+                                            message,
+                                            confirm_label: "Delete".into(),
+                                            destructive: true,
+                                        }),
+                                    ),
                                     window,
                                     cx,
-                                    "Delete documents",
-                                    message,
-                                    "Delete",
-                                    true,
-                                    {
-                                        let state_for_delete = state_for_delete.clone();
-                                        let session_key = session_key.clone();
-                                        move |_window, cx| {
-                                            AppCommands::delete_documents_by_filter(
-                                                state_for_delete.clone(),
-                                                session_key.clone(),
-                                                filter.clone(),
-                                                cx,
-                                            );
-                                        }
+                                    move |_window, cx| {
+                                        AppCommands::delete_documents_by_filter(
+                                            state_for_write,
+                                            session_key,
+                                            filter,
+                                            cx,
+                                        );
                                     },
                                 );
                             }
@@ -448,7 +458,7 @@ fn render_documents_actions_clean(
         Button::new("apply-clean").compact().disabled(!any_selected_dirty).on_click({
             let state_for_apply = state_for_apply.clone();
             let view = view.clone();
-            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 view.update(cx, |this, cx| {
                     this.view_model.commit_inline_edit(&this.state, cx);
                 });
@@ -468,18 +478,43 @@ fn render_documents_actions_clean(
                         .cloned()
                         .collect()
                 };
-                for doc_key in dirty_docs {
-                    let doc = state_for_apply.read(cx).session_draft(&session_key, &doc_key);
-                    if let Some(doc) = doc {
-                        AppCommands::save_document(
-                            state_for_apply.clone(),
-                            session_key.clone(),
-                            doc_key,
-                            doc,
-                            cx,
-                        );
-                    }
+                let documents = dirty_docs
+                    .into_iter()
+                    .filter_map(|doc_key| {
+                        state_for_apply
+                            .read(cx)
+                            .session_draft(&session_key, &doc_key)
+                            .map(|document| (doc_key, document))
+                    })
+                    .collect::<Vec<_>>();
+                if documents.is_empty() {
+                    return;
                 }
+                let write_count = documents.len();
+                let state_for_write = state_for_apply.clone();
+                request_connection_write(
+                    state_for_apply.clone(),
+                    crate::components::WriteRequest::new(
+                        session_key.connection_id,
+                        session_key.namespace(),
+                        format!("Save {write_count} document change(s)"),
+                        None,
+                    )
+                    .for_writes(write_count),
+                    window,
+                    cx,
+                    move |_window, cx| {
+                        for (doc_key, document) in documents {
+                            AppCommands::save_document(
+                                state_for_write.clone(),
+                                session_key.clone(),
+                                doc_key,
+                                document,
+                                cx,
+                            );
+                        }
+                    },
+                );
             }
         }),
         IconName::Check,

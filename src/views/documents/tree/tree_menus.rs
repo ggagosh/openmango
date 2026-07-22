@@ -8,6 +8,7 @@ use crate::bson::{
     format_relaxed_json_value, get_bson_at_path, parse_document_from_json,
     parse_documents_from_json,
 };
+use crate::components::request_connection_write;
 use crate::keyboard::{
     AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
     CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DiscardDocumentChanges,
@@ -109,15 +110,30 @@ pub(in crate::views::documents) fn build_document_menu(
                     let state = state.clone();
                     let session_key = session_key.clone();
                     let doc_key = doc_key.clone();
-                    move |_, _window, cx| {
+                    move |_, window, cx| {
                         if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
                             let mut new_doc = doc.clone();
                             new_doc.insert("_id", mongodb::bson::oid::ObjectId::new());
-                            AppCommands::insert_document(
+                            let state_for_write = state.clone();
+                            let session_for_write = session_key.clone();
+                            request_connection_write(
                                 state.clone(),
-                                session_key.clone(),
-                                new_doc,
+                                crate::components::WriteRequest::new(
+                                    session_key.connection_id,
+                                    session_key.namespace(),
+                                    "Insert a duplicated document",
+                                    None,
+                                ),
+                                window,
                                 cx,
+                                move |_window, cx| {
+                                    AppCommands::insert_document(
+                                        state_for_write,
+                                        session_for_write,
+                                        new_doc,
+                                        cx,
+                                    );
+                                },
                             );
                         }
                     }
@@ -126,8 +142,8 @@ pub(in crate::views::documents) fn build_document_menu(
         .item(PopupMenuItem::new("Paste Document(s)").action(Box::new(PasteDocuments)).on_click({
             let state = state.clone();
             let session_key = session_key.clone();
-            move |_, _window, cx| {
-                paste_documents_from_clipboard(state.clone(), session_key.clone(), cx);
+            move |_, window, cx| {
+                paste_documents_from_clipboard(state.clone(), session_key.clone(), window, cx);
             }
         }))
         .item(
@@ -453,6 +469,7 @@ fn resolve_document(
 pub(crate) fn paste_documents_from_clipboard(
     state: Entity<AppState>,
     session_key: SessionKey,
+    window: &mut Window,
     cx: &mut App,
 ) {
     let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
@@ -493,7 +510,22 @@ pub(crate) fn paste_documents_from_clipboard(
         })
         .collect::<Vec<_>>();
 
-    AppCommands::insert_documents(state, session_key, docs, cx);
+    let state_for_write = state.clone();
+    let target = session_key.namespace();
+    request_connection_write(
+        state,
+        crate::components::WriteRequest::new(
+            session_key.connection_id,
+            target,
+            format!("Insert {} documents from the clipboard", docs.len()),
+            None,
+        ),
+        window,
+        cx,
+        move |_window, cx| {
+            AppCommands::insert_documents(state_for_write, session_key, docs, cx);
+        },
+    );
 }
 
 fn format_bson_for_clipboard(value: &Bson) -> String {
