@@ -5,21 +5,13 @@ use crate::components::action_bar::ActionExecution;
 use crate::components::{
     ConnectionDialog, QueryLibraryDialog, request_disconnect_connection, request_unsaved_action,
 };
-use crate::keyboard::RefreshView;
+use crate::keyboard::{RefreshView, format_keystroke};
 use crate::state::settings::AppTheme;
 use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, UnsavedScope, View};
 use crate::views::CollectionView;
 
 use super::AppRoot;
 use super::dialogs::{open_create_collection_dialog, open_create_database_dialog};
-
-fn numbered_tab_index(key: &str, command: bool, alt: bool, shift: bool) -> Option<usize> {
-    if !command || alt || shift || key.len() != 1 {
-        return None;
-    }
-    let digit = key.chars().next()?.to_digit(10)?;
-    (1..=9).contains(&digit).then(|| (digit - 1) as usize)
-}
 
 impl AppRoot {
     pub(super) fn install_global_shortcuts(cx: &mut Context<Self>) -> Subscription {
@@ -34,17 +26,24 @@ impl AppRoot {
                     cx.notify();
                 }
 
-                let key = event.keystroke.key.to_ascii_lowercase();
-                let modifiers = event.keystroke.modifiers;
-                let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-                let alt = modifiers.alt;
-                let shift = modifiers.shift;
-
-                // Cmd+1-9: switch to tab by index. Other global shortcuts are handled by
-                // the context-aware keymap so each keystroke has a single dispatch path.
-                if let Some(tab_index) = numbered_tab_index(&key, cmd_or_ctrl, alt, shift) {
+                let recording = this.state.read(cx).keybinding_capture().is_some();
+                if recording && this.state.read(cx).current_view != View::Settings {
                     this.state.update(cx, |state, cx| {
-                        state.select_tab(tab_index, cx);
+                        state.cancel_keybinding_capture();
+                        cx.notify();
+                    });
+                    return;
+                }
+                if recording {
+                    let cancel = event.keystroke.key.eq_ignore_ascii_case("escape");
+                    let shortcut = (!cancel).then(|| format_keystroke(event));
+                    this.state.update(cx, |state, cx| {
+                        if let Some(shortcut) = shortcut {
+                            state.capture_keybinding(shortcut);
+                        } else {
+                            state.cancel_keybinding_capture();
+                        }
+                        cx.notify();
                     });
                     cx.stop_propagation();
                 }
@@ -407,44 +406,5 @@ impl AppRoot {
                 }
             }
         }
-    }
-}
-
-fn format_keystroke(event: &KeystrokeEvent) -> String {
-    let modifiers = event.keystroke.modifiers;
-    let mut parts = Vec::new();
-    if modifiers.platform {
-        parts.push("cmd");
-    }
-    if modifiers.control {
-        parts.push("ctrl");
-    }
-    if modifiers.alt {
-        parts.push("alt");
-    }
-    if modifiers.shift {
-        parts.push("shift");
-    }
-    let key = event.keystroke.key.to_string();
-    if parts.is_empty() {
-        key
-    } else {
-        parts.push(&key);
-        parts.join("-")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::numbered_tab_index;
-
-    #[test]
-    fn numbered_tabs_own_unshifted_command_digits() {
-        assert_eq!(numbered_tab_index("1", true, false, false), Some(0));
-        assert_eq!(numbered_tab_index("9", true, false, false), Some(8));
-        assert_eq!(numbered_tab_index("1", true, false, true), None);
-        assert_eq!(numbered_tab_index("1", true, true, false), None);
-        assert_eq!(numbered_tab_index("1", false, false, false), None);
-        assert_eq!(numbered_tab_index("0", true, false, false), None);
     }
 }

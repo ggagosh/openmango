@@ -12,7 +12,10 @@ use gpui_component::{Icon, IconName, Sizable as _};
 
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::format_number;
-use crate::keyboard::DeleteAggregationStage;
+use crate::keyboard::{
+    DeleteAggregationStage, DuplicateAggregationStage, MoveAggregationStageDown,
+    MoveAggregationStageUp, ToggleAggregationStageEnabled,
+};
 use crate::state::app_state::PipelineState;
 use crate::state::{AppState, SessionKey, StatusMessage};
 use crate::theme::{borders, spacing};
@@ -444,19 +447,27 @@ fn render_stage_row(
         row = row.child(insert_after);
     }
 
-    let row = row.context_menu(move |menu, _window, _cx| {
+    let row = row.context_menu(move |menu, window, _cx| {
         let mut menu = menu.action_context(menu_focus.clone());
         let has_session = menu_session.is_some();
         let operator_label_for_delete = operator_label_for_menu.clone();
 
-        let duplicate_item = menu_item("Duplicate", Some("⌘D")).disabled(!has_session);
-        let delete_item = menu_item("Delete", Some("⌫")).disabled(!has_session);
+        let duplicate_item =
+            menu_item("Duplicate", registered_shortcut(window, &DuplicateAggregationStage))
+                .disabled(!has_session);
+        let delete_item = menu_item("Delete", registered_shortcut(window, &DeleteAggregationStage))
+            .disabled(!has_session);
         let toggle_label = if stage_enabled { "Disable" } else { "Enable" };
-        let toggle_item = menu_item(toggle_label, Some("⌘⇧E")).disabled(!has_session);
+        let toggle_item =
+            menu_item(toggle_label, registered_shortcut(window, &ToggleAggregationStageEnabled))
+                .disabled(!has_session);
 
-        let move_up_item = menu_item("Move Up", Some("⌘⇧↑")).disabled(!has_session || idx == 0);
+        let move_up_item =
+            menu_item("Move Up", registered_shortcut(window, &MoveAggregationStageUp))
+                .disabled(!has_session || idx == 0);
         let move_down_item =
-            menu_item("Move Down", Some("⌘⇧↓")).disabled(!has_session || idx + 1 >= item_count);
+            menu_item("Move Down", registered_shortcut(window, &MoveAggregationStageDown))
+                .disabled(!has_session || idx + 1 >= item_count);
 
         menu = menu
             .item(duplicate_item.on_click({
@@ -680,13 +691,19 @@ pub(super) fn compute_drop_target(from: usize, insertion_index: usize, count: us
     to
 }
 
-fn menu_item(label: &'static str, shortcut: Option<&'static str>) -> PopupMenuItem {
+fn registered_shortcut(window: &Window, action: &dyn Action) -> Option<String> {
+    window.highest_precedence_binding_for_action(action).map(|binding| {
+        binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
+    })
+}
+
+fn menu_item(label: &'static str, shortcut: Option<String>) -> PopupMenuItem {
     PopupMenuItem::element(move |_window, cx| {
         let mut row = div().flex().items_center().justify_between().w_full().gap(spacing::lg());
 
         row = row.child(div().text_sm().child(label));
 
-        if let Some(shortcut) = shortcut {
+        if let Some(shortcut) = shortcut.clone() {
             row =
                 row.child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut));
         }

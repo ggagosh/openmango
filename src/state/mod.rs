@@ -20,10 +20,10 @@ pub use app_state::{
     ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
     ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
-    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange,
-    UnsavedInventory, UnsavedScope, View,
+    InsertMode, KeybindingCapture, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType,
+    SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
+    TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState,
+    UnsavedChange, UnsavedInventory, UnsavedScope, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;
@@ -38,7 +38,8 @@ pub use query_library::{
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, IslandsAppearanceSettings,
-    IslandsCornerSoftness, IslandsTabStyle, TransferSettings, expand_filename_template,
+    IslandsCornerSoftness, IslandsTabStyle, KeybindingSettings, TransferSettings,
+    expand_filename_template,
 };
 pub use status::{StatusLevel, StatusMessage};
 pub use transfer_rules::{

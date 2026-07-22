@@ -13,10 +13,12 @@ use crate::components::{
 use crate::helpers::keystore::KeyStore;
 use crate::helpers::validate::UriSecrets;
 use crate::keyboard::{
-    CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase, CreateIndex,
-    DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate, EditConnection,
-    FocusContent, FocusSidebar, InstallUpdate, NewConnection, NextTab, OpenActionBar, OpenForge,
-    OpenQueryLibrary, OpenSettings, PrevTab, QuitApp, RefreshView, ToggleAiPanel,
+    self, CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase,
+    CreateIndex, DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate,
+    EditConnection, FocusContent, FocusSidebar, InstallUpdate, NewConnection, NextTab,
+    OpenActionBar, OpenForge, OpenQueryLibrary, OpenSettings, PrevTab, QuitApp, RefreshView,
+    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
+    SelectTab9, ToggleAiPanel,
 };
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::app_state::{
@@ -397,15 +399,19 @@ impl AppRoot {
         let subscription = Self::install_global_shortcuts(cx);
         subscriptions.push(subscription);
 
-        // Global keystroke observer: fallback for CloseTab when dispatch tree
-        // loses track of focus after a tab close (stale FocusId → root_node_id(0)
-        // → no "Workspace" context → keybinding doesn't match).
-        let keystroke_sub = cx.observe_keystrokes(|this, event, window, cx| {
-            let ks = &event.keystroke;
-            let is_close = ks.key == "w"
-                && (ks.modifiers.platform || ks.modifiers.control)
-                && !ks.modifiers.alt
-                && !ks.modifiers.shift;
+        // Fallback for CloseTab when a stale focus ID leaves no Workspace context.
+        // Capture the startup keymap so pending Settings changes still require restart.
+        let close_tab_shortcuts = keyboard::effective_shortcuts_for_action(
+            &state.read(cx).settings.keybindings,
+            "close-tab",
+        );
+        let keystroke_sub = cx.observe_keystrokes(move |this, event, window, cx| {
+            let shortcut = keyboard::normalize_shortcut(&keyboard::format_keystroke(event)).ok();
+            let is_close = shortcut.as_deref().is_some_and(|shortcut| {
+                close_tab_shortcuts.iter().any(|candidate| {
+                    keyboard::normalize_shortcut(candidate).ok().as_deref() == Some(shortcut)
+                })
+            });
             if is_close && event.action.is_none() {
                 this.handle_close_tab(window, cx);
                 window.focus(&this.focus_handle);
@@ -538,6 +544,33 @@ impl Render for AppRoot {
                 this.state.update(cx, |state, cx| {
                     state.select_prev_tab(cx);
                 });
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab1, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(0, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab2, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(1, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab3, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(2, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab4, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(3, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab5, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(4, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab6, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(5, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab7, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(6, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab8, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(7, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SelectTab9, _window, cx| {
+                this.state.update(cx, |state, cx| state.select_tab(8, cx));
             }))
             .on_action(cx.listener(|this, _: &NewConnection, window, cx| {
                 this.handle_new_connection(window, cx);

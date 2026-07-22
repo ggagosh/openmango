@@ -1,5 +1,7 @@
 //! Application settings with persistence.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::app_state::{InsertMode, TransferFormat};
@@ -14,6 +16,8 @@ pub struct AppSettings {
     pub transfer: TransferSettings,
     #[serde(default)]
     pub ai: AiSettings,
+    #[serde(default)]
+    pub keybindings: KeybindingSettings,
     #[serde(default = "default_interactive_query_timeout_ms")]
     pub interactive_query_timeout_ms: u64,
     #[serde(default = "default_current_version")]
@@ -28,11 +32,20 @@ impl Default for AppSettings {
             appearance: AppearanceSettings::default(),
             transfer: TransferSettings::default(),
             ai: AiSettings::default(),
+            keybindings: KeybindingSettings::default(),
             interactive_query_timeout_ms: default_interactive_query_timeout_ms(),
             last_seen_version: default_current_version(),
             auto_update: true,
         }
     }
+}
+
+/// User overrides keyed by a stable binding ID.
+/// Missing IDs use defaults, `null` disables a binding, and strings replace it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingSettings {
+    #[serde(default)]
+    pub overrides: BTreeMap<String, Option<String>>,
 }
 
 fn default_interactive_query_timeout_ms() -> u64 {
@@ -314,9 +327,27 @@ mod tests {
         assert!(settings.appearance.islands.tab_style_migrated_to_islands);
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
+        assert!(settings.keybindings.overrides.is_empty());
         assert!(!settings.ai.enabled);
         assert_eq!(settings.ai.model, "gemini-3-flash-preview");
         assert_eq!(settings.interactive_query_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn keybinding_overrides_round_trip_and_missing_settings_default() {
+        let mut settings = AppSettings::default();
+        settings
+            .keybindings
+            .overrides
+            .insert("open-settings.workspace".into(), Some("cmd-alt-s".into()));
+        settings.keybindings.overrides.insert("unknown.future-binding".into(), None);
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        let legacy: AppSettings = serde_json::from_str("{}").unwrap();
+
+        assert_eq!(restored.keybindings, settings.keybindings);
+        assert!(legacy.keybindings.overrides.is_empty());
     }
 
     #[test]
