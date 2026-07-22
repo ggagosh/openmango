@@ -5,7 +5,7 @@ use crate::bson::{
     PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
     get_bson_at_path,
 };
-use crate::components::open_confirm_dialog;
+use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
 use crate::keyboard::{
     AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs, CopyAsCsv, CopyAsJson,
     CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey, CopyValue, CreateIndex,
@@ -110,7 +110,7 @@ impl CollectionView {
                 cx,
             );
         }))
-        .on_action(cx.listener(|this, _: &DuplicateDocument, _window, cx| {
+        .on_action(cx.listener(|this, _: &DuplicateDocument, window, cx| {
             let Some((session_key, _doc_key, doc)) = this.selected_document_for_current_session(cx)
             else {
                 return;
@@ -126,7 +126,23 @@ impl CollectionView {
             }
             let mut new_doc = doc.clone();
             new_doc.insert("_id", ObjectId::new());
-            AppCommands::insert_document(this.state.clone(), session_key, new_doc, cx);
+            let state = this.state.clone();
+            let state_for_write = state.clone();
+            let target = session_key.namespace();
+            request_connection_write(
+                state,
+                crate::components::WriteRequest::new(
+                    session_key.connection_id,
+                    target,
+                    "Insert a duplicated document",
+                    None,
+                ),
+                window,
+                cx,
+                move |_window, cx| {
+                    AppCommands::insert_document(state_for_write, session_key, new_doc, cx);
+                },
+            );
         }))
         .on_action(cx.listener(|this, _: &DeleteDocument, window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
@@ -145,18 +161,27 @@ impl CollectionView {
             if selected_docs.len() == 1 {
                 let doc_key = selected_docs.into_iter().next().unwrap();
                 let message = format!("Delete document {}? This cannot be undone.", doc_key);
-                open_confirm_dialog(window, cx, "Delete document", message, "Delete", true, {
-                    let state = this.state.clone();
-                    let session_key = session_key.clone();
+                let state = this.state.clone();
+                let state_for_write = state.clone();
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        session_key.connection_id,
+                        session_key.namespace(),
+                        "Delete a document",
+                        Some(WriteConfirmation {
+                            title: "Delete document".into(),
+                            message,
+                            confirm_label: "Delete".into(),
+                            destructive: true,
+                        }),
+                    ),
+                    window,
+                    cx,
                     move |_window, cx| {
-                        AppCommands::delete_document(
-                            state.clone(),
-                            session_key.clone(),
-                            doc_key.clone(),
-                            cx,
-                        );
-                    }
-                });
+                        AppCommands::delete_document(state_for_write, session_key, doc_key, cx);
+                    },
+                );
             } else {
                 let ids: Vec<Bson> = {
                     let state_ref = this.state.read(cx);
@@ -176,18 +201,32 @@ impl CollectionView {
                 let filter = doc! { "_id": { "$in": ids } };
                 let message =
                     format!("Delete {} documents? This cannot be undone.", affected_count);
-                open_confirm_dialog(window, cx, "Delete documents", message, "Delete", true, {
-                    let state = this.state.clone();
-                    let session_key = session_key.clone();
+                let state = this.state.clone();
+                let state_for_write = state.clone();
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        session_key.connection_id,
+                        session_key.namespace(),
+                        format!("Delete {affected_count} documents"),
+                        Some(WriteConfirmation {
+                            title: "Delete documents".into(),
+                            message,
+                            confirm_label: "Delete".into(),
+                            destructive: true,
+                        }),
+                    ),
+                    window,
+                    cx,
                     move |_window, cx| {
                         AppCommands::delete_documents_by_filter(
-                            state.clone(),
-                            session_key.clone(),
-                            filter.clone(),
+                            state_for_write,
+                            session_key,
+                            filter,
                             cx,
                         );
-                    }
-                });
+                    },
+                );
             }
         }))
         .on_action(cx.listener(|this, _: &DeleteCollection, window, cx| {
@@ -196,25 +235,39 @@ impl CollectionView {
             };
             let message =
                 format!("Drop collection {}? This cannot be undone.", session_key.collection);
-            open_confirm_dialog(window, cx, "Drop collection", message, "Drop", true, {
-                let state = this.state.clone();
-                let session_key = session_key.clone();
+            let state = this.state.clone();
+            let state_for_write = state.clone();
+            request_connection_write(
+                state,
+                crate::components::WriteRequest::new(
+                    session_key.connection_id,
+                    session_key.namespace(),
+                    "Drop a collection",
+                    Some(WriteConfirmation {
+                        title: "Drop collection".into(),
+                        message,
+                        confirm_label: "Drop".into(),
+                        destructive: true,
+                    }),
+                ),
+                window,
+                cx,
                 move |_window, cx| {
                     AppCommands::drop_collection(
-                        state.clone(),
+                        state_for_write,
                         session_key.connection_id,
-                        session_key.database.clone(),
-                        session_key.collection.clone(),
+                        session_key.database,
+                        session_key.collection,
                         cx,
                     );
-                }
-            });
+                },
+            );
         }))
-        .on_action(cx.listener(|this, _: &PasteDocuments, _window, cx| {
+        .on_action(cx.listener(|this, _: &PasteDocuments, window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            paste_documents_from_clipboard(this.state.clone(), session_key, cx);
+            paste_documents_from_clipboard(this.state.clone(), session_key, window, cx);
         }))
         .on_action(cx.listener(|this, _: &CopyDocumentJson, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {
@@ -258,7 +311,7 @@ impl CollectionView {
                 .detach();
             }
         }))
-        .on_action(cx.listener(|this, _: &SaveDocument, _window, cx| {
+        .on_action(cx.listener(|this, _: &SaveDocument, window, cx| {
             this.view_model.commit_inline_edit(&this.state, cx);
             let Some(session_key) = this.view_model.current_session() else {
                 return;
@@ -276,18 +329,44 @@ impl CollectionView {
                     .cloned()
                     .collect()
             };
-            for doc_key in dirty_selected {
-                let doc = this.state.read(cx).session_draft(&session_key, &doc_key);
-                if let Some(doc) = doc {
-                    AppCommands::save_document(
-                        this.state.clone(),
-                        session_key.clone(),
-                        doc_key,
-                        doc,
-                        cx,
-                    );
-                }
+            let documents = dirty_selected
+                .into_iter()
+                .filter_map(|doc_key| {
+                    this.state
+                        .read(cx)
+                        .session_draft(&session_key, &doc_key)
+                        .map(|document| (doc_key, document))
+                })
+                .collect::<Vec<_>>();
+            if documents.is_empty() {
+                return;
             }
+            let state = this.state.clone();
+            let state_for_write = state.clone();
+            let write_count = documents.len();
+            request_connection_write(
+                state,
+                crate::components::WriteRequest::new(
+                    session_key.connection_id,
+                    session_key.namespace(),
+                    format!("Save {write_count} document change(s)"),
+                    None,
+                )
+                .for_writes(write_count),
+                window,
+                cx,
+                move |_window, cx| {
+                    for (doc_key, document) in documents {
+                        AppCommands::save_document(
+                            state_for_write.clone(),
+                            session_key.clone(),
+                            doc_key,
+                            document,
+                            cx,
+                        );
+                    }
+                },
+            );
         }))
         .on_action(cx.listener(|this, _: &EditValueType, window, cx| {
             let Some((session_key, meta)) = this.selected_property_context(cx) else {

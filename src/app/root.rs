@@ -7,8 +7,9 @@ use uuid::Uuid;
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
 use crate::components::{
-    ConnectionManager, ContentArea, QueryLibraryDialog, StatusBar, open_confirm_dialog,
-    request_app_quit, request_disconnect_connection, request_remove_connection,
+    ConnectionManager, ContentArea, QueryLibraryDialog, StatusBar, WriteConfirmation,
+    open_confirm_dialog, request_app_quit, request_connection_write, request_disconnect_connection,
+    request_remove_connection,
 };
 use crate::helpers::keystore::KeyStore;
 use crate::helpers::validate::UriSecrets;
@@ -601,19 +602,29 @@ impl Render for AppRoot {
                 };
                 let message =
                     format!("Drop database \"{}\"? This cannot be undone.", database_key.database);
-                open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
-                    let state = this.state.clone();
-                    let database = database_key.database.clone();
-                    let connection_id = database_key.connection_id;
+                let state = this.state.clone();
+                let state_for_write = state.clone();
+                let database = database_key.database;
+                let connection_id = database_key.connection_id;
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        connection_id,
+                        database.clone(),
+                        "Drop a database",
+                        Some(WriteConfirmation {
+                            title: "Drop database".into(),
+                            message,
+                            confirm_label: "Drop".into(),
+                            destructive: true,
+                        }),
+                    ),
+                    window,
+                    cx,
                     move |_window, cx| {
-                        AppCommands::drop_database(
-                            state.clone(),
-                            connection_id,
-                            database.clone(),
-                            cx,
-                        );
-                    }
-                });
+                        AppCommands::drop_database(state_for_write, connection_id, database, cx);
+                    },
+                );
             }))
             .on_action(cx.listener(|this, _: &DeleteConnection, window, cx| {
                 if let Some(connection_id) = this.state.read(cx).selected_connection_id() {

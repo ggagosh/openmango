@@ -2,8 +2,9 @@ use anyhow::{Result, anyhow};
 use uuid::Uuid;
 
 use crate::state::{
-    CollectionSubview, ForgeTabKey, QueryContent, QueryDefinition, QueryHistoryEntry, QueryLibrary,
-    QueryLibraryPersistenceError, SavedQuery, SessionKey,
+    CollectionSubview, ForgeTabKey, QueryContent, QueryDefinition, QueryHistoryEntry,
+    QueryImportReport, QueryLibrary, QueryLibraryPersistenceError, SavedQuery, SavedQueryInput,
+    SessionKey,
 };
 
 use super::AppState;
@@ -38,6 +39,43 @@ impl AppState {
 
     pub fn save_query(&mut self, definition: QueryDefinition, name: &str) -> Result<Uuid> {
         self.update_query_library(|library| library.save(definition, name))
+    }
+
+    pub fn save_query_input(&mut self, input: SavedQueryInput) -> Result<Uuid> {
+        self.update_query_library(|library| library.save_input(input))
+    }
+
+    pub fn edit_saved_query(&mut self, id: Uuid, input: SavedQueryInput) -> Result<()> {
+        self.update_query_library(|library| library.edit_saved(id, input))
+    }
+
+    pub fn preview_saved_query_import(
+        &self,
+        inputs: &[SavedQueryInput],
+    ) -> Result<QueryImportReport> {
+        self.query_library.preview_import(inputs).map_err(anyhow::Error::msg)
+    }
+
+    pub fn import_saved_queries(
+        &mut self,
+        inputs: Vec<SavedQueryInput>,
+    ) -> Result<QueryImportReport> {
+        if self.query_library_persistence_blocked {
+            return Err(QueryLibraryPersistenceError(
+                "Saved queries were not imported because query_library.json is invalid. Fix or remove the file, then restart OpenMango."
+                    .to_string(),
+            )
+            .into());
+        }
+        let mut next = self.query_library.clone();
+        let report = next.import_saved(inputs).map_err(anyhow::Error::msg)?;
+        self.config.save_query_library(&next).map_err(|error| {
+            QueryLibraryPersistenceError(format!(
+                "Saved queries were not imported because the library could not be saved: {error}"
+            ))
+        })?;
+        self.query_library = next;
+        Ok(report)
     }
 
     pub fn update_saved_query(&mut self, id: Uuid, definition: QueryDefinition) -> Result<()> {
@@ -232,6 +270,27 @@ mod tests {
         assert_eq!(aggregation.stages, stages);
         assert_eq!(aggregation.selected_stage, Some(0));
         assert_eq!(state.session_subview(&key), Some(CollectionSubview::Aggregation));
+    }
+
+    #[test]
+    fn blocked_persistence_rejects_import_without_mutating_memory() {
+        let mut state = AppState::new();
+        state.query_library_persistence_blocked = true;
+        let before = state.query_library.clone();
+        let result = state.import_saved_queries(vec![SavedQueryInput {
+            name: "Users".into(),
+            description: String::new(),
+            tags: Vec::new(),
+            scope: crate::state::SavedQueryScope::Connection,
+            definition: QueryDefinition {
+                connection_id: Uuid::new_v4(),
+                database: "app".into(),
+                collection: None,
+                content: QueryContent::Forge { statement: "db.users.find({})".into() },
+            },
+        }]);
+        assert!(result.is_err());
+        assert_eq!(state.query_library, before);
     }
 
     #[test]

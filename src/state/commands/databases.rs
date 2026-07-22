@@ -15,11 +15,13 @@ impl AppCommands {
         collection: String,
         cx: &mut App,
     ) {
-        let connection_id = state.read(cx).selected_connection_id();
-        if !Self::ensure_writable(&state, connection_id, cx) {
+        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+            return;
+        };
+        if !Self::ensure_writable(&state, Some(connection_id), cx) {
             return;
         }
-        Self::create_collection(state, database, collection, cx);
+        Self::create_collection_authorized(state, connection_id, database, collection, cx);
     }
 
     /// Drop a database.

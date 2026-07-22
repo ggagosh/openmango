@@ -20,6 +20,17 @@ impl AppCommands {
         let Some(conn_id) = connection_id else {
             return;
         };
+        Self::create_collection_authorized(state, conn_id, database, collection, cx);
+    }
+
+    pub(super) fn create_collection_authorized(
+        state: Entity<AppState>,
+        conn_id: Uuid,
+        database: String,
+        collection: String,
+        cx: &mut App,
+    ) {
+        let connection_id = Some(conn_id);
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
             return;
         };

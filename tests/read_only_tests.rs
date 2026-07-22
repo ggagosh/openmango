@@ -11,7 +11,15 @@ use openmango::ai::tools::aggregate::{AggregateArgs, AggregateTool};
 use openmango::ai::tools::insert::{InsertArgs, InsertDocumentsTool};
 use openmango::ai::tools::update::{UpdateArgs, UpdateDocumentsTool};
 use openmango::ai::tools::{MongoContext, StreamEvent};
+use openmango::models::{ConnectionWriteIdentity, SavedConnection};
 use rig::tool::Tool;
+
+fn write_identity(read_only: bool) -> ConnectionWriteIdentity {
+    let mut connection =
+        SavedConnection::new("Integration test".into(), "mongodb://localhost".into());
+    connection.read_only = read_only;
+    ConnectionWriteIdentity::from(&connection)
+}
 
 #[tokio::test]
 async fn read_only_ai_update_is_rejected_without_mutating_data() {
@@ -26,6 +34,7 @@ async fn read_only_ai_update_is_rejected_without_mutating_data() {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_update".to_string()),
+        write_identity: write_identity(true),
         read_only: true,
         event_tx: None,
     });
@@ -53,6 +62,7 @@ async fn ai_write_fails_closed_without_confirmation_channel() {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_missing_confirmation".to_string()),
+        write_identity: write_identity(false),
         read_only: false,
         event_tx: None,
     });
@@ -79,6 +89,7 @@ async fn ai_update_one_confirmation_reports_one_affected_document() {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_update_one_preview".to_string()),
+        write_identity: write_identity(false),
         read_only: false,
         event_tx: Some(event_tx),
     });
@@ -118,6 +129,7 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_aggregate".to_string()),
+        write_identity: write_identity(true),
         read_only: true,
         event_tx: None,
     });
@@ -148,6 +160,7 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_confirmed_aggregate".to_string()),
+        write_identity: write_identity(false),
         read_only: false,
         event_tx: Some(event_tx),
     });

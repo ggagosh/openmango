@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Saved-query descriptions, tags, global scope, and bounded versioned JSON import/export with atomic persistence and credential screening
+- Explicit Development, Staging, and Production connection identity across the workspace, with optional fail-closed confirmation for Production writes and Forge execution
 - Complete keyboard and command-palette coverage for Schema, Transfer and its query editor, Forge, document/index/aggregation workflows, tabs, and focus navigation, with a visible palette button
 - Customizable keyboard shortcuts with search, context-aware conflict validation, recording, disable/reset controls, persisted overrides, and restart-safe application
 - Query Library for Documents, Aggregation, and Forge with successful-run history, saved queries, full-text search, restore/run/copy/update/delete actions, keyboard access, atomic local persistence, and credential-aware exclusion

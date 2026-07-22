@@ -3,6 +3,7 @@ pub mod connection_io;
 pub mod crypto;
 pub mod format;
 pub mod keystore;
+pub mod query_library_io;
 pub mod support;
 pub mod validate;
 

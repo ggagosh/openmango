@@ -66,6 +66,8 @@ struct ConnectionDraft {
     uri_secrets: crate::helpers::UriSecrets,
     internal_uri_value: Option<String>,
     color: Option<crate::models::ConnectionColor>,
+    environment: Option<crate::models::ConnectionEnvironment>,
+    confirm_production_writes: bool,
     read_only: bool,
     direct_connection: bool,
     tls: bool,

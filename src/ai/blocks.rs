@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier};
+use crate::models::ConnectionWriteIdentity;
 
 // ---------------------------------------------------------------------------
 // Content blocks — structured rendering primitives
@@ -377,6 +378,7 @@ pub enum ToolActivityStatus {
         description: String,
         tier: SafetyTier,
         preview: OperationPreview,
+        write_identity: ConnectionWriteIdentity,
         response_tx: ConfirmationSender,
     },
     Completed,
@@ -637,6 +639,7 @@ impl AiChatState {
         description: String,
         tier: SafetyTier,
         preview: OperationPreview,
+        write_identity: ConnectionWriteIdentity,
         response_tx: ConfirmationSender,
     ) {
         for entry in self.entries.iter_mut().rev() {
@@ -648,6 +651,7 @@ impl AiChatState {
                     description,
                     tier,
                     preview,
+                    write_identity,
                     response_tx,
                 };
                 return;

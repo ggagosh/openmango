@@ -9,10 +9,10 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName, Sizable as _};
 use uuid::Uuid;
 
-use crate::components::Button;
+use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
 use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
-use crate::theme::{borders, colors, sizing, spacing};
+use crate::theme::{borders, sizing, spacing};
 
 use super::export_dialog::open_export_dialog;
 use super::import::open_import_flow;
@@ -166,8 +166,7 @@ impl ConnectionManager {
             .last_connected
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| "Never".to_string());
-        let read_only = conn.read_only;
-        let accent = conn.color.map(|color| colors::connection_accent(color, cx));
+        let identity = ConnectionIdentity::from(&conn);
 
         div()
             .flex()
@@ -186,33 +185,7 @@ impl ConnectionManager {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .when_some(accent, |this, color| {
-                                this.child(div().size(px(8.0)).rounded_full().bg(color))
-                            })
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child(conn.name.clone()),
-                            ),
-                    )
-                    .when(read_only, |s| {
-                        s.child(
-                            div()
-                                .px(spacing::xs())
-                                .py(px(1.0))
-                                .rounded(borders::radius_sm())
-                                .bg(cx.theme().warning)
-                                .text_xs()
-                                .text_color(cx.theme().tab_bar)
-                                .child("RO"),
-                        )
-                    }),
+                    .child(connection_identity_badge(&identity, true, cx)),
             )
             .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(host))
             .child(

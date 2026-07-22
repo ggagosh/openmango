@@ -11,7 +11,7 @@ use crate::bson::{
     DocumentKey, document_to_shell_string, format_relaxed_json_value, parse_bson_from_relaxed_json,
     parse_document_from_json, parse_value_from_relaxed_json,
 };
-use crate::components::{Button, request_unsaved_action};
+use crate::components::{Button, request_connection_write, request_unsaved_action};
 use crate::keyboard::CloseEditorWindow;
 use crate::state::{
     AppCommands, AppEvent, AppState, EditorSessionId, EditorSessionStore, EditorSessionTarget,
@@ -245,7 +245,35 @@ impl DetachedJsonEditorView {
         self.set_notice(false, "Formatted");
     }
 
-    fn save_or_insert(&mut self, cx: &mut Context<Self>) {
+    fn save_or_insert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.snapshot(self.session_id) else {
+            self.set_error("Editor session is no longer available.");
+            return;
+        };
+        if matches!(session.target, EditorSessionTarget::Document { .. }) {
+            self.save_or_insert_authorized(cx);
+            return;
+        }
+
+        let state = self.state.clone();
+        let view = cx.entity();
+        request_connection_write(
+            state,
+            crate::components::WriteRequest::new(
+                session.session_key.connection_id,
+                session.session_key.namespace(),
+                "Save the document editor contents",
+                None,
+            ),
+            window,
+            cx,
+            move |_window, cx| {
+                view.update(cx, |view, cx| view.save_or_insert_authorized(cx));
+            },
+        );
+    }
+
+    fn save_or_insert_authorized(&mut self, cx: &mut Context<Self>) {
         if self.state.read(cx).unsaved_guard_is_active() {
             self.set_notice(false, "Finish the open unsaved-changes prompt before saving.");
             cx.notify();
@@ -362,6 +390,8 @@ impl DetachedJsonEditorView {
         let task = cx.background_spawn(async move {
             manager.find_document_by_id(&client, &database, &collection, &id_for_task)
         });
+        let window_handle = self.window_handle;
+        let state = self.state.clone();
 
         cx.spawn({
             let session_key = session_key.clone();
@@ -370,45 +400,80 @@ impl DetachedJsonEditorView {
             async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let result: Result<Option<Document>, crate::error::Error> = task.await;
                 let _ = cx.update(|cx| {
-                    let _ = view.update(cx, |this, cx| match result {
-                        Ok(Some(current)) => {
-                            if current != baseline_document {
+                    match result {
+                        Ok(Some(current)) if current == baseline_document => {
+                            let _ = view.update(cx, |this, cx| {
+                                this.set_save_in_flight(false);
+                                this.clear_sync_issue();
+                                this.set_notice(false, "Latest document confirmed.");
+                                cx.notify();
+                            });
+                            let Some(window_handle) = window_handle else {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.set_error("Editor window is no longer available.");
+                                    cx.notify();
+                                });
+                                return;
+                            };
+                            let view_for_save = view.clone();
+                            let _ = window_handle.update(cx, move |_root, window, cx| {
+                                request_connection_write(
+                                    state,
+                                    crate::components::WriteRequest::new(
+                                        session_key.connection_id,
+                                        session_key.namespace(),
+                                        "Save the document editor contents",
+                                        None,
+                                    ),
+                                    window,
+                                    cx,
+                                    move |_window, cx| {
+                                        let _ = view_for_save.update(cx, |this, cx| {
+                                            this.set_save_in_flight(true);
+                                            this.set_notice(false, "Saving...");
+                                            AppCommands::save_document_for_editor(
+                                                this.state.clone(),
+                                                session_key,
+                                                doc_key,
+                                                updated_document,
+                                                baseline_document,
+                                                this.session_id,
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                );
+                            });
+                        }
+                        Ok(Some(_)) => {
+                            let _ = view.update(cx, |this, cx| {
                                 this.set_save_in_flight(false);
                                 this.set_sync_issue(
                                     SyncIssue::ConflictChanged,
                                     "Document changed on server. Reload to review latest version before saving.",
                                 );
                                 cx.notify();
-                                return;
-                            }
-
-                            this.clear_sync_issue();
-                            this.set_notice(false, "Saving...");
-                            AppCommands::save_document_for_editor(
-                                this.state.clone(),
-                                session_key.clone(),
-                                doc_key.clone(),
-                                updated_document.clone(),
-                                baseline_document.clone(),
-                                this.session_id,
-                                cx,
-                            );
+                            });
                         }
                         Ok(None) => {
-                            this.set_save_in_flight(false);
-                            this.set_sync_issue(
-                                SyncIssue::MissingOriginal,
-                                "Original document was deleted. Reload or create current JSON as new.",
-                            );
+                            let _ = view.update(cx, |this, _cx| {
+                                this.set_save_in_flight(false);
+                                this.set_sync_issue(
+                                    SyncIssue::MissingOriginal,
+                                    "Original document was deleted. Reload or create current JSON as new.",
+                                );
+                            });
                         }
                         Err(err) => {
-                            this.set_save_in_flight(false);
-                            this.set_sync_issue(
-                                SyncIssue::ReloadFailed,
-                                format!("Failed to reload latest document: {err}"),
-                            );
+                            let _ = view.update(cx, |this, _cx| {
+                                this.set_save_in_flight(false);
+                                this.set_sync_issue(
+                                    SyncIssue::ReloadFailed,
+                                    format!("Failed to reload latest document: {err}"),
+                                );
+                            });
                         }
-                    });
+                    }
                 });
             }
         })
@@ -539,7 +604,7 @@ impl DetachedJsonEditorView {
         .detach();
     }
 
-    fn create_as_new(&mut self, cx: &mut Context<Self>) {
+    fn create_as_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.read(cx).unsaved_guard_is_active() {
             self.set_notice(false, "Finish the open unsaved-changes prompt before saving.");
             cx.notify();
@@ -582,15 +647,32 @@ impl DetachedJsonEditorView {
         let mut document = document;
         document.insert("_id", ObjectId::new());
 
-        self.awaiting_create_as_new = true;
-        self.set_save_in_flight(true);
-        self.set_notice(false, "Creating as new document...");
-        AppCommands::insert_document_for_editor(
-            self.state.clone(),
-            session.session_key,
-            document,
-            self.session_id,
+        let state = self.state.clone();
+        let view = cx.entity();
+        request_connection_write(
+            state,
+            crate::components::WriteRequest::new(
+                session.session_key.connection_id,
+                session.session_key.namespace(),
+                "Create the editor contents as a new document",
+                None,
+            ),
+            window,
             cx,
+            move |_window, cx| {
+                view.update(cx, |this, cx| {
+                    this.awaiting_create_as_new = true;
+                    this.set_save_in_flight(true);
+                    this.set_notice(false, "Creating as new document...");
+                    AppCommands::insert_document_for_editor(
+                        this.state.clone(),
+                        session.session_key,
+                        document,
+                        this.session_id,
+                        cx,
+                    );
+                });
+            },
         );
     }
 
@@ -652,6 +734,12 @@ impl Render for DetachedJsonEditorView {
         let state_ref = self.state.read(cx);
         let appearance = state_ref.settings.appearance.clone();
         let vibrancy = state_ref.startup_vibrancy;
+        let connection_identity = crate::components::connection_identity_for(
+            &self.state,
+            session.session_key.connection_id,
+            true,
+            cx,
+        );
 
         let Some(editor) = self.editor_state.clone() else {
             return div()
@@ -693,7 +781,7 @@ impl Render for DetachedJsonEditorView {
                         cx.stop_propagation();
                     } else if cmd_or_ctrl && key == "s" {
                         cx.stop_propagation();
-                        view.update(cx, |this, cx| this.save_or_insert(cx));
+                        view.update(cx, |this, cx| this.save_or_insert(window, cx));
                     } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "c" {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.copy_json(window, cx));
@@ -726,7 +814,8 @@ impl Render for DetachedJsonEditorView {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!("{}  •  {}", subtitle, session.title())),
-                            ),
+                            )
+                            .child(connection_identity),
                     )
                     .child(
                         div()
@@ -764,8 +853,10 @@ impl Render for DetachedJsonEditorView {
                                     .label(primary_label)
                                     .on_click({
                                         let view = view.clone();
-                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| this.save_or_insert(cx));
+                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.save_or_insert(window, cx)
+                                            });
                                         }
                                     }),
                             ),
@@ -831,8 +922,8 @@ impl Render for DetachedJsonEditorView {
                                 .label("Create as New")
                                 .on_click({
                                     let view = view.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        view.update(cx, |this, cx| this.create_as_new(cx));
+                                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        view.update(cx, |this, cx| this.create_as_new(window, cx));
                                     }
                                 }),
                         );

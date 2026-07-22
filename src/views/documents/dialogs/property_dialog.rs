@@ -9,7 +9,7 @@ use gpui_component::{Disableable as _, WindowExt as _};
 use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
-use crate::components::{Button, cancel_button, open_confirm_dialog};
+use crate::components::{Button, WriteConfirmation, cancel_button, request_connection_write};
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::theme::spacing;
 use crate::views::documents::node_meta::NodeMeta;
@@ -401,14 +401,35 @@ impl PropertyActionDialog {
 
         match self.effective_scope() {
             UpdateScope::CurrentDocument => {
-                self.updating = true;
-                cx.notify();
-                AppCommands::update_document_by_key(
-                    self.state.clone(),
-                    self.session_key.clone(),
-                    self.doc_key.clone(),
-                    update_doc,
+                let state = self.state.clone();
+                let state_for_write = state.clone();
+                let session_key = self.session_key.clone();
+                let session_for_write = session_key.clone();
+                let doc_key = self.doc_key.clone();
+                let view = cx.entity();
+                request_connection_write(
+                    state,
+                    crate::components::WriteRequest::new(
+                        session_key.connection_id,
+                        session_key.namespace(),
+                        "Update a document property",
+                        None,
+                    ),
+                    window,
                     cx,
+                    move |_window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.updating = true;
+                            cx.notify();
+                            AppCommands::update_document_by_key(
+                                state_for_write,
+                                session_for_write,
+                                doc_key,
+                                update_doc,
+                                cx,
+                            );
+                        });
+                    },
                 );
             }
             UpdateScope::MatchQuery => {
@@ -478,22 +499,30 @@ impl PropertyActionDialog {
                         "Update every document matching this filter in {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
                         if count == 1 { "" } else { "s" }
                     );
-                    open_confirm_dialog(
+                    request_connection_write(
+                        state.clone(),
+                        crate::components::WriteRequest::new(
+                            session_key.connection_id,
+                            session_key.namespace(),
+                            format!("Update {count} documents"),
+                            Some(WriteConfirmation {
+                            title: "Confirm property update".into(),
+                            message,
+                            confirm_label: "Update".into(),
+                            destructive: true,
+                        }),
+                        ),
                         window,
                         cx,
-                        "Confirm property update",
-                        message,
-                        "Update",
-                        true,
                         move |_window, cx| {
                             let _ = confirm_view.update(cx, |this, cx| {
                                 this.updating = true;
                                 this.error_message = None;
                                 AppCommands::update_documents_by_filter(
-                                    state.clone(),
-                                    session_key.clone(),
-                                    filter.clone(),
-                                    update_doc.clone(),
+                                    state,
+                                    session_key,
+                                    filter,
+                                    update_doc,
                                     cx,
                                 );
                                 cx.notify();
@@ -783,6 +812,12 @@ impl Render for PropertyActionDialog {
             .flex_col()
             .gap(spacing::sm())
             .p(spacing::md())
+            .child(crate::components::connection_identity_for(
+                &self.state,
+                self.session_key.connection_id,
+                true,
+                cx,
+            ))
             .child(
                 div()
                     .flex()

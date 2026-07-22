@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::*;
@@ -9,8 +9,9 @@ use gpui_component::dialog::Dialog;
 use uuid::Uuid;
 
 use crate::bson::parse_document_from_json;
-use crate::components::Button;
+use crate::components::{Button, with_scoped_production_authorizations};
 use crate::error::Error;
+use crate::models::ConnectionWriteIdentity;
 use crate::state::{
     AppCommands, AppEvent, AppState, EditorSession, EditorSessionTarget, StatusMessage,
     UnsavedChange, UnsavedInventory, UnsavedScope,
@@ -28,6 +29,21 @@ fn has_in_flight_editor_save(inventory: &UnsavedInventory) -> bool {
     inventory.changes.iter().any(|change| {
         matches!(change, UnsavedChange::DetachedEditor(EditorSession { save_in_flight: true, .. }))
     })
+}
+
+fn write_counts(inventory: &UnsavedInventory) -> HashMap<Uuid, usize> {
+    let mut counts = HashMap::new();
+    for change in &inventory.changes {
+        let session_key = match change {
+            UnsavedChange::InlineDocument { session_key, .. } => Some(session_key),
+            UnsavedChange::DetachedEditor(session) => Some(&session.session_key),
+            UnsavedChange::InvalidInlineEdit { .. } => None,
+        };
+        if let Some(session_key) = session_key {
+            *counts.entry(session_key.connection_id).or_default() += 1;
+        }
+    }
+    counts
 }
 
 pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
@@ -155,10 +171,60 @@ fn open_unsaved_dialog(
     let cancel_focus = cx.focus_handle().tab_index(0).tab_stop(true);
     let save_focus = cx.focus_handle().tab_index(1).tab_stop(true);
     let discard_focus = cx.focus_handle().tab_index(2).tab_stop(true);
-    let message = format!(
+    let inventory = state.read(cx).unsaved_inventory(&scope);
+    let production_counts = write_counts(&inventory)
+        .into_iter()
+        .filter(|(connection_id, _)| {
+            state.read(cx).connection_requires_production_write_confirmation(*connection_id)
+        })
+        .collect::<HashMap<_, _>>();
+    let production_writes = production_counts
+        .iter()
+        .filter_map(|(connection_id, uses)| {
+            state
+                .read(cx)
+                .connection_by_id(*connection_id)
+                .map(|connection| (ConnectionWriteIdentity::from(connection), *uses))
+        })
+        .collect::<Vec<_>>();
+    let production_summaries = production_writes
+        .iter()
+        .map(|(identity, _)| {
+            let mut targets = inventory
+                .changes
+                .iter()
+                .filter_map(|change| {
+                    let session_key = match change {
+                        UnsavedChange::InlineDocument { session_key, .. }
+                        | UnsavedChange::InvalidInlineEdit { session_key } => session_key,
+                        UnsavedChange::DetachedEditor(session) => &session.session_key,
+                    };
+                    (session_key.connection_id == identity.id).then(|| session_key.namespace())
+                })
+                .collect::<Vec<_>>();
+            targets.sort();
+            targets.dedup();
+            format!(
+                "{} [{}]: {}",
+                identity.name,
+                identity
+                    .environment
+                    .map(crate::models::ConnectionEnvironment::label)
+                    .unwrap_or("Not set"),
+                targets.join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut message = format!(
         "{count} unsaved change{} will be lost. Save changes, discard them, or cancel.",
         if count == 1 { "" } else { "s" }
     );
+    if !production_summaries.is_empty() {
+        message.push_str(&format!(
+            "\n\nProduction write confirmation:\n{}",
+            production_summaries.join("\n")
+        ));
+    }
 
     window.open_dialog(cx, move |dialog: Dialog, window, cx| {
         let dialog_state = window.use_keyed_state("unsaved-dialog-focus", cx, |_window, _cx| {
@@ -218,17 +284,54 @@ fn open_unsaved_dialog(
                                     let state = state.clone();
                                     let scope = scope.clone();
                                     let proceed = proceed.clone();
+                                    let production_writes = production_writes.clone();
                                     move |_, window, cx| {
+                                        let identities_match = production_writes.iter().all(
+                                            |(identity, _)| {
+                                                state
+                                                    .read(cx)
+                                                    .connection_by_id(identity.id)
+                                                    .is_some_and(|connection| identity.matches(connection))
+                                                    && state.read(cx).is_connected(identity.id)
+                                                    && !state.read(cx).connection_read_only(identity.id)
+                                                    && state
+                                                        .read(cx)
+                                                        .connection_requires_production_write_confirmation(identity.id)
+                                            },
+                                        );
+                                        if !identities_match {
+                                            state.update(cx, |state, cx| {
+                                                state.set_status_message(Some(StatusMessage::error(
+                                                    "Save blocked because a Production connection identity changed. Review again.",
+                                                )));
+                                                cx.notify();
+                                            });
+                                            return;
+                                        }
                                         window.close_dialog(cx);
                                         let Some(proceed) = proceed.borrow_mut().take() else {
                                             return;
                                         };
-                                        save_unsaved_changes(
-                                            state.clone(),
-                                            scope.clone(),
-                                            window.window_handle(),
-                                            proceed,
+                                        let grants = production_writes
+                                            .iter()
+                                            .map(|(identity, uses)| (identity.id, *uses))
+                                            .collect::<Vec<_>>();
+                                        let window_handle = window.window_handle();
+                                        let state_for_save = state.clone();
+                                        let scope_for_save = scope.clone();
+                                        with_scoped_production_authorizations(
+                                            &state,
+                                            &grants,
                                             cx,
+                                            move |cx| {
+                                                save_unsaved_changes(
+                                                    state_for_save,
+                                                    scope_for_save,
+                                                    window_handle,
+                                                    proceed,
+                                                    cx,
+                                                );
+                                            },
                                         );
                                     }
                                 }),
@@ -390,8 +493,9 @@ fn save_unsaved_changes(
 fn prepare_saves(
     state: &Entity<AppState>,
     inventory: UnsavedInventory,
-    cx: &App,
+    cx: &mut App,
 ) -> Result<Vec<PreparedSave>, Error> {
+    let required_authorizations = write_counts(&inventory);
     let mut prepared = Vec::new();
     let mut document_targets = HashSet::new();
     for change in inventory.changes {
@@ -451,6 +555,25 @@ fn prepare_saves(
             }
         }
     }
+    let protected = required_authorizations
+        .into_iter()
+        .filter(|(connection_id, _)| {
+            state.read(cx).connection_requires_production_write_confirmation(*connection_id)
+        })
+        .collect::<Vec<_>>();
+    let authorized = protected.iter().all(|(connection_id, uses)| {
+        state.read(cx).has_production_write_authorizations(*connection_id, *uses)
+    });
+    if !authorized {
+        return Err(Error::Parse(
+            "Production writes require confirmation before saving.".to_string(),
+        ));
+    }
+    state.update(cx, |state, _cx| {
+        for (connection_id, uses) in protected {
+            state.consume_production_write_authorizations(connection_id, uses);
+        }
+    });
     Ok(prepared)
 }
 

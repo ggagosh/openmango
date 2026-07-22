@@ -92,6 +92,8 @@ impl ConnectionManager {
                 .name_state
                 .update(cx, |state, cx| state.set_value(connection.name.clone(), window, cx));
             self.draft.color = connection.color;
+            self.draft.environment = connection.environment;
+            self.draft.confirm_production_writes = connection.confirm_production_writes;
             self.draft.read_only = connection.read_only;
             self.load_transport_settings(&connection, window, cx);
             self.import_uri(connection.uri.clone(), window, cx);
@@ -632,6 +634,8 @@ impl ConnectionManager {
         };
 
         let color = self.draft.color;
+        let environment = self.draft.environment;
+        let confirm_production_writes = self.draft.confirm_production_writes;
         let read_only = self.draft.read_only;
         let (ssh, proxy) = match self.build_transport_settings(cx) {
             Ok(settings) => settings,
@@ -651,6 +655,8 @@ impl ConnectionManager {
                         id: existing_id,
                         name: name.clone(),
                         color,
+                        environment,
+                        confirm_production_writes,
                         uri: uri.clone(),
                         last_connected: existing.last_connected,
                         read_only,
@@ -664,6 +670,8 @@ impl ConnectionManager {
             } else {
                 let mut connection = SavedConnection::new(name.clone(), uri.clone());
                 connection.color = color;
+                connection.environment = environment;
+                connection.confirm_production_writes = confirm_production_writes;
                 connection.read_only = read_only;
                 connection.ssh = ssh.clone();
                 connection.proxy = proxy.clone();

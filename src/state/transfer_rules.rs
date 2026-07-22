@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use mongodb::bson::Document;
+use uuid::Uuid;
 
 use crate::bson::parse_document_from_json;
 use crate::state::app_state::{
@@ -51,6 +52,14 @@ pub fn coerce_transfer_format(
         format
     } else {
         default_transfer_format(mode, scope)
+    }
+}
+
+pub fn transfer_write_connection(tab: &TransferTabState) -> Option<Uuid> {
+    match tab.config.mode {
+        TransferMode::Import => tab.config.source_connection_id,
+        TransferMode::Copy => tab.config.destination_connection_id,
+        TransferMode::Export => None,
     }
 }
 
@@ -462,6 +471,22 @@ mod tests {
 
         assert!(validation.can_run());
         assert!(validation.requires_confirmation);
+    }
+
+    #[test]
+    fn transfer_write_target_uses_import_target_and_copy_destination() {
+        let source = Uuid::new_v4();
+        let destination = Uuid::new_v4();
+        let mut tab = TransferTabState::default();
+        tab.config.source_connection_id = Some(source);
+        tab.config.destination_connection_id = Some(destination);
+
+        tab.config.mode = TransferMode::Export;
+        assert_eq!(transfer_write_connection(&tab), None);
+        tab.config.mode = TransferMode::Import;
+        assert_eq!(transfer_write_connection(&tab), Some(source));
+        tab.config.mode = TransferMode::Copy;
+        assert_eq!(transfer_write_connection(&tab), Some(destination));
     }
 
     #[test]

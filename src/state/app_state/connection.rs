@@ -142,7 +142,71 @@ impl AppState {
     }
 
     pub fn connection_read_only(&self, connection_id: Uuid) -> bool {
-        self.conn.active.get(&connection_id).map(|conn| conn.config.read_only).unwrap_or(false)
+        self.conn.active.get(&connection_id).map(|conn| conn.config.read_only).unwrap_or_else(
+            || self.connection_by_id(connection_id).is_some_and(|connection| connection.read_only),
+        )
+    }
+
+    pub fn connection_requires_production_write_confirmation(&self, connection_id: Uuid) -> bool {
+        self.connection_by_id(connection_id)
+            .is_some_and(SavedConnection::requires_production_write_confirmation)
+    }
+
+    pub fn authorize_production_writes(&mut self, connection_id: Uuid, uses: usize) {
+        if uses > 0 {
+            *self.production_write_authorizations.entry(connection_id).or_default() += uses;
+        }
+    }
+
+    pub fn authorize_next_production_write(&mut self, connection_id: Uuid) {
+        self.authorize_production_writes(connection_id, 1);
+    }
+
+    pub(crate) fn has_production_write_authorizations(
+        &self,
+        connection_id: Uuid,
+        uses: usize,
+    ) -> bool {
+        self.production_write_authorizations.get(&connection_id).copied().unwrap_or(0) >= uses
+    }
+
+    pub(crate) fn revoke_production_write_authorizations(
+        &mut self,
+        connection_id: Uuid,
+        uses: usize,
+    ) {
+        let Some(remaining) = self.production_write_authorizations.get_mut(&connection_id) else {
+            return;
+        };
+        *remaining = remaining.saturating_sub(uses);
+        if *remaining == 0 {
+            self.production_write_authorizations.remove(&connection_id);
+        }
+    }
+
+    pub(crate) fn consume_production_write_authorizations(
+        &mut self,
+        connection_id: Uuid,
+        uses: usize,
+    ) -> bool {
+        if uses == 0 {
+            return true;
+        }
+        let Some(remaining) = self.production_write_authorizations.get_mut(&connection_id) else {
+            return false;
+        };
+        if *remaining < uses {
+            return false;
+        }
+        *remaining -= uses;
+        if *remaining == 0 {
+            self.production_write_authorizations.remove(&connection_id);
+        }
+        true
+    }
+
+    pub(crate) fn consume_production_write_authorization(&mut self, connection_id: Uuid) -> bool {
+        self.consume_production_write_authorizations(connection_id, 1)
     }
 
     pub fn is_connected(&self, connection_id: Uuid) -> bool {
@@ -358,10 +422,10 @@ impl AppState {
 
     fn finish_update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
         let mut updated = false;
-        let mut uri_changed = false;
+        let mut transport_changed = false;
         for existing in &mut self.connections {
             if existing.id == connection.id {
-                uri_changed = existing.uri != connection.uri;
+                transport_changed = connection_transport_changed(existing, &connection);
                 *existing = connection.clone();
                 updated = true;
                 break;
@@ -377,7 +441,7 @@ impl AppState {
 
         if let Some(active) = self.conn.active.get_mut(&connection.id) {
             active.config = connection.clone();
-            if uri_changed {
+            if transport_changed {
                 self.connection_manager().disconnect(connection.id);
                 self.conn.active.remove(&connection.id);
                 self.reset_connection_runtime_state(connection.id, cx);
@@ -688,6 +752,10 @@ impl AppState {
     // Disconnect functionality is not wired yet.
 }
 
+fn connection_transport_changed(existing: &SavedConnection, updated: &SavedConnection) -> bool {
+    existing.uri != updated.uri || existing.ssh != updated.ssh || existing.proxy != updated.proxy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +778,34 @@ mod tests {
 
         assert_eq!(state.take_connections_waiting_for_secrets(), vec![connection_id]);
         assert!(state.connections_waiting_for_secret_sync.is_empty());
+    }
+
+    #[test]
+    fn connection_transport_changes_require_a_new_client() {
+        let connection = SavedConnection::new("Local".into(), "mongodb://localhost".into());
+        let mut updated = connection.clone();
+        updated.name = "Renamed".into();
+        updated.color = Some(crate::models::ConnectionColor::Blue);
+        assert!(!connection_transport_changed(&connection, &updated));
+
+        updated.ssh = Some(crate::models::SshConfig {
+            enabled: true,
+            host: "jump.example".into(),
+            ..Default::default()
+        });
+        assert!(connection_transport_changed(&connection, &updated));
+
+        updated = connection.clone();
+        updated.proxy = Some(crate::models::ProxyConfig {
+            enabled: true,
+            host: "proxy.example".into(),
+            ..Default::default()
+        });
+        assert!(connection_transport_changed(&connection, &updated));
+
+        updated = connection.clone();
+        updated.uri = "mongodb://remote".into();
+        assert!(connection_transport_changed(&connection, &updated));
     }
 
     #[test]

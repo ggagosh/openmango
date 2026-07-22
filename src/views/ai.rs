@@ -475,10 +475,13 @@ impl AiView {
                 let client = s.active_connection_client(id)?;
                 let db = s.selected_database_name()?;
                 let col = s.selected_collection_name();
+                let write_identity =
+                    crate::models::ConnectionWriteIdentity::from(s.connection_by_id(id)?);
                 Some(MongoContext {
                     client,
                     database: db,
                     collection: col,
+                    write_identity,
                     read_only: s.connection_read_only(id),
                     event_tx: None,
                 })
@@ -2289,6 +2292,7 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
             description,
             tier,
             preview,
+            write_identity,
             response_tx,
         } => {
             state.ai_chat.set_tool_awaiting_confirmation(
@@ -2296,6 +2300,7 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
                 description,
                 tier,
                 preview,
+                write_identity,
                 response_tx,
             );
         }
@@ -2337,6 +2342,39 @@ fn is_danger_tool(tool_name: &str) -> bool {
     matches!(tool_name, "update_documents" | "delete_documents" | "drop_index")
 }
 
+fn ai_write_identity_is_current(
+    state: &AppState,
+    write_identity: &crate::models::ConnectionWriteIdentity,
+) -> bool {
+    state
+        .connection_by_id(write_identity.id)
+        .is_some_and(|connection| write_identity.matches(connection))
+        && !state.connection_read_only(write_identity.id)
+}
+
+fn approve_ai_tool_confirmation(
+    state: &Entity<AppState>,
+    write_identity: &crate::models::ConnectionWriteIdentity,
+    response_tx: &crate::ai::safety::ConfirmationSender,
+    activity_id: Uuid,
+    cx: &mut App,
+) {
+    let allowed = state.read(cx).is_connected(write_identity.id)
+        && ai_write_identity_is_current(state.read(cx), write_identity);
+    response_tx.respond(allowed);
+    state.update(cx, |state, cx| {
+        if allowed {
+            state.ai_chat.approve_tool_confirmation(activity_id);
+        } else {
+            state.ai_chat.reject_tool_confirmation(activity_id);
+            state.set_status_message(Some(crate::state::StatusMessage::error(
+                "AI write blocked because the connection identity changed. Review it again.",
+            )));
+        }
+        cx.notify();
+    });
+}
+
 fn render_confirmation_card(
     activity: &ToolActivity,
     state: Entity<AppState>,
@@ -2347,12 +2385,14 @@ fn render_confirmation_card(
         ref description,
         ref tier,
         ref preview,
+        ref write_identity,
         ref response_tx,
     } = activity.status
     else {
         unreachable!();
     };
     let activity_id = activity.id;
+    let identity = crate::components::ConnectionIdentity::from(write_identity);
     let tool_name = &activity.tool_name;
     let is_blocked = matches!(tier, SafetyTier::Blocked);
     let danger = is_blocked || is_danger_tool(tool_name);
@@ -2382,28 +2422,34 @@ fn render_confirmation_card(
     let reject_tx = response_tx.clone();
     let approve_state = state.clone();
     let reject_state = state;
+    let approve_identity = write_identity.clone();
 
     let confirm_id: SharedString = format!("confirm-{activity_id}").into();
     let cancel_id: SharedString = format!("cancel-{activity_id}").into();
 
     let confirm_button = if danger {
         Button::new(confirm_id).danger().compact().label(confirm_label).on_click(move |_, _, cx| {
-            approve_tx.respond(true);
-            approve_state.update(cx, |s, cx| {
-                s.ai_chat.approve_tool_confirmation(activity_id);
-                cx.notify();
-            });
+            approve_ai_tool_confirmation(
+                &approve_state,
+                &approve_identity,
+                &approve_tx,
+                activity_id,
+                cx,
+            );
         })
     } else {
-        Button::new(confirm_id).primary().compact().label(confirm_label).on_click(
+        Button::new(confirm_id).primary().compact().label(confirm_label).on_click({
+            let approve_identity = approve_identity.clone();
             move |_, _, cx| {
-                approve_tx.respond(true);
-                approve_state.update(cx, |s, cx| {
-                    s.ai_chat.approve_tool_confirmation(activity_id);
-                    cx.notify();
-                });
-            },
-        )
+                approve_ai_tool_confirmation(
+                    &approve_state,
+                    &approve_identity,
+                    &approve_tx,
+                    activity_id,
+                    cx,
+                );
+            }
+        })
     };
 
     let cancel_button =
@@ -2487,6 +2533,11 @@ fn render_confirmation_card(
                     .text_color(summary_color)
                     .child(summary),
             ),
+        )
+        .child(
+            div()
+                .mt(spacing::xs())
+                .child(crate::components::connection_identity_badge(&identity, true, cx)),
         )
         .children(blocked_reason)
         .children(sample_preview)
@@ -2718,6 +2769,22 @@ fn download_report_as_excel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn ai_confirmation_uses_captured_connection_identity() {
+        let mut state = AppState::new();
+        state.connections.clear();
+        let connection = crate::models::SavedConnection::new(
+            "Production".into(),
+            "mongodb://localhost/app".into(),
+        );
+        let identity = crate::models::ConnectionWriteIdentity::from(&connection);
+        state.connections.push(connection);
+        assert!(ai_write_identity_is_current(&state, &identity));
+
+        state.connections[0].name = "Other".into();
+        assert!(!ai_write_identity_is_current(&state, &identity));
+    }
 
     #[::core::prelude::v1::test]
     fn coalesce_stream_events_merges_adjacent_text_chunks() {

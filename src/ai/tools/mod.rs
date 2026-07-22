@@ -17,6 +17,7 @@ use mongodb::bson;
 use rig::tool::ToolDyn;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
+use crate::models::ConnectionWriteIdentity;
 
 /// Shared context passed to all tools at construction time.
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct MongoContext {
     pub client: mongodb::Client,
     pub database: String,
     pub collection: Option<String>,
+    pub write_identity: ConnectionWriteIdentity,
     pub read_only: bool,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
 }
@@ -60,6 +62,7 @@ pub enum StreamEvent {
         description: String,
         tier: SafetyTier,
         preview: OperationPreview,
+        write_identity: ConnectionWriteIdentity,
         response_tx: ConfirmationSender,
     },
 }
@@ -128,6 +131,7 @@ pub async fn require_confirmation(
                     description: classification.description,
                     tier: classification.tier,
                     preview,
+                    write_identity: ctx.write_identity.clone(),
                     response_tx: ConfirmationSender::new(resp_tx),
                 });
                 match resp_rx.await {

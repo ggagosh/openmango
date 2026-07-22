@@ -32,8 +32,8 @@ pub use editor_sessions::{
 };
 pub use events::AppEvent;
 pub use query_library::{
-    DocumentQuery, QueryContent, QueryDefinition, QueryHistoryEntry, QueryKind, QueryLibrary,
-    QueryLibraryPersistenceError, SavedQuery,
+    DocumentQuery, QueryContent, QueryDefinition, QueryHistoryEntry, QueryImportReport, QueryKind,
+    QueryLibrary, QueryLibraryPersistenceError, SavedQuery, SavedQueryInput, SavedQueryScope,
 };
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,
@@ -44,6 +44,7 @@ pub use settings::{
 pub use status::{StatusLevel, StatusMessage};
 pub use transfer_rules::{
     TransferValidation, available_transfer_formats, coerce_transfer_format,
-    parse_export_query_document, resolved_export_destination, validate_transfer,
+    parse_export_query_document, resolved_export_destination, transfer_write_connection,
+    validate_transfer,
 };
 pub use workspace::{WindowMode, WindowState, WorkspaceState, WorkspaceTab, WorkspaceTabKind};

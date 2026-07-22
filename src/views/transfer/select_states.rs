@@ -5,6 +5,7 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
 use uuid::Uuid;
 
+use crate::components::{ConnectionIdentity, connection_identity_badge};
 use crate::state::{AppCommands, TransferMode};
 
 use super::TransferView;
@@ -14,6 +15,7 @@ use super::TransferView;
 pub(super) struct ConnectionItem {
     pub id: Uuid,
     pub name: SharedString,
+    pub identity: ConnectionIdentity,
 }
 
 impl SelectItem for ConnectionItem {
@@ -21,6 +23,10 @@ impl SelectItem for ConnectionItem {
 
     fn title(&self) -> SharedString {
         self.name.clone()
+    }
+
+    fn render(&self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        connection_identity_badge(&self.identity, true, cx)
     }
 
     fn value(&self) -> &Self::Value {

@@ -82,6 +82,8 @@ impl ConnectionDraft {
             uri_secrets: crate::helpers::UriSecrets::default(),
             internal_uri_value: None,
             color: None,
+            environment: None,
+            confirm_production_writes: false,
             read_only: false,
             direct_connection: false,
             tls: false,
@@ -147,6 +149,8 @@ impl ConnectionDraft {
         self.uri_secrets = crate::helpers::UriSecrets::default();
         self.internal_uri_value = None;
         self.color = None;
+        self.environment = None;
+        self.confirm_production_writes = false;
         self.read_only = false;
         self.direct_connection = false;
         self.tls = false;

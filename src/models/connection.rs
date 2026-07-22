@@ -141,6 +141,26 @@ impl ConnectionColor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionEnvironment {
+    Development,
+    Staging,
+    Production,
+}
+
+impl ConnectionEnvironment {
+    pub const ALL: [Self; 3] = [Self::Development, Self::Staging, Self::Production];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Development => "Development",
+            Self::Staging => "Staging",
+            Self::Production => "Production",
+        }
+    }
+}
+
 /// A saved connection configuration (persisted to disk)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedConnection {
@@ -148,6 +168,10 @@ pub struct SavedConnection {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ConnectionColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ConnectionEnvironment>,
+    #[serde(default)]
+    pub confirm_production_writes: bool,
     pub uri: String,
     pub last_connected: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -160,12 +184,64 @@ pub struct SavedConnection {
     pub secret_id: Option<Uuid>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConnectionTransportIdentity {
+    pub ssh: Option<SshConfig>,
+    pub proxy: Option<ProxyConfig>,
+    pub secret_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionWriteIdentity {
+    pub id: Uuid,
+    pub name: String,
+    pub uri: String,
+    pub color: Option<ConnectionColor>,
+    pub environment: Option<ConnectionEnvironment>,
+    pub confirm_production_writes: bool,
+    pub read_only: bool,
+    pub transport: Box<ConnectionTransportIdentity>,
+}
+
+impl ConnectionWriteIdentity {
+    pub fn matches(&self, connection: &SavedConnection) -> bool {
+        self == &Self::from(connection)
+    }
+
+    pub fn requires_production_confirmation(&self) -> bool {
+        self.environment == Some(ConnectionEnvironment::Production)
+            && self.confirm_production_writes
+    }
+}
+
+impl From<&SavedConnection> for ConnectionWriteIdentity {
+    fn from(connection: &SavedConnection) -> Self {
+        let stripped = connection.with_secrets_stripped();
+        Self {
+            id: stripped.id,
+            name: stripped.name,
+            uri: stripped.uri,
+            color: stripped.color,
+            environment: stripped.environment,
+            confirm_production_writes: stripped.confirm_production_writes,
+            read_only: stripped.read_only,
+            transport: Box::new(ConnectionTransportIdentity {
+                ssh: stripped.ssh,
+                proxy: stripped.proxy,
+                secret_id: stripped.secret_id,
+            }),
+        }
+    }
+}
+
 impl SavedConnection {
     pub fn new(name: String, uri: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,
             color: None,
+            environment: None,
+            confirm_production_writes: false,
             uri,
             last_connected: None,
             read_only: false,
@@ -173,6 +249,11 @@ impl SavedConnection {
             proxy: None,
             secret_id: None,
         }
+    }
+
+    pub fn requires_production_write_confirmation(&self) -> bool {
+        self.environment == Some(ConnectionEnvironment::Production)
+            && self.confirm_production_writes
     }
 
     /// Return a copy with all secrets removed (for disk persistence).
@@ -200,4 +281,69 @@ pub struct ActiveConnection {
     /// Collections per database (db_name -> collection_names)
     pub collections: HashMap<String, Vec<String>>,
     pub runtime_meta: ConnectionRuntimeMeta,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_is_explicit_and_legacy_safe() {
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "name": "prod-looking-host",
+            "uri": "mongodb://prod.example.test",
+            "last_connected": null
+        });
+        let connection: SavedConnection = serde_json::from_value(legacy).unwrap();
+        assert_eq!(connection.environment, None);
+        assert!(!connection.confirm_production_writes);
+        assert!(!connection.requires_production_write_confirmation());
+
+        let mut connection =
+            SavedConnection::new("not-production-by-name".into(), "mongodb://localhost".into());
+        connection.confirm_production_writes = true;
+        for environment in
+            [None, Some(ConnectionEnvironment::Development), Some(ConnectionEnvironment::Staging)]
+        {
+            connection.environment = environment;
+            assert!(!connection.requires_production_write_confirmation());
+        }
+        connection.environment = Some(ConnectionEnvironment::Production);
+        assert!(connection.requires_production_write_confirmation());
+    }
+
+    #[test]
+    fn environments_round_trip_with_stable_values() {
+        for (environment, expected) in [
+            (ConnectionEnvironment::Development, "\"development\""),
+            (ConnectionEnvironment::Staging, "\"staging\""),
+            (ConnectionEnvironment::Production, "\"production\""),
+        ] {
+            let json = serde_json::to_string(&environment).unwrap();
+            assert_eq!(json, expected);
+            assert_eq!(serde_json::from_str::<ConnectionEnvironment>(&json).unwrap(), environment);
+        }
+    }
+
+    #[test]
+    fn write_identity_rejects_endpoint_or_label_changes() {
+        let mut connection =
+            SavedConnection::new("Production".into(), "mongodb://localhost/app".into());
+        connection.environment = Some(ConnectionEnvironment::Production);
+        connection.confirm_production_writes = true;
+        let identity = ConnectionWriteIdentity::from(&connection);
+        assert!(identity.matches(&connection));
+
+        connection.name = "Renamed".into();
+        assert!(!identity.matches(&connection));
+        connection.name = "Production".into();
+        connection.uri = "mongodb://other-host/app".into();
+        assert!(!identity.matches(&connection));
+
+        connection.uri = "mongodb://localhost/app".into();
+        connection.ssh =
+            Some(SshConfig { enabled: true, host: "jump.example".into(), ..Default::default() });
+        assert!(!identity.matches(&connection));
+    }
 }

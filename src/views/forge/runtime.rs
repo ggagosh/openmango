@@ -50,9 +50,17 @@ pub fn active_forge_session_info(
 
 const READ_ONLY_FORGE_ERROR: &str = "Forge execution is disabled for read-only connections. Use a writable connection or a server-enforced read-only MongoDB account.";
 
-fn ensure_forge_execution_allowed(read_only: bool) -> Result<(), crate::error::Error> {
+fn ensure_forge_execution_allowed(
+    read_only: bool,
+    protected_production: bool,
+    authorized: bool,
+) -> Result<(), crate::error::Error> {
     if read_only {
         Err(crate::error::Error::Parse(READ_ONLY_FORGE_ERROR.to_string()))
+    } else if protected_production && !authorized {
+        Err(crate::error::Error::Parse(
+            "Production Forge execution requires confirmation.".to_string(),
+        ))
     } else {
         Ok(())
     }
@@ -61,7 +69,16 @@ fn ensure_forge_execution_allowed(read_only: bool) -> Result<(), crate::error::E
 impl ForgeView {
     pub fn handle_execute_query(&mut self, text: &str, cx: &mut Context<Self>) {
         self.state.editor.current_text = text.to_string();
-        let (session_id, uri, database, runtime_handle, read_only, forge_key) = {
+        let (
+            session_id,
+            uri,
+            database,
+            runtime_handle,
+            read_only,
+            protected_production,
+            connection_id,
+            forge_key,
+        ) = {
             let state_ref = self.app_state.read(cx);
             let (session_id, uri, database) = match active_forge_session_info(state_ref) {
                 Ok(Some(info)) => info,
@@ -82,17 +99,34 @@ impl ForgeView {
             let read_only = forge_key
                 .as_ref()
                 .is_some_and(|key| state_ref.connection_read_only(key.connection_id));
+            let protected_production = forge_key.as_ref().is_some_and(|key| {
+                state_ref.connection_requires_production_write_confirmation(key.connection_id)
+            });
+            let connection_id = forge_key.as_ref().map(|key| key.connection_id);
             (
                 session_id,
                 uri,
                 database,
                 state_ref.connection_manager().runtime_handle(),
                 read_only,
+                protected_production,
+                connection_id,
                 forge_key,
             )
         };
 
-        if let Err(error) = ensure_forge_execution_allowed(read_only) {
+        let authorized = if protected_production {
+            connection_id.is_some_and(|connection_id| {
+                self.app_state.update(cx, |state, _cx| {
+                    state.consume_production_write_authorization(connection_id)
+                })
+            })
+        } else {
+            true
+        };
+        if let Err(error) =
+            ensure_forge_execution_allowed(read_only, protected_production, authorized)
+        {
             let message = error.to_string();
             self.state.output.last_error = Some(message.clone());
             self.state.output.last_result = None;
@@ -470,8 +504,11 @@ mod tests {
 
     #[test]
     fn read_only_connections_cannot_execute_forge() {
-        let error = ensure_forge_execution_allowed(true).expect_err("read-only Forge must fail");
+        let error = ensure_forge_execution_allowed(true, true, true)
+            .expect_err("read-only Forge must fail");
         assert!(error.to_string().contains("read-only"));
-        assert!(ensure_forge_execution_allowed(false).is_ok());
+        assert!(ensure_forge_execution_allowed(false, false, false).is_ok());
+        assert!(ensure_forge_execution_allowed(false, true, false).is_err());
+        assert!(ensure_forge_execution_allowed(false, true, true).is_ok());
     }
 }

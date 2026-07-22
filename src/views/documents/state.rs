@@ -122,24 +122,46 @@ impl CollectionView {
             view.update(cx, |this, cx| {
                 let mut handled = false;
 
-                let save_selected_document = |this: &mut CollectionView, cx: &mut Context<Self>| {
-                    let Some(session_key) = this.view_model.current_session() else {
-                        return false;
+                let save_selected_document =
+                    |this: &mut CollectionView, window: &mut Window, cx: &mut Context<Self>| {
+                        let Some(session_key) = this.view_model.current_session() else {
+                            return false;
+                        };
+                        let (doc_key, doc) = {
+                            let state_ref = this.state.read(cx);
+                            let doc_key = state_ref.session_selected_doc(&session_key);
+                            let doc = doc_key
+                                .as_ref()
+                                .and_then(|doc_key| state_ref.session_draft(&session_key, doc_key));
+                            (doc_key, doc)
+                        };
+                        let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
+                            return false;
+                        };
+                        let state = this.state.clone();
+                        let state_for_write = state.clone();
+                        crate::components::request_connection_write(
+                            state,
+                            crate::components::WriteRequest::new(
+                                session_key.connection_id,
+                                session_key.namespace(),
+                                "Save document changes",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |_window, cx| {
+                                AppCommands::save_document(
+                                    state_for_write,
+                                    session_key,
+                                    doc_key,
+                                    doc,
+                                    cx,
+                                );
+                            },
+                        );
+                        true
                     };
-                    let (doc_key, doc) = {
-                        let state_ref = this.state.read(cx);
-                        let doc_key = state_ref.session_selected_doc(&session_key);
-                        let doc = doc_key
-                            .as_ref()
-                            .and_then(|doc_key| state_ref.session_draft(&session_key, doc_key));
-                        (doc_key, doc)
-                    };
-                    let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
-                        return false;
-                    };
-                    AppCommands::save_document(this.state.clone(), session_key, doc_key, doc, cx);
-                    true
-                };
                 let is_aggregation = this
                     .view_model
                     .current_session()
@@ -182,12 +204,12 @@ impl CollectionView {
                         if committed {
                             window.focus(&this.documents_focus);
                             if cmd_or_ctrl {
-                                save_selected_document(this, cx);
+                                save_selected_document(this, window, cx);
                             }
                         }
                         handled = true;
                     } else if cmd_or_ctrl {
-                        handled = save_selected_document(this, cx);
+                        handled = save_selected_document(this, window, cx);
                     } else if this.documents_focus.is_focused(window) {
                         let Some(session_key) = this.view_model.current_session() else {
                             return;

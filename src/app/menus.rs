@@ -6,8 +6,8 @@ use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
 use crate::components::{
-    ConnectionManager, open_confirm_dialog, request_disconnect_connection,
-    request_remove_connection,
+    ConnectionManager, WriteConfirmation, open_confirm_dialog, request_connection_write,
+    request_disconnect_connection, request_remove_connection,
 };
 use crate::keyboard::{
     CopyConnectionUri, CopySelectionName, CopyTreeItem, CreateCollection, DeleteSelection,
@@ -328,18 +328,32 @@ pub(crate) fn build_database_menu(
                     move |_, window, cx| {
                         let message =
                             format!("Drop database \"{database}\"? This cannot be undone.");
-                        open_confirm_dialog(window, cx, "Drop database", message, "Drop", true, {
-                            let state = state.clone();
-                            let database = database.clone();
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                database.clone(),
+                                "Drop a database",
+                                Some(WriteConfirmation {
+                                    title: "Drop database".into(),
+                                    message,
+                                    confirm_label: "Drop".into(),
+                                    destructive: true,
+                                }),
+                            ),
+                            window,
+                            cx,
                             move |_window, cx| {
                                 AppCommands::drop_database(
-                                    state.clone(),
+                                    state_for_write,
                                     connection_id,
-                                    database.clone(),
+                                    database_for_write,
                                     cx,
                                 );
-                            }
-                        });
+                            },
+                        );
                     }
                 }),
         )
@@ -519,26 +533,32 @@ pub(crate) fn build_collection_menu(
                         let message = format!(
                             "Drop collection \"{database}.{collection}\"? This cannot be undone."
                         );
-                        open_confirm_dialog(
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        let collection_for_write = collection.clone();
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                format!("{database}.{collection}"),
+                                "Drop a collection",
+                                Some(WriteConfirmation {
+                                    title: "Drop collection".into(),
+                                    message,
+                                    confirm_label: "Drop".into(),
+                                    destructive: true,
+                                }),
+                            ),
                             window,
                             cx,
-                            "Drop collection",
-                            message,
-                            "Drop",
-                            true,
-                            {
-                                let state = state.clone();
-                                let database = database.clone();
-                                let collection = collection.clone();
-                                move |_window, cx| {
-                                    AppCommands::drop_collection(
-                                        state.clone(),
-                                        connection_id,
-                                        database.clone(),
-                                        collection.clone(),
-                                        cx,
-                                    );
-                                }
+                            move |_window, cx| {
+                                AppCommands::drop_collection(
+                                    state_for_write,
+                                    connection_id,
+                                    database_for_write,
+                                    collection_for_write,
+                                    cx,
+                                );
                             },
                         );
                     }

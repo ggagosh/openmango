@@ -416,40 +416,64 @@ impl Render for IndexCreateDialog {
                                         let confirm_view = view.clone();
                                         let confirm_state = state.clone();
                                         let confirm_session = session_key.clone();
-                                        crate::components::open_confirm_dialog(
+                                        crate::components::request_connection_write(
+                                            confirm_state.clone(),
+                                            crate::components::WriteRequest::new(
+                                                confirm_session.connection_id,
+                                                confirm_session.namespace(),
+                                                "Replace an index",
+                                                Some(crate::components::WriteConfirmation {
+                                                title: "Replace index".into(),
+                                                message: format!(
+                                                    "Replace index \"{original_name}\"? The existing index may be dropped during replacement."
+                                                ),
+                                                confirm_label: "Replace".into(),
+                                                destructive: true,
+                                            }),
+                                            ),
                                             window,
                                             cx,
-                                            "Replace index",
-                                            format!(
-                                                "Replace index \"{original_name}\"? The existing index may be dropped during replacement."
-                                            ),
-                                            "Replace",
-                                            true,
                                             move |_window, cx| {
                                                 confirm_view.update(cx, |this, cx| {
                                                     this.creating = true;
                                                     cx.notify();
                                                     AppCommands::replace_collection_index(
-                                                        confirm_state.clone(),
-                                                        confirm_session.clone(),
-                                                        original_name.clone(),
-                                                        index_doc.clone(),
+                                                        confirm_state,
+                                                        confirm_session,
+                                                        original_name,
+                                                        index_doc,
                                                         cx,
                                                     );
                                                 });
                                             },
                                         );
                                     } else {
-                                        view.update(cx, |this, cx| {
-                                            this.creating = true;
-                                            cx.notify();
-                                            AppCommands::create_collection_index(
-                                                state.clone(),
-                                                session_key.clone(),
-                                                index_doc,
-                                                cx,
-                                            );
-                                        });
+                                        let confirm_view = view.clone();
+                                        let confirm_state = state.clone();
+                                        let confirm_session = session_key.clone();
+                                        crate::components::request_connection_write(
+                                            state.clone(),
+                                            crate::components::WriteRequest::new(
+                                                session_key.connection_id,
+                                                session_key.namespace(),
+                                                "Create an index",
+                                                None,
+                                            ),
+                                            window,
+                                            cx,
+                                            move |_window, cx| {
+                                                confirm_view.update(cx, |this, cx| {
+                                                    this.creating = true;
+                                                    cx.notify();
+                                                    AppCommands::create_collection_index(
+                                                        confirm_state,
+                                                        confirm_session,
+                                                        index_doc,
+                                                        cx,
+                                                    );
+                                                });
+                                            },
+                                        );
                                     }
                                 }
                             })
@@ -461,6 +485,12 @@ impl Render for IndexCreateDialog {
             .flex_col()
             .gap(spacing::sm())
             .p(spacing::md())
+            .child(crate::components::connection_identity_for(
+                &self.state,
+                self.session_key.connection_id,
+                true,
+                cx,
+            ))
             .child(tabs)
             .child(if self.mode == IndexMode::Form { form_view } else { json_view })
             .child(action_row)
