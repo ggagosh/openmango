@@ -7,62 +7,54 @@
   aria-label="OpenMango logo"
 >
   <defs>
-    <!-- Mango gradient -->
-    <linearGradient id="mangoGradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#FFB74D"/>
-      <stop offset="100%" stop-color="#FF7A1A"/>
+    <linearGradient id="backgroundGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#292A2E"/>
+      <stop offset="100%" stop-color="#17181B"/>
     </linearGradient>
-
-    <!-- Leaf gradient -->
+    <linearGradient id="mangoGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFB02E"/>
+      <stop offset="100%" stop-color="#FF8917"/>
+    </linearGradient>
     <linearGradient id="leafGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#4BE27C"/>
-      <stop offset="100%" stop-color="#1E8A43"/>
+      <stop offset="0%" stop-color="#78DC53"/>
+      <stop offset="100%" stop-color="#43B83F"/>
     </linearGradient>
   </defs>
 
-  <!-- Mango body (geometric, app-icon friendly) -->
+  <!-- Transparent outer corners keep the icon native to the macOS Dock. -->
+  <rect x="64" y="64" width="896" height="896" rx="196" fill="url(#backgroundGradient)"/>
+
   <path
     fill="url(#mangoGradient)"
     d="
-      M512 120
-      C330 120 220 310 220 500
-      C220 710 370 880 512 880
-      C654 880 804 710 804 500
-      C804 310 694 120 512 120
+      M482 250
+      C372 250 292 353 284 496
+      C275 652 363 807 492 837
+      C620 867 720 728 741 574
+      C758 451 721 352 641 292
+      L556 355
+      L535 262
+      C518 254 500 250 482 250
       Z
     "
   />
 
-  <!-- Database rings (negative-space feel, subtle, scalable) -->
-  <g
-    fill="none"
-    stroke="rgba(255,255,255,0.38)"
-    stroke-width="20"
-    stroke-linecap="round"
-  >
-    <ellipse cx="512" cy="440" rx="180" ry="36"/>
-    <ellipse cx="512" cy="520" rx="180" ry="36"/>
-    <ellipse cx="512" cy="600" rx="180" ry="36"/>
+  <!-- Strong negative-space data layers remain legible at small Dock sizes. -->
+  <g fill="url(#backgroundGradient)">
+    <ellipse cx="512" cy="486" rx="154" ry="31"/>
+    <ellipse cx="512" cy="580" rx="154" ry="31"/>
+    <ellipse cx="512" cy="674" rx="154" ry="31"/>
   </g>
 
-  <!-- Leaf (abstract, non-Mongo, minimal) -->
   <path
     fill="url(#leafGradient)"
     d="
-      M560 92
-      C650 40 760 60 800 120
-      C700 120 620 170 590 230
-      C585 180 575 130 560 92
+      M542 249
+      C565 207 590 180 620 166
+      C699 153 766 172 813 220
+      C710 221 627 261 561 329
+      C558 296 551 269 542 249
       Z
     "
-  />
-
-  <!-- Stem (very subtle) -->
-  <path
-    d="M548 112 C556 78 582 52 612 44"
-    stroke="#6B4A2B"
-    stroke-width="14"
-    stroke-linecap="round"
-    fill="none"
   />
 </svg>
