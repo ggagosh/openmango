@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Complete keyboard and command-palette coverage for Schema, Transfer and its query editor, Forge, document/index/aggregation workflows, tabs, and focus navigation, with a visible palette button
+- Customizable keyboard shortcuts with search, context-aware conflict validation, recording, disable/reset controls, persisted overrides, and restart-safe application
 - Query Library for Documents, Aggregation, and Forge with successful-run history, saved queries, full-text search, restore/run/copy/update/delete actions, keyboard access, atomic local persistence, and credential-aware exclusion
 - Optional connection colors that accent connections in the sidebar, connection manager, and tabs, and survive connection import/export
 - Shared unsaved-change protection across tabs, detached editors, connection changes, workspace restore, app quit, theme restart, and updater relaunch
@@ -29,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- macOS development runs use a stable Apple Development signature so Keychain access remains trusted across rebuilds
 - Workspace restore no longer crashes by re-entering the sidebar while a connection event is being handled
 - Workspace restore now waits for saved connection credentials to finish loading from Keychain before reconnecting
 - Import and copy Clear/Drop operations now stage changes before atomic promotion, and Replace preserves failed originals while reporting partial progress

@@ -1,9 +1,11 @@
 use gpui::{Action, SharedString, Window};
 
 use crate::keyboard::{
-    CreateCollection, CreateDatabase, OpenQueryLibrary, OpenSettings, RefreshView,
-    ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview, ShowStatsSubview,
-    ToggleAiPanel,
+    CloseTab, CreateCollection, CreateDatabase, CreateIndex, DiscardDocumentChanges, FocusContent,
+    FocusSidebar, InsertDocument, OpenForge, OpenQueryLibrary, OpenSettings, RefreshView,
+    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview,
+    ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy, TransferExport,
+    TransferImport,
 };
 use crate::state::AppState;
 use crate::state::TabKey;
@@ -139,6 +141,12 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     let has_selected = state.selected_connection_id().is_some();
     let is_connected = has_selected
         && state.selected_connection_id().map(|id| state.is_connected(id)).unwrap_or(false);
+    let current_session = state.current_session_key();
+    let has_collection = current_session.is_some();
+    let is_documents = matches!(state.current_view, crate::state::View::Documents);
+    let current_subview = current_session.as_ref().and_then(|key| state.session_subview(key));
+    let has_database = state.current_database_key().is_some();
+    let can_close_tab = !state.open_tabs().is_empty() || state.preview_tab().is_some();
 
     vec![
         ActionItem {
@@ -164,6 +172,116 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             shortcut: registered_shortcut(window, &CreateCollection),
             available: is_connected && state.selected_database().is_some(),
             priority: 11,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:insert-document"),
+            label: SharedString::from("Insert Document"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &InsertDocument),
+            available: has_collection,
+            priority: 12,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:create-index"),
+            label: SharedString::from("Create Index"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &CreateIndex),
+            available: has_collection,
+            priority: 13,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:run-aggregation"),
+            label: SharedString::from("Run Aggregation"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &RunAggregation),
+            available: has_collection,
+            priority: 14,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:open-forge"),
+            label: SharedString::from("Open Forge"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &OpenForge),
+            available: has_database,
+            priority: 15,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:transfer-export"),
+            label: SharedString::from("Export Data"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &TransferExport),
+            available: has_database,
+            priority: 16,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:transfer-import"),
+            label: SharedString::from("Import Data"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &TransferImport),
+            available: has_database,
+            priority: 17,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:transfer-copy"),
+            label: SharedString::from("Copy Data"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &TransferCopy),
+            available: has_database,
+            priority: 18,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:save-document"),
+            label: SharedString::from("Save Document Changes"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &SaveDocument),
+            available: is_documents
+                && current_subview == Some(crate::state::CollectionSubview::Documents),
+            priority: 19,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:discard-document"),
+            label: SharedString::from("Discard Document Changes"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &DiscardDocumentChanges),
+            available: is_documents
+                && current_subview == Some(crate::state::CollectionSubview::Documents),
+            priority: 20,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:close-tab"),
+            label: SharedString::from("Close Tab"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &CloseTab),
+            available: can_close_tab,
+            priority: 21,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:focus-sidebar"),
+            label: SharedString::from("Focus Sidebar"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &FocusSidebar),
+            available: true,
+            priority: 22,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("cmd:focus-content"),
+            label: SharedString::from("Focus Content"),
+            category: ActionCategory::Command,
+            shortcut: registered_shortcut(window, &FocusContent),
+            available: true,
+            priority: 23,
             ..Default::default()
         },
         ActionItem {
@@ -338,7 +456,7 @@ pub fn disconnect_actions(state: &AppState) -> Vec<ActionItem> {
 
 /// View: subview toggles (documents/indexes/stats).
 pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
-    let has_collection = state.selected_collection().is_some();
+    let has_collection = state.current_session_key().is_some();
 
     vec![
         ActionItem {
@@ -374,6 +492,15 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             shortcut: registered_shortcut(window, &ShowAggregationSubview),
             available: has_collection,
             priority: 3,
+            ..Default::default()
+        },
+        ActionItem {
+            id: SharedString::from("view:schema"),
+            label: SharedString::from("Show Schema"),
+            category: ActionCategory::View,
+            shortcut: registered_shortcut(window, &ShowSchemaSubview),
+            available: has_collection,
+            priority: 4,
             ..Default::default()
         },
     ]

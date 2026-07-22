@@ -1,5 +1,7 @@
 //! Settings view for application configuration.
 
+mod keybindings;
+
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::button::ButtonVariants as _;
@@ -19,10 +21,13 @@ use crate::state::{
 };
 use crate::theme::{borders, islands, sizing, spacing};
 
+use self::keybindings::KeybindingsView;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SettingsSubtab {
     #[default]
     General,
+    Keybindings,
     Transfer,
     Ai,
 }
@@ -31,15 +36,17 @@ impl SettingsSubtab {
     fn to_index(self) -> usize {
         match self {
             Self::General => 0,
-            Self::Transfer => 1,
-            Self::Ai => 2,
+            Self::Keybindings => 1,
+            Self::Transfer => 2,
+            Self::Ai => 3,
         }
     }
 
     fn from_index(index: usize) -> Self {
         match index {
-            1 => Self::Transfer,
-            2 => Self::Ai,
+            1 => Self::Keybindings,
+            2 => Self::Transfer,
+            3 => Self::Ai,
             _ => Self::General,
         }
     }
@@ -55,6 +62,7 @@ pub struct SettingsView {
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
     active_subtab: SettingsSubtab,
+    keybindings_view: Entity<KeybindingsView>,
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
     batch_size_input_state: Option<Entity<InputState>>,
@@ -69,6 +77,7 @@ pub struct SettingsView {
 impl SettingsView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let last_seen_provider = state.read(cx).settings.ai.provider;
+        let keybindings_view = cx.new(|cx| KeybindingsView::new(state.clone(), cx));
         model_registry::spawn_model_fetch(&state, cx);
         let subscriptions = vec![cx.observe(&state, |this: &mut Self, _, cx| {
             let current = this.state.read(cx).settings.ai.provider;
@@ -83,6 +92,7 @@ impl SettingsView {
             state,
             _subscriptions: subscriptions,
             active_subtab: SettingsSubtab::default(),
+            keybindings_view,
             template_input_state: None,
             batch_size_input_state: None,
             query_timeout_input_state: None,
@@ -325,7 +335,12 @@ impl Render for SettingsView {
             .selected_index(self.active_subtab.to_index())
             .on_click({
                 let view = view.clone();
+                let state = state.clone();
                 move |index, _window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.cancel_keybinding_capture();
+                        cx.notify();
+                    });
                     view.update(cx, |this, cx| {
                         this.active_subtab = SettingsSubtab::from_index(*index);
                         cx.notify();
@@ -334,6 +349,7 @@ impl Render for SettingsView {
             })
             .children(vec![
                 Tab::new().label("General"),
+                Tab::new().label("Keybindings"),
                 Tab::new().label("Transfer"),
                 Tab::new().label("AI"),
             ]);
@@ -342,16 +358,23 @@ impl Render for SettingsView {
             SettingsSubtab::General => div()
                 .flex()
                 .flex_col()
+                .flex_1()
+                .min_h_0()
                 .gap(spacing::lg())
+                .overflow_y_scrollbar()
                 .child(render_appearance_section(state.clone(), &settings, cx))
                 .child(render_query_section(self.query_timeout_input_state.clone().unwrap(), cx))
                 .child(render_updates_section(state.clone(), &settings, cx))
                 .child(render_support_section(state.clone(), cx))
                 .into_any_element(),
+            SettingsSubtab::Keybindings => self.keybindings_view.clone().into_any_element(),
             SettingsSubtab::Transfer => div()
                 .flex()
                 .flex_col()
+                .flex_1()
+                .min_h_0()
                 .gap(spacing::lg())
+                .overflow_y_scrollbar()
                 .child(render_transfer_section(
                     state.clone(),
                     &settings,
@@ -363,7 +386,10 @@ impl Render for SettingsView {
             SettingsSubtab::Ai => div()
                 .flex()
                 .flex_col()
+                .flex_1()
+                .min_h_0()
                 .gap(spacing::lg())
+                .overflow_y_scrollbar()
                 .child(render_ai_section(
                     view.clone(),
                     state.clone(),
@@ -387,6 +413,8 @@ impl Render for SettingsView {
             .flex_col()
             .flex_1()
             .min_w(px(0.0))
+            .min_h(px(0.0))
+            .overflow_hidden()
             .bg(islands::content_bg(&appearance, cx))
             .child(header)
             .child(div().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
@@ -395,8 +423,9 @@ impl Render for SettingsView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h_0()
                     .p(spacing::lg())
-                    .overflow_y_scrollbar()
+                    .overflow_hidden()
                     .child(tab_content),
             )
     }

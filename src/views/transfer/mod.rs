@@ -23,6 +23,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, 
 use uuid::Uuid;
 
 use crate::components::{Button, open_confirm_dialog};
+use crate::keyboard::{CancelTransfer, CloseTransferQueryModal, RunTransfer, SaveTransferQuery};
 use crate::state::{
     AppCommands, AppState, CompressionMode, InsertMode, StatusMessage, TargetWriteMode,
     TransferMode, TransferScope, TransferTabState, available_transfer_formats,
@@ -37,6 +38,7 @@ use summary_panel::render_summary_panel;
 
 pub struct TransferView {
     state: Entity<AppState>,
+    focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
     _select_subscriptions: Vec<Subscription>,
     options_expanded: bool,
@@ -67,6 +69,8 @@ pub struct TransferView {
     // JSON editor modal state
     query_edit_modal: Option<QueryEditField>, // Which field is being edited (None = closed)
     query_edit_input: Option<Entity<InputState>>, // Textarea content for modal
+    query_edit_transfer_id: Option<Uuid>,
+    query_edit_previous_focus: Option<FocusHandle>,
 }
 
 impl TransferView {
@@ -75,6 +79,7 @@ impl TransferView {
 
         Self {
             state,
+            focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
             _select_subscriptions: Vec::new(),
             options_expanded: true,
@@ -95,6 +100,19 @@ impl TransferView {
             prev_dest_coll_names: Vec::new(),
             query_edit_modal: None,
             query_edit_input: None,
+            query_edit_transfer_id: None,
+            query_edit_previous_focus: None,
+        }
+    }
+
+    pub(crate) fn focus(&self, window: &mut Window, cx: &App) {
+        let active_transfer = self.state.read(cx).active_transfer_tab_id();
+        if self.query_edit_transfer_id == active_transfer
+            && let Some(input) = self.query_edit_input.as_ref()
+        {
+            window.focus(&input.read(cx).focus_handle(cx));
+        } else {
+            window.focus(&self.focus_handle);
         }
     }
 }
@@ -133,6 +151,85 @@ fn destructive_transfer_message(transfer_state: &TransferTabState) -> String {
     }
     effects.push(format!("Target: {target}. This cannot be undone."));
     effects.join(" ")
+}
+
+fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
+    let Some((transfer_id, transfer_state)) = ({
+        let state = state.read(cx);
+        state
+            .active_transfer_tab_id()
+            .and_then(|id| state.transfer_tab(id).cloned().map(|transfer| (id, transfer)))
+    }) else {
+        return;
+    };
+    if transfer_state.runtime.is_running {
+        return;
+    }
+
+    let validation = validate_transfer(&transfer_state);
+    if !validation.can_run() {
+        return;
+    }
+    let resolved_destination = resolved_export_destination(&transfer_state);
+    let overwrite_destination =
+        resolved_destination.clone().filter(|destination| destination.exists());
+    let requires_confirmation = validation.requires_confirmation || overwrite_destination.is_some();
+    if !requires_confirmation {
+        AppCommands::execute_transfer(state, transfer_id, cx);
+        return;
+    }
+
+    let message = overwrite_destination.map_or_else(
+        || destructive_transfer_message(&transfer_state),
+        |destination| {
+            format!(
+                "The export destination '{}' already exists and will be replaced only after the export completes successfully.",
+                destination.display()
+            )
+        },
+    );
+    let expected_config = transfer_state.config.clone();
+    let expected_options = transfer_state.options.clone();
+    open_confirm_dialog(
+        window,
+        cx,
+        "Confirm destructive transfer",
+        message,
+        "Run Transfer",
+        true,
+        move |_window, cx| {
+            let unchanged = state.read(cx).transfer_tab(transfer_id).is_some_and(|tab| {
+                tab.config == expected_config && tab.options == expected_options
+            });
+            if !unchanged {
+                state.update(cx, |state, cx| {
+                    let message =
+                        "Transfer options changed after confirmation. Review and run again.";
+                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                        tab.runtime.error_message = Some(message.to_string());
+                    }
+                    state.set_status_message(Some(StatusMessage::error(message)));
+                    cx.notify();
+                });
+                return;
+            }
+            AppCommands::execute_confirmed_transfer(
+                state.clone(),
+                transfer_id,
+                resolved_destination.clone(),
+                cx,
+            );
+        },
+    );
+}
+
+fn cancel_active_transfer(state: Entity<AppState>, cx: &mut App) {
+    let Some(transfer_id) = state.read(cx).active_transfer_tab_id() else {
+        return;
+    };
+    if state.read(cx).transfer_tab(transfer_id).is_some_and(|tab| tab.runtime.is_running) {
+        AppCommands::cancel_transfer(state, transfer_id, cx);
+    }
 }
 
 impl Render for TransferView {
@@ -210,6 +307,12 @@ impl Render for TransferView {
 
             (id, transfer, connections, databases, collections, dest_databases, dest_collections)
         };
+        if self.query_edit_modal.is_some() && self.query_edit_transfer_id != Some(transfer_id) {
+            self.query_edit_modal = None;
+            self.query_edit_input = None;
+            self.query_edit_transfer_id = None;
+            self.query_edit_previous_focus = None;
+        }
 
         // Update select items and sync selected indices
         let conn_ids: Vec<Uuid> = connections.iter().map(|(id, _)| *id).collect();
@@ -552,33 +655,14 @@ impl Render for TransferView {
             };
 
         // Run or Cancel button (depending on is_running state)
-        let validation = validate_transfer(&transfer_state);
-        let can_run = validation.can_run();
-        let resolved_export_destination = resolved_export_destination(&transfer_state);
-        let overwrite_destination =
-            resolved_export_destination.clone().filter(|destination| destination.exists());
-        let confirmed_overwrite_destination = resolved_export_destination;
-        let requires_confirmation =
-            validation.requires_confirmation || overwrite_destination.is_some();
-        let destructive_message = if let Some(destination) = overwrite_destination {
-            format!(
-                "The export destination '{}' already exists and will be replaced only after the export completes successfully.",
-                destination.display()
-            )
-        } else {
-            destructive_transfer_message(&transfer_state)
-        };
-        let confirmed_config = transfer_state.config.clone();
-        let confirmed_options = transfer_state.options.clone();
+        let can_run = validate_transfer(&transfer_state).can_run();
         let action_button = if transfer_state.runtime.is_running {
             let state = state.clone();
             Button::new("transfer-cancel")
                 .ghost()
                 .compact()
                 .label("Cancel")
-                .on_click(move |_, _, cx| {
-                    AppCommands::cancel_transfer(state.clone(), transfer_id, cx);
-                })
+                .on_click(move |_, _, cx| cancel_active_transfer(state.clone(), cx))
                 .into_any_element()
         } else {
             let state = state.clone();
@@ -588,53 +672,7 @@ impl Render for TransferView {
                 .label(transfer_state.config.mode.label())
                 .disabled(!can_run)
                 .on_click(move |_, window, cx| {
-                    if requires_confirmation {
-                        let expected_config = confirmed_config.clone();
-                        let expected_options = confirmed_options.clone();
-                        let confirmed_overwrite_destination =
-                            confirmed_overwrite_destination.clone();
-                        open_confirm_dialog(
-                            window,
-                            cx,
-                            "Confirm destructive transfer",
-                            destructive_message.clone(),
-                            "Run Transfer",
-                            true,
-                            {
-                                let state = state.clone();
-                                move |_window, cx| {
-                                    let unchanged = state
-                                        .read(cx)
-                                        .transfer_tab(transfer_id)
-                                        .is_some_and(|tab| {
-                                            tab.config == expected_config
-                                                && tab.options == expected_options
-                                        });
-                                    if !unchanged {
-                                        state.update(cx, |state, cx| {
-                                            let message = "Transfer options changed after confirmation. Review and run again.";
-                                            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
-                                                tab.runtime.error_message = Some(message.to_string());
-                                            }
-                                            state.set_status_message(Some(StatusMessage::error(
-                                                message,
-                                            )));
-                                            cx.notify();
-                                        });
-                                        return;
-                                    }
-                                    AppCommands::execute_confirmed_transfer(
-                                        state.clone(),
-                                        transfer_id,
-                                        confirmed_overwrite_destination.clone(),
-                                        cx,
-                                    );
-                                }
-                            },
-                        );
-                    } else {
-                        AppCommands::execute_transfer(state.clone(), transfer_id, cx);
-                    }
+                    run_active_transfer(state.clone(), window, cx);
                 })
                 .into_any_element()
         };
@@ -797,6 +835,13 @@ impl Render for TransferView {
         let section_gap = px(20.0);
 
         // Modal overlay for query editing
+        let transfer_key_context =
+            match (self.query_edit_modal.is_some(), transfer_state.runtime.is_running) {
+                (true, true) => "Transfer TransferRunning TransferQueryModal",
+                (true, false) => "Transfer TransferQueryModal",
+                (false, true) => "Transfer TransferRunning",
+                (false, false) => "Transfer",
+            };
         let modal_overlay = self.render_query_edit_modal(window, cx);
 
         div()
@@ -805,6 +850,20 @@ impl Render for TransferView {
             .flex_col()
             .flex_1()
             .min_w(px(0.0))
+            .key_context(transfer_key_context)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &RunTransfer, window, cx| {
+                run_active_transfer(this.state.clone(), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CancelTransfer, _window, cx| {
+                cancel_active_transfer(this.state.clone(), cx);
+            }))
+            .on_action(cx.listener(|this, _: &SaveTransferQuery, window, cx| {
+                this.save_query_modal(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseTransferQueryModal, window, cx| {
+                this.close_query_modal(window, cx);
+            }))
             .child(header)
             .child(
                 div()

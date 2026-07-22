@@ -3,23 +3,22 @@ use uuid::Uuid;
 
 use crate::components::action_bar::ActionExecution;
 use crate::components::{
-    ConnectionDialog, QueryLibraryDialog, request_disconnect_connection, request_unsaved_action,
+    ConnectionDialog, ContentArea, QueryLibraryDialog, request_disconnect_connection,
+    request_unsaved_action,
 };
-use crate::keyboard::RefreshView;
+use crate::keyboard::{
+    CloseTab, DiscardDocumentChanges, FocusContent, FocusSidebar, OpenForge, RefreshView,
+    SaveDocument, format_keystroke,
+};
 use crate::state::settings::AppTheme;
-use crate::state::{ActiveTab, AppCommands, AppState, CollectionSubview, UnsavedScope, View};
+use crate::state::{
+    ActiveTab, AppCommands, AppState, CollectionSubview, TransferMode, TransferScope, UnsavedScope,
+    View,
+};
 use crate::views::CollectionView;
 
 use super::AppRoot;
 use super::dialogs::{open_create_collection_dialog, open_create_database_dialog};
-
-fn numbered_tab_index(key: &str, command: bool, alt: bool, shift: bool) -> Option<usize> {
-    if !command || alt || shift || key.len() != 1 {
-        return None;
-    }
-    let digit = key.chars().next()?.to_digit(10)?;
-    (1..=9).contains(&digit).then(|| (digit - 1) as usize)
-}
 
 impl AppRoot {
     pub(super) fn install_global_shortcuts(cx: &mut Context<Self>) -> Subscription {
@@ -34,17 +33,24 @@ impl AppRoot {
                     cx.notify();
                 }
 
-                let key = event.keystroke.key.to_ascii_lowercase();
-                let modifiers = event.keystroke.modifiers;
-                let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-                let alt = modifiers.alt;
-                let shift = modifiers.shift;
-
-                // Cmd+1-9: switch to tab by index. Other global shortcuts are handled by
-                // the context-aware keymap so each keystroke has a single dispatch path.
-                if let Some(tab_index) = numbered_tab_index(&key, cmd_or_ctrl, alt, shift) {
+                let recording = this.state.read(cx).keybinding_capture().is_some();
+                if recording && this.state.read(cx).current_view != View::Settings {
                     this.state.update(cx, |state, cx| {
-                        state.select_tab(tab_index, cx);
+                        state.cancel_keybinding_capture();
+                        cx.notify();
+                    });
+                    return;
+                }
+                if recording {
+                    let cancel = event.keystroke.key.eq_ignore_ascii_case("escape");
+                    let shortcut = (!cancel).then(|| format_keystroke(event));
+                    this.state.update(cx, |state, cx| {
+                        if let Some(shortcut) = shortcut {
+                            state.capture_keybinding(shortcut);
+                        } else {
+                            state.cancel_keybinding_capture();
+                        }
+                        cx.notify();
                     });
                     cx.stop_propagation();
                 }
@@ -139,6 +145,7 @@ impl AppRoot {
 
     pub(super) fn execute_action(
         state: &Entity<AppState>,
+        content_area: &Entity<ContentArea>,
         exec: ActionExecution,
         window: &mut Window,
         cx: &mut App,
@@ -247,6 +254,9 @@ impl AppRoot {
                     state.select_tab(index, cx);
                 });
             }
+            content_area.update(cx, |content, cx| {
+                content.focus_current_view(window, cx);
+            });
             return;
         }
 
@@ -278,6 +288,91 @@ impl AppRoot {
                 };
                 open_create_collection_dialog(state.clone(), database, window, cx);
             }
+            "cmd:insert-document" => {
+                let Some(session_key) = state.read(cx).current_session_key() else {
+                    return;
+                };
+                state.update(cx, |state, cx| {
+                    state.set_collection_subview(&session_key, CollectionSubview::Documents);
+                    cx.notify();
+                });
+                CollectionView::open_insert_document_json_editor(
+                    state.clone(),
+                    session_key,
+                    window,
+                    cx,
+                );
+            }
+            "cmd:create-index" => {
+                let Some(session_key) = state.read(cx).current_session_key() else {
+                    return;
+                };
+                state.update(cx, |state, cx| {
+                    state.set_collection_subview(&session_key, CollectionSubview::Indexes);
+                    cx.notify();
+                });
+                CollectionView::open_index_create_dialog(state.clone(), session_key, window, cx);
+            }
+            "cmd:run-aggregation" => {
+                let Some(session_key) = state.read(cx).current_session_key() else {
+                    return;
+                };
+                state.update(cx, |state, cx| {
+                    state.set_collection_subview(&session_key, CollectionSubview::Aggregation);
+                    cx.notify();
+                });
+                crate::views::documents::request_run_aggregation(
+                    state.clone(),
+                    session_key,
+                    false,
+                    window,
+                    cx,
+                );
+            }
+            "cmd:open-forge" => {
+                window.dispatch_action(Box::new(OpenForge), cx);
+            }
+            "cmd:transfer-export" => {
+                if Self::open_transfer_from_current(state, TransferMode::Export, cx) {
+                    content_area.update(cx, |content, cx| {
+                        content.focus_current_view(window, cx);
+                    });
+                }
+            }
+            "cmd:transfer-import" => {
+                if Self::open_transfer_from_current(state, TransferMode::Import, cx) {
+                    content_area.update(cx, |content, cx| {
+                        content.focus_current_view(window, cx);
+                    });
+                }
+            }
+            "cmd:transfer-copy" => {
+                if Self::open_transfer_from_current(state, TransferMode::Copy, cx) {
+                    content_area.update(cx, |content, cx| {
+                        content.focus_current_view(window, cx);
+                    });
+                }
+            }
+            "cmd:save-document" => {
+                Self::dispatch_content_action(content_area, Box::new(SaveDocument), window, cx);
+            }
+            "cmd:discard-document" => {
+                Self::dispatch_content_action(
+                    content_area,
+                    Box::new(DiscardDocumentChanges),
+                    window,
+                    cx,
+                );
+            }
+            "cmd:close-tab" => {
+                window.dispatch_action(Box::new(CloseTab), cx);
+            }
+            "cmd:focus-sidebar" => {
+                window.dispatch_action(Box::new(FocusSidebar), cx);
+            }
+            "cmd:focus-content" => {
+                window.dispatch_action(Box::new(FocusContent), cx);
+            }
             "cmd:refresh" => {
                 window.dispatch_action(Box::new(RefreshView), cx);
             }
@@ -301,32 +396,19 @@ impl AppRoot {
                 crate::changelog::open_changelog_tab(state.clone(), cx);
             }
             "view:documents" => {
-                if let Some(key) = state.read(cx).current_session_key() {
-                    state.update(cx, |state, _cx| {
-                        state.set_collection_subview(&key, CollectionSubview::Documents);
-                    });
-                }
+                Self::show_collection_subview(state, CollectionSubview::Documents, cx);
             }
             "view:indexes" => {
-                if let Some(key) = state.read(cx).current_session_key() {
-                    state.update(cx, |state, _cx| {
-                        state.set_collection_subview(&key, CollectionSubview::Indexes);
-                    });
-                }
+                Self::show_collection_subview(state, CollectionSubview::Indexes, cx);
             }
             "view:stats" => {
-                if let Some(key) = state.read(cx).current_session_key() {
-                    state.update(cx, |state, _cx| {
-                        state.set_collection_subview(&key, CollectionSubview::Stats);
-                    });
-                }
+                Self::show_collection_subview(state, CollectionSubview::Stats, cx);
             }
             "view:aggregation" => {
-                if let Some(key) = state.read(cx).current_session_key() {
-                    state.update(cx, |state, _cx| {
-                        state.set_collection_subview(&key, CollectionSubview::Aggregation);
-                    });
-                }
+                Self::show_collection_subview(state, CollectionSubview::Aggregation, cx);
+            }
+            "view:schema" => {
+                Self::show_collection_subview(state, CollectionSubview::Schema, cx);
             }
             "cmd:check-updates" => {
                 AppCommands::check_for_updates(state.clone(), cx);
@@ -338,6 +420,72 @@ impl AppRoot {
                 AppCommands::install_update(state.clone(), cx);
             }
             _ => {} // Unknown action — no-op
+        }
+    }
+
+    fn dispatch_content_action(
+        content_area: &Entity<ContentArea>,
+        action: Box<dyn Action>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if content_area.update(cx, |content, cx| content.focus_current_view(window, cx)) {
+            window.dispatch_action(action, cx);
+        }
+    }
+
+    fn open_transfer_from_current(
+        state: &Entity<AppState>,
+        mode: TransferMode,
+        cx: &mut App,
+    ) -> bool {
+        let Some((key, collection)) = ({
+            let state = state.read(cx);
+            state.current_database_key().map(|key| (key, state.selected_collection_name()))
+        }) else {
+            return false;
+        };
+        let scope =
+            if collection.is_some() { TransferScope::Collection } else { TransferScope::Database };
+        state.update(cx, |state, cx| {
+            state.open_transfer_tab_with_prefill(
+                key.connection_id,
+                key.database,
+                collection,
+                scope,
+                mode,
+                cx,
+            );
+        });
+        true
+    }
+
+    fn show_collection_subview(state: &Entity<AppState>, subview: CollectionSubview, cx: &mut App) {
+        let Some(key) = state.read(cx).current_session_key() else {
+            return;
+        };
+        let should_load = state.update(cx, |state, cx| {
+            let should_load = state.set_collection_subview(&key, subview);
+            cx.notify();
+            should_load
+        });
+        match subview {
+            CollectionSubview::Indexes => {
+                AppCommands::load_collection_indexes(state.clone(), key, false, cx);
+            }
+            CollectionSubview::Stats if should_load => {
+                AppCommands::load_collection_stats(state.clone(), key, cx);
+            }
+            CollectionSubview::Schema if should_load => {
+                AppCommands::analyze_collection_schema(state.clone(), key, cx);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn focus_current_content(&mut self, window: &mut Window, cx: &mut App) {
+        if !self.content_area.update(cx, |content, cx| content.focus_current_view(window, cx)) {
+            window.focus(&self.focus_handle);
         }
     }
 
@@ -407,44 +555,5 @@ impl AppRoot {
                 }
             }
         }
-    }
-}
-
-fn format_keystroke(event: &KeystrokeEvent) -> String {
-    let modifiers = event.keystroke.modifiers;
-    let mut parts = Vec::new();
-    if modifiers.platform {
-        parts.push("cmd");
-    }
-    if modifiers.control {
-        parts.push("ctrl");
-    }
-    if modifiers.alt {
-        parts.push("alt");
-    }
-    if modifiers.shift {
-        parts.push("shift");
-    }
-    let key = event.keystroke.key.to_string();
-    if parts.is_empty() {
-        key
-    } else {
-        parts.push(&key);
-        parts.join("-")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::numbered_tab_index;
-
-    #[test]
-    fn numbered_tabs_own_unshifted_command_digits() {
-        assert_eq!(numbered_tab_index("1", true, false, false), Some(0));
-        assert_eq!(numbered_tab_index("9", true, false, false), Some(8));
-        assert_eq!(numbered_tab_index("1", true, false, true), None);
-        assert_eq!(numbered_tab_index("1", true, true, false), None);
-        assert_eq!(numbered_tab_index("1", false, false, false), None);
-        assert_eq!(numbered_tab_index("0", true, false, false), None);
     }
 }

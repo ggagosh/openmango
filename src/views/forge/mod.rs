@@ -68,6 +68,12 @@ impl ForgeView {
         }
     }
 
+    pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.editor.editor_focus_requested = true;
+        ForgeController::focus_editor(self, window, cx);
+        cx.notify();
+    }
+
     fn render_header(&self, cx: &App) -> impl IntoElement {
         let target = self.app_state.read(cx).active_forge_tab_key().cloned();
         let database = target

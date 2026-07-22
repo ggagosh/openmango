@@ -27,20 +27,21 @@ impl TransferView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Get current value for this field
-        let current_value = {
+        // Get current value for this field and retain its owning transfer tab.
+        let Some((transfer_id, current_value)) = ({
             let state_ref = self.state.read(cx);
-            if let Some(id) = state_ref.active_transfer_tab_id()
-                && let Some(tab) = state_ref.transfer_tab(id)
-            {
-                match field {
-                    QueryEditField::Filter => tab.options.export_filter.clone(),
-                    QueryEditField::Projection => tab.options.export_projection.clone(),
-                    QueryEditField::Sort => tab.options.export_sort.clone(),
-                }
-            } else {
-                String::new()
-            }
+            state_ref.active_transfer_tab_id().and_then(|id| {
+                state_ref.transfer_tab(id).map(|tab| {
+                    let value = match field {
+                        QueryEditField::Filter => tab.options.export_filter.clone(),
+                        QueryEditField::Projection => tab.options.export_projection.clone(),
+                        QueryEditField::Sort => tab.options.export_sort.clone(),
+                    };
+                    (id, value)
+                })
+            })
+        }) else {
+            return;
         };
 
         // Create input state for modal textarea
@@ -51,13 +52,21 @@ impl TransferView {
         });
 
         self.query_edit_modal = Some(field);
-        self.query_edit_input = Some(input_state);
+        self.query_edit_input = Some(input_state.clone());
+        self.query_edit_transfer_id = Some(transfer_id);
+        self.query_edit_previous_focus = window.focused(cx);
         cx.notify();
+        cx.defer_in(window, move |_view, window, cx| {
+            input_state.update(cx, |input, cx| input.focus(window, cx));
+        });
     }
 
     /// Save the query modal content and close.
-    pub(super) fn save_query_modal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_query_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(field) = self.query_edit_modal else {
+            return;
+        };
+        let Some(transfer_id) = self.query_edit_transfer_id else {
             return;
         };
         let Some(ref input_state) = self.query_edit_input else {
@@ -65,11 +74,12 @@ impl TransferView {
         };
 
         let new_value = input_state.read(cx).value().to_string();
+        if parse_export_query_document(&new_value).is_err() {
+            return;
+        }
 
         self.state.update(cx, |state, cx| {
-            if let Some(id) = state.active_transfer_tab_id()
-                && let Some(tab) = state.transfer_tab_mut(id)
-            {
+            if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 match field {
                     QueryEditField::Filter => tab.options.export_filter = new_value,
                     QueryEditField::Projection => tab.options.export_projection = new_value,
@@ -78,18 +88,19 @@ impl TransferView {
                 cx.notify();
             }
         });
-
-        // Close modal
-        self.query_edit_modal = None;
-        self.query_edit_input = None;
-        cx.notify();
+        self.close_query_modal(window, cx);
     }
 
     /// Close the query modal without saving.
-    pub(super) fn close_query_modal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_query_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.query_edit_modal = None;
         self.query_edit_input = None;
+        self.query_edit_transfer_id = None;
+        let previous_focus = self.query_edit_previous_focus.take();
         cx.notify();
+        if let Some(previous_focus) = previous_focus {
+            window.defer(cx, move |window, _cx| window.focus(&previous_focus));
+        }
     }
 
     /// Format the JSON in the modal textarea (compact, single-line since Input doesn't support newlines).
@@ -156,6 +167,7 @@ impl TransferView {
         div()
             .absolute()
             .inset_0()
+            .key_context("Transfer TransferQueryModal")
             .bg(crate::theme::colors::backdrop(cx))
             .flex()
             .items_center()

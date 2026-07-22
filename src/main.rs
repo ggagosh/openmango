@@ -14,15 +14,16 @@ fn main() {
     openmango::helpers::support::init_logging();
 
     Application::new().with_assets(Assets).run(|cx: &mut gpui::App| {
-        // Initialize gpui-component library
+        // Initialize gpui-component library, then add the effective app keymap.
         gpui_component::init(cx);
-        keyboard::bind_default_keymap(cx);
+        let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
+        keyboard::bind_keymap(cx, &saved_settings.keybindings);
         if let Err(err) = cx.text_system().add_fonts(embedded_fonts()) {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
-        // Load saved settings
-        let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
+        // Load saved appearance.
+
         let saved_theme = saved_settings.appearance.theme;
         let vibrancy = theme::effective_vibrancy(saved_theme, saved_settings.appearance.vibrancy);
 

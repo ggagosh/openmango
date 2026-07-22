@@ -4,6 +4,7 @@ mod aggregation;
 mod connection;
 mod database_sessions;
 mod forge;
+mod keybindings;
 mod query_library;
 mod selection;
 mod sessions;
@@ -23,6 +24,7 @@ pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
 };
 pub(crate) use database_sessions::DatabaseSessionStore;
+pub use keybindings::KeybindingCapture;
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,
@@ -82,8 +84,9 @@ pub struct AppState {
     query_library: QueryLibrary,
     query_library_persistence_blocked: bool,
 
-    /// Vibrancy state from startup (window creation). Runtime changes require restart.
+    /// Window/keymap state from startup. Runtime changes require restart.
     pub startup_vibrancy: bool,
+    pub startup_keybindings: crate::state::KeybindingSettings,
 
     // Connection manager (injected for testability)
     connection_manager: Arc<ConnectionManager>,
@@ -104,6 +107,7 @@ pub struct AppState {
     // View state
     pub current_view: View,
     status_message: Option<StatusMessage>,
+    keybinding_capture: Option<KeybindingCapture>,
     unsaved_guard_active: bool,
     invalid_inline_edits: HashSet<SessionKey>,
 
@@ -184,6 +188,7 @@ impl AppState {
             settings.appearance.theme,
             settings.appearance.vibrancy,
         );
+        let startup_keybindings = settings.keybindings.clone();
 
         Self {
             connections,
@@ -191,6 +196,7 @@ impl AppState {
             query_library,
             query_library_persistence_blocked,
             startup_vibrancy,
+            startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
             tabs: TabState::default(),
@@ -208,6 +214,7 @@ impl AppState {
                 .clone()
                 .or(query_library_load_error)
                 .map(StatusMessage::error),
+            keybinding_capture: None,
             unsaved_guard_active: false,
             invalid_inline_edits: HashSet::new(),
             copied_tree_item: None,
