@@ -230,6 +230,26 @@ impl ContentArea {
             }
         }
 
+        if matches!(self.state.read(cx).current_view, View::Transfer) {
+            if self.transfer_view.is_none() {
+                self.transfer_view = Some(cx.new(|cx| TransferView::new(self.state.clone(), cx)));
+            }
+            if let Some(view) = self.transfer_view.clone() {
+                view.update(cx, |view, cx| view.focus(window, cx));
+                return true;
+            }
+        }
+
+        if matches!(self.state.read(cx).current_view, View::Forge) {
+            if self.forge_view.is_none() {
+                self.forge_view = Some(cx.new(|cx| ForgeView::new(self.state.clone(), cx)));
+            }
+            if let Some(view) = self.forge_view.clone() {
+                view.update(cx, |view, cx| view.focus(window, cx));
+                return true;
+            }
+        }
+
         false
     }
 }

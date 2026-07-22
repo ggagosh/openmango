@@ -596,10 +596,22 @@ fn friendly_context(context: &str) -> String {
         "Database or collection"
     } else if context.contains("JsonEditorWindow") {
         "JSON editor"
+    } else if context.contains("TransferQueryModal") && !context.contains("!TransferQueryModal") {
+        "Transfer query editor"
+    } else if context.contains("!TransferRunning") {
+        "Transfer, while idle"
+    } else if context.contains("TransferRunning") {
+        "Transfer, while running"
+    } else if context.contains("Transfer") {
+        "Transfer"
     } else if context.contains("Aggregation") {
         "Aggregation"
     } else if context.contains("Indexes") {
         "Indexes"
+    } else if context.contains("Schema") {
+        "Schema"
+    } else if context.contains("Stats") {
+        "Statistics"
     } else if context.contains("Forge") {
         "Forge"
     } else if context.contains("Documents") && !context.contains("!Documents") {

@@ -38,9 +38,9 @@ const AI_ISLAND_MAX_WIDTH: f32 = 900.0;
 
 pub struct AppRoot {
     pub(super) state: Entity<AppState>,
-    focus_handle: FocusHandle,
+    pub(super) focus_handle: FocusHandle,
     pub(super) sidebar: Entity<Sidebar>,
-    content_area: Entity<ContentArea>,
+    pub(super) content_area: Entity<ContentArea>,
     ai_view: Entity<AiView>,
     pub(super) action_bar: Entity<ActionBar>,
     pub(super) key_debug: bool,
@@ -321,8 +321,9 @@ impl AppRoot {
         let action_bar = cx.new(|_cx| {
             ActionBar::new(state.clone()).on_execute({
                 let state = state.clone();
+                let content_area = content_area.clone();
                 move |execution, window, cx| {
-                    Self::execute_action(&state, execution, window, cx);
+                    Self::execute_action(&state, &content_area, execution, window, cx);
                 }
             })
         });
@@ -505,7 +506,7 @@ impl Render for AppRoot {
             View::Database => key_context.push_str(" Database"),
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
-            View::Transfer => key_context.push_str(" Transfer"),
+            View::Transfer => {}
             View::Forge => key_context.push_str(" Forge"),
             View::Welcome => key_context.push_str(" Welcome"),
             View::Settings => key_context.push_str(" Settings"),
@@ -535,42 +536,49 @@ impl Render for AppRoot {
                 this.handle_close_tab(window, cx);
                 window.focus(&this.focus_handle);
             }))
-            .on_action(cx.listener(|this, _: &NextTab, _window, cx| {
-                this.state.update(cx, |state, cx| {
-                    state.select_next_tab(cx);
-                });
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
+                this.state.update(cx, |state, cx| state.select_next_tab(cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &PrevTab, _window, cx| {
-                this.state.update(cx, |state, cx| {
-                    state.select_prev_tab(cx);
-                });
+            .on_action(cx.listener(|this, _: &PrevTab, window, cx| {
+                this.state.update(cx, |state, cx| state.select_prev_tab(cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab1, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab1, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(0, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab2, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab2, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(1, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab3, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab3, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(2, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab4, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab4, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(3, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab5, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab5, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(4, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab6, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab6, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(5, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab7, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab7, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(6, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab8, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab8, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(7, cx));
+                this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SelectTab9, _window, cx| {
+            .on_action(cx.listener(|this, _: &SelectTab9, window, cx| {
                 this.state.update(cx, |state, cx| state.select_tab(8, cx));
+                this.focus_current_content(window, cx);
             }))
             .on_action(cx.listener(|this, _: &NewConnection, window, cx| {
                 this.handle_new_connection(window, cx);
@@ -686,14 +694,18 @@ impl Render for AppRoot {
                     this.ai_view.update(cx, |view, cx| view.focus_input(window, cx));
                 }
             }))
-            .on_action(cx.listener(|this, _: &OpenForge, _window, cx| {
-                this.state.update(cx, |state, cx| {
+            .on_action(cx.listener(|this, _: &OpenForge, window, cx| {
+                let opened = this.state.update(cx, |state, cx| {
                     let Some(key) = state.current_database_key() else {
-                        return;
+                        return false;
                     };
                     let collection = state.selected_collection_name();
                     state.open_forge_tab(key.connection_id, key.database, collection, cx);
+                    true
                 });
+                if opened {
+                    this.focus_current_content(window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &FocusSidebar, window, cx| {
                 this.sidebar.update(cx, |sidebar, cx| {
@@ -705,12 +717,7 @@ impl Render for AppRoot {
                 });
             }))
             .on_action(cx.listener(|this, _: &FocusContent, window, cx| {
-                let focused_content = this
-                    .content_area
-                    .update(cx, |content, cx| content.focus_current_view(window, cx));
-                if !focused_content {
-                    window.focus(&this.focus_handle);
-                }
+                this.focus_current_content(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DownloadUpdate, _window, cx| {
                 AppCommands::download_update(this.state.clone(), cx);

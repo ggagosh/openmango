@@ -7,6 +7,7 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::components::request_unsaved_action;
+use crate::keyboard::FocusContent;
 use crate::state::{
     ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, SessionKey, TabKey, UnsavedScope,
     View,
@@ -222,7 +223,7 @@ impl Render for OpenTabsBar {
                         }
                     }),
             )
-            .on_click(move |index, _window, cx| {
+            .on_click(move |index, window, cx| {
                 let index = *index;
                 state.update(cx, |state, cx| {
                     if index < state.open_tabs().len() {
@@ -231,6 +232,7 @@ impl Render for OpenTabsBar {
                         state.select_preview_tab(cx);
                     }
                 });
+                window.dispatch_action(Box::new(FocusContent), cx);
             })
             .children(
                 tabs.iter()

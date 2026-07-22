@@ -15,8 +15,9 @@ use gpui_component::{Icon, IconName, Sizable as _};
 use crate::components::ConnectionManager;
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
-    DisconnectConnection, EditConnection, FindInSidebar, OpenSelection, OpenSelectionPreview,
-    PasteTreeItem, RenameCollection, TransferCopy, TransferExport, TransferImport,
+    DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenSelection,
+    OpenSelectionPreview, PasteTreeItem, RenameCollection, TransferCopy, TransferExport,
+    TransferImport,
 };
 use crate::models::TreeNodeId;
 use crate::state::{AppCommands, TransferMode};
@@ -27,8 +28,20 @@ use super::super::sidebar_model::SidebarModel;
 use super::Sidebar;
 
 impl Render for Sidebar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let appearance = self.state.read(cx).settings.appearance.clone();
+        let command_palette_tooltip = window
+            .highest_precedence_binding_for_action(&OpenActionBar)
+            .map(|binding| {
+                let shortcut = binding
+                    .keystrokes()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("Command palette ({shortcut})")
+            })
+            .unwrap_or_else(|| "Command palette".to_string());
 
         let active_connections = self.cached_active.clone();
         let connecting_id = self.model.connecting_connection;
@@ -133,14 +146,14 @@ impl Render for Sidebar {
                 }
                 this.handle_delete_selection(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &TransferExport, _window, cx| {
-                this.handle_transfer_action(TransferMode::Export, cx);
+            .on_action(cx.listener(|this, _: &TransferExport, window, cx| {
+                this.handle_transfer_action(TransferMode::Export, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &TransferImport, _window, cx| {
-                this.handle_transfer_action(TransferMode::Import, cx);
+            .on_action(cx.listener(|this, _: &TransferImport, window, cx| {
+                this.handle_transfer_action(TransferMode::Import, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &TransferCopy, _window, cx| {
-                this.handle_transfer_action(TransferMode::Copy, cx);
+            .on_action(cx.listener(|this, _: &TransferCopy, window, cx| {
+                this.handle_transfer_action(TransferMode::Copy, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CopyTreeItem, _window, cx| {
                 this.handle_copy_tree_item(cx);
@@ -176,6 +189,16 @@ impl Render for Sidebar {
                             .flex()
                             .items_center()
                             .gap(spacing::xs())
+                            .child(
+                                Button::new("command-palette-btn")
+                                    .icon(Icon::new(IconName::Search).xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(command_palette_tooltip)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(OpenActionBar), cx);
+                                    }),
+                            )
                             .child({
                                 let sidebar_entity = sidebar_entity.clone();
                                 // Connect dropdown button

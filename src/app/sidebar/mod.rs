@@ -397,7 +397,12 @@ impl Sidebar {
         true
     }
 
-    pub(crate) fn handle_transfer_action(&mut self, mode: TransferMode, cx: &mut Context<Self>) {
+    pub(crate) fn handle_transfer_action(
+        &mut self,
+        mode: TransferMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(node_id) = self.model.selected_tree_id.clone() else {
             return;
         };
@@ -415,6 +420,7 @@ impl Sidebar {
                         cx,
                     );
                 });
+                window.dispatch_action(Box::new(FocusContent), cx);
             }
             TreeNodeId::Collection { connection, database, collection } => {
                 let state = self.state.clone();
@@ -428,6 +434,7 @@ impl Sidebar {
                         cx,
                     );
                 });
+                window.dispatch_action(Box::new(FocusContent), cx);
             }
             _ => {}
         }

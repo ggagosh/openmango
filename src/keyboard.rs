@@ -26,6 +26,10 @@ actions!(
         TransferExport,
         TransferImport,
         TransferCopy,
+        RunTransfer,
+        CancelTransfer,
+        SaveTransferQuery,
+        CloseTransferQueryModal,
         CreateDatabase,
         CreateCollection,
         CreateIndex,
@@ -68,6 +72,7 @@ actions!(
         ShowIndexesSubview,
         ShowStatsSubview,
         ShowAggregationSubview,
+        ShowSchemaSubview,
         RunAggregation,
         FormatAggregationStage,
         ClearAggregationStage,
@@ -147,6 +152,24 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-alt-i", TransferImport, Some("Sidebar && !Input")),
         KeyBinding::new("cmd-alt-c", TransferCopy, Some("Sidebar && !Input")),
         KeyBinding::new("ctrl-alt-c", TransferCopy, Some("Sidebar && !Input")),
+        KeyBinding::new(
+            "cmd-enter",
+            RunTransfer,
+            Some("Transfer && !TransferRunning && !TransferQueryModal"),
+        ),
+        KeyBinding::new(
+            "ctrl-enter",
+            RunTransfer,
+            Some("Transfer && !TransferRunning && !TransferQueryModal"),
+        ),
+        KeyBinding::new(
+            "escape",
+            CancelTransfer,
+            Some("Transfer && TransferRunning && !TransferQueryModal"),
+        ),
+        KeyBinding::new("cmd-enter", SaveTransferQuery, Some("Transfer && TransferQueryModal")),
+        KeyBinding::new("ctrl-enter", SaveTransferQuery, Some("Transfer && TransferQueryModal")),
+        KeyBinding::new("escape", CloseTransferQueryModal, Some("Transfer && TransferQueryModal")),
         KeyBinding::new("cmd-alt-f", OpenForge, Some("Workspace")),
         KeyBinding::new("ctrl-alt-f", OpenForge, Some("Workspace")),
         KeyBinding::new("cmd-enter", RunForgeAll, Some("ForgeView")),
@@ -318,10 +341,12 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-2", ShowIndexesSubview, Some("Documents")),
         KeyBinding::new("cmd-alt-3", ShowStatsSubview, Some("Documents")),
         KeyBinding::new("cmd-alt-4", ShowAggregationSubview, Some("Documents")),
+        KeyBinding::new("cmd-alt-5", ShowSchemaSubview, Some("Documents")),
         KeyBinding::new("ctrl-alt-1", ShowDocumentsSubview, Some("Documents")),
         KeyBinding::new("ctrl-alt-2", ShowIndexesSubview, Some("Documents")),
         KeyBinding::new("ctrl-alt-3", ShowStatsSubview, Some("Documents")),
         KeyBinding::new("ctrl-alt-4", ShowAggregationSubview, Some("Documents")),
+        KeyBinding::new("ctrl-alt-5", ShowSchemaSubview, Some("Documents")),
         KeyBinding::new("cmd-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("secondary-enter", RunAggregation, Some("Documents && Aggregation")),
@@ -687,6 +712,8 @@ fn binding_category(context: Option<&str>) -> &'static str {
     let context = context.unwrap_or_default();
     if context.contains("ForgeView") {
         "Forge"
+    } else if context.contains("Transfer") {
+        "Transfer"
     } else if context.contains("Aggregation") {
         "Aggregation"
     } else if context.contains("Indexes") {
@@ -772,10 +799,14 @@ fn context_samples() -> Vec<Vec<KeyContext>> {
         single("Workspace Documents Input"),
         single("Workspace Documents Indexes"),
         single("Workspace Documents Stats"),
+        single("Workspace Documents Schema"),
         single("Workspace Documents Aggregation"),
         single("Workspace Documents Aggregation Input"),
         single("Workspace ForgeView"),
         path("Workspace ForgeView", "Input"),
+        single("Workspace Transfer"),
+        single("Workspace Transfer TransferRunning"),
+        single("Workspace Transfer TransferQueryModal"),
         single("Sidebar"),
         single("Sidebar Input"),
         single("JsonEditorWindow"),
@@ -806,6 +837,66 @@ mod tests {
         assert!(!FOCUS_CONTENT_KEYS.contains(&"cmd-1"));
         assert!(!FOCUS_CONTENT_KEYS.contains(&"ctrl-1"));
         assert_eq!(FOCUS_CONTENT_KEYS, ["cmd-shift-1", "ctrl-shift-1"]);
+    }
+
+    #[test]
+    fn feature_ten_shortcuts_are_in_the_default_catalog() {
+        let commands = keybinding_commands(&KeybindingSettings::default());
+        let shortcuts = |action: &str| {
+            commands
+                .iter()
+                .filter(|command| command.id.starts_with(action))
+                .flat_map(|command| command.default_shortcuts.iter().cloned())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            shortcuts("show-schema-subview.").contains(&normalize_shortcut("cmd-alt-5").unwrap())
+        );
+        assert!(
+            shortcuts("show-schema-subview.").contains(&normalize_shortcut("ctrl-alt-5").unwrap())
+        );
+        assert!(shortcuts("run-transfer.").contains(&"cmd-enter".to_string()));
+        assert!(shortcuts("run-transfer.").contains(&"ctrl-enter".to_string()));
+        assert!(shortcuts("cancel-transfer.").contains(&"escape".to_string()));
+        assert!(shortcuts("save-transfer-query.").contains(&"cmd-enter".to_string()));
+        assert!(shortcuts("close-transfer-query-modal.").contains(&"escape".to_string()));
+        assert!(!contexts_overlap(
+            Some("Transfer && !TransferRunning && !TransferQueryModal"),
+            Some("Transfer && TransferQueryModal")
+        ));
+    }
+
+    #[test]
+    fn transfer_shortcuts_match_base_and_modal_runtime_contexts() {
+        let run = KeyBindingContextPredicate::parse(
+            "Transfer && !TransferRunning && !TransferQueryModal",
+        )
+        .unwrap();
+        let cancel =
+            KeyBindingContextPredicate::parse("Transfer && TransferRunning && !TransferQueryModal")
+                .unwrap();
+        let modal = KeyBindingContextPredicate::parse("Transfer && TransferQueryModal").unwrap();
+        let base_contexts =
+            [KeyContext::parse("Workspace").unwrap(), KeyContext::parse("Transfer").unwrap()];
+        let running_contexts = [
+            KeyContext::parse("Workspace").unwrap(),
+            KeyContext::parse("Transfer TransferRunning").unwrap(),
+        ];
+        let modal_contexts = [
+            KeyContext::parse("Workspace").unwrap(),
+            KeyContext::parse("Transfer TransferQueryModal").unwrap(),
+            KeyContext::parse("Input").unwrap(),
+        ];
+
+        assert!(run.depth_of(&base_contexts).is_some());
+        assert!(cancel.depth_of(&base_contexts).is_none());
+        assert!(run.depth_of(&running_contexts).is_none());
+        assert!(cancel.depth_of(&running_contexts).is_some());
+        assert!(modal.depth_of(&base_contexts).is_none());
+        assert!(run.depth_of(&modal_contexts).is_none());
+        assert!(cancel.depth_of(&modal_contexts).is_none());
+        assert!(modal.depth_of(&modal_contexts).is_some());
     }
 
     #[test]
