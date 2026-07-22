@@ -5,116 +5,95 @@
 <h1 align="center">OpenMango</h1>
 
 <p align="center">
-  <strong>GPU-accelerated MongoDB client for macOS</strong><br/>
-  No Electron. No web views. Just fast.
+  <strong>A native MongoDB workbench for macOS.</strong><br />
+  Browse, query, edit, analyze, and move data without Electron or web views.
 </p>
 
 <p align="center">
-  <a href="https://github.com/ggagosh/openmango/releases/latest"><img src="https://img.shields.io/github/v/release/ggagosh/openmango?label=release" alt="Latest Release" /></a>
-  <a href="https://github.com/ggagosh/openmango/actions/workflows/ci.yml"><img src="https://github.com/ggagosh/openmango/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/ggagosh/openmango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS" />
+  <a href="https://openmango.app">Website</a> ·
+  <a href="https://github.com/ggagosh/openmango/releases/latest">Download</a> ·
+  <a href="https://github.com/ggagosh/openmango/releases/tag/nightly">Nightly</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 <p align="center">
-  <img src="assets/initial.gif" width="800" alt="OpenMango demo" />
+  <a href="https://github.com/ggagosh/openmango/releases/latest"><img src="https://img.shields.io/github/v/release/ggagosh/openmango?label=release" alt="Latest release" /></a>
+  <a href="https://github.com/ggagosh/openmango/actions/workflows/ci.yml"><img src="https://github.com/ggagosh/openmango/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/ggagosh/openmango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="GPL-3.0 license" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="macOS" />
 </p>
 
----
+<p align="center">
+  <img src="assets/initial.gif" width="900" alt="OpenMango browsing and editing a MongoDB collection" />
+</p>
+
+## Why OpenMango
+
+OpenMango puts the tools used in day-to-day MongoDB work into one fast, keyboard-friendly desktop app. Its interface is written in Rust with [GPUI](https://gpui.rs) and rendered natively on the GPU—there is no browser runtime between you and your data.
+
+| Area | What you can do |
+| --- | --- |
+| **Documents** | Browse in tree or table view, filter, sort, project, paginate, edit inline or as JSON, and run guarded bulk operations. |
+| **Queries** | Build aggregation pipelines, inspect schemas and explain plans, use mongosh-compatible Forge, and save or restore work from the Query Library. |
+| **Data movement** | Import JSON, NDJSON, CSV, or BSON; export those formats plus Excel; copy between collections or databases with progress and cancellation. |
+| **Connections** | Use direct or SRV connections, SSH tunnels, and SOCKS5 proxies. Import and export connection profiles in redacted or encrypted form. |
+| **AI (optional)** | Ask MongoDB-aware questions with Gemini, OpenAI, Anthropic, or Ollama; review tool calls and control whether document samples are shared. |
+| **Workspace** | Restore tabs and connections, use a command palette and keyboard shortcuts, choose from 13 themes, and check for verified updates in-app. |
 
 ## Install
 
-**[Download the latest release](https://github.com/ggagosh/openmango/releases/latest)** — signed and notarized for macOS (Apple Silicon & Intel).
+1. Open the [latest release](https://github.com/ggagosh/openmango/releases/latest).
+2. Download the ZIP for your Mac:
+   - `macos-arm64` for Apple Silicon
+   - `macos-x86_64` for Intel
+3. Unzip it and move `OpenMango.app` to `/Applications`.
 
-OpenMango can check for and download verified updates automatically; installation happens only when you choose **Restart to update**.
+Stable builds are signed and notarized. Each release also includes a SHA-256 checksum. OpenMango can download the matching update in the background, verifies its checksum, and installs it only after you choose **Restart to update**.
 
-<!--
-**Homebrew** (coming soon):
+Want current development builds? Use the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly); nightly builds may be unstable.
 
-```sh
-brew install --cask openmango
-```
--->
+## Get started
 
-Or [build from source](#development) if you prefer.
+1. Open the connection manager with the **+** button.
+2. Add a `mongodb://` or `mongodb+srv://` connection string and test it.
+3. Connect, then choose a database and collection from the sidebar.
+4. Browse documents or open **Aggregation**, **Schema**, **Explain**, **Forge**, or the **Query Library** for deeper work.
 
----
+For AI features, open **Settings**, enable AI, and choose a provider. Remote-provider keys can be entered in the app; Ollama is supported without an API key.
 
-## Features
+## Data safety and privacy
 
-### Forge Shell
-
-Built-in query shell powered by a [Bun/TypeScript sidecar](tools/forge-sidecar/) with mongosh-compatible syntax, schema-aware completions, and inline results.
-
-### Aggregation Builder
-
-Visual pipeline editor — add/reorder/toggle stages, preview intermediate results, and copy the pipeline as code.
-
-### Schema Explorer
-
-Sample documents to discover field types, cardinality, type drift, and outliers across your collection.
-
-### Document Browser
-
-Filter, sort, project, and paginate documents. Edit fields inline in the tree view or open the full JSON editor with validation.
-
-### Transfer System
-
-Import JSON, NDJSON, CSV, and BSON; export those formats plus Excel (`.xlsx`). Excel exports flatten documents into worksheets, discover columns across the full result set, and fail rather than silently truncate rows, strings, or late-discovered fields. Copy documents between collections or databases with progress tracking.
-
-### Explain Plan
-
-Visualize the winning query plan, index usage, scanned-vs-returned doc counts, and stage costs.
-
-### Connectivity
-
-Standard connections, SRV records, SSH tunneling, and SOCKS5 proxy support. Credentials are stored in macOS Keychain; connection import/export supports redacted or encrypted files.
-
-### Keyboard-First
-
-40+ keybindings for navigation, tabs, editing, and search. Everything is reachable without a mouse.
-
-### Themes
-
-13 built-in themes — Vercel Dark, Darcula, Tokyo Night, Nord, One Dark, Catppuccin (Mocha & Latte), Solarized (Dark & Light), Ros&eacute; Pine (Dark & Dawn), and Gruvbox (Dark & Light). The Islands and segmented options are tab styles, not additional themes.
-
-See [`docs/features.md`](docs/features.md) for the complete feature matrix.
-
----
-
-## Roadmap
-
-Upcoming highlights from the [full roadmap](docs/features.md):
-
-- Index diagnostics and "why is this query slow" hints
-- Query history with restore
-- Saved query snippets and templates
-- Validation rule editor
-- Live server health panel
-- Change stream viewer
-- Split view (side-by-side tabs)
-
----
+- Connection credentials and AI API keys are stored in macOS Keychain, not in the JSON configuration files.
+- Per-connection read-only mode blocks app-owned writes, including writes initiated through AI and Forge.
+- Destructive actions use confirmations and revalidate their target before execution.
+- Imports, copies, and exports stage their output so failure or cancellation does not silently replace existing data or files.
+- AI document sharing is opt-in: selected-document and automatic sample sharing are disabled by default.
+- Settings can export a redacted support bundle without connection secrets.
 
 ## Architecture
 
-OpenMango is a native macOS app written in **Rust**.
+| Layer | Location | Responsibility |
+| --- | --- | --- |
+| Native UI | `src/app/`, `src/views/`, `src/components/` | GPUI shell, screens, dialogs, editors, and shared controls |
+| State and actions | `src/state/` | Workspace state, commands, persistence, query library, and updater |
+| MongoDB access | `src/connection/` | Driver operations, transfers, SSH tunnels, SOCKS5 transport, and BSON tools |
+| Forge shell | `tools/forge-sidecar/` | Bun/TypeScript sidecar for mongosh-compatible execution and completion |
+| Assets and themes | `assets/`, `themes/`, `resources/` | Embedded fonts, icons, themes, and packaged helper binaries |
 
-| Layer | Technology |
-|-------|-----------|
-| UI framework | [GPUI](https://gpui.rs) — GPU-accelerated via Metal |
-| Async runtime | Tokio |
-| MongoDB driver | Official Rust driver (`mongodb` crate) |
-| Shell sidecar | Bun + TypeScript (mongosh-compatible) |
-| Packaging | Signed, notarized `.app` with auto-updater |
-
-The entire UI runs on the GPU through Metal — no web views, no DOM, no CSS layout engine.
-
----
+The main data path is deliberately direct: GPUI views dispatch state commands, commands call the connection layer, and the official Rust MongoDB driver talks to the server. Forge reuses the active connection transport through its compiled sidecar.
 
 ## Development
 
-**Prerequisites:** Rust (stable), [just](https://github.com/casey/just), MongoDB (local or remote), Docker (for integration tests), Bun (for the Forge sidecar)
+### Prerequisites
+
+- macOS and the stable Rust toolchain
+- [just](https://github.com/casey/just)
+- [lld](https://lld.llvm.org/) at `/opt/homebrew/opt/lld/bin/ld64.lld` (the repository linker configuration uses this path)
+- [Bun](https://bun.sh/) when changing or rebuilding Forge
+- Docker for the Testcontainers integration suites
+- A local or remote MongoDB deployment for manual testing
+
+### Run locally
 
 ```sh
 git clone https://github.com/ggagosh/openmango.git
@@ -122,26 +101,56 @@ cd openmango
 just dev
 ```
 
-| Command | Description |
-|---------|------------|
-| `just dev` | Run in development mode |
-| `just debug` | Run with `RUST_LOG=debug` |
-| `just check` | Fast compile verification |
-| `just lint` | Clippy with warnings denied |
-| `just fmt-check` | Enforce formatting |
-| `just test` | Run all tests |
-| `just ci` | Local CI parity |
+The repository includes the Apple Silicon helper binaries used by normal local development. Rebuild or download them for your host when working on Forge or BSON transfer support:
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
+```sh
+just build-sidecar
+just download-tools
+```
 
----
+No `.env` file is required. Use `just debug` to start with `RUST_LOG=debug`.
 
-## AI Disclosure
+### Common commands
 
-OpenMango is fully written by AI — architecture, implementation, tests, and tooling. Human-directed, machine-authored.
+| Command | Purpose |
+| --- | --- |
+| `just dev` | Run the debug build |
+| `just check` | Fast compile check |
+| `just fmt-check` | Check Rust formatting |
+| `just lint` | Run Clippy with warnings denied |
+| `just unit-test` | Run library tests serially |
+| `just test` | Run all Rust tests; integration suites require Docker |
+| `just ci` | Match the hosted quality job: format, release check, release Clippy, sidecar check, and unit tests |
+| `just precommit` | Run `just ci` followed by the full test suite |
 
----
+Run one integration suite serially with:
+
+```sh
+cargo test --test transfer_tests -- --test-threads=1
+```
+
+### Project layout
+
+```text
+src/
+  app/          Application shell, sidebar, and top-level layout
+  state/        State, persistence, and commands
+  connection/   MongoDB operations and transports
+  views/        Documents, aggregation, Forge, transfer, AI, and settings screens
+  components/   Reusable GPUI controls
+  models/       Connection and tree models
+  helpers/      Validation, Keychain, logging, crypto, and support utilities
+tests/          Docker-backed integration suites and shared test helpers
+tools/          Forge sidecar source
+scripts/        Tool download, packaging, and release scripts
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards and the pull request checklist. Shipped changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+
+## AI disclosure
+
+OpenMango is human-directed and machine-authored: its architecture, implementation, tests, and tooling were written with AI.
 
 ## License
 
-[GPL-3.0](LICENSE)
+OpenMango is available under the [GNU General Public License v3.0](LICENSE).
