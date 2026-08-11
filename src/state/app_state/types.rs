@@ -373,6 +373,8 @@ impl TransferOptions {
 #[derive(Default)]
 pub struct TransferRuntime {
     pub is_running: bool,
+    pub has_started: bool,
+    pub cancellation_requested: bool,
     pub progress_count: u64,
     pub error_message: Option<String>,
     pub transfer_generation: Arc<AtomicU64>,
@@ -381,10 +383,18 @@ pub struct TransferRuntime {
     pub database_progress: Option<DatabaseTransferProgress>,
 }
 
+impl TransferRuntime {
+    pub fn cancellation_pending(&self) -> bool {
+        self.is_running && self.cancellation_requested
+    }
+}
+
 impl Clone for TransferRuntime {
     fn clone(&self) -> Self {
         Self {
             is_running: self.is_running,
+            has_started: self.has_started,
+            cancellation_requested: self.cancellation_requested,
             progress_count: self.progress_count,
             error_message: self.error_message.clone(),
             transfer_generation: Arc::new(AtomicU64::new(
@@ -401,6 +411,8 @@ impl std::fmt::Debug for TransferRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransferRuntime")
             .field("is_running", &self.is_running)
+            .field("has_started", &self.has_started)
+            .field("cancellation_requested", &self.cancellation_requested)
             .field("progress_count", &self.progress_count)
             .field("error_message", &self.error_message)
             .field("database_progress", &self.database_progress)
@@ -436,19 +448,7 @@ pub struct TransferTabState {
 
 impl TransferTabState {
     pub fn tab_label(&self) -> String {
-        let base = self.config.mode.label();
-        let source = if !self.config.source_database.is_empty() {
-            if self.config.scope == TransferScope::Collection
-                && !self.config.source_collection.is_empty()
-            {
-                format!("{}/{}", self.config.source_database, self.config.source_collection)
-            } else {
-                self.config.source_database.clone()
-            }
-        } else {
-            "New".to_string()
-        };
-        format!("{base}: {source}")
+        self.config.mode.label().to_string()
     }
 
     /// Create a new TransferTabState with defaults from settings.

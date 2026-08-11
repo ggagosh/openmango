@@ -10,27 +10,6 @@ use crate::theme::{borders, spacing};
 
 use super::QueryEditField;
 
-/// Panel wrapper with title and content.
-pub(super) fn panel(title: &str, content: impl IntoElement, cx: &App) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(spacing::sm())
-        .p(spacing::md())
-        .bg(cx.theme().tab_bar)
-        .border_1()
-        .border_color(cx.theme().sidebar_border)
-        .rounded(borders::radius_sm())
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(cx.theme().secondary_foreground)
-                .child(title.to_string()),
-        )
-        .child(content)
-}
-
 /// Form row with horizontal label + control for cleaner alignment.
 pub(super) fn form_row(label: &str, control: impl IntoElement, cx: &App) -> impl IntoElement {
     div()
@@ -45,25 +24,6 @@ pub(super) fn form_row(label: &str, control: impl IntoElement, cx: &App) -> impl
                 .child(label.to_string()),
         )
         .child(div().flex_1().max_w(px(400.0)).child(control))
-}
-
-/// Static form row with horizontal label + value.
-pub(super) fn form_row_static(label: &str, value: impl Into<String>, cx: &App) -> impl IntoElement {
-    form_row(label, value_box(value, false, cx), cx)
-}
-
-/// Value display box.
-pub(super) fn value_box(value: impl Into<String>, muted: bool, cx: &App) -> Div {
-    div()
-        .px(spacing::sm())
-        .py(px(6.0))
-        .bg(cx.theme().sidebar)
-        .border_1()
-        .border_color(cx.theme().sidebar_border)
-        .rounded(borders::radius_sm())
-        .text_sm()
-        .text_color(if muted { cx.theme().muted_foreground } else { cx.theme().foreground })
-        .child(value.into())
 }
 
 /// Option value pill display.
@@ -87,13 +47,10 @@ pub(super) fn option_section(title: &str, rows: Vec<AnyElement>, cx: &App) -> Di
         .flex()
         .flex_col()
         .gap(spacing::sm())
-        .p(spacing::sm())
-        .bg(cx.theme().tab_bar)
-        .border_1()
+        .px(spacing::md())
+        .py(spacing::sm())
+        .border_t_1()
         .border_color(cx.theme().sidebar_border)
-        .rounded(borders::radius_sm())
-        .min_w(px(220.0))
-        .flex_1()
         .child(
             div()
                 .text_xs()
@@ -135,28 +92,6 @@ where
         .flex()
         .items_center()
         .child(Checkbox::new(id).checked(checked).on_click(move |_, _, cx| on_click(cx)))
-}
-
-/// Compact summary item for horizontal summary bar.
-pub(super) fn summary_item(label: &str, value: impl Into<String>, cx: &App) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(spacing::xs())
-        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().secondary_foreground)
-                .overflow_x_hidden()
-                .text_ellipsis()
-                .child(value.into()),
-        )
-}
-
-/// Returns the value if non-empty, otherwise returns the fallback.
-pub(super) fn fallback_text(value: &str, fallback: &str) -> String {
-    if value.is_empty() { fallback.to_string() } else { value.to_string() }
 }
 
 /// Render a read-only query field row with Edit and Clear buttons.

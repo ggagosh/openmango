@@ -112,6 +112,8 @@ impl AppCommands {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                     + 1;
                 tab.runtime.is_running = true;
+                tab.runtime.has_started = true;
+                tab.runtime.cancellation_requested = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new export
@@ -415,7 +417,10 @@ impl AppCommands {
                 }
 
                 if cancellation_token.is_cancelled() {
-                    had_error = true;
+                    let _ = tx.unbounded_send(TransferProgressMessage::Cancelled {
+                        termination_succeeded: true,
+                    });
+                    return;
                 }
                 if !had_error
                     && let Err(error) = crate::connection::ops::export::promote_export_directory(
@@ -515,7 +520,16 @@ impl AppCommands {
                                         count: total_count,
                                     });
                                 }
-                                TransferProgressMessage::Cancelled { .. } => {}
+                                TransferProgressMessage::Cancelled { .. } => {
+                                    let message = "Export cancelled";
+                                    if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.is_running = false;
+                                        tab.runtime.cancellation_token = None;
+                                        tab.runtime.error_message = Some(message.to_string());
+                                    }
+                                    state.set_status_message(Some(StatusMessage::info(message)));
+                                    cx.emit(AppEvent::TransferCancelled { transfer_id });
+                                }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;

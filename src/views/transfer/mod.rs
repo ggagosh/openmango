@@ -1,41 +1,31 @@
 //! Transfer view for import, export, and copy operations.
 
-mod destination;
 mod helpers;
 mod options;
 mod progress_panel;
 mod query_modal;
 mod select_states;
-mod source_panel;
-mod summary_panel;
+mod simple;
 
 pub use query_modal::QueryEditField;
 
 use gpui::*;
-use gpui_component::button::Button as MenuButton;
 use gpui_component::input::InputState;
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SearchableVec, SelectState};
-use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, Size};
+use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
 use uuid::Uuid;
 
-use crate::components::{Button, WriteConfirmation, open_confirm_dialog, request_connection_write};
+use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
 use crate::keyboard::{CancelTransfer, CloseTransferQueryModal, RunTransfer, SaveTransferQuery};
 use crate::state::{
-    AppCommands, AppState, CompressionMode, InsertMode, StatusMessage, TargetWriteMode,
-    TransferMode, TransferScope, TransferTabState, available_transfer_formats,
-    coerce_transfer_format, resolved_export_destination, transfer_write_connection,
-    validate_transfer,
+    AppCommands, AppState, InsertMode, StatusMessage, TargetWriteMode, TransferMode, TransferScope,
+    TransferTabState, coerce_transfer_format, resolved_export_destination,
+    transfer_write_connection, validate_transfer,
 };
-use crate::theme::{borders, colors, islands, sizing, spacing};
+use crate::theme::{islands, sizing, spacing};
 
-use helpers::{option_field, option_field_static, option_section};
-use progress_panel::{render_progress_panel, render_warnings};
 use select_states::ConnectionItem;
-use summary_panel::render_summary_panel;
 
 pub struct TransferView {
     state: Entity<AppState>,
@@ -83,7 +73,7 @@ impl TransferView {
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
             _select_subscriptions: Vec::new(),
-            options_expanded: true,
+            options_expanded: false,
             source_conn_state: None,
             source_db_state: None,
             source_coll_state: None,
@@ -582,21 +572,33 @@ impl Render for TransferView {
         let state = self.state.clone();
         let appearance = self.state.read(cx).settings.appearance.clone();
         let transfer_key: u64 = (transfer_id.as_u128() & 0xffff_ffff_ffff_ffff) as u64;
-        let options_expanded = self.options_expanded;
         let view = cx.entity();
 
-        // Mode tabs
         let mode_tabs = islands::tab_bar(TabBar::new(("transfer-mode", transfer_key)), &appearance)
             .small()
             .selected_index(transfer_state.config.mode.index())
             .on_click({
                 let state = state.clone();
+                let view = view.clone();
                 move |index, _window, cx| {
                     let mode = TransferMode::from_index(*index);
+                    view.update(cx, |view, cx| {
+                        view.options_expanded = false;
+                        cx.notify();
+                    });
                     state.update(cx, |state, cx| {
                         if let Some(id) = state.active_transfer_tab_id()
                             && let Some(tab) = state.transfer_tab_mut(id)
                         {
+                            if tab.runtime.is_running || tab.runtime.cancellation_pending() {
+                                return;
+                            }
+                            if tab.config.mode != mode {
+                                tab.runtime.has_started = false;
+                                tab.runtime.progress_count = 0;
+                                tab.runtime.error_message = None;
+                                tab.runtime.database_progress = None;
+                            }
                             tab.config.mode = mode;
                             if matches!(mode, TransferMode::Import) {
                                 tab.config.destination_database.clear();
@@ -618,120 +620,14 @@ impl Render for TransferView {
                 Tab::new().label("Copy"),
             ]);
 
-        // Scope dropdown
-        let scope_button = {
-            let state = state.clone();
-            MenuButton::new(("transfer-scope", transfer_key))
-                .compact()
-                .label(transfer_state.config.scope.label())
-                .dropdown_caret(true)
-                .rounded(borders::radius_sm())
-                .with_size(Size::XSmall)
-                .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
-                    let state = state.clone();
-                    let state2 = state.clone();
-                    menu.item(PopupMenuItem::new("Collection").on_click({
-                        move |_, _, cx| {
-                            state.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.config.scope = TransferScope::Collection;
-                                    tab.config.format = coerce_transfer_format(
-                                        tab.config.mode,
-                                        tab.config.scope,
-                                        tab.config.format,
-                                    );
-                                    cx.notify();
-                                }
-                            });
-                        }
-                    }))
-                    .item(PopupMenuItem::new("Database").on_click({
-                        move |_, _, cx| {
-                            state2.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.config.scope = TransferScope::Database;
-                                    tab.config.format = coerce_transfer_format(
-                                        tab.config.mode,
-                                        tab.config.scope,
-                                        tab.config.format,
-                                    );
-                                    cx.notify();
-                                }
-                            });
-                        }
-                    }))
-                })
+        let subtitle = match transfer_state.config.mode {
+            TransferMode::Export => "Export data to a file",
+            TransferMode::Import => "Import data from a file",
+            TransferMode::Copy => "Copy data between connections",
         };
-
-        // Format dropdown
-        let format_control =
-            if matches!(transfer_state.config.mode, TransferMode::Export | TransferMode::Import) {
-                let state = state.clone();
-                let mode = transfer_state.config.mode;
-                let scope = transfer_state.config.scope;
-                let formats = available_transfer_formats(mode, scope);
-                MenuButton::new(("transfer-format", transfer_key))
-                    .compact()
-                    .label(transfer_state.config.format.label())
-                    .dropdown_caret(true)
-                    .rounded(borders::radius_sm())
-                    .with_size(Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _window, _cx| {
-                        for format in formats.clone() {
-                            let state = state.clone();
-                            menu = menu.item(PopupMenuItem::new(format.label()).on_click(
-                                move |_, _, cx| {
-                                    state.update(cx, |state, cx| {
-                                        if let Some(id) = state.active_transfer_tab_id()
-                                            && let Some(tab) = state.transfer_tab_mut(id)
-                                        {
-                                            tab.config.format = format;
-                                            tab.config.file_path.clear();
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ));
-                        }
-                        menu
-                    })
-                    .into_any_element()
-            } else {
-                div().into_any_element()
-            };
-
-        // Run or Cancel button (depending on is_running state)
-        let can_run = validate_transfer(&transfer_state).can_run();
-        let action_button = if transfer_state.runtime.is_running {
-            let state = state.clone();
-            Button::new("transfer-cancel")
-                .ghost()
-                .compact()
-                .label("Cancel")
-                .on_click(move |_, _, cx| cancel_active_transfer(state.clone(), cx))
-                .into_any_element()
-        } else {
-            let state = state.clone();
-            Button::new("transfer-run")
-                .primary()
-                .compact()
-                .label(transfer_state.config.mode.label())
-                .disabled(!can_run)
-                .on_click(move |_, window, cx| {
-                    run_active_transfer(state.clone(), window, cx);
-                })
-                .into_any_element()
-        };
-
-        // Header
         let header = div()
             .flex()
             .items_center()
-            .justify_between()
             .h(sizing::header_height())
             .px(spacing::lg())
             .bg(islands::tool_bg(&appearance, cx))
@@ -747,36 +643,10 @@ impl Render for TransferView {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(cx.theme().foreground)
-                            .child("Transfer"),
+                            .child(transfer_state.config.mode.label()),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Import, export, or copy data"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(scope_button)
-                    .child(format_control)
-                    .child(action_button),
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(subtitle)),
             );
-
-        // Source panel
-        let source_panel = self.render_source_panel(&transfer_state, cx);
-
-        // Destination panel
-        let destination_panel = self.render_destination_panel(&transfer_state, window, cx);
-        let (first_panel, second_panel) =
-            if matches!(transfer_state.config.mode, TransferMode::Import) {
-                (destination_panel, source_panel)
-            } else {
-                (source_panel, destination_panel)
-            };
 
         let source_identity = transfer_state.config.source_connection_id.and_then(|id| {
             connections
@@ -791,96 +661,6 @@ impl Render for TransferView {
                 .map(|(_, identity)| identity)
         });
 
-        let summary_panel =
-            render_summary_panel(&transfer_state, source_identity, destination_identity, cx);
-
-        // Progress panel
-        let progress_panel: AnyElement =
-            if let Some(ref db_progress) = transfer_state.runtime.database_progress {
-                // Database-scope: existing per-collection progress panel
-                render_progress_panel(db_progress, state.clone(), transfer_id, cx)
-                    .into_any_element()
-            } else if transfer_state.runtime.is_running {
-                // Collection-scope running: spinner + live count
-                let verb = match transfer_state.config.mode {
-                    TransferMode::Export => "Exporting...",
-                    TransferMode::Import => "Importing...",
-                    TransferMode::Copy => "Copying...",
-                };
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .p(spacing::md())
-                    .bg(islands::card_bg(&appearance, cx))
-                    .border_1()
-                    .border_color(islands::panel_border(&appearance, cx))
-                    .rounded(islands::radius_sm(&appearance))
-                    .child(Spinner::new().small())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
-                        "{} {} documents",
-                        verb, transfer_state.runtime.progress_count
-                    )))
-                    .into_any_element()
-            } else if transfer_state.runtime.progress_count > 0
-                && transfer_state.runtime.error_message.is_none()
-            {
-                // Collection-scope completed: check icon + final count
-                let verb = match transfer_state.config.mode {
-                    TransferMode::Export => "Exported",
-                    TransferMode::Import => "Imported",
-                    TransferMode::Copy => "Copied",
-                };
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .p(spacing::md())
-                    .bg(islands::card_bg(&appearance, cx))
-                    .border_1()
-                    .border_color(islands::panel_border(&appearance, cx))
-                    .rounded(islands::radius_sm(&appearance))
-                    .child(Icon::new(IconName::Check).xsmall().text_color(cx.theme().success))
-                    .child(div().text_sm().text_color(cx.theme().foreground).child(format!(
-                        "{} {} documents",
-                        verb, transfer_state.runtime.progress_count
-                    )))
-                    .into_any_element()
-            } else {
-                div().into_any_element()
-            };
-
-        // Warning banners
-        let warnings = render_warnings(&transfer_state, cx);
-
-        // Options panel
-        let options_panel =
-            self.render_options_panel(transfer_key, &transfer_state, options_expanded, view, cx);
-
-        // Error message
-        let error_display: AnyElement = if let Some(error) = &transfer_state.runtime.error_message {
-            div()
-                .px(spacing::md())
-                .py(spacing::sm())
-                .bg(colors::bg_error(cx))
-                .border_1()
-                .border_color(colors::border_error(cx))
-                .rounded(islands::radius_sm(&appearance))
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .overflow_hidden()
-                .max_h(px(120.0))
-                .overflow_y_scrollbar()
-                .child(error.clone())
-                .into_any_element()
-        } else {
-            div().into_any_element()
-        };
-
-        // Section spacing
-        let section_gap = px(20.0);
-
-        // Modal overlay for query editing
         let transfer_key_context =
             match (self.query_edit_modal.is_some(), transfer_state.runtime.is_running) {
                 (true, true) => "Transfer TransferRunning TransferQueryModal",
@@ -916,177 +696,22 @@ impl Render for TransferView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h(px(0.0))
                     .p(spacing::lg())
-                    .overflow_y_scrollbar()
-                    // Mode tabs
-                    .child(div().mb(section_gap).child(mode_tabs))
-                    // Mode-specific primary and secondary panels
-                    .child(div().mb(section_gap).child(first_panel))
-                    .child(div().mb(section_gap).child(second_panel))
-                    // Options panel - collapsible
-                    .child(div().mb(section_gap).child(options_panel))
-                    // Warnings (only shown when needed)
-                    .child(warnings)
-                    // Error display (only shown when needed)
-                    .child(error_display)
-                    // Summary at bottom - review before action
-                    .child(summary_panel)
-                    // Progress panel for database-scope operations
-                    .child(div().mt(spacing::md()).child(progress_panel)),
+                    .overflow_hidden()
+                    .child(div().mb(px(20.0)).child(mode_tabs))
+                    .child(self.render_simple_transfer(
+                        transfer_id,
+                        transfer_key,
+                        &transfer_state,
+                        source_identity,
+                        destination_identity,
+                        view,
+                        window,
+                        cx,
+                    )),
             )
             .child(modal_overlay)
-            .into_any_element()
-    }
-}
-
-impl TransferView {
-    fn render_options_panel(
-        &self,
-        key: u64,
-        transfer_state: &TransferTabState,
-        expanded: bool,
-        view: Entity<Self>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let state = self.state.clone();
-        let appearance = self.state.read(cx).settings.appearance.clone();
-
-        let header = div()
-            .id(("options-header", key))
-            .flex()
-            .items_center()
-            .gap(spacing::xs())
-            .cursor_pointer()
-            .on_click(move |_, _, cx| {
-                view.update(cx, |view, cx| {
-                    view.options_expanded = !view.options_expanded;
-                    cx.notify();
-                });
-            })
-            .child(
-                Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
-                    .xsmall()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().secondary_foreground)
-                    .child("Options"),
-            );
-
-        let content = if expanded {
-            let mut sections = Vec::new();
-
-            // General section with controls that apply to the selected mode.
-            let compression_dropdown = {
-                let state = state.clone();
-                MenuButton::new(("compression", key))
-                    .compact()
-                    .label(transfer_state.options.compression.label())
-                    .dropdown_caret(true)
-                    .rounded(borders::radius_sm())
-                    .with_size(Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
-                        let s1 = state.clone();
-                        let s2 = state.clone();
-                        menu.item(PopupMenuItem::new("None").on_click(move |_, _, cx| {
-                            s1.update(cx, |state, cx| {
-                                if let Some(id) = state.active_transfer_tab_id()
-                                    && let Some(tab) = state.transfer_tab_mut(id)
-                                {
-                                    tab.options.compression = CompressionMode::None;
-                                    cx.notify();
-                                }
-                            });
-                        }))
-                        .item(PopupMenuItem::new("Gzip").on_click(
-                            move |_, _, cx| {
-                                s2.update(cx, |state, cx| {
-                                    if let Some(id) = state.active_transfer_tab_id()
-                                        && let Some(tab) = state.transfer_tab_mut(id)
-                                    {
-                                        tab.options.compression = CompressionMode::Gzip;
-                                        cx.notify();
-                                    }
-                                });
-                            },
-                        ))
-                    })
-            };
-
-            let mut general_rows = vec![
-                option_field_static("Scope", transfer_state.config.scope.label(), cx),
-                option_field_static(
-                    "Format",
-                    if matches!(transfer_state.config.mode, TransferMode::Copy) {
-                        "Live copy"
-                    } else {
-                        transfer_state.config.format.label()
-                    },
-                    cx,
-                ),
-            ];
-
-            if matches!(transfer_state.config.mode, TransferMode::Export) {
-                general_rows.push(option_field(
-                    "Compression",
-                    compression_dropdown.into_any_element(),
-                    cx,
-                ));
-            }
-
-            sections.push(option_section("General", general_rows, cx).into_any_element());
-
-            match transfer_state.config.mode {
-                TransferMode::Export => {
-                    options::render_export_options(
-                        &mut sections,
-                        state.clone(),
-                        key,
-                        transfer_state,
-                        self.exclude_coll_state.as_ref(),
-                        cx,
-                    );
-                }
-                TransferMode::Import => {
-                    options::render_import_options(
-                        &mut sections,
-                        state.clone(),
-                        key,
-                        transfer_state,
-                        cx,
-                    );
-                }
-                TransferMode::Copy => {
-                    options::render_copy_options(
-                        &mut sections,
-                        state.clone(),
-                        key,
-                        transfer_state,
-                        self.exclude_coll_state.as_ref(),
-                        cx,
-                    );
-                }
-            }
-
-            div().flex().flex_wrap().items_start().gap(spacing::md()).children(sections)
-        } else {
-            div()
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .p(spacing::md())
-            .bg(islands::card_bg(&appearance, cx))
-            .border_1()
-            .border_color(islands::panel_border(&appearance, cx))
-            .rounded(islands::radius_sm(&appearance))
-            .child(header)
-            .child(content)
             .into_any_element()
     }
 }

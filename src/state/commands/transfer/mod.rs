@@ -363,6 +363,11 @@ impl AppCommands {
         state.update(cx, |state, cx| {
             let mut cancellation_message = "Transfer cancelled";
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                if tab.runtime.cancellation_requested {
+                    return;
+                }
+                tab.runtime.cancellation_requested = true;
+
                 // Increment generation to invalidate any running operation
                 tab.runtime.transfer_generation.fetch_add(1, Ordering::SeqCst);
 
@@ -378,7 +383,6 @@ impl AppCommands {
                     h.abort();
                 }
 
-                tab.runtime.is_running = false;
                 if matches!(tab.config.format, TransferFormat::Bson) {
                     cancellation_message =
                         "Cancellation requested; waiting for the MongoDB tool to terminate";

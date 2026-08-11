@@ -208,7 +208,7 @@ impl AppState {
                                 documents_total: None,
                             })
                             .collect(),
-                        panel_expanded: true,
+                        panel_expanded: false,
                     });
                 }
             }
@@ -225,7 +225,7 @@ impl AppState {
                     if tab.runtime.database_progress.is_none() {
                         tab.runtime.database_progress = Some(DatabaseTransferProgress {
                             collections: vec![],
-                            panel_expanded: true,
+                            panel_expanded: false,
                         });
                     }
 

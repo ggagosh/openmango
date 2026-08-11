@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Transfer cancellation now blocks reruns and mode changes until the active operation has stopped, preventing stale completion races
 - macOS development runs use a stable Apple Development signature so Keychain access remains trusted across rebuilds
 - Workspace restore no longer crashes by re-entering the sidebar while a connection event is being handled
 - Workspace restore now waits for saved connection credentials to finish loading from Keychain before reconnecting
@@ -70,6 +71,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
+- Transfer now uses one compact Export, Import, and Copy workflow with progressive options and consistent aggregate progress across collection, database, JSON/CSV, and BSON operations
 - Updates now require published SHA-256 assets, verify the downloaded archive and macOS code signature, respect the automatic-update preference, and install only after Restart to Update
 - Update-check failures remain visible with Retry instead of silently returning to idle
 - AI enablement now discloses the workspace metadata sent to the selected provider, and complete system prompts are no longer written to debug logs

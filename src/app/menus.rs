@@ -152,6 +152,15 @@ fn menu_item_with_shortcut(
     let shortcut = window.highest_precedence_binding_for_action(action).map(|binding| {
         binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
     });
+    let icon = match label {
+        "Open Forge" => IconName::SquareTerminal,
+        "Reload Database" => IconName::Redo,
+        "Export Data..." => IconName::Download,
+        "Import Data..." => IconName::Upload,
+        "Copy Data To..." | "Copy" => IconName::Copy,
+        "Paste" => IconName::Inbox,
+        _ => IconName::Menu,
+    };
     PopupMenuItem::element(move |_window, cx| {
         div()
             .flex()
@@ -164,6 +173,7 @@ fn menu_item_with_shortcut(
                 this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut))
             })
     })
+    .icon(Icon::new(icon))
 }
 
 #[allow(clippy::too_many_arguments)]

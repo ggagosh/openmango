@@ -123,6 +123,8 @@ impl AppCommands {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                     + 1;
                 tab.runtime.is_running = true;
+                tab.runtime.has_started = true;
+                tab.runtime.cancellation_requested = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.cancellation_token = Some(cancellation_token.clone());

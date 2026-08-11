@@ -26,7 +26,7 @@ fn target_behavior_dropdown(
         .dropdown_caret(true)
         .rounded(borders::radius_sm())
         .with_size(gpui_component::Size::XSmall)
-        .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _window, _cx| {
+        .dropdown_menu_with_anchor(Corner::TopLeft, move |mut menu, _window, _cx| {
             for mode in [TargetWriteMode::Append, TargetWriteMode::Clear, TargetWriteMode::Drop] {
                 let state = state.clone();
                 menu = menu.item(PopupMenuItem::new(mode.label()).on_click(move |_, _, cx| {
@@ -65,7 +65,7 @@ pub(super) fn render_export_options(
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(gpui_component::Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                    .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
                         let s1 = state.clone();
                         let s2 = state.clone();
                         menu.item(PopupMenuItem::new("Folder").on_click(move |_, _, cx| {
@@ -115,7 +115,7 @@ pub(super) fn render_export_options(
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(gpui_component::Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+                    .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
                         let s1 = state.clone();
                         let s2 = state.clone();
                         menu.item(PopupMenuItem::new("Relaxed").on_click(move |_, _, cx| {
@@ -319,7 +319,7 @@ pub(super) fn render_import_options(
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 menu.item(PopupMenuItem::new("UTF-8").on_click(move |_, _, cx| {
@@ -366,7 +366,7 @@ pub(super) fn render_import_options(
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 let s3 = state.clone();
@@ -500,7 +500,7 @@ pub(super) fn render_copy_options(
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 let s3 = state.clone();

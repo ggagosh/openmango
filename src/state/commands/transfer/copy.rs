@@ -88,6 +88,8 @@ impl AppCommands {
             if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                 tab.runtime.transfer_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 tab.runtime.is_running = true;
+                tab.runtime.has_started = true;
+                tab.runtime.cancellation_requested = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new copy
