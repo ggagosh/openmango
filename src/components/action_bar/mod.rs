@@ -25,6 +25,7 @@ pub struct ActionBar {
     open: bool,
     mode: PaletteMode,
     original_theme: Option<AppTheme>,
+    previous_focus: Option<FocusHandle>,
     input_state: Option<Entity<InputState>>,
     all_actions: Vec<types::ActionItem>,
     filtered: Vec<FilteredAction>,
@@ -41,6 +42,7 @@ impl ActionBar {
             open: false,
             mode: PaletteMode::default(),
             original_theme: None,
+            previous_focus: None,
             input_state: None,
             all_actions: Vec::new(),
             filtered: Vec::new(),
@@ -68,6 +70,7 @@ impl ActionBar {
     }
 
     fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.previous_focus = window.focused(cx);
         self.open = true;
         self.selected_index = 0;
         self.rebuild_actions(window, cx);
@@ -187,6 +190,9 @@ impl ActionBar {
         self.filtered.clear();
         self.input_state = None;
         self._subscriptions.clear();
+        if let Some(previous_focus) = self.previous_focus.take() {
+            window.focus(&previous_focus);
+        }
         cx.notify();
     }
 

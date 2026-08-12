@@ -151,9 +151,10 @@ impl Render for DatabaseView {
             .flex()
             .flex_col()
             .flex_1()
+            .h_full()
             .min_w(px(0.0))
             .min_h(px(0.0))
-            .overflow_y_scrollbar()
+            .overflow_hidden()
             .child(Self::render_stats_section(
                 stats,
                 stats_loading,
@@ -177,8 +178,10 @@ impl Render for DatabaseView {
             .flex()
             .flex_col()
             .flex_1()
+            .size_full()
             .min_w(px(0.0))
             .min_h(px(0.0))
+            .overflow_hidden()
             .bg(cx.theme().background)
             .child(header)
             .child(content)
@@ -278,6 +281,10 @@ impl DatabaseView {
         let mut section = div()
             .flex()
             .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .overflow_hidden()
             .gap(spacing::sm())
             .px(spacing::lg())
             .pt(spacing::lg())
@@ -454,7 +461,16 @@ impl DatabaseView {
 
         section
             .child(header_row)
-            .child(div().flex().flex_col().min_w(px(0.0)).children(rows))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .min_h(px(0.0))
+                    .overflow_y_scrollbar()
+                    .children(rows),
+            )
             .into_any_element()
     }
 }
