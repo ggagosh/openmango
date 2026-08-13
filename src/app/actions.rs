@@ -545,7 +545,11 @@ impl AppRoot {
                 };
                 AppCommands::reload_database(self.state.clone(), database_key, cx);
             }
-            View::Transfer | View::Forge | View::Settings | View::Changelog => {}
+            View::Transfer
+            | View::Forge
+            | View::AgentActivity
+            | View::Settings
+            | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

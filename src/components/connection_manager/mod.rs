@@ -69,6 +69,8 @@ struct ConnectionDraft {
     environment: Option<crate::models::ConnectionEnvironment>,
     confirm_production_writes: bool,
     read_only: bool,
+    agent_shared: bool,
+    protected: bool,
     direct_connection: bool,
     tls: bool,
     tls_insecure: bool,

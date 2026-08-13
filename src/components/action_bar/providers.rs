@@ -95,6 +95,9 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
             }
+            TabKey::AgentActivity => {
+                ("Agent Activity".to_string(), "Approvals and operations".to_string())
+            }
             TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
             TabKey::Changelog => ("What's New".to_string(), "Changelog".to_string()),
         };

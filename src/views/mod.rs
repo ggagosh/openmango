@@ -1,4 +1,5 @@
 // Screen/page components
+pub mod agent_activity;
 pub mod ai;
 pub mod databases;
 pub mod documents;
@@ -9,6 +10,7 @@ pub mod settings;
 pub mod transfer;
 
 pub use crate::changelog::ChangelogView;
+pub use agent_activity::AgentActivityView;
 pub use ai::AiView;
 pub use databases::DatabaseView;
 pub use documents::CollectionView;

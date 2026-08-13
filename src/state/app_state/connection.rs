@@ -327,7 +327,9 @@ impl AppState {
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
-                super::types::TabKey::Settings | super::types::TabKey::Changelog => false,
+                super::types::TabKey::AgentActivity
+                | super::types::TabKey::Settings
+                | super::types::TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -415,9 +417,40 @@ impl AppState {
             return;
         }
         let rollback = self.connections.clone();
+        if let Some(existing) = self.connection_by_id(connection.id) {
+            apply_agent_sharing_safety(existing, &mut connection);
+        }
         connection.secret_id = Some(Uuid::new_v4());
         self.finish_update_connection(connection, cx);
         self.sync_connection_secrets(rollback, cx);
+    }
+
+    pub fn set_connection_agent_shared(
+        &mut self,
+        connection_id: Uuid,
+        shared: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let Some(index) = self.connections.iter().position(|item| item.id == connection_id) else {
+            return;
+        };
+        if self.connections[index].agent_shared == shared {
+            return;
+        }
+        self.connections[index].agent_shared = shared;
+        if let Err(error) = self.config.save_connections(&self.connections) {
+            self.connections[index].agent_shared = !shared;
+            self.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                "Could not update agent sharing: {error}"
+            ))));
+            cx.notify();
+            return;
+        }
+        cx.emit(AppEvent::ConnectionUpdated);
+        cx.notify();
     }
 
     fn finish_update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
@@ -756,6 +789,19 @@ fn connection_transport_changed(existing: &SavedConnection, updated: &SavedConne
     existing.uri != updated.uri || existing.ssh != updated.ssh || existing.proxy != updated.proxy
 }
 
+fn apply_agent_sharing_safety(existing: &SavedConnection, updated: &mut SavedConnection) {
+    let became_protected = !existing.protected && updated.protected;
+    let became_production = existing.environment
+        != Some(crate::models::ConnectionEnvironment::Production)
+        && updated.environment == Some(crate::models::ConnectionEnvironment::Production);
+    let identity_changed = existing.uri != updated.uri
+        || existing.ssh != updated.ssh
+        || existing.proxy != updated.proxy;
+    if became_protected || became_production || identity_changed {
+        updated.agent_shared = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +824,27 @@ mod tests {
 
         assert_eq!(state.take_connections_waiting_for_secrets(), vec![connection_id]);
         assert!(state.connections_waiting_for_secret_sync.is_empty());
+    }
+
+    #[test]
+    fn sensitive_connection_changes_disable_agent_sharing() {
+        let mut existing = SavedConnection::new("Local".into(), "mongodb://localhost".into());
+        existing.agent_shared = true;
+
+        let mut updated = existing.clone();
+        updated.protected = true;
+        apply_agent_sharing_safety(&existing, &mut updated);
+        assert!(!updated.agent_shared);
+
+        let mut updated = existing.clone();
+        updated.environment = Some(crate::models::ConnectionEnvironment::Production);
+        apply_agent_sharing_safety(&existing, &mut updated);
+        assert!(!updated.agent_shared);
+
+        let mut updated = existing.clone();
+        updated.uri = "mongodb://remote".into();
+        apply_agent_sharing_safety(&existing, &mut updated);
+        assert!(!updated.agent_shared);
     }
 
     #[test]

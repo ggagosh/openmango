@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod ai;
 pub mod app;
 pub mod assets;
@@ -8,8 +9,10 @@ pub mod connection;
 pub mod error;
 pub mod helpers;
 pub mod keyboard;
+pub mod mcp;
 pub mod models;
 pub mod perf;
 pub mod state;
+pub mod sync;
 pub mod theme;
 pub mod views;

@@ -454,6 +454,10 @@ impl ConnectionManager {
                 if cancellation.is_cancelled() {
                     return Ok(BsonToolRunOutcome::Cancelled { termination_succeeded: true });
                 }
+                if output_format == BsonOutputFormat::Folder && !staged_path.join(database).exists()
+                {
+                    std::fs::create_dir_all(staged_path.join(database))?;
+                }
                 crate::connection::ops::export::promote_export_path(&staged_path, &final_path)?;
                 Ok(BsonToolRunOutcome::Completed)
             }
@@ -462,9 +466,11 @@ impl ConnectionManager {
 
     /// Import a database from BSON format with progress tracking.
     /// The callback receives (collection_name, bytes_processed, bytes_total, is_complete).
+    #[allow(clippy::too_many_arguments)]
     pub fn import_database_bson_with_progress<F>(
         &self,
         connection_string: &str,
+        source_database: &str,
         database: &str,
         path: &Path,
         drop_before: bool,
@@ -483,20 +489,23 @@ impl ConnectionManager {
 
         let mut secure_command = secure_tool_command(&mongorestore, connection_string)?;
         let cmd = &mut secure_command.command;
-        cmd.arg("--db")
-            .arg(database)
-            .arg("-v") // Enable verbose output for progress
-            .stderr(Stdio::piped());
+        cmd.arg("-v").stderr(Stdio::piped());
 
         if drop_before {
             cmd.arg("--drop");
         }
 
-        // Detect if path is archive or folder
-        if path.extension().map(|e| e == "archive").unwrap_or(false) {
-            // --archive requires = format: --archive=/path/to/file
+        if path.extension().is_some_and(|extension| extension == "archive") {
+            cmd.arg("--nsInclude").arg(format!("{source_database}.*"));
+            if source_database != database {
+                cmd.arg("--nsFrom")
+                    .arg(format!("{source_database}.*"))
+                    .arg("--nsTo")
+                    .arg(format!("{database}.*"));
+            }
             cmd.arg(format!("--archive={}", path.display()));
         } else {
+            cmd.arg("--db").arg(database);
             let db_path = path.join(database);
             if db_path.exists() {
                 cmd.arg("--dir").arg(&db_path);

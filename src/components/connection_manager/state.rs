@@ -85,6 +85,8 @@ impl ConnectionDraft {
             environment: None,
             confirm_production_writes: false,
             read_only: false,
+            agent_shared: false,
+            protected: false,
             direct_connection: false,
             tls: false,
             tls_insecure: false,
@@ -152,6 +154,8 @@ impl ConnectionDraft {
         self.environment = None;
         self.confirm_production_writes = false;
         self.read_only = false;
+        self.agent_shared = false;
+        self.protected = false;
         self.direct_connection = false;
         self.tls = false;
         self.tls_insecure = false;

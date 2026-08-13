@@ -115,6 +115,10 @@ pub struct AppState {
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
 
+    // Agent action persistence
+    action_broker: Arc<crate::actions::ActionBroker>,
+    sync_executor: Arc<crate::sync::SyncExecutor>,
+
     // Config manager for persistence
     pub(crate) config: ConfigManager,
     pub(crate) connections_persistence_blocked: bool,
@@ -190,6 +194,13 @@ impl AppState {
             settings.appearance.vibrancy,
         );
         let startup_keybindings = settings.keybindings.clone();
+        let action_store = Arc::new(crate::actions::ActionStore::new(config.agent_data_dir()));
+        if let Err(error) = action_store.reconcile_interrupted() {
+            log::error!("Could not reconcile interrupted agent operations: {error}");
+        }
+        let action_broker = Arc::new(crate::actions::ActionBroker::new(action_store.clone()));
+        let sync_executor =
+            Arc::new(crate::sync::SyncExecutor::new(connection_manager.clone(), action_store));
 
         Self {
             connections,
@@ -220,6 +231,8 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
+            action_broker,
+            sync_executor,
             config,
             connections_persistence_blocked: connection_load_error.is_some(),
             connection_secret_sync_pending: false,
@@ -237,6 +250,14 @@ impl AppState {
     /// Get the connection manager
     pub fn connection_manager(&self) -> Arc<ConnectionManager> {
         self.connection_manager.clone()
+    }
+
+    pub fn action_broker(&self) -> Arc<crate::actions::ActionBroker> {
+        self.action_broker.clone()
+    }
+
+    pub fn sync_executor(&self) -> Arc<crate::sync::SyncExecutor> {
+        self.sync_executor.clone()
     }
 
     pub fn status_message(&self) -> Option<StatusMessage> {

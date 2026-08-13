@@ -40,6 +40,10 @@ impl ConfigManager {
         dirs::config_dir().map(|p| p.join(APP_NAME)).context("Could not determine config directory")
     }
 
+    pub(crate) fn agent_data_dir(&self) -> PathBuf {
+        self.config_dir.join("agent")
+    }
+
     /// Get path to a specific config file
     fn file_path(&self, filename: &str) -> PathBuf {
         self.config_dir.join(filename)

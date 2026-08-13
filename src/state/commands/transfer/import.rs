@@ -232,6 +232,7 @@ impl AppCommands {
                 let result = manager.import_database_bson_with_progress(
                     &connection_uri,
                     &database,
+                    &database,
                     &path,
                     drop_before,
                     cancellation_token,

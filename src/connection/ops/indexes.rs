@@ -1,5 +1,8 @@
 //! Index operations for MongoDB collections.
 
+use std::time::Duration;
+
+use futures::TryStreamExt;
 use mongodb::Client;
 use mongodb::IndexModel;
 use mongodb::bson::{Document, doc};
@@ -35,6 +38,16 @@ fn validate_index_document(index: &Document) -> Result<()> {
     Ok(())
 }
 
+pub async fn list_indexes_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    max_time: Duration,
+) -> Result<Vec<IndexModel>> {
+    let coll = client.database(database).collection::<Document>(collection);
+    Ok(coll.list_indexes().max_time(max_time).await?.try_collect().await?)
+}
+
 impl ConnectionManager {
     /// List indexes for a collection (runs in Tokio runtime)
     pub fn list_indexes(
@@ -43,18 +56,16 @@ impl ConnectionManager {
         database: &str,
         collection: &str,
     ) -> Result<Vec<IndexModel>> {
-        use futures::TryStreamExt;
-
         let client = client.clone();
         let database = database.to_string();
         let collection = collection.to_string();
 
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            let cursor = coll.list_indexes().await?;
-            let indexes: Vec<IndexModel> = cursor.try_collect().await?;
-            Ok(indexes)
-        })
+        self.runtime.block_on(list_indexes_async(
+            &client,
+            &database,
+            &collection,
+            Duration::from_secs(30),
+        ))
     }
 
     /// Create an index for a collection (runs in Tokio runtime)

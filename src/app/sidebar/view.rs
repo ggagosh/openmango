@@ -12,6 +12,7 @@ use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{Icon, IconName, Sizable as _};
 
+use crate::actions::model::ActionStatus;
 use crate::components::{ConnectionIdentity, ConnectionManager, connection_identity_badge};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
@@ -69,9 +70,24 @@ impl Render for Sidebar {
             .filter(|c| !active_connections.contains_key(&c.id))
             .cloned()
             .collect();
+        let pending_agent_actions = self
+            .state
+            .read(cx)
+            .action_broker()
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|action| action.status == ActionStatus::PendingApproval)
+            .count();
+        let activity_tooltip = if pending_agent_actions == 0 {
+            "Agent activity".to_string()
+        } else {
+            format!("Agent activity ({pending_agent_actions} waiting for approval)")
+        };
 
         let state = self.state.clone();
         let state_for_add = state.clone();
+        let state_for_activity = state.clone();
         let state_for_manager = state.clone();
         let state_for_connect = state.clone();
         let state_for_tree = self.state.clone();
@@ -259,6 +275,47 @@ impl Render for Sidebar {
                                     .tooltip("Add connection")
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .child(
+                                        Button::new("agent-activity-btn")
+                                            .icon(Icon::new(IconName::Bot).xsmall())
+                                            .ghost()
+                                            .xsmall()
+                                            .tooltip(activity_tooltip)
+                                            .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                                state_for_activity.update(cx, |state, cx| {
+                                                    state.open_agent_activity_tab(cx);
+                                                });
+                                            }),
+                                    )
+                                    .when(pending_agent_actions > 0, |button| {
+                                        let label = if pending_agent_actions > 9 {
+                                            "9+".to_string()
+                                        } else {
+                                            pending_agent_actions.to_string()
+                                        };
+                                        button.child(
+                                            div()
+                                                .absolute()
+                                                .top(px(-3.0))
+                                                .right(px(-4.0))
+                                                .min_w(px(14.0))
+                                                .h(px(14.0))
+                                                .px(px(3.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .bg(cx.theme().danger)
+                                                .text_size(px(9.0))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(cx.theme().danger_foreground)
+                                                .child(label),
+                                        )
                                     }),
                             )
                             .child(

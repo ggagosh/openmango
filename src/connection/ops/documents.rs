@@ -1,5 +1,6 @@
 //! Document CRUD operations for MongoDB collections.
 
+use futures::TryStreamExt;
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
 use mongodb::results::UpdateResult;
@@ -7,6 +8,43 @@ use mongodb::results::UpdateResult;
 use crate::connection::ConnectionManager;
 use crate::connection::types::FindDocumentsOptions;
 use crate::error::Result;
+
+pub struct AsyncFindOptions {
+    pub filter: Document,
+    pub sort: Option<Document>,
+    pub projection: Option<Document>,
+    pub skip: u64,
+    pub limit: i64,
+    pub max_time: std::time::Duration,
+}
+
+pub async fn find_documents_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    options: AsyncFindOptions,
+) -> Result<Vec<Document>> {
+    let coll = client.database(database).collection::<Document>(collection);
+    let find_options = mongodb::options::FindOptions::builder()
+        .skip(options.skip)
+        .limit(options.limit)
+        .sort(options.sort)
+        .projection(options.projection)
+        .max_time(options.max_time)
+        .build();
+    Ok(coll.find(options.filter).with_options(find_options).await?.try_collect().await?)
+}
+
+pub async fn count_documents_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    filter: Document,
+    max_time: std::time::Duration,
+) -> Result<u64> {
+    let coll = client.database(database).collection::<Document>(collection);
+    Ok(coll.count_documents(filter).max_time(max_time).await?)
+}
 
 impl ConnectionManager {
     /// Find documents in a collection with pagination (runs in Tokio runtime)

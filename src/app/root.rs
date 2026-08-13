@@ -54,6 +54,9 @@ pub struct AppRoot {
     ai_drag_start_width: f32,
     ai_drag_current_width: Option<f32>,
     _subscriptions: Vec<Subscription>,
+    mcp_shutdown: Option<tokio_util::sync::CancellationToken>,
+    mcp_enabled: bool,
+    mcp_access_signature: Vec<(Uuid, bool)>,
 }
 
 enum ConnectionSecretRead {
@@ -310,6 +313,9 @@ impl AppRoot {
         let state = cx.new(|_| AppState::new());
 
         Self::hydrate_connection_secrets(state.clone(), cx);
+        let mcp_enabled = state.read(cx).settings.mcp.enabled;
+        let mcp_access_signature = Self::mcp_access_signature(state.read(cx));
+        let mcp_shutdown = Self::start_mcp_if_enabled(state.clone(), cx);
 
         // Create sidebar with state reference
         let sidebar = cx.new(|cx| Sidebar::new(state.clone(), window, cx));
@@ -397,6 +403,21 @@ impl AppRoot {
 
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.observe(&state, |this, state, cx| {
+            let enabled = state.read(cx).settings.mcp.enabled;
+            let access_signature = Self::mcp_access_signature(state.read(cx));
+            if enabled != this.mcp_enabled || access_signature != this.mcp_access_signature {
+                this.mcp_enabled = enabled;
+                this.mcp_access_signature = access_signature;
+                if let Some(shutdown) = this.mcp_shutdown.take() {
+                    shutdown.cancel();
+                }
+                if enabled {
+                    this.mcp_shutdown = Self::start_mcp_if_enabled(state.clone(), cx);
+                }
+            }
+            cx.notify();
+        }));
 
         let subscription = Self::install_global_shortcuts(cx);
         subscriptions.push(subscription);
@@ -440,7 +461,150 @@ impl AppRoot {
             ai_drag_start_width: AI_ISLAND_DEFAULT_WIDTH,
             ai_drag_current_width: None,
             _subscriptions: subscriptions,
+            mcp_shutdown,
+            mcp_enabled,
+            mcp_access_signature,
         }
+    }
+
+    fn mcp_access_signature(state: &AppState) -> Vec<(Uuid, bool)> {
+        let mut signature = state
+            .settings
+            .mcp
+            .grants
+            .iter()
+            .filter(|grant| grant.active())
+            .map(|grant| (grant.id, true))
+            .collect::<Vec<_>>();
+        signature.push((Uuid::nil(), state.settings.mcp.legacy_access));
+        signature
+    }
+
+    fn start_mcp_if_enabled(
+        state: Entity<AppState>,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio_util::sync::CancellationToken> {
+        let settings = state.read(cx).settings.mcp.clone();
+        if !settings.enabled {
+            return None;
+        }
+        let legacy_token = settings.legacy_access.then(|| KeyStore::read_mcp_token(cx));
+        let grant_tokens = settings
+            .grants
+            .iter()
+            .filter(|grant| grant.active())
+            .map(|grant| (grant.id, KeyStore::read_mcp_grant(cx, grant.id)))
+            .collect::<Vec<_>>();
+        let bridge = crate::mcp::McpBridge::attach(state.clone(), cx);
+        let audit_path = state.read(cx).config.agent_data_dir().join("audit.jsonl");
+        let runtime = state.read(cx).connection_manager().runtime_handle();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let server_cancellation = cancellation.clone();
+        let (grant_usage, mut grant_usage_receiver) = tokio::sync::mpsc::unbounded_channel();
+        cx.spawn({
+            let state = state.clone();
+            async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+                while let Some(grant_id) = grant_usage_receiver.recv().await {
+                    let _ = cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            let now = chrono::Utc::now();
+                            let Some(grant) = state
+                                .settings
+                                .mcp
+                                .grants
+                                .iter_mut()
+                                .find(|grant| grant.id == grant_id)
+                            else {
+                                return;
+                            };
+                            let stale = grant
+                                .last_used_at
+                                .is_none_or(|last_used| (now - last_used).num_seconds() >= 60);
+                            if stale {
+                                grant.last_used_at = Some(now);
+                                state.save_settings();
+                                cx.notify();
+                            }
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut tokens = Vec::new();
+            if let Some(token_task) = legacy_token {
+                match token_task.await {
+                    Ok(Some(token)) => tokens.push((Uuid::nil(), token)),
+                    Ok(None) => {
+                        let bytes: [u8; 32] = rand::random();
+                        let token =
+                            bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+                        let Ok(write) = cx.update(|cx| KeyStore::write_mcp_token(cx, &token))
+                        else {
+                            log::error!(
+                                "MCP server disabled: legacy access token could not be stored"
+                            );
+                            return;
+                        };
+                        if write.await.is_err() {
+                            log::error!(
+                                "MCP server disabled: legacy access token could not be stored"
+                            );
+                            return;
+                        }
+                        tokens.push((Uuid::nil(), token));
+                    }
+                    Err(error) => {
+                        log::error!("MCP legacy access token could not be read: {error}");
+                    }
+                }
+            }
+            for (grant_id, token_task) in grant_tokens {
+                match token_task.await {
+                    Ok(Some(token)) => tokens.push((grant_id, token)),
+                    Ok(None) => log::error!("MCP client grant {grant_id} has no stored token"),
+                    Err(error) => {
+                        log::error!("MCP client grant {grant_id} could not be read: {error}")
+                    }
+                }
+            }
+            if tokens.is_empty() {
+                log::error!("MCP server disabled: no active client grant has a stored token");
+                return;
+            }
+            let server = crate::mcp::McpServer::new(bridge);
+            let port = settings.port;
+            let start = runtime.spawn(crate::mcp::McpServerHandle::start_on(
+                server,
+                crate::mcp::McpAccess::new(tokens)
+                    .with_usage(grant_usage)
+                    .with_audit_path(audit_path),
+                port,
+                server_cancellation,
+            ));
+            match start.await {
+                Ok(Ok(handle)) => {
+                    let actual_port = handle.addr().port();
+                    let _ = cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            if state.settings.mcp.port != actual_port {
+                                state.settings.mcp.port = actual_port;
+                                state.save_settings();
+                            }
+                            cx.notify();
+                        });
+                    });
+                    if let Err(error) = handle.wait().await {
+                        log::error!("MCP server stopped: {error}");
+                    }
+                }
+                Ok(Err(error)) => log::error!("MCP server failed to start: {error}"),
+                Err(error) => log::error!("MCP server task failed: {error}"),
+            }
+        })
+        .detach();
+        Some(cancellation)
     }
 
     pub fn flush_workspace_on_shutdown(&mut self, cx: &mut App) {
@@ -458,6 +622,14 @@ impl AppRoot {
         let sessions = self.state.read(cx).editor_sessions();
         for handle in sessions.all_window_handles() {
             handle.update(cx, |_, window, _cx| window.remove_window()).ok();
+        }
+    }
+}
+
+impl Drop for AppRoot {
+    fn drop(&mut self) {
+        if let Some(shutdown) = &self.mcp_shutdown {
+            shutdown.cancel();
         }
     }
 }
@@ -509,6 +681,7 @@ impl Render for AppRoot {
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => {}
             View::Forge => key_context.push_str(" Forge"),
+            View::AgentActivity => key_context.push_str(" AgentActivity"),
             View::Welcome => key_context.push_str(" Welcome"),
             View::Settings => key_context.push_str(" Settings"),
             View::Changelog => key_context.push_str(" Changelog"),

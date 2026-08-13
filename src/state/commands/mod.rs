@@ -59,6 +59,7 @@ impl AppCommands {
     }
 }
 
+mod actions;
 mod aggregation;
 mod collection_meta;
 mod collections;

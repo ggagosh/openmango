@@ -176,6 +176,10 @@ pub struct SavedConnection {
     pub last_connected: Option<DateTime<Utc>>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub agent_shared: bool,
+    #[serde(default)]
+    pub protected: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<SshConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +249,8 @@ impl SavedConnection {
             uri,
             last_connected: None,
             read_only: false,
+            agent_shared: false,
+            protected: false,
             ssh: None,
             proxy: None,
             secret_id: None,
@@ -297,6 +303,8 @@ mod tests {
         });
         let connection: SavedConnection = serde_json::from_value(legacy).unwrap();
         assert_eq!(connection.environment, None);
+        assert!(!connection.agent_shared);
+        assert!(!connection.protected);
         assert!(!connection.confirm_production_writes);
         assert!(!connection.requires_production_write_confirmation());
 

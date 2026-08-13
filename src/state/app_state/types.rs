@@ -26,6 +26,7 @@ pub enum View {
     Database,
     Transfer,
     Forge,
+    AgentActivity,
     Settings,
     Changelog,
 }
@@ -108,6 +109,7 @@ pub enum TabKey {
     Database(DatabaseKey),
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
+    AgentActivity,
     Settings,
     Changelog,
 }
