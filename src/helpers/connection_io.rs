@@ -35,6 +35,8 @@ pub struct ExportedConnection {
     pub uri: String,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub reversible_history: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,6 +110,7 @@ pub fn build_export(
                 confirm_production_writes: conn.confirm_production_writes,
                 uri: strip_uri_secrets(&conn.uri),
                 read_only: conn.read_only,
+                reversible_history: conn.reversible_history,
                 encrypted_password: None,
                 encrypted_transport: None,
                 ssh: sanitized_ssh,
@@ -133,6 +136,7 @@ pub fn build_export(
                     confirm_production_writes: conn.confirm_production_writes,
                     uri: strip_uri_secrets(&conn.uri),
                     read_only: conn.read_only,
+                    reversible_history: conn.reversible_history,
                     encrypted_password: encrypted,
                     encrypted_transport,
                     ssh: sanitized_ssh,
@@ -204,6 +208,7 @@ pub fn resolve_import(
             conn.environment = ec.environment;
             conn.confirm_production_writes = ec.confirm_production_writes;
             conn.read_only = ec.read_only;
+            conn.reversible_history = ec.reversible_history;
             conn.ssh = ec.ssh.clone();
             conn.proxy = ec.proxy.clone();
             conn
@@ -276,6 +281,7 @@ mod tests {
                 read_only: false,
                 agent_shared: false,
                 protected: false,
+                reversible_history: false,
                 ssh: Some(SshConfig {
                     enabled: true,
                     host: "bastion".into(),
@@ -309,6 +315,7 @@ mod tests {
                 read_only: true,
                 agent_shared: false,
                 protected: false,
+                reversible_history: false,
                 ssh: None,
                 proxy: None,
                 secret_id: None,
@@ -440,6 +447,7 @@ mod tests {
             read_only: false,
             agent_shared: false,
             protected: false,
+            reversible_history: false,
             ssh: None,
             proxy: None,
             secret_id: None,
@@ -458,6 +466,7 @@ mod tests {
                     confirm_production_writes: true,
                     uri: "mongodb://localhost:27017".into(),
                     read_only: false,
+                    reversible_history: true,
                     encrypted_password: None,
                     encrypted_transport: None,
                     ssh: None,
@@ -470,6 +479,7 @@ mod tests {
                     confirm_production_writes: false,
                     uri: "mongodb+srv://cluster0.abc.mongodb.net".into(),
                     read_only: true,
+                    reversible_history: false,
                     encrypted_password: None,
                     encrypted_transport: None,
                     ssh: None,
@@ -484,6 +494,7 @@ mod tests {
         assert_eq!(resolved[0].color, Some(ConnectionColor::Blue));
         assert_eq!(resolved[0].environment, Some(ConnectionEnvironment::Production));
         assert!(resolved[0].confirm_production_writes);
+        assert!(resolved[0].reversible_history);
         assert_eq!(resolved[1].name, "Atlas");
         // New UUIDs
         assert_ne!(resolved[0].id, existing[0].id);
@@ -502,6 +513,7 @@ mod tests {
             read_only: false,
             agent_shared: false,
             protected: false,
+            reversible_history: false,
             ssh: None,
             proxy: None,
             secret_id: None,

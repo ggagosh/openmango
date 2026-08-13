@@ -115,6 +115,10 @@ pub struct AppState {
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
 
+    // Durable mutation history
+    operation_engine: Option<Arc<crate::operations::OperationEngine>>,
+    operation_backend: Arc<crate::operations::MongoMutationBackend>,
+
     // Agent action persistence
     action_broker: Arc<crate::actions::ActionBroker>,
     sync_executor: Arc<crate::sync::SyncExecutor>,
@@ -201,6 +205,8 @@ impl AppState {
         let action_broker = Arc::new(crate::actions::ActionBroker::new(action_store.clone()));
         let sync_executor =
             Arc::new(crate::sync::SyncExecutor::new(connection_manager.clone(), action_store));
+        let operation_backend =
+            Arc::new(crate::operations::MongoMutationBackend::new(connection_manager.clone()));
 
         Self {
             connections,
@@ -231,6 +237,8 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
+            operation_engine: None,
+            operation_backend,
             action_broker,
             sync_executor,
             config,
@@ -250,6 +258,18 @@ impl AppState {
     /// Get the connection manager
     pub fn connection_manager(&self) -> Arc<ConnectionManager> {
         self.connection_manager.clone()
+    }
+
+    pub fn operation_engine(&self) -> Option<Arc<crate::operations::OperationEngine>> {
+        self.operation_engine.clone()
+    }
+
+    pub(crate) fn operation_backend(&self) -> Arc<crate::operations::MongoMutationBackend> {
+        self.operation_backend.clone()
+    }
+
+    pub(crate) fn set_operation_engine(&mut self, engine: Arc<crate::operations::OperationEngine>) {
+        self.operation_engine = Some(engine);
     }
 
     pub fn action_broker(&self) -> Arc<crate::actions::ActionBroker> {

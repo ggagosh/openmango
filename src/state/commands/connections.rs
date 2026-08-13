@@ -66,6 +66,17 @@ impl AppCommands {
 
                 let _ = cx.update(|cx| match result {
                     Ok((client, databases, runtime_meta)) => {
+                        let (history, backend) = {
+                            let state = state.read(cx);
+                            (state.operation_engine(), state.operation_backend())
+                        };
+                        backend.register_client(connection_id, client.clone());
+                        if let Some(history) = history {
+                            cx.background_spawn(async move {
+                                let _ = history.reconcile();
+                            })
+                            .detach();
+                        }
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
                             saved.last_connected = Some(Utc::now());

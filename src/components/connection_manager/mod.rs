@@ -71,6 +71,7 @@ struct ConnectionDraft {
     read_only: bool,
     agent_shared: bool,
     protected: bool,
+    reversible_history: bool,
     direct_connection: bool,
     tls: bool,
     tls_insecure: bool,

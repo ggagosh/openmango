@@ -97,6 +97,7 @@ impl ConnectionManager {
             self.draft.read_only = connection.read_only;
             self.draft.agent_shared = connection.agent_shared;
             self.draft.protected = connection.protected;
+            self.draft.reversible_history = connection.reversible_history;
             self.load_transport_settings(&connection, window, cx);
             self.import_uri(connection.uri.clone(), window, cx);
         } else {
@@ -641,6 +642,7 @@ impl ConnectionManager {
         let read_only = self.draft.read_only;
         let agent_shared = self.draft.agent_shared;
         let protected = self.draft.protected;
+        let reversible_history = self.draft.reversible_history;
         let (ssh, proxy) = match self.build_transport_settings(cx) {
             Ok(settings) => settings,
             Err(err) => {
@@ -666,6 +668,7 @@ impl ConnectionManager {
                         read_only,
                         agent_shared,
                         protected,
+                        reversible_history,
                         ssh: ssh.clone(),
                         proxy: proxy.clone(),
                         secret_id: existing.secret_id,
@@ -681,6 +684,7 @@ impl ConnectionManager {
                 connection.read_only = read_only;
                 connection.agent_shared = agent_shared;
                 connection.protected = protected;
+                connection.reversible_history = reversible_history;
                 connection.ssh = ssh.clone();
                 connection.proxy = proxy.clone();
                 state.add_connection(connection.clone(), cx);

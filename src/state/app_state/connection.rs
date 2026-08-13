@@ -147,6 +147,10 @@ impl AppState {
         )
     }
 
+    pub fn connection_reversible_history(&self, connection_id: Uuid) -> bool {
+        self.connection_by_id(connection_id).is_some_and(|connection| connection.reversible_history)
+    }
+
     pub fn connection_requires_production_write_confirmation(&self, connection_id: Uuid) -> bool {
         self.connection_by_id(connection_id)
             .is_some_and(SavedConnection::requires_production_write_confirmation)
@@ -824,6 +828,21 @@ mod tests {
 
         assert_eq!(state.take_connections_waiting_for_secrets(), vec![connection_id]);
         assert!(state.connections_waiting_for_secret_sync.is_empty());
+    }
+
+    #[test]
+    fn reversible_history_is_scoped_per_connection_and_defaults_off() {
+        let mut state = AppState::new();
+        state.connections.clear();
+        let disabled = SavedConnection::new("Disabled".into(), "mongodb://disabled".into());
+        let disabled_id = disabled.id;
+        let mut enabled = SavedConnection::new("Enabled".into(), "mongodb://enabled".into());
+        enabled.reversible_history = true;
+        let enabled_id = enabled.id;
+        state.connections = vec![disabled, enabled];
+
+        assert!(!state.connection_reversible_history(disabled_id));
+        assert!(state.connection_reversible_history(enabled_id));
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub struct ConnectionDialog {
     read_only: bool,
     agent_shared: bool,
     protected: bool,
+    reversible_history: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
     pending_test_uri: Option<String>,
@@ -126,6 +127,7 @@ impl ConnectionDialog {
             read_only: false,
             agent_shared: false,
             protected: false,
+            reversible_history: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
             pending_test_uri: None,
@@ -193,6 +195,7 @@ impl ConnectionDialog {
             read_only: existing.read_only,
             agent_shared: existing.agent_shared,
             protected: existing.protected,
+            reversible_history: existing.reversible_history,
             status: TestStatus::Success,
             last_tested_uri: Some(redacted_default),
             pending_test_uri: None,
@@ -427,6 +430,39 @@ impl Render for ConnectionDialog {
                     .items_center()
                     .gap(spacing::sm())
                     .child(
+                        Switch::new("connection-reversible-history")
+                            .checked(self.reversible_history)
+                            .small()
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.reversible_history = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child("Reversible history")
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Encrypt recovery data for document replacements on this connection."),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
                         Switch::new("connection-agent-shared")
                             .checked(self.agent_shared)
                             .small()
@@ -568,6 +604,7 @@ impl Render for ConnectionDialog {
                                 let read_only = self.read_only;
                                 let agent_shared = self.agent_shared;
                                 let protected = self.protected;
+                                let reversible_history = self.reversible_history;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
@@ -613,6 +650,7 @@ impl Render for ConnectionDialog {
                                                     read_only,
                                                     agent_shared,
                                                     protected,
+                                                    reversible_history,
                                                     ssh: existing.ssh,
                                                     proxy: existing.proxy,
                                                     secret_id: existing.secret_id,
@@ -627,6 +665,7 @@ impl Render for ConnectionDialog {
                                                 connection.read_only = read_only;
                                                 connection.agent_shared = agent_shared;
                                                 connection.protected = protected;
+                                                connection.reversible_history = reversible_history;
                                                 connection_id = Some(connection.id);
                                                 state.add_connection(connection, cx);
                                             }

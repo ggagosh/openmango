@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
 use gpui::*;
 use gpui_component::ActiveTheme as _;
@@ -308,11 +310,80 @@ impl AppRoot {
         .detach();
     }
 
+    fn start_operation_history(state: Entity<AppState>, cx: &mut Context<Self>) {
+        let key_read = KeyStore::read_history_key(cx);
+        let path = state.read(cx).config.operation_history_path();
+        let history_exists = path.exists();
+        let backend = state.read(cx).operation_backend();
+        let runtime = state.read(cx).connection_manager().runtime_handle();
+        cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let key = match key_read.await {
+                Ok(Some(key)) => match <[u8; 32]>::try_from(key) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        log::error!("Reversible history key has an invalid length");
+                        return;
+                    }
+                },
+                Ok(None) => {
+                    if history_exists {
+                        log::error!(
+                            "Reversible history key is missing; existing recovery data was preserved"
+                        );
+                        return;
+                    }
+                    let key: [u8; 32] = rand::random();
+                    let Ok(write) = cx.update(|cx| KeyStore::write_history_key(cx, &key)) else {
+                        log::error!("Reversible history key could not be stored");
+                        return;
+                    };
+                    if write.await.is_err() {
+                        log::error!("Reversible history key could not be stored");
+                        return;
+                    }
+                    key
+                }
+                Err(_) => {
+                    log::error!("Reversible history key could not be read");
+                    return;
+                }
+            };
+            let opened = runtime
+                .spawn_blocking(move || {
+                    crate::operations::OperationEngine::open(path, key, backend).map(Arc::new)
+                })
+                .await;
+            match opened {
+                Ok(Ok(engine)) => {
+                    if let Ok((backend, active)) = cx.update(|cx| {
+                        let state = state.read(cx);
+                        (state.operation_backend(), state.active_connections_snapshot())
+                    }) {
+                        for (connection_id, connection) in active {
+                            backend.register_client(connection_id, connection.client);
+                        }
+                    }
+                    let reconcile_engine = engine.clone();
+                    let _ = runtime.spawn_blocking(move || reconcile_engine.reconcile()).await;
+                    let _ = cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            state.set_operation_engine(engine);
+                            cx.notify();
+                        });
+                    });
+                }
+                _ => log::error!("Reversible history could not be initialized"),
+            }
+        })
+        .detach();
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Create the app state entity
         let state = cx.new(|_| AppState::new());
 
         Self::hydrate_connection_secrets(state.clone(), cx);
+        Self::start_operation_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;
         let mcp_access_signature = Self::mcp_access_signature(state.read(cx));
         let mcp_shutdown = Self::start_mcp_if_enabled(state.clone(), cx);
@@ -673,6 +744,7 @@ impl Render for AppRoot {
                     Some(CollectionSubview::Stats) => key_context.push_str(" Stats"),
                     Some(CollectionSubview::Aggregation) => key_context.push_str(" Aggregation"),
                     Some(CollectionSubview::Schema) => key_context.push_str(" Schema"),
+                    Some(CollectionSubview::History) => key_context.push_str(" History"),
                     _ => {}
                 }
             }

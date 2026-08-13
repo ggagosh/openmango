@@ -44,6 +44,10 @@ impl ConfigManager {
         self.config_dir.join("agent")
     }
 
+    pub(crate) fn operation_history_path(&self) -> PathBuf {
+        self.config_dir.join("operations").join("history.sqlite3")
+    }
+
     /// Get path to a specific config file
     fn file_path(&self, filename: &str) -> PathBuf {
         self.config_dir.join(filename)
@@ -305,6 +309,7 @@ mod tests {
             SavedConnection::new("json".to_string(), "mongodb://localhost:27017".into());
         connection.environment = Some(crate::models::ConnectionEnvironment::Production);
         connection.confirm_production_writes = true;
+        connection.reversible_history = true;
         fs::write(
             temp_dir.path().join(ConfigManager::CONNECTIONS_FILE),
             serde_json::to_string_pretty(&vec![connection.clone()])
@@ -317,5 +322,6 @@ mod tests {
         assert_eq!(loaded[0].name, connection.name);
         assert_eq!(loaded[0].environment, connection.environment);
         assert!(loaded[0].confirm_production_writes);
+        assert!(loaded[0].reversible_history);
     }
 }

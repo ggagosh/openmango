@@ -410,6 +410,9 @@ impl AppRoot {
             "view:schema" => {
                 Self::show_collection_subview(state, CollectionSubview::Schema, cx);
             }
+            "view:history" => {
+                Self::show_collection_subview(state, CollectionSubview::History, cx);
+            }
             "cmd:check-updates" => {
                 AppCommands::check_for_updates(state.clone(), cx);
             }
@@ -536,6 +539,9 @@ impl AppRoot {
                     }
                     CollectionSubview::Schema => {
                         AppCommands::analyze_collection_schema(self.state.clone(), session_key, cx);
+                    }
+                    CollectionSubview::History => {
+                        AppCommands::load_collection_history(self.state.clone(), session_key, cx);
                     }
                 }
             }

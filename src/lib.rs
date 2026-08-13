@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod keyboard;
 pub mod mcp;
 pub mod models;
+pub mod operations;
 pub mod perf;
 pub mod state;
 pub mod sync;

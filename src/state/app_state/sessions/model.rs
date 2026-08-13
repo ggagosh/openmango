@@ -172,6 +172,16 @@ impl AppState {
             },
             schema_loading: session.data.schema_loading,
             schema_error: session.data.schema_error.clone(),
+            history: if subview == CollectionSubview::History {
+                session.data.history.clone()
+            } else {
+                Vec::new()
+            },
+            history_loading: session.data.history_loading,
+            history_loaded: session.data.history_loaded,
+            history_total: session.data.history_total,
+            history_next_offset: session.data.history_next_offset,
+            history_error: session.data.history_error.clone(),
             schema_selected_field: session.view.schema_selected_field.clone(),
             schema_expanded_fields: session.view.schema_expanded_fields.clone(),
             schema_filter: session.view.schema_filter.clone(),

@@ -19,10 +19,26 @@ fn mcp_grant_credentials_url(id: Uuid) -> String {
 }
 
 const MCP_TOKEN_PROVIDER: &str = "mcp-server-token";
+const HISTORY_KEY_URL: &str = "com.openmango.history.key";
+const HISTORY_KEY_USER: &str = "history";
 
 pub struct KeyStore;
 
 impl KeyStore {
+    pub fn write_history_key(cx: &App, key: &[u8; 32]) -> Task<Result<()>> {
+        cx.write_credentials(HISTORY_KEY_URL, HISTORY_KEY_USER, key)
+    }
+
+    pub fn read_history_key(cx: &App) -> Task<Result<Option<Vec<u8>>>> {
+        let task = cx.read_credentials(HISTORY_KEY_URL);
+        cx.spawn(async move |_cx| match task.await {
+            Ok(Some((user, key))) if user == HISTORY_KEY_USER => Ok(Some(key)),
+            Ok(_) => Ok(None),
+            Err(error) if credential_was_missing(&error) => Ok(None),
+            Err(error) => Err(error),
+        })
+    }
+
     pub fn write_mcp_token(cx: &App, token: &str) -> Task<Result<()>> {
         Self::write(cx, MCP_TOKEN_PROVIDER, token)
     }

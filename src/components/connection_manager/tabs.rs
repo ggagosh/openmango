@@ -206,6 +206,44 @@ impl ConnectionManager {
                         ),
                 )
             })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-reversible-history")
+                            .checked(self.draft.reversible_history)
+                            .small()
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.draft.reversible_history = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child("Reversible history"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().secondary_foreground)
+                                    .child("Encrypt recovery data for document replacements on this connection."),
+                            ),
+                    ),
+            )
             // Agent access
             .child(
                 div()

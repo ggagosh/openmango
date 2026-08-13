@@ -61,6 +61,7 @@ axum = "0.8.9"
 tokio-util = "0.7.19"
 tower-http = { version = "0.6.8", features = ["limit"] }
 schemars = "1.2.1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = [

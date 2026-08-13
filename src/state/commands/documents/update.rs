@@ -53,7 +53,17 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
-        let (database, collection, original_id, doc_index, should_reload_after_save) = {
+        let (
+            database,
+            collection,
+            original_id,
+            doc_index,
+            should_reload_after_save,
+            history_enabled,
+            operation_engine,
+            operation_backend,
+            connection_name,
+        ) = {
             let state_ref = state.read(cx);
             let doc_index = state_ref.document_index(&session_key, &doc_key).or_else(|| {
                 state_ref.session(&session_key).and_then(|session| {
@@ -81,8 +91,33 @@ impl AppCommands {
                 original_id,
                 doc_index,
                 doc_index.is_none(),
+                state_ref.connection_reversible_history(session_key.connection_id),
+                state_ref.operation_engine(),
+                state_ref.operation_backend(),
+                state_ref
+                    .connection_name(session_key.connection_id)
+                    .unwrap_or_else(|| "Connection".to_string()),
             )
         };
+        let history_engine =
+            match crate::operations::tracked_engine(history_enabled, operation_engine) {
+                Ok(engine) => engine,
+                Err(error) => {
+                    state.update(cx, |state, cx| {
+                        let event = AppEvent::DocumentSaveFailed {
+                            session: session_key,
+                            document: doc_key,
+                            editor,
+                            error: error.user_message().to_string(),
+                        };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+        let tracked_save = history_enabled;
         let manager = state.read(cx).connection_manager();
 
         let updated_for_task = updated.clone();
@@ -90,7 +125,28 @@ impl AppCommands {
             let database = database.clone();
             let collection = collection.clone();
             async move {
-                if let Some(baseline_document) = baseline_document {
+                if let Some(engine) = history_engine {
+                    operation_backend.register_client(session_key.connection_id, client);
+                    engine
+                        .execute(
+                            crate::operations::OperationContext::user(),
+                            crate::operations::Mutation::ReplaceDocument {
+                                target: crate::operations::DocumentTarget {
+                                    connection_id: session_key.connection_id,
+                                    connection_name,
+                                    database,
+                                    collection,
+                                    id: original_id,
+                                },
+                                replacement: updated_for_task,
+                                editor_precondition: baseline_document,
+                            },
+                        )
+                        .map(|_| ())
+                        .map_err(|error| {
+                            crate::error::Error::Parse(error.user_message().to_string())
+                        })
+                } else if let Some(baseline_document) = baseline_document {
                     manager.replace_document_if_current(
                         &client,
                         &database,
@@ -145,6 +201,11 @@ impl AppCommands {
                                 editor,
                             };
                             state.update_status_from_event(&event);
+                            if !tracked_save {
+                                state.set_status_message(Some(StatusMessage::info(
+                                    "Document saved without reversible history.",
+                                )));
+                            }
                             cx.emit(event);
                             cx.notify();
                         });
@@ -155,9 +216,19 @@ impl AppCommands {
                                 cx,
                             );
                         }
+                        if tracked_save
+                            && state.read(cx).session_subview(&session_key)
+                                == Some(crate::state::CollectionSubview::History)
+                        {
+                            AppCommands::load_collection_history(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                     }
                     Err(e) => {
-                        log::error!("Failed to save document: {}", e);
+                        log::error!("Failed to save document");
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentSaveFailed {
                                 session: session_key.clone(),

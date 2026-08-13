@@ -14,8 +14,8 @@ use crate::keyboard::{
     FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
     NextSearchMatch, PasteDocuments, PrevSearchMatch, RemoveMatchingValues, RemoveSelectedField,
     RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
-    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview,
-    ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
+    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
+    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
 };
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
 
@@ -670,6 +670,16 @@ impl CollectionView {
                 state.set_collection_subview(&session_key, CollectionSubview::Aggregation);
                 cx.notify();
             });
+        }))
+        .on_action(cx.listener(|this, _: &ShowHistorySubview, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            this.state.update(cx, |state, cx| {
+                state.set_collection_subview(&session_key, CollectionSubview::History);
+                cx.notify();
+            });
+            AppCommands::load_collection_history(this.state.clone(), session_key, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowSchemaSubview, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {

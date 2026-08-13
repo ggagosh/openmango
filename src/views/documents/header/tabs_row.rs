@@ -7,7 +7,7 @@ use gpui_component::tab::{Tab, TabBar};
 use crate::state::{AppCommands, AppState, CollectionSubview, SessionKey};
 use crate::theme::islands;
 
-/// Render the subview tabs (Documents/Indexes/Stats/Aggregation/Schema).
+/// Render the collection subview tabs.
 pub fn render_subview_tabs(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
@@ -47,6 +47,12 @@ pub fn render_subview_tabs(
                         session_key,
                         cx,
                     );
+                } else if next == CollectionSubview::History {
+                    AppCommands::load_collection_history(
+                        state_for_subview.clone(),
+                        session_key,
+                        cx,
+                    );
                 }
             }
         })
@@ -56,5 +62,6 @@ pub fn render_subview_tabs(
             Tab::new().label("Stats"),
             Tab::new().label("Aggregation"),
             Tab::new().label("Schema"),
+            Tab::new().label("History"),
         ])
 }

@@ -3,9 +3,9 @@ use gpui::{Action, SharedString, Window};
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DiscardDocumentChanges, FocusContent,
     FocusSidebar, InsertDocument, OpenForge, OpenQueryLibrary, OpenSettings, RefreshView,
-    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview,
-    ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy, TransferExport,
-    TransferImport,
+    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
+    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy,
+    TransferExport, TransferImport,
 };
 use crate::state::AppState;
 use crate::state::TabKey;
@@ -498,12 +498,21 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("view:history"),
+            label: SharedString::from("Show History"),
+            category: ActionCategory::View,
+            shortcut: registered_shortcut(window, &ShowHistorySubview),
+            available: has_collection,
+            priority: 4,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("view:schema"),
             label: SharedString::from("Show Schema"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowSchemaSubview),
             available: has_collection,
-            priority: 4,
+            priority: 5,
             ..Default::default()
         },
     ]

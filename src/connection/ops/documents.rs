@@ -368,6 +368,32 @@ impl ConnectionManager {
         expected: &Document,
         replacement: Document,
     ) -> Result<()> {
+        if self.replace_document_if_current_matches(
+            client,
+            database,
+            collection,
+            id,
+            expected,
+            replacement,
+        )? {
+            Ok(())
+        } else {
+            Err(crate::error::Error::Parse(
+                "Document changed on the server; reload before saving.".to_string(),
+            ))
+        }
+    }
+
+    /// Return whether an exact-current-state replacement matched its document.
+    pub fn replace_document_if_current_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+        expected: &Document,
+        replacement: Document,
+    ) -> Result<bool> {
         let client = client.clone();
         let database = database.to_string();
         let collection = collection.to_string();
@@ -381,12 +407,7 @@ impl ConnectionManager {
         self.runtime.block_on(async {
             let coll = client.database(&database).collection::<Document>(&collection);
             let result = coll.replace_one(filter, replacement).await?;
-            if result.matched_count == 0 {
-                return Err(crate::error::Error::Parse(
-                    "Document changed on the server; reload before saving.".to_string(),
-                ));
-            }
-            Ok(())
+            Ok(result.matched_count == 1)
         })
     }
 

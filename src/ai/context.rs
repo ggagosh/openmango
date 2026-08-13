@@ -228,6 +228,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
             CollectionSubview::Stats => "Stats",
             CollectionSubview::Aggregation => "Aggregation",
             CollectionSubview::Schema => "Schema",
+            CollectionSubview::History => "History",
         };
         let mut query_buf = String::new();
         let _ = write!(query_buf, "Active subview: {subview_label}");
