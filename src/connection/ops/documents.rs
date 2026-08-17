@@ -431,6 +431,54 @@ impl ConnectionManager {
         })
     }
 
+    /// Delete only when the server document still matches the expected image.
+    pub fn delete_document_if_current_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+        expected: &Document,
+    ) -> Result<bool> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+        let expected = expected.clone();
+        let filter = doc! {
+            "_id": id,
+            "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
+        };
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let result = coll.delete_one(filter).await?;
+            Ok(result.deleted_count == 1)
+        })
+    }
+
+    /// Insert a recovery image only while its `_id` remains absent.
+    pub fn insert_document_if_absent_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        document: Document,
+    ) -> Result<bool> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            match coll.insert_one(document).await {
+                Ok(_) => Ok(true),
+                Err(error) if is_duplicate_key(&error) => Ok(false),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+
     /// Delete a document by _id in a collection (runs in Tokio runtime)
     pub fn delete_document(
         &self,
@@ -450,4 +498,12 @@ impl ConnectionManager {
             Ok(())
         })
     }
+}
+
+fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
+    matches!(
+        error.kind.as_ref(),
+        mongodb::error::ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error))
+            if write_error.code == 11000
+    )
 }

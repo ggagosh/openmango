@@ -7,6 +7,7 @@ pub type OperationId = Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {
     ReplaceDocument,
+    DeleteDocument,
     RevertDocument,
 }
 
@@ -14,6 +15,7 @@ impl OperationKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ReplaceDocument => "replace_document",
+            Self::DeleteDocument => "delete_document",
             Self::RevertDocument => "revert_document",
         }
     }
@@ -21,6 +23,7 @@ impl OperationKind {
     pub(crate) fn parse(value: &str) -> anyhow::Result<Self> {
         match value {
             "replace_document" => Ok(Self::ReplaceDocument),
+            "delete_document" => Ok(Self::DeleteDocument),
             "revert_document" => Ok(Self::RevertDocument),
             _ => anyhow::bail!("unsupported operation kind"),
         }
@@ -29,7 +32,8 @@ impl OperationKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::ReplaceDocument => "Document replacement",
-            Self::RevertDocument => "Document revert",
+            Self::DeleteDocument => "Document deletion",
+            Self::RevertDocument => "Document restore",
         }
     }
 }
@@ -122,6 +126,10 @@ pub enum Mutation {
         replacement: Document,
         /// Existing editor concurrency precondition. The engine still captures and owns the
         /// durable server before-image.
+        editor_precondition: Option<Document>,
+    },
+    DeleteDocument {
+        target: DocumentTarget,
         editor_precondition: Option<Document>,
     },
 }
@@ -234,8 +242,8 @@ pub struct ReconciliationReport {
 #[derive(Debug, Clone)]
 pub(crate) struct RecoveryPayload {
     pub target: DocumentTarget,
-    pub before: Document,
-    pub after: Document,
+    pub before: Option<Document>,
+    pub after: Option<Document>,
 }
 
 #[derive(Debug, Clone)]

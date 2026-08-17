@@ -240,7 +240,7 @@ impl ConnectionManager {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().secondary_foreground)
-                                    .child("Encrypt recovery data for document replacements on this connection."),
+                                    .child("Encrypt recovery data for document replacements and deletions on this connection."),
                             ),
                     ),
             )

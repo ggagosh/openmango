@@ -51,9 +51,9 @@ pub(crate) fn render_history_view(
                 "History is disabled"
             },
             if enabled {
-                "Document replacements saved from now on will appear here."
+                "Document replacements and deletions saved from now on will appear here."
             } else {
-                "Enable Reversible history in this connection's settings to track future replacements."
+                "Enable Reversible history in this connection's settings to track future replacements and deletions."
             },
             cx,
         )
@@ -190,11 +190,13 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         .unwrap_or("unknown document");
     let title = match operation.kind {
         OperationKind::ReplaceDocument => format!("Updated document {document_id}"),
+        OperationKind::DeleteDocument => format!("Deleted document {document_id}"),
         OperationKind::RevertDocument => format!("Restored document {document_id}"),
     };
     let preview = change_preview(&operation);
     let icon = match operation.kind {
         OperationKind::ReplaceDocument => IconName::Replace,
+        OperationKind::DeleteDocument => IconName::Delete,
         OperationKind::RevertDocument => IconName::Undo2,
     };
 

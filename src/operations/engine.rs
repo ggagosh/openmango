@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::bson::bson_value_preview;
 
 use super::backend::{BackendError, MutationBackend};
-use super::crypto::{HistoryCipher, document_hash};
+use super::crypto::{HistoryCipher, document_state_hash};
 use super::model::{
     Mutation, OperationChangePreview, OperationContext, OperationDetails, OperationId,
     OperationKind, OperationPreview, OperationQuery, OperationStatus, OperationSummary, Page,
@@ -22,7 +22,7 @@ pub enum OperationError {
     Unavailable,
     #[error("operation was not found")]
     NotFound,
-    #[error("only existing single-document replacements are supported")]
+    #[error("only existing single-document replacements and deletes are supported")]
     Unsupported,
     #[error("document changed after it was opened for editing")]
     PreconditionConflict,
@@ -42,7 +42,7 @@ impl OperationError {
             Self::Unavailable => "Reversible history is unavailable; no write was made.",
             Self::NotFound => "The operation was not found.",
             Self::Unsupported => {
-                "Reversible history currently supports existing single-document replacements only."
+                "Reversible history currently supports existing single-document replacements and deletes only."
             }
             Self::PreconditionConflict | Self::Conflict { .. } => {
                 "The document changed on the server. OpenMango did not overwrite it."
@@ -80,8 +80,15 @@ impl OperationEngine {
         context: OperationContext,
         mutation: Mutation,
     ) -> Result<OperationId, OperationError> {
-        let Mutation::ReplaceDocument { target, replacement, editor_precondition } = mutation;
-        if replacement.get("_id") != Some(&target.id) {
+        let (target, after, editor_precondition, kind) = match mutation {
+            Mutation::ReplaceDocument { target, replacement, editor_precondition } => {
+                (target, Some(replacement), editor_precondition, OperationKind::ReplaceDocument)
+            }
+            Mutation::DeleteDocument { target, editor_precondition } => {
+                (target, None, editor_precondition, OperationKind::DeleteDocument)
+            }
+        };
+        if after.as_ref().is_some_and(|document| document.get("_id") != Some(&target.id)) {
             return Err(OperationError::Unsupported);
         }
         let before = self
@@ -97,8 +104,8 @@ impl OperationEngine {
         }
         let operation_id = self.prepare_transition(
             context,
-            OperationKind::ReplaceDocument,
-            RecoveryPayload { target, before, after: replacement },
+            kind,
+            RecoveryPayload { target, before: Some(before), after },
             None,
             None,
         )?;
@@ -197,20 +204,7 @@ impl OperationEngine {
                     }
                 };
             let current = match self.backend.current_document(&payload.target) {
-                Ok(Some(current)) => current,
-                Ok(None) => {
-                    self.store
-                        .transition(
-                            operation.id,
-                            OperationStatus::Conflict,
-                            "reconciliation_target_missing",
-                            "conflict",
-                            Some("Target document is missing; recovery data was retained."),
-                        )
-                        .map_err(|_| OperationError::Internal)?;
-                    report.conflicted += 1;
-                    continue;
-                }
+                Ok(current) => current,
                 Err(_) => {
                     self.store
                         .record_recovery_status(
@@ -223,7 +217,8 @@ impl OperationEngine {
                     continue;
                 }
             };
-            let current_hash = document_hash(&current).map_err(|_| OperationError::Internal)?;
+            let current_hash =
+                document_state_hash(current.as_ref()).map_err(|_| OperationError::Internal)?;
             if current_hash == stored.after_hash {
                 self.store
                     .transition(
@@ -332,14 +327,23 @@ impl OperationEngine {
             .cipher
             .decrypt(operation_id, details.summary.connection_name, &stored)
             .map_err(|_| OperationError::Internal)?;
+        if payload.before.is_none() && payload.after.is_none() {
+            return Err(OperationError::Internal);
+        }
         self.store
             .transition(operation_id, OperationStatus::Running, "running", "running", None)
             .map_err(|_| OperationError::Internal)?;
-        match self.backend.replace_document_if_current(
-            &payload.target,
-            &payload.before,
-            &payload.after,
-        ) {
+        let result = match (payload.before.as_ref(), payload.after.as_ref()) {
+            (Some(before), Some(after)) => {
+                self.backend.replace_document_if_current(&payload.target, before, after)
+            }
+            (Some(before), None) => {
+                self.backend.delete_document_if_current(&payload.target, before)
+            }
+            (None, Some(after)) => self.backend.insert_document_if_absent(&payload.target, after),
+            (None, None) => unreachable!(),
+        };
+        match result {
             Ok(()) => {
                 if self
                     .store
@@ -389,7 +393,23 @@ impl OperationEngine {
         self.prepare_transition(
             OperationContext::user(),
             OperationKind::ReplaceDocument,
-            RecoveryPayload { target, before, after },
+            RecoveryPayload { target, before: Some(before), after: Some(after) },
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[cfg(test)]
+    pub(super) fn prepare_delete_for_test(
+        &self,
+        target: super::model::DocumentTarget,
+        before: mongodb::bson::Document,
+    ) -> OperationId {
+        self.prepare_transition(
+            OperationContext::user(),
+            OperationKind::DeleteDocument,
+            RecoveryPayload { target, before: Some(before), after: None },
             None,
             None,
         )
@@ -404,26 +424,32 @@ impl OperationEngine {
 
 fn operation_preview(payload: &RecoveryPayload) -> OperationPreview {
     let mut changes = Vec::new();
-    for (field, before) in &payload.before {
-        if field == "_id" {
-            continue;
-        }
-        let after = payload.after.get(field);
-        if after != Some(before) {
-            changes.push(OperationChangePreview {
-                field: field.clone(),
-                before: Some(bson_value_preview(before, 32)),
-                after: after.map(|value| bson_value_preview(value, 32)),
-            });
+    if let Some(before) = &payload.before {
+        for (field, before_value) in before {
+            if field == "_id" {
+                continue;
+            }
+            let after = payload.after.as_ref().and_then(|document| document.get(field));
+            if after != Some(before_value) {
+                changes.push(OperationChangePreview {
+                    field: field.clone(),
+                    before: Some(bson_value_preview(before_value, 32)),
+                    after: after.map(|value| bson_value_preview(value, 32)),
+                });
+            }
         }
     }
-    for (field, after) in &payload.after {
-        if field != "_id" && !payload.before.contains_key(field) {
-            changes.push(OperationChangePreview {
-                field: field.clone(),
-                before: None,
-                after: Some(bson_value_preview(after, 32)),
-            });
+    if let Some(after) = &payload.after {
+        for (field, after_value) in after {
+            if field != "_id"
+                && payload.before.as_ref().is_none_or(|document| !document.contains_key(field))
+            {
+                changes.push(OperationChangePreview {
+                    field: field.clone(),
+                    before: None,
+                    after: Some(bson_value_preview(after_value, 32)),
+                });
+            }
         }
     }
     let total_changes = changes.len();

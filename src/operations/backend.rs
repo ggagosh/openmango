@@ -28,6 +28,22 @@ pub(crate) trait MutationBackend: Send + Sync {
         expected: &Document,
         replacement: &Document,
     ) -> Result<(), BackendError>;
+
+    fn delete_document_if_current(
+        &self,
+        _target: &DocumentTarget,
+        _expected: &Document,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::Failed)
+    }
+
+    fn insert_document_if_absent(
+        &self,
+        _target: &DocumentTarget,
+        _document: &Document,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::Failed)
+    }
 }
 
 pub(crate) struct MongoMutationBackend {
@@ -84,6 +100,43 @@ impl MutationBackend for MongoMutationBackend {
             Err(_) => Err(BackendError::Failed),
         }
     }
+
+    fn delete_document_if_current(
+        &self,
+        target: &DocumentTarget,
+        expected: &Document,
+    ) -> Result<(), BackendError> {
+        let client = self.client(target.connection_id)?;
+        match self.manager.delete_document_if_current_matches(
+            &client,
+            &target.database,
+            &target.collection,
+            &target.id,
+            expected,
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BackendError::Conflict),
+            Err(_) => Err(BackendError::Failed),
+        }
+    }
+
+    fn insert_document_if_absent(
+        &self,
+        target: &DocumentTarget,
+        document: &Document,
+    ) -> Result<(), BackendError> {
+        let client = self.client(target.connection_id)?;
+        match self.manager.insert_document_if_absent_matches(
+            &client,
+            &target.database,
+            &target.collection,
+            document.clone(),
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BackendError::Conflict),
+            Err(_) => Err(BackendError::Failed),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -123,6 +176,34 @@ impl MutationBackend for InMemoryMutationBackend {
             return Err(BackendError::Conflict);
         }
         documents.insert(target_key(target), replacement.clone());
+        Ok(())
+    }
+
+    fn delete_document_if_current(
+        &self,
+        target: &DocumentTarget,
+        expected: &Document,
+    ) -> Result<(), BackendError> {
+        let mut documents = self.documents.lock().map_err(|_| BackendError::Failed)?;
+        let key = target_key(target);
+        if documents.get(&key) != Some(expected) {
+            return Err(BackendError::Conflict);
+        }
+        documents.remove(&key);
+        Ok(())
+    }
+
+    fn insert_document_if_absent(
+        &self,
+        target: &DocumentTarget,
+        document: &Document,
+    ) -> Result<(), BackendError> {
+        let mut documents = self.documents.lock().map_err(|_| BackendError::Failed)?;
+        let key = target_key(target);
+        if documents.contains_key(&key) {
+            return Err(BackendError::Conflict);
+        }
+        documents.insert(key, document.clone());
         Ok(())
     }
 }

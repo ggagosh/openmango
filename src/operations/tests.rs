@@ -119,6 +119,114 @@ fn successful_replacement_becomes_completed() {
 }
 
 #[test]
+fn successful_delete_can_be_restored_while_id_remains_absent() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(7);
+    let before = doc! { "_id": 7, "name": "recover me" };
+    backend.set_document(&target, before.clone());
+    let engine = engine_with(&directory, [13; 32], backend.clone());
+
+    let deleted = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::DeleteDocument {
+                target: target.clone(),
+                editor_precondition: Some(before.clone()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(backend.document(&target), None);
+    let deleted_summary = engine.get(deleted).unwrap().unwrap().summary;
+    assert_eq!(deleted_summary.kind, super::model::OperationKind::DeleteDocument);
+    assert_eq!(deleted_summary.preview.unwrap().changes[0].field, "name");
+
+    let restored = engine.revert(OperationContext::user(), deleted).unwrap();
+
+    assert_eq!(backend.document(&target), Some(before));
+    assert_eq!(engine.get(restored).unwrap().unwrap().summary.status, OperationStatus::Completed);
+    assert!(!engine.get(deleted).unwrap().unwrap().summary.can_revert());
+}
+
+#[test]
+fn concurrent_change_blocks_delete() {
+    struct RacingDeleteBackend {
+        inner: Arc<InMemoryMutationBackend>,
+        concurrent: Document,
+    }
+    impl MutationBackend for RacingDeleteBackend {
+        fn current_document(
+            &self,
+            target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            self.inner.current_document(target)
+        }
+
+        fn replace_document_if_current(
+            &self,
+            target: &DocumentTarget,
+            expected: &Document,
+            replacement: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.replace_document_if_current(target, expected, replacement)
+        }
+
+        fn delete_document_if_current(
+            &self,
+            target: &DocumentTarget,
+            expected: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.set_document(target, self.concurrent.clone());
+            self.inner.delete_document_if_current(target, expected)
+        }
+    }
+
+    let directory = TempDir::new().unwrap();
+    let memory = Arc::new(InMemoryMutationBackend::default());
+    let target = target(8);
+    let before = document(8, "before");
+    let concurrent = document(8, "concurrent");
+    memory.set_document(&target, before.clone());
+    let engine = engine_with(
+        &directory,
+        [14; 32],
+        Arc::new(RacingDeleteBackend { inner: memory.clone(), concurrent: concurrent.clone() }),
+    );
+
+    let error = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::DeleteDocument { target: target.clone(), editor_precondition: Some(before) },
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(memory.document(&target), Some(concurrent));
+}
+
+#[test]
+fn restore_delete_conflicts_when_id_was_reused() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(9);
+    backend.set_document(&target, document(9, "before"));
+    let engine = engine_with(&directory, [15; 32], backend.clone());
+    let deleted = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::DeleteDocument { target: target.clone(), editor_precondition: None },
+        )
+        .unwrap();
+    backend.set_document(&target, document(9, "reused"));
+
+    let error = engine.revert(OperationContext::user(), deleted).unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(backend.document(&target), Some(document(9, "reused")));
+}
+
+#[test]
 fn operation_listing_previews_the_document_and_changed_fields() {
     let directory = TempDir::new().unwrap();
     let backend = Arc::new(InMemoryMutationBackend::default());
@@ -313,6 +421,29 @@ fn stale_editor_precondition_blocks_tracked_save_before_prepare() {
 }
 
 #[test]
+fn stale_editor_precondition_blocks_tracked_delete_before_prepare() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(1);
+    backend.set_document(&target, document(1, "server-newer"));
+    let engine = engine_with(&directory, [16; 32], backend.clone());
+
+    let error = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::DeleteDocument {
+                target: target.clone(),
+                editor_precondition: Some(document(1, "editor-baseline")),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error, OperationError::PreconditionConflict);
+    assert_eq!(backend.document(&target), Some(document(1, "server-newer")));
+    assert!(engine.list(OperationQuery::default()).unwrap().items.is_empty());
+}
+
+#[test]
 fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() {
     let directory = TempDir::new().unwrap();
     let backend = Arc::new(InMemoryMutationBackend::default());
@@ -321,6 +452,7 @@ fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() 
     let applied_target = target(2);
     let ambiguous_target = target(3);
     let missing_target = target(4);
+    let deleted_target = target(5);
     let unapplied = engine.prepare_for_test(
         unapplied_target.clone(),
         document(1, "before"),
@@ -338,6 +470,7 @@ fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() 
     );
     let missing =
         engine.prepare_for_test(missing_target, document(4, "before"), document(4, "after"));
+    let deleted = engine.prepare_delete_for_test(deleted_target, document(5, "before"));
     backend.set_document(&unapplied_target, document(1, "before"));
     backend.set_document(&applied_target, document(2, "after"));
     backend.set_document(&ambiguous_target, document(3, "other"));
@@ -345,12 +478,13 @@ fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() 
     let report = engine.reconcile().unwrap();
 
     assert_eq!(report.not_applied, 1);
-    assert_eq!(report.completed, 1);
+    assert_eq!(report.completed, 2);
     assert_eq!(report.conflicted, 2);
     assert_eq!(engine.get(unapplied).unwrap().unwrap().summary.status, OperationStatus::Failed);
     assert_eq!(engine.get(applied).unwrap().unwrap().summary.status, OperationStatus::Completed);
     assert_eq!(engine.get(ambiguous).unwrap().unwrap().summary.status, OperationStatus::Conflict);
     assert_eq!(engine.get(missing).unwrap().unwrap().summary.status, OperationStatus::Conflict);
+    assert_eq!(engine.get(deleted).unwrap().unwrap().summary.status, OperationStatus::Completed);
 }
 
 #[test]

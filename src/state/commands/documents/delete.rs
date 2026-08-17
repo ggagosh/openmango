@@ -1,10 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
-use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
-use crate::state::{AppEvent, AppState, SessionKey};
-
-use crate::state::AppCommands;
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 
 impl AppCommands {
     /// Delete a document by _id in MongoDB.
@@ -20,23 +17,84 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
-        let (database, collection, original_id) = {
-            let state = state.read(cx);
-            let Some(original) = state.document_for_key(&session_key, &doc_key) else {
+        let (
+            database,
+            collection,
+            original,
+            original_id,
+            history_enabled,
+            operation_engine,
+            operation_backend,
+            connection_name,
+        ) = {
+            let state_ref = state.read(cx);
+            let Some(original) = state_ref.document_for_key(&session_key, &doc_key) else {
                 return;
             };
             let Some(id) = original.get("_id") else {
                 return;
             };
 
-            (session_key.database.clone(), session_key.collection.clone(), id.clone())
+            (
+                session_key.database.clone(),
+                session_key.collection.clone(),
+                original.clone(),
+                id.clone(),
+                state_ref.connection_reversible_history(session_key.connection_id),
+                state_ref.operation_engine(),
+                state_ref.operation_backend(),
+                state_ref
+                    .connection_name(session_key.connection_id)
+                    .unwrap_or_else(|| "Connection".to_string()),
+            )
         };
+        let history_engine =
+            match crate::operations::tracked_engine(history_enabled, operation_engine) {
+                Ok(engine) => engine,
+                Err(error) => {
+                    state.update(cx, |state, cx| {
+                        let event = AppEvent::DocumentDeleteFailed {
+                            session: session_key.clone(),
+                            error: error.user_message().to_string(),
+                        };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+        let tracked_delete = history_enabled;
         let manager = state.read(cx).connection_manager();
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move { manager.delete_document(&client, &database, &collection, &original_id) }
+            async move {
+                if let Some(engine) = history_engine {
+                    operation_backend.register_client(session_key.connection_id, client);
+                    engine
+                        .execute(
+                            crate::operations::OperationContext::user(),
+                            crate::operations::Mutation::DeleteDocument {
+                                target: crate::operations::DocumentTarget {
+                                    connection_id: session_key.connection_id,
+                                    connection_name,
+                                    database,
+                                    collection,
+                                    id: original_id,
+                                },
+                                editor_precondition: Some(original),
+                            },
+                        )
+                        .map(|_| ())
+                        .map_err(|error| {
+                            crate::error::Error::Parse(error.user_message().to_string())
+                        })
+                } else {
+                    manager.delete_document(&client, &database, &collection, &original_id)
+                }
+            }
         });
 
         cx.spawn({
@@ -81,13 +139,23 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
+                        if tracked_delete
+                            && state.read(cx).session_subview(&session_key)
+                                == Some(crate::state::CollectionSubview::History)
+                        {
+                            AppCommands::load_collection_history(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                     }
-                    Err(e) => {
-                        log::error!("Failed to delete document: {}", e);
+                    Err(error) => {
+                        log::error!("Failed to delete document");
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentDeleteFailed {
                                 session: session_key.clone(),
-                                error: e.to_string(),
+                                error: error.to_string(),
                             };
                             state.update_status_from_event(&event);
                             cx.emit(event);

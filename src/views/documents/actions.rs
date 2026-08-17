@@ -160,7 +160,13 @@ impl CollectionView {
             }
             if selected_docs.len() == 1 {
                 let doc_key = selected_docs.into_iter().next().unwrap();
-                let message = format!("Delete document {}? This cannot be undone.", doc_key);
+                let message =
+                    if this.state.read(cx).connection_reversible_history(session_key.connection_id)
+                    {
+                        format!("Delete document {}? You can restore it from History.", doc_key)
+                    } else {
+                        format!("Delete document {}? This cannot be undone.", doc_key)
+                    };
                 let state = this.state.clone();
                 let state_for_write = state.clone();
                 request_connection_write(
