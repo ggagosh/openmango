@@ -46,6 +46,7 @@ impl OperationKind {
 pub enum OperationOrigin {
     User,
     BuiltInAi,
+    Mcp,
 }
 
 impl OperationOrigin {
@@ -53,6 +54,7 @@ impl OperationOrigin {
         match self {
             Self::User => "user",
             Self::BuiltInAi => "built_in_ai",
+            Self::Mcp => "mcp",
         }
     }
 
@@ -60,6 +62,7 @@ impl OperationOrigin {
         match value {
             "user" => Ok(Self::User),
             "built_in_ai" => Ok(Self::BuiltInAi),
+            "mcp" => Ok(Self::Mcp),
             _ => anyhow::bail!("unsupported operation origin"),
         }
     }
@@ -68,12 +71,14 @@ impl OperationOrigin {
         match self {
             Self::User => "User",
             Self::BuiltInAi => "Built-in AI",
+            Self::Mcp => "MCP",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationStatus {
+    PendingApproval,
     Prepared,
     Running,
     Completed,
@@ -86,6 +91,7 @@ pub enum OperationStatus {
 impl OperationStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::PendingApproval => "pending_approval",
             Self::Prepared => "prepared",
             Self::Running => "running",
             Self::Completed => "completed",
@@ -98,6 +104,7 @@ impl OperationStatus {
 
     pub(crate) fn parse(value: &str) -> anyhow::Result<Self> {
         match value {
+            "pending_approval" => Ok(Self::PendingApproval),
             "prepared" => Ok(Self::Prepared),
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
@@ -111,6 +118,7 @@ impl OperationStatus {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::PendingApproval => "Awaiting approval",
             Self::Prepared => "Prepared",
             Self::Running => "Running",
             Self::Completed => "Completed",
@@ -162,6 +170,10 @@ impl OperationContext {
 
     pub fn built_in_ai() -> Self {
         Self { origin: OperationOrigin::BuiltInAi }
+    }
+
+    pub fn mcp() -> Self {
+        Self { origin: OperationOrigin::Mcp }
     }
 }
 

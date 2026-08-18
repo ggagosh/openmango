@@ -170,6 +170,68 @@ fn built_in_ai_origin_and_recovery_size_limit_are_persisted() {
 }
 
 #[test]
+fn mcp_transition_waits_for_approval_and_can_be_cancelled() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let engine = engine_with(&directory, [22; 32], backend.clone());
+    let approved_target = target(15);
+    let cancelled_target = target(16);
+    let approved = engine
+        .prepare_for_approval(
+            OperationContext::mcp(),
+            Mutation::InsertDocument {
+                target: approved_target.clone(),
+                document: document(15, "approved"),
+            },
+        )
+        .unwrap();
+    let cancelled = engine
+        .prepare_for_approval(
+            OperationContext::mcp(),
+            Mutation::InsertDocument {
+                target: cancelled_target.clone(),
+                document: document(16, "cancelled"),
+            },
+        )
+        .unwrap();
+
+    let pending = engine.get(approved).unwrap().unwrap();
+    assert_eq!(pending.summary.status, OperationStatus::PendingApproval);
+    assert_eq!(pending.events[0].event_type, "pending_approval");
+    assert_eq!(pending.events[0].status, OperationStatus::PendingApproval);
+    assert_eq!(backend.document(&approved_target), None);
+
+    engine.apply_approved(approved).unwrap();
+    engine.cancel_pending(cancelled).unwrap();
+
+    let approved = engine.get(approved).unwrap().unwrap().summary;
+    assert_eq!(approved.status, OperationStatus::Completed);
+    assert_eq!(approved.origin, OperationOrigin::Mcp);
+    assert_eq!(backend.document(&approved_target), Some(document(15, "approved")));
+    assert_eq!(engine.get(cancelled).unwrap().unwrap().summary.status, OperationStatus::Failed);
+    assert_eq!(backend.document(&cancelled_target), None);
+
+    let retained = engine
+        .prepare_for_approval(
+            OperationContext::mcp(),
+            Mutation::InsertDocument { target: target(17), document: document(17, "retained") },
+        )
+        .unwrap();
+    let orphaned = engine
+        .prepare_for_approval(
+            OperationContext::mcp(),
+            Mutation::InsertDocument { target: target(18), document: document(18, "orphaned") },
+        )
+        .unwrap();
+    engine.cancel_unreferenced_pending(&std::collections::HashSet::from([retained])).unwrap();
+    assert_eq!(
+        engine.get(retained).unwrap().unwrap().summary.status,
+        OperationStatus::PendingApproval
+    );
+    assert_eq!(engine.get(orphaned).unwrap().unwrap().summary.status, OperationStatus::Failed);
+}
+
+#[test]
 fn changed_insert_blocks_revert() {
     let directory = TempDir::new().unwrap();
     let backend = Arc::new(InMemoryMutationBackend::default());

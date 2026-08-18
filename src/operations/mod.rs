@@ -23,22 +23,37 @@ pub const MAX_REVERSIBLE_BULK_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) fn ensure_reversible_bulk_size<'a>(
     documents: impl IntoIterator<Item = &'a mongodb::bson::Document>,
 ) -> Result<(), OperationError> {
+    reversible_bulk_size(documents).map(|_| ())
+}
+
+pub(crate) fn reversible_bulk_size<'a>(
+    documents: impl IntoIterator<Item = &'a mongodb::bson::Document>,
+) -> Result<usize, OperationError> {
     ensure_reversible_bulk_size_with_limit(documents, MAX_REVERSIBLE_BULK_BYTES)
 }
 
 fn ensure_reversible_bulk_size_with_limit<'a>(
     documents: impl IntoIterator<Item = &'a mongodb::bson::Document>,
     max_bytes: usize,
-) -> Result<(), OperationError> {
+) -> Result<usize, OperationError> {
     let mut bytes = 0usize;
     for document in documents {
-        let encoded = mongodb::bson::to_vec(document).map_err(|_| OperationError::Internal)?;
-        bytes = bytes.checked_add(encoded.len()).ok_or(OperationError::RecoveryLimitExceeded)?;
+        bytes = bytes
+            .checked_add(reversible_document_size(document)?)
+            .ok_or(OperationError::RecoveryLimitExceeded)?;
         if bytes > max_bytes {
             return Err(OperationError::RecoveryLimitExceeded);
         }
     }
-    Ok(())
+    Ok(bytes)
+}
+
+pub(crate) fn reversible_document_size(
+    document: &mongodb::bson::Document,
+) -> Result<usize, OperationError> {
+    mongodb::bson::to_vec(document)
+        .map(|encoded| encoded.len())
+        .map_err(|_| OperationError::Internal)
 }
 
 pub(crate) fn tracked_engine(

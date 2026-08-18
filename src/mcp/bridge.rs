@@ -1,4 +1,6 @@
-use gpui::{AsyncApp, Context, Entity, WeakEntity};
+use std::sync::Arc;
+
+use gpui::{App, AppContext as _, AsyncApp, Context, Entity, WeakEntity};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -7,10 +9,15 @@ use mongodb::Client;
 use crate::actions::model::{
     BackupManifest, OperationRecord, ProposedAction, ProposedActionContent,
 };
-use crate::state::{AppEvent, AppState};
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 use crate::sync::plan::ActionPreflight;
 
 use super::{McpConnection, policy::PolicyEvaluator};
+
+pub struct McpDocumentWriteContext {
+    pub preflight: ActionPreflight,
+    pub engine: Arc<crate::operations::OperationEngine>,
+}
 
 #[derive(Clone)]
 pub struct McpBridge {
@@ -26,6 +33,10 @@ enum BridgeRequest {
     ResolveRead {
         connection_id: Uuid,
         response: oneshot::Sender<Result<Client, String>>,
+    },
+    ResolveDocumentWrite {
+        connection_id: Uuid,
+        response: oneshot::Sender<Result<McpDocumentWriteContext, String>>,
     },
     ResolveAction {
         source_connection_id: Option<Uuid>,
@@ -85,6 +96,57 @@ impl McpBridge {
                         let result = shared_client(state.read(cx), connection_id);
                         let _ = response.send(result);
                     }
+                    BridgeRequest::ResolveDocumentWrite { connection_id, response } => {
+                        let state = state.read(cx);
+                        let policy = PolicyEvaluator::new(state);
+                        let result = (|| {
+                            let connection = state
+                                .connection_by_id(connection_id)
+                                .filter(|connection| connection.agent_shared)
+                                .ok_or_else(|| "Connection is not shared with agents".to_string())?;
+                            if !connection.reversible_history {
+                                return Err(
+                                    "MCP document writes require Reversible history on the target connection."
+                                        .to_string(),
+                                );
+                            }
+                            let target = policy.authorize_action_connection(connection_id, true)?;
+                            if target.snapshot.protected {
+                                return Err(
+                                    "Protected or Production targets require a verified backup; bounded MCP document proposals are unavailable."
+                                        .to_string(),
+                                );
+                            }
+                            let engine = state.operation_engine().ok_or_else(|| {
+                                "Reversible history is unavailable; no proposal was created."
+                                    .to_string()
+                            })?;
+                            state
+                                .operation_backend()
+                                .register_client(connection_id, target.client.clone());
+                            let broker = state.action_broker();
+                            let recovery_interlocks = broker
+                                .store()
+                                .list_operations()
+                                .map_err(|error| error.to_string())?
+                                .into_iter()
+                                .filter(|operation| operation.recovery_interlock)
+                                .map(|operation| {
+                                    (operation.target_connection_id, operation.target_database)
+                                })
+                                .collect();
+                            Ok(McpDocumentWriteContext {
+                                preflight: ActionPreflight {
+                                    source: None,
+                                    target,
+                                    backup_root: broker.store().backups_root(),
+                                    recovery_interlocks,
+                                },
+                                engine,
+                            })
+                        })();
+                        let _ = response.send(result);
+                    }
                     BridgeRequest::ResolveAction {
                         source_connection_id,
                         target_connection_id,
@@ -133,16 +195,63 @@ impl McpBridge {
                         let _ = response.send(label);
                     }
                     BridgeRequest::ProposeAction { content, response } => {
-                        let result = state
+                        let document_action = match &content.request {
+                            crate::actions::model::ActionRequest::DocumentTransitions {
+                                connection_id,
+                                database,
+                                collection,
+                                operation_ids,
+                                ..
+                            } => Some((
+                                SessionKey::new(
+                                    *connection_id,
+                                    database.clone(),
+                                    collection.clone(),
+                                ),
+                                operation_ids.clone(),
+                            )),
+                            _ => None,
+                        };
+                        if response.is_closed() {
+                            if let Some((_, operation_ids)) = document_action {
+                                let engine = state.read(cx).operation_engine();
+                                cancel_document_transitions(engine, operation_ids, cx);
+                            }
+                        } else {
+                            let result = state
                             .read(cx)
                             .action_broker()
                             .propose(*content)
                             .map_err(|error| error.to_string());
+                        let proposed = result.is_ok();
+                        if let Ok(action) = &result {
+                            AppCommands::schedule_document_action_expiry(
+                                state.clone(),
+                                action.clone(),
+                                cx,
+                            );
+                        }
+                        if !proposed
+                            && let Some((_, operation_ids)) = &document_action
+                        {
+                            let engine = state.read(cx).operation_engine();
+                            cancel_document_transitions(engine, operation_ids.clone(), cx);
+                        }
                         let _ = response.send(result);
                         state.update(cx, |_state, cx| {
                             cx.emit(AppEvent::AgentActivityChanged);
                             cx.notify();
                         });
+                            if proposed
+                                && let Some((session_key, _)) = document_action
+                            {
+                                AppCommands::collection_history_changed(
+                                    state.clone(),
+                                    session_key,
+                                    cx,
+                                );
+                            }
+                        }
                     }
                     BridgeRequest::GetAction { action_id, grant_id, response } => {
                         let result = state
@@ -226,6 +335,18 @@ impl McpBridge {
         receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
     }
 
+    pub async fn resolve_document_write(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<McpDocumentWriteContext, String> {
+        let (response, receiver) = oneshot::channel();
+        self.requests
+            .send(BridgeRequest::ResolveDocumentWrite { connection_id, response })
+            .await
+            .map_err(|_| "OpenMango is shutting down".to_string())?;
+        receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
+    }
+
     pub async fn resolve_action(
         &self,
         source_connection_id: Option<Uuid>,
@@ -258,12 +379,22 @@ impl McpBridge {
         &self,
         content: ProposedActionContent,
     ) -> Result<ProposedAction, String> {
+        self.enqueue_action(content)
+            .await?
+            .await
+            .map_err(|_| "OpenMango is shutting down".to_string())?
+    }
+
+    pub(crate) async fn enqueue_action(
+        &self,
+        content: ProposedActionContent,
+    ) -> Result<oneshot::Receiver<Result<ProposedAction, String>>, String> {
         let (response, receiver) = oneshot::channel();
         self.requests
             .send(BridgeRequest::ProposeAction { content: Box::new(content), response })
             .await
             .map_err(|_| "OpenMango is shutting down".to_string())?;
-        receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
+        Ok(receiver)
     }
 
     pub async fn get_action(
@@ -353,6 +484,10 @@ impl McpBridge {
                     BridgeRequest::ResolveRead { response, .. } => {
                         drop(response);
                     }
+                    BridgeRequest::ResolveDocumentWrite { response, .. } => {
+                        let _ = response
+                            .send(Err("Document preflight is unavailable in this test".into()));
+                    }
                     BridgeRequest::ResolveAction { response, .. } => {
                         let _ = response
                             .send(Err("Action preflight is unavailable in this test".into()));
@@ -382,6 +517,22 @@ impl McpBridge {
         });
         Self { requests }
     }
+}
+
+fn cancel_document_transitions(
+    engine: Option<Arc<crate::operations::OperationEngine>>,
+    operation_ids: Vec<Uuid>,
+    cx: &mut App,
+) {
+    let Some(engine) = engine else {
+        return;
+    };
+    cx.background_spawn(async move {
+        for operation_id in operation_ids {
+            let _ = engine.cancel_pending(operation_id);
+        }
+    })
+    .detach();
 }
 
 fn shared_connections(state: &AppState) -> Vec<McpConnection> {

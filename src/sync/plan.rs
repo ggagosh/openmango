@@ -50,6 +50,9 @@ impl ActionPreflight {
             ActionRequest::OperationRevert { .. } => {
                 return Err("Revert preflight must be prepared from its original operation".into());
             }
+            ActionRequest::DocumentTransitions { .. } => {
+                return Err("Document transitions require document preflight".into());
+            }
         };
         if !matches!(request, ActionRequest::DatabaseBackup { .. })
             && self.recovery_interlocks.iter().any(|(connection_id, database)| {
@@ -113,7 +116,9 @@ impl ActionPreflight {
                     .map(|source| source.snapshot.display_name.as_str())
                     .unwrap_or("source")
             ),
-            ActionRequest::OperationRevert { .. } => unreachable!(),
+            ActionRequest::OperationRevert { .. } | ActionRequest::DocumentTransitions { .. } => {
+                unreachable!()
+            }
         };
 
         Ok(ProposedActionContent {
@@ -160,6 +165,97 @@ impl ActionPreflight {
                 free_space_known_sufficient: None,
             },
             source_state_fingerprint: source_fingerprint,
+            target_state_fingerprint: target_fingerprint,
+        })
+    }
+
+    pub async fn prepare_document_action(
+        self,
+        request: ActionRequest,
+        origin: ActionOrigin,
+        estimated_documents: u64,
+        estimated_bytes: u64,
+    ) -> Result<ProposedActionContent, String> {
+        let ActionRequest::DocumentTransitions {
+            connection_id,
+            database,
+            collection,
+            action,
+            operation_ids,
+        } = request.clone()
+        else {
+            return Err("Document action request is invalid".to_string());
+        };
+        validate_database_name(&database)?;
+        validate_collection_name(&collection)?;
+        if connection_id != self.target.snapshot.connection_id {
+            return Err("Document action target does not match the approved connection".into());
+        }
+        if operation_ids.is_empty()
+            || operation_ids.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
+        {
+            return Err("Document action must contain 1-100 prepared transitions".into());
+        }
+        if self.recovery_interlocks.iter().any(|(target_id, target_database)| {
+            *target_id == connection_id && target_database == &database
+        }) {
+            return Err("Target database requires recovery before another agent operation".into());
+        }
+        let target_fingerprint = database_fingerprint(&self.target, &database).await?;
+        if !target_fingerprint.exists
+            || !target_fingerprint.collections.iter().any(|candidate| candidate == &collection)
+        {
+            return Err("Target collection does not exist".into());
+        }
+        let action_label = match action {
+            crate::actions::model::DocumentActionKind::Insert => "Insert into",
+            crate::actions::model::DocumentActionKind::Replace => "Replace documents in",
+            crate::actions::model::DocumentActionKind::Delete => "Delete documents from",
+        };
+        let mut warnings = vec![
+            "Each document will be applied only if it still matches the encrypted proposal checkpoint."
+                .to_string(),
+        ];
+        if self.target.snapshot.protected {
+            warnings.push("Target is protected or Production".to_string());
+        }
+        Ok(ProposedActionContent {
+            request,
+            origin,
+            policy: ActionPolicySnapshot {
+                version: ACTION_POLICY_VERSION,
+                source_shared: true,
+                target_shared: self.target.snapshot.agent_shared,
+                target_writable: !self.target.snapshot.read_only,
+                target_protected: self.target.snapshot.protected,
+            },
+            preview: ActionPreview {
+                summary: format!(
+                    "{action_label} {} / {database}.{collection} ({estimated_documents} document{})",
+                    self.target.snapshot.display_name,
+                    if estimated_documents == 1 { "" } else { "s" }
+                ),
+                source: None,
+                target: self.target.snapshot,
+                source_database: None,
+                target_database: database.clone(),
+                mode: None,
+                estimated_documents,
+                estimated_bytes,
+                warnings,
+                backup_behavior: "Encrypted before/after checkpoints are already prepared; no database backup is required."
+                    .into(),
+                rollback_behavior: "Completed document transitions can be reverted individually from collection History."
+                    .into(),
+            },
+            prerequisites: ActionPrerequisites {
+                database_tools_available: false,
+                source_reachable: true,
+                target_reachable: true,
+                backup_storage_available: false,
+                free_space_known_sufficient: Some(true),
+            },
+            source_state_fingerprint: None,
             target_state_fingerprint: target_fingerprint,
         })
     }
@@ -242,6 +338,16 @@ fn validate_request(request: &ActionRequest) -> Result<(), String> {
             Ok(())
         }
         ActionRequest::OperationRevert { .. } => Ok(()),
+        ActionRequest::DocumentTransitions { database, collection, operation_ids, .. } => {
+            validate_database_name(database)?;
+            validate_collection_name(collection)?;
+            if operation_ids.is_empty()
+                || operation_ids.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
+            {
+                return Err("Document action must contain 1-100 prepared transitions".into());
+            }
+            Ok(())
+        }
     }
 }
 
@@ -253,6 +359,13 @@ pub fn validate_database_name(name: &str) -> Result<(), String> {
         matches!(character, '/' | '\\' | '.' | '"' | '*' | '<' | '>' | ':' | '|' | '?' | '\0' | ' ')
     }) {
         return Err("Database name contains an unsupported character".into());
+    }
+    Ok(())
+}
+
+fn validate_collection_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 255 || name.contains('\0') || name.starts_with("system.") {
+        return Err("Collection name is unsupported for agent document writes".into());
     }
     Ok(())
 }

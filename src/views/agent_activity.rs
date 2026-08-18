@@ -790,6 +790,11 @@ fn action_icon(request: &ActionRequest) -> IconName {
         ActionRequest::DatabaseBackup { .. } => IconName::Download,
         ActionRequest::DatabaseSync { .. } => IconName::Replace,
         ActionRequest::OperationRevert { .. } => IconName::Undo2,
+        ActionRequest::DocumentTransitions { action, .. } => match action {
+            crate::actions::model::DocumentActionKind::Insert => IconName::Plus,
+            crate::actions::model::DocumentActionKind::Replace => IconName::Replace,
+            crate::actions::model::DocumentActionKind::Delete => IconName::Delete,
+        },
     }
 }
 
@@ -798,6 +803,11 @@ fn operation_kind_label(request: &ActionRequest) -> &'static str {
         ActionRequest::DatabaseBackup { .. } => "Backup",
         ActionRequest::DatabaseSync { .. } => "Database sync",
         ActionRequest::OperationRevert { .. } => "Revert",
+        ActionRequest::DocumentTransitions { action, .. } => match action {
+            crate::actions::model::DocumentActionKind::Insert => "Document insert",
+            crate::actions::model::DocumentActionKind::Replace => "Document replacement",
+            crate::actions::model::DocumentActionKind::Delete => "Document deletion",
+        },
     }
 }
 
@@ -902,6 +912,7 @@ impl OperationProgressLabel for OperationRecord {
             crate::actions::model::OperationPhase::BackingUpTarget => "Backing up target",
             crate::actions::model::OperationPhase::VerifyingBackup => "Verifying backup",
             crate::actions::model::OperationPhase::ReplacingTarget => "Replacing target",
+            crate::actions::model::OperationPhase::ApplyingDocuments => "Applying documents",
             crate::actions::model::OperationPhase::VerifyingTarget => "Verifying target",
             crate::actions::model::OperationPhase::RestoringTargetBackup => "Restoring target",
             crate::actions::model::OperationPhase::VerifyingRecovery => "Verifying recovery",

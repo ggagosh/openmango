@@ -69,6 +69,10 @@ impl ActionBroker {
         Ok(action)
     }
 
+    pub fn expire_action_if_needed(&self, id: Uuid) -> Result<ProposedAction> {
+        self.expire_if_needed(self.load_verified_action(id)?)
+    }
+
     pub fn get_for_grant(&self, id: Uuid, grant_id: Uuid) -> Result<ProposedAction> {
         let action = self.load_verified_action(id)?;
         ensure_grant_visibility(&action, grant_id)?;
@@ -252,15 +256,22 @@ impl ActionBroker {
 fn validate_proposal(content: &ProposedActionContent) -> Result<()> {
     anyhow::ensure!(content.policy.version > 0, "Proposal policy version is missing");
     anyhow::ensure!(content.policy.target_shared, "Target is not shared with agents");
-    anyhow::ensure!(
-        content.prerequisites.database_tools_available,
-        "MongoDB Database Tools are unavailable"
-    );
+    let document_action =
+        matches!(content.request, super::model::ActionRequest::DocumentTransitions { .. });
+    if !document_action {
+        anyhow::ensure!(
+            content.prerequisites.database_tools_available,
+            "MongoDB Database Tools are unavailable"
+        );
+        anyhow::ensure!(
+            content.prerequisites.backup_storage_available,
+            "Backup storage is unavailable"
+        );
+    }
     anyhow::ensure!(content.prerequisites.target_reachable, "Target is unreachable");
-    anyhow::ensure!(
-        content.prerequisites.backup_storage_available,
-        "Backup storage is unavailable"
-    );
+    if document_action {
+        anyhow::ensure!(content.policy.target_writable, "Target is read-only");
+    }
     if matches!(
         content.request,
         super::model::ActionRequest::DatabaseSync { .. }

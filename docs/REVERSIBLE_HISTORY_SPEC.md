@@ -1,6 +1,6 @@
 # OpenMango Reversible Operation History — Design Direction
 
-> **Status:** Manual and built-in AI document transition slices implemented
+> **Status:** Manual, built-in AI, and MCP-proposed document transition slices implemented
 > **Scope:** General OpenMango feature used by users, built-in AI, and MCP clients
 
 ## Implemented document slices
@@ -11,10 +11,11 @@ The initial implementation is deliberately narrower than the full direction belo
 - clipboard bulk inserts plus filter-based bulk replacements and deletes are tracked as independent per-document checkpoints, capped at 100 documents and 64 MiB of recovery BSON;
 - bulk operator updates remain blocked while reversible history is enabled because OpenMango cannot durably compute every MongoDB post-image before applying the write;
 - built-in AI inserts, bounded replacements, and bounded deletes require reversible history plus native confirmation and use the same per-document transition engine with a `Built-in AI` origin;
+- MCP insert, replacement, and delete tools only create immutable pending actions backed by encrypted `MCP` transition checkpoints; MongoDB changes wait for native approval and are applied with exact-state checks;
 - recovery envelopes contain exact BSON before/after images and `_id` values, encrypted with AES-256-GCM using a random Keychain-held installation key;
 - bundled SQLite stores the authoritative operation projection, append-only lifecycle events, and encrypted item payloads through one serialized worker;
 - conditional insertion, replacement, and deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
-- grouped bulk revert, metadata/snapshot recipes, retention/purge controls, and MCP mutation routing remain future slices.
+- grouped bulk revert, metadata/snapshot recipes, and retention/purge controls remain future slices.
 
 A missing Keychain key never replaces the key for an existing history database. Existing recovery data is preserved and tracked writes remain failed closed until the key problem is resolved.
 
@@ -313,7 +314,7 @@ Policy:
 7. Add index metadata recipes.
 8. Integrate transfers, collection/database operations, `$out`, and `$merge` through verified snapshots.
 
-The first implementation slice was **manual single-document update**. Manual single-document insert and delete use the same transition model with absent before/after states. Bounded clipboard and built-in AI inserts, replacements, and deletes freeze at most 100 targets and execute the same durable transition once per document, so partial progress remains independently visible and revertible in History. Insert revert deletes only an unchanged post-image; delete restore inserts only while the `_id` remains absent. Bulk operator updates remain blocked while history is enabled until a bounded planner can persist exact post-images before applying them.
+The first implementation slice was **manual single-document update**. Manual single-document insert and delete use the same transition model with absent before/after states. Bounded clipboard, built-in AI, and MCP-proposed inserts, replacements, and deletes freeze at most 100 targets and execute the same durable transition once per document, so partial progress remains independently visible and revertible in History. Insert revert deletes only an unchanged post-image; delete restore inserts only while the `_id` remains absent. Bulk operator updates remain blocked while history is enabled until a bounded planner can persist exact post-images before applying them.
 
 ## Primary sources
 

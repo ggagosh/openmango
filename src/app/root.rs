@@ -355,21 +355,74 @@ impl AppRoot {
                 .await;
             match opened {
                 Ok(Ok(engine)) => {
-                    if let Ok((backend, active)) = cx.update(|cx| {
+                    let action_store = if let Ok((backend, active, action_store)) = cx.update(|cx| {
                         let state = state.read(cx);
-                        (state.operation_backend(), state.active_connections_snapshot())
+                        (
+                            state.operation_backend(),
+                            state.active_connections_snapshot(),
+                            state.action_broker().store(),
+                        )
                     }) {
                         for (connection_id, connection) in active {
                             backend.register_client(connection_id, connection.client);
                         }
-                    }
+                        Some(action_store)
+                    } else {
+                        None
+                    };
                     let reconcile_engine = engine.clone();
-                    let _ = runtime.spawn_blocking(move || reconcile_engine.reconcile()).await;
+                    let pending_actions = runtime
+                        .spawn_blocking(move || {
+                            let _ = reconcile_engine.reconcile();
+                            let Some(action_store) = action_store else {
+                                return Vec::new();
+                            };
+                            let pending_actions = action_store
+                                .list_actions()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|action| action.is_pending(chrono::Utc::now()))
+                                .filter(|action| {
+                                    matches!(
+                                        action.content.request,
+                                        crate::actions::model::ActionRequest::DocumentTransitions {
+                                            ..
+                                        }
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let retained = pending_actions
+                                .iter()
+                                .filter_map(|action| match &action.content.request {
+                                    crate::actions::model::ActionRequest::DocumentTransitions {
+                                        operation_ids,
+                                        ..
+                                    } => Some(operation_ids.iter().copied()),
+                                    _ => None,
+                                })
+                                .flatten()
+                                .collect();
+                            let _ = reconcile_engine.cancel_unreferenced_pending(&retained);
+                            let _ = AppCommands::reconcile_document_action_operations(
+                                &reconcile_engine,
+                                &action_store,
+                            );
+                            pending_actions
+                        })
+                        .await
+                        .unwrap_or_default();
                     let _ = cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             state.set_operation_engine(engine);
                             cx.notify();
                         });
+                        for action in pending_actions {
+                            AppCommands::schedule_document_action_expiry(
+                                state.clone(),
+                                action,
+                                cx,
+                            );
+                        }
                     });
                 }
                 _ => log::error!("Reversible history could not be initialized"),

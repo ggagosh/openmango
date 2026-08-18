@@ -77,6 +77,7 @@ impl<'a> PolicyEvaluator<'a> {
             "environment": stripped.environment,
             "protected": stripped.protected,
             "read_only": stripped.read_only,
+            "reversible_history": stripped.reversible_history,
             "ssh": stripped.ssh,
             "proxy": stripped.proxy,
             "secret_id": stripped.secret_id,

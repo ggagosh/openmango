@@ -104,6 +104,7 @@ impl OperationStore {
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let summary = operation.summary;
+            let initial_status = summary.status;
             transaction.execute(
                 "INSERT INTO operations (
                     id, kind, origin, connection_id, connection_name, database_name,
@@ -140,7 +141,16 @@ impl OperationStore {
                     payload.after_hash.as_slice(),
                 ],
             )?;
-            insert_event(&transaction, summary.id, "prepared", OperationStatus::Prepared)?;
+            insert_event(
+                &transaction,
+                summary.id,
+                if initial_status == OperationStatus::PendingApproval {
+                    "pending_approval"
+                } else {
+                    "prepared"
+                },
+                initial_status,
+            )?;
             transaction.commit()?;
             Ok(())
         })
@@ -279,6 +289,23 @@ impl OperationStore {
                 next_offset: (u64::from(consumed) < total).then_some(consumed),
                 total,
             })
+        })
+    }
+
+    pub(crate) fn list_pending_approval(&self) -> Result<Vec<OperationSummary>> {
+        self.call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, kind, origin, connection_id, connection_name, database_name,
+                        collection_name, status, parent_operation_id, reverts_operation_id,
+                        created_at_ms, updated_at_ms, recovery_status
+                 FROM operations
+                 WHERE status = 'pending_approval'
+                 ORDER BY created_at_ms ASC, rowid ASC",
+            )?;
+            statement
+                .query_map([], raw_summary)?
+                .map(|row| summary_from_raw(row?))
+                .collect::<Result<Vec<_>>>()
         })
     }
 

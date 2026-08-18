@@ -88,45 +88,79 @@ impl OperationEngine {
         context: OperationContext,
         mutation: Mutation,
     ) -> Result<OperationId, OperationError> {
-        let (target, after, editor_precondition, kind) = match mutation {
-            Mutation::InsertDocument { target, document } => {
-                (target, Some(document), None, OperationKind::InsertDocument)
-            }
-            Mutation::ReplaceDocument { target, replacement, editor_precondition } => {
-                (target, Some(replacement), editor_precondition, OperationKind::ReplaceDocument)
-            }
-            Mutation::DeleteDocument { target, editor_precondition } => {
-                (target, None, editor_precondition, OperationKind::DeleteDocument)
-            }
-        };
-        if after.as_ref().is_some_and(|document| document.get("_id") != Some(&target.id)) {
-            return Err(OperationError::Unsupported);
-        }
-        let current =
-            self.backend.current_document(&target).map_err(|_| OperationError::Unavailable)?;
-        let before = if kind == OperationKind::InsertDocument {
-            if current.is_some() {
-                return Err(OperationError::TargetExists);
-            }
-            None
-        } else {
-            let before = current.ok_or(OperationError::Unsupported)?;
-            if before.get("_id") != Some(&target.id) {
-                return Err(OperationError::Unsupported);
-            }
-            if editor_precondition.as_ref().is_some_and(|expected| expected != &before) {
-                return Err(OperationError::PreconditionConflict);
-            }
-            Some(before)
-        };
-        let operation_id = self.prepare_transition(
+        let (kind, payload) = self.plan_mutation(mutation)?;
+        let operation_id = self.prepare_transition(context, kind, payload, None, None)?;
+        self.apply_prepared(operation_id)
+    }
+
+    pub fn prepare_for_approval(
+        &self,
+        context: OperationContext,
+        mutation: Mutation,
+    ) -> Result<OperationId, OperationError> {
+        let (kind, payload) = self.plan_mutation(mutation)?;
+        self.prepare_transition_with_status(
             context,
             kind,
-            RecoveryPayload { target, before, after },
+            payload,
+            OperationStatus::PendingApproval,
             None,
             None,
-        )?;
+        )
+    }
+
+    pub fn apply_approved(&self, operation_id: OperationId) -> Result<OperationId, OperationError> {
+        let operation = self
+            .store
+            .get(operation_id)
+            .map_err(|_| OperationError::Internal)?
+            .ok_or(OperationError::NotFound)?;
+        if operation.summary.status != OperationStatus::PendingApproval {
+            return Err(OperationError::Unsupported);
+        }
+        self.store
+            .transition(
+                operation_id,
+                OperationStatus::Prepared,
+                "approved",
+                "prepared",
+                Some("Native approval granted."),
+            )
+            .map_err(|_| OperationError::Internal)?;
         self.apply_prepared(operation_id)
+    }
+
+    pub fn cancel_pending(&self, operation_id: OperationId) -> Result<(), OperationError> {
+        let operation = self
+            .store
+            .get(operation_id)
+            .map_err(|_| OperationError::Internal)?
+            .ok_or(OperationError::NotFound)?;
+        if operation.summary.status != OperationStatus::PendingApproval {
+            return Ok(());
+        }
+        self.store
+            .transition(
+                operation_id,
+                OperationStatus::Failed,
+                "proposal_cancelled",
+                "not_applied",
+                Some("The proposal was not approved."),
+            )
+            .map_err(|_| OperationError::Internal)
+    }
+
+    pub(crate) fn cancel_unreferenced_pending(
+        &self,
+        retained: &std::collections::HashSet<OperationId>,
+    ) -> Result<(), OperationError> {
+        let pending = self.store.list_pending_approval().map_err(|_| OperationError::Internal)?;
+        for operation in pending {
+            if !retained.contains(&operation.id) {
+                self.cancel_pending(operation.id)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn revert(
@@ -274,6 +308,44 @@ impl OperationEngine {
         Ok(report)
     }
 
+    fn plan_mutation(
+        &self,
+        mutation: Mutation,
+    ) -> Result<(OperationKind, RecoveryPayload), OperationError> {
+        let (target, after, editor_precondition, kind) = match mutation {
+            Mutation::InsertDocument { target, document } => {
+                (target, Some(document), None, OperationKind::InsertDocument)
+            }
+            Mutation::ReplaceDocument { target, replacement, editor_precondition } => {
+                (target, Some(replacement), editor_precondition, OperationKind::ReplaceDocument)
+            }
+            Mutation::DeleteDocument { target, editor_precondition } => {
+                (target, None, editor_precondition, OperationKind::DeleteDocument)
+            }
+        };
+        if after.as_ref().is_some_and(|document| document.get("_id") != Some(&target.id)) {
+            return Err(OperationError::Unsupported);
+        }
+        let current =
+            self.backend.current_document(&target).map_err(|_| OperationError::Unavailable)?;
+        let before = if kind == OperationKind::InsertDocument {
+            if current.is_some() {
+                return Err(OperationError::TargetExists);
+            }
+            None
+        } else {
+            let before = current.ok_or(OperationError::Unsupported)?;
+            if before.get("_id") != Some(&target.id) {
+                return Err(OperationError::Unsupported);
+            }
+            if editor_precondition.as_ref().is_some_and(|expected| expected != &before) {
+                return Err(OperationError::PreconditionConflict);
+            }
+            Some(before)
+        };
+        Ok((kind, RecoveryPayload { target, before, after }))
+    }
+
     fn hydrate_summary(&self, summary: &mut OperationSummary) -> Result<(), OperationError> {
         let stored = self
             .store
@@ -302,6 +374,25 @@ impl OperationEngine {
         parent_operation_id: Option<OperationId>,
         reverts_operation_id: Option<OperationId>,
     ) -> Result<OperationId, OperationError> {
+        self.prepare_transition_with_status(
+            context,
+            kind,
+            payload,
+            OperationStatus::Prepared,
+            parent_operation_id,
+            reverts_operation_id,
+        )
+    }
+
+    fn prepare_transition_with_status(
+        &self,
+        context: OperationContext,
+        kind: OperationKind,
+        payload: RecoveryPayload,
+        status: OperationStatus,
+        parent_operation_id: Option<OperationId>,
+        reverts_operation_id: Option<OperationId>,
+    ) -> Result<OperationId, OperationError> {
         let operation_id = Uuid::new_v4();
         let now = Utc::now();
         let encrypted =
@@ -314,7 +405,7 @@ impl OperationEngine {
             connection_name: payload.target.connection_name.clone(),
             database: payload.target.database.clone(),
             collection: payload.target.collection.clone(),
-            status: OperationStatus::Prepared,
+            status,
             parent_operation_id,
             reverts_operation_id,
             created_at: now,

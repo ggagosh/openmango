@@ -364,7 +364,9 @@ fn format_change(change: &OperationChangePreview) -> String {
 
 fn status_color(status: OperationStatus, cx: &App) -> Hsla {
     match status {
-        OperationStatus::Prepared | OperationStatus::Running => cx.theme().primary,
+        OperationStatus::PendingApproval | OperationStatus::Prepared | OperationStatus::Running => {
+            cx.theme().primary
+        }
         OperationStatus::Completed => cx.theme().success,
         OperationStatus::Failed => cx.theme().muted_foreground,
         OperationStatus::Conflict | OperationStatus::RecoveryRequired => cx.theme().danger,

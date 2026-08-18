@@ -2,7 +2,10 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{
+    Arc, Mutex, RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
@@ -25,8 +28,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
 use crate::actions::model::{
-    ActionOrigin, ActionOriginKind, ActionRequest, ActionStatus, OperationPhase, OperationStatus,
-    SyncMode,
+    ActionOrigin, ActionOriginKind, ActionRequest, ActionStatus, DocumentActionKind,
+    OperationPhase, OperationStatus, ProposedAction, SyncMode,
 };
 
 use super::McpBridge;
@@ -160,6 +163,59 @@ pub struct McpConnection {
 }
 
 #[derive(Clone)]
+struct PendingTransitionGuard {
+    engine: Arc<crate::operations::OperationEngine>,
+    operation_ids: Arc<Mutex<Vec<Uuid>>>,
+    preparation_done: Arc<AtomicBool>,
+    abandoned: Arc<AtomicBool>,
+    committed: bool,
+}
+
+impl PendingTransitionGuard {
+    fn new(engine: Arc<crate::operations::OperationEngine>) -> Self {
+        Self {
+            engine,
+            operation_ids: Arc::new(Mutex::new(Vec::new())),
+            preparation_done: Arc::new(AtomicBool::new(false)),
+            abandoned: Arc::new(AtomicBool::new(false)),
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PendingTransitionGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.abandoned.store(true, Ordering::SeqCst);
+        if self.preparation_done.load(Ordering::SeqCst) {
+            let engine = self.engine.clone();
+            let operation_ids = self.operation_ids.clone();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn_blocking(move || {
+                    if let Ok(operation_ids) = operation_ids.lock() {
+                        for operation_id in operation_ids.iter() {
+                            let _ = engine.cancel_pending(*operation_id);
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
+
+enum DocumentProposal {
+    Insert(Vec<mongodb::bson::Document>),
+    Replace { filter: mongodb::bson::Document, replacement: mongodb::bson::Document, many: bool },
+    Delete { filter: mongodb::bson::Document },
+}
+
+#[derive(Clone)]
 pub struct McpServer {
     tool_router: ToolRouter<Self>,
     bridge: McpBridge,
@@ -168,6 +224,223 @@ pub struct McpServer {
 impl McpServer {
     pub fn new(bridge: McpBridge) -> Self {
         Self { tool_router: Self::tool_router(), bridge }
+    }
+
+    async fn propose_document_action(
+        &self,
+        identity: &AuthenticatedMcpRequest,
+        connection_id: Uuid,
+        database: String,
+        collection: String,
+        proposal: DocumentProposal,
+    ) -> Result<ProposedAction, String> {
+        validate_namespace(&database, "database")?;
+        validate_namespace(&collection, "collection")?;
+        let origin = self.action_origin(identity).await?;
+        let context = self.bridge.resolve_document_write(connection_id).await?;
+        let target_collection = context
+            .preflight
+            .target
+            .client
+            .database(&database)
+            .collection::<mongodb::bson::Document>(&collection);
+        let (action, mutations, recovery_documents, estimated_bytes) = match proposal {
+            DocumentProposal::Insert(mut documents) => {
+                if documents.is_empty()
+                    || documents.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
+                {
+                    return Err("documents must contain 1-100 items".to_string());
+                }
+                for document in &mut documents {
+                    if !document.contains_key("_id") {
+                        document.insert("_id", mongodb::bson::oid::ObjectId::new());
+                    }
+                }
+                let mutations = documents
+                    .iter()
+                    .map(|document| {
+                        let id = document.get("_id").cloned().expect("assigned above");
+                        crate::operations::Mutation::InsertDocument {
+                            target: mcp_document_target(
+                                connection_id,
+                                &context.preflight.target.snapshot.display_name,
+                                &database,
+                                &collection,
+                                id,
+                            ),
+                            document: document.clone(),
+                        }
+                    })
+                    .collect();
+                let estimated_bytes = crate::operations::reversible_bulk_size(documents.iter())
+                    .map_err(|error| error.user_message().to_string())?;
+                (DocumentActionKind::Insert, mutations, documents, estimated_bytes)
+            }
+            DocumentProposal::Replace { filter, replacement, many } => {
+                if filter.is_empty() {
+                    return Err("filter must not be empty".to_string());
+                }
+                if replacement.is_empty()
+                    || replacement.contains_key("_id")
+                    || replacement.keys().any(|key| key.starts_with('$'))
+                {
+                    return Err(
+                        "replacement must be a complete non-empty document without _id or update operators"
+                            .to_string(),
+                    );
+                }
+                let limit = if many {
+                    (crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS + 1) as i64
+                } else {
+                    1
+                };
+                use futures::TryStreamExt as _;
+                let mut cursor = target_collection
+                    .find(filter)
+                    .sort(mongodb::bson::doc! { "_id": 1 })
+                    .limit(limit)
+                    .await
+                    .map_err(|_| "Document proposal query failed".to_string())?;
+                let mut recovery_documents = Vec::new();
+                let mut recovery_bytes = 0usize;
+                let mut mutations = Vec::new();
+                while let Some(document) = cursor
+                    .try_next()
+                    .await
+                    .map_err(|_| "Document proposal query failed".to_string())?
+                {
+                    if mutations.len() >= crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS {
+                        return Err("More than 100 documents match; narrow the filter".to_string());
+                    }
+                    let id = document
+                        .get("_id")
+                        .cloned()
+                        .ok_or_else(|| "Matched document has no _id".to_string())?;
+                    let mut after = replacement.clone();
+                    after.insert("_id", id.clone());
+                    push_recovery_document(
+                        &mut recovery_documents,
+                        &mut recovery_bytes,
+                        document.clone(),
+                    )?;
+                    push_recovery_document(
+                        &mut recovery_documents,
+                        &mut recovery_bytes,
+                        after.clone(),
+                    )?;
+                    mutations.push(crate::operations::Mutation::ReplaceDocument {
+                        target: mcp_document_target(
+                            connection_id,
+                            &context.preflight.target.snapshot.display_name,
+                            &database,
+                            &collection,
+                            id,
+                        ),
+                        replacement: after,
+                        editor_precondition: Some(document),
+                    });
+                }
+                if mutations.is_empty() {
+                    return Err("No documents match the proposal filter".to_string());
+                }
+                (DocumentActionKind::Replace, mutations, recovery_documents, recovery_bytes)
+            }
+            DocumentProposal::Delete { filter } => {
+                if filter.is_empty() {
+                    return Err("filter must not be empty".to_string());
+                }
+                use futures::TryStreamExt as _;
+                let mut cursor = target_collection
+                    .find(filter)
+                    .sort(mongodb::bson::doc! { "_id": 1 })
+                    .limit((crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS + 1) as i64)
+                    .await
+                    .map_err(|_| "Document proposal query failed".to_string())?;
+                let mut recovery_documents = Vec::new();
+                let mut recovery_bytes = 0usize;
+                let mut mutations = Vec::new();
+                while let Some(document) = cursor
+                    .try_next()
+                    .await
+                    .map_err(|_| "Document proposal query failed".to_string())?
+                {
+                    if mutations.len() >= crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS {
+                        return Err("More than 100 documents match; narrow the filter".to_string());
+                    }
+                    let id = document
+                        .get("_id")
+                        .cloned()
+                        .ok_or_else(|| "Matched document has no _id".to_string())?;
+                    push_recovery_document(
+                        &mut recovery_documents,
+                        &mut recovery_bytes,
+                        document.clone(),
+                    )?;
+                    mutations.push(crate::operations::Mutation::DeleteDocument {
+                        target: mcp_document_target(
+                            connection_id,
+                            &context.preflight.target.snapshot.display_name,
+                            &database,
+                            &collection,
+                            id,
+                        ),
+                        editor_precondition: Some(document),
+                    });
+                }
+                if mutations.is_empty() {
+                    return Err("No documents match the proposal filter".to_string());
+                }
+                (DocumentActionKind::Delete, mutations, recovery_documents, recovery_bytes)
+            }
+        };
+        drop(recovery_documents);
+        let mut pending_guard = PendingTransitionGuard::new(context.engine.clone());
+        let engine = context.engine.clone();
+        let operation_ids = pending_guard.operation_ids.clone();
+        let preparation_done = pending_guard.preparation_done.clone();
+        let abandoned = pending_guard.abandoned.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            let result = (|| {
+                for mutation in mutations {
+                    let operation_id = engine
+                        .prepare_for_approval(crate::operations::OperationContext::mcp(), mutation)
+                        .map_err(|error| error.user_message().to_string())?;
+                    operation_ids
+                        .lock()
+                        .map_err(|_| "Pending transition registry is unavailable".to_string())?
+                        .push(operation_id);
+                }
+                operation_ids
+                    .lock()
+                    .map(|operation_ids| operation_ids.clone())
+                    .map_err(|_| "Pending transition registry is unavailable".to_string())
+            })();
+            preparation_done.store(true, Ordering::SeqCst);
+            if abandoned.load(Ordering::SeqCst)
+                && let Ok(operation_ids) = operation_ids.lock()
+            {
+                for operation_id in operation_ids.iter() {
+                    let _ = engine.cancel_pending(*operation_id);
+                }
+            }
+            result
+        })
+        .await
+        .map_err(|_| "Document proposal preparation stopped unexpectedly".to_string())??;
+        let request = ActionRequest::DocumentTransitions {
+            connection_id,
+            database: database.clone(),
+            collection: collection.clone(),
+            action,
+            operation_ids: prepared.clone(),
+        };
+        let content = context
+            .preflight
+            .prepare_document_action(request, origin, prepared.len() as u64, estimated_bytes as u64)
+            .await?;
+        let action = self.bridge.enqueue_action(content).await?;
+        pending_guard.commit();
+        action.await.map_err(|_| "OpenMango is shutting down".to_string())?
     }
 }
 
@@ -254,6 +527,37 @@ enum ExplainQuery {
     Aggregation {
         pipeline: Vec<serde_json::Value>,
     },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProposeInsertDocumentsRequest {
+    connection_id: String,
+    database: String,
+    collection: String,
+    documents: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProposeReplaceDocumentsRequest {
+    connection_id: String,
+    database: String,
+    collection: String,
+    #[serde(default = "default_document_value")]
+    filter: serde_json::Value,
+    replacement: serde_json::Value,
+    #[serde(default = "default_true")]
+    many: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProposeDeleteDocumentsRequest {
+    connection_id: String,
+    database: String,
+    collection: String,
+    filter: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -885,6 +1189,87 @@ impl McpServer {
     }
 
     #[tool(
+        name = "openmango_propose_insert_documents",
+        description = "Prepare encrypted checkpoints and create a pending native-approval proposal to insert 1-100 documents. No MongoDB write occurs until the user approves in OpenMango.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn propose_insert_documents(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(request): Parameters<ProposeInsertDocumentsRequest>,
+    ) -> Result<Json<ActionResponse>, String> {
+        let identity = authenticated_request(&parts)?;
+        let connection_id = parse_connection_id(&request.connection_id)?;
+        let documents = request
+            .documents
+            .into_iter()
+            .enumerate()
+            .map(|(index, document)| parse_read_document(document, &format!("documents[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let action = self
+            .propose_document_action(
+                &identity,
+                connection_id,
+                request.database,
+                request.collection,
+                DocumentProposal::Insert(documents),
+            )
+            .await?;
+        Ok(Json(action_response(action)))
+    }
+
+    #[tool(
+        name = "openmango_propose_replace_documents",
+        description = "Prepare encrypted exact before/after checkpoints and create a pending native-approval proposal to fully replace up to 100 matched documents while preserving _id. No MongoDB write occurs until approval.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn propose_replace_documents(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(request): Parameters<ProposeReplaceDocumentsRequest>,
+    ) -> Result<Json<ActionResponse>, String> {
+        let identity = authenticated_request(&parts)?;
+        let connection_id = parse_connection_id(&request.connection_id)?;
+        let filter = parse_read_document(request.filter, "filter")?;
+        let replacement = parse_read_document(request.replacement, "replacement")?;
+        let action = self
+            .propose_document_action(
+                &identity,
+                connection_id,
+                request.database,
+                request.collection,
+                DocumentProposal::Replace { filter, replacement, many: request.many },
+            )
+            .await?;
+        Ok(Json(action_response(action)))
+    }
+
+    #[tool(
+        name = "openmango_propose_delete_documents",
+        description = "Prepare encrypted exact before-state checkpoints and create a pending native-approval proposal to delete up to 100 matched documents. Empty filters are rejected. No MongoDB write occurs until approval.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn propose_delete_documents(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(request): Parameters<ProposeDeleteDocumentsRequest>,
+    ) -> Result<Json<ActionResponse>, String> {
+        let identity = authenticated_request(&parts)?;
+        let connection_id = parse_connection_id(&request.connection_id)?;
+        let filter = parse_read_document(request.filter, "filter")?;
+        let action = self
+            .propose_document_action(
+                &identity,
+                connection_id,
+                request.database,
+                request.collection,
+                DocumentProposal::Delete { filter },
+            )
+            .await?;
+        Ok(Json(action_response(action)))
+    }
+
+    #[tool(
         name = "openmango_propose_database_backup",
         description = "Create an immutable pending proposal for an app-managed verified database backup. No backup starts until native approval.",
         annotations(read_only_hint = false, destructive_hint = false)
@@ -966,7 +1351,9 @@ impl McpServer {
         let recovery_backup_id = match operation.request {
             ActionRequest::DatabaseSync { .. } => operation.backup_id,
             ActionRequest::OperationRevert { .. } => operation.safety_backup_id,
-            ActionRequest::DatabaseBackup { .. } => None,
+            ActionRequest::DatabaseBackup { .. } | ActionRequest::DocumentTransitions { .. } => {
+                None
+            }
         }
         .ok_or_else(|| "Operation has no retained recovery backup".to_string())?;
         let manifest = self.bridge.get_backup_manifest(recovery_backup_id).await?;
@@ -1236,6 +1623,7 @@ fn operation_phase_name(phase: OperationPhase) -> &'static str {
         OperationPhase::BackingUpTarget => "backing_up_target",
         OperationPhase::VerifyingBackup => "verifying_backup",
         OperationPhase::ReplacingTarget => "replacing_target",
+        OperationPhase::ApplyingDocuments => "applying_documents",
         OperationPhase::VerifyingTarget => "verifying_target",
         OperationPhase::RestoringTargetBackup => "restoring_target_backup",
         OperationPhase::VerifyingRecovery => "verifying_recovery",
@@ -1243,8 +1631,45 @@ fn operation_phase_name(phase: OperationPhase) -> &'static str {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_document_value() -> serde_json::Value {
     serde_json::json!({})
+}
+
+fn push_recovery_document(
+    recovery_documents: &mut Vec<mongodb::bson::Document>,
+    recovery_bytes: &mut usize,
+    document: mongodb::bson::Document,
+) -> Result<(), String> {
+    let bytes = crate::operations::reversible_document_size(&document)
+        .map_err(|error| error.user_message().to_string())?;
+    *recovery_bytes = recovery_bytes
+        .checked_add(bytes)
+        .ok_or_else(|| "Reversible recovery data is too large".to_string())?;
+    if *recovery_bytes > crate::operations::MAX_REVERSIBLE_BULK_BYTES {
+        return Err("Reversible recovery data exceeds 64 MiB; narrow the proposal".to_string());
+    }
+    recovery_documents.push(document);
+    Ok(())
+}
+
+fn mcp_document_target(
+    connection_id: Uuid,
+    connection_name: &str,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+) -> crate::operations::DocumentTarget {
+    crate::operations::DocumentTarget {
+        connection_id,
+        connection_name: connection_name.to_string(),
+        database: database.to_string(),
+        collection: collection.to_string(),
+        id,
+    }
 }
 
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, String> {
@@ -1907,6 +2332,49 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn abandoned_document_proposal_cancels_prepared_transitions() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(crate::operations::InMemoryMutationBackend::default());
+        let engine = Arc::new(
+            crate::operations::OperationEngine::open(
+                directory.path().join("history.sqlite3"),
+                [51; 32],
+                backend,
+            )
+            .unwrap(),
+        );
+        let transition = engine
+            .prepare_for_approval(
+                crate::operations::OperationContext::mcp(),
+                crate::operations::Mutation::InsertDocument {
+                    target: crate::operations::DocumentTarget {
+                        connection_id: Uuid::new_v4(),
+                        connection_name: "Local".into(),
+                        database: "app".into(),
+                        collection: "users".into(),
+                        id: 1.into(),
+                    },
+                    document: mongodb::bson::doc! { "_id": 1 },
+                },
+            )
+            .unwrap();
+        let guard = PendingTransitionGuard::new(engine.clone());
+        guard.operation_ids.lock().unwrap().push(transition);
+        guard.preparation_done.store(true, Ordering::SeqCst);
+        drop(guard);
+
+        for _ in 0..50 {
+            if engine.get(transition).unwrap().unwrap().summary.status
+                == crate::operations::OperationStatus::Failed
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("abandoned transition was not cancelled");
+    }
+
+    #[tokio::test]
     async fn listener_retry_handles_server_restart_on_same_port() {
         let held = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = held.local_addr().unwrap().port();
@@ -1983,6 +2451,9 @@ mod tests {
             "openmango_inspect_collection",
             "openmango_aggregate",
             "openmango_explain_query",
+            "openmango_propose_insert_documents",
+            "openmango_propose_replace_documents",
+            "openmango_propose_delete_documents",
             "openmango_propose_database_backup",
             "openmango_propose_database_sync",
             "openmango_propose_operation_revert",
@@ -1993,7 +2464,7 @@ mod tests {
         ] {
             assert!(tools.iter().any(|tool| tool.name == name), "missing {name}");
         }
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 18);
         assert!(!contains_format(&serde_json::to_value(&tools).unwrap(), "uint64"));
 
         let arguments = serde_json::json!({ "connection_id": connection_id.to_string() })
@@ -2025,6 +2496,26 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         let result = serde_json::to_string(&result).unwrap();
         assert!(result.contains("Action preflight is unavailable in this test"), "{result}");
+
+        let arguments = serde_json::json!({
+            "connection_id": connection_id.to_string(),
+            "database": "app",
+            "collection": "users",
+            "documents": [{"name": "Ada"}]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let result = client
+            .call_tool(
+                CallToolRequestParams::new("openmango_propose_insert_documents")
+                    .with_arguments(arguments),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let result = serde_json::to_string(&result).unwrap();
+        assert!(result.contains("Document preflight is unavailable in this test"), "{result}");
 
         client.cancel().await.unwrap();
         handle.shutdown().await.unwrap();

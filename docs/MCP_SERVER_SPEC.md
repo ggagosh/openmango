@@ -81,7 +81,7 @@ Tool annotations, prompts, acknowledgement booleans, model compliance, MCP elici
 - Agent control over sharing, environment, protected, or read-only flags.
 - Agent-supplied connection credentials.
 - Arbitrary `runCommand`, mongosh/Forge JavaScript, shell execution, process execution, or filesystem paths.
-- Direct CRUD/index write tools in the first release.
+- Direct or remotely approved CRUD/index writes; bounded document mutations are proposal-only and require native approval.
 - Transfers unrelated to database backup/sync/revert.
 - Query history, unsaved editors, clipboard data, support logs, or AI provider keys.
 - Resources and prompts until target-client testing demonstrates value.
@@ -436,6 +436,9 @@ Never expose query history. A global saved query must not leak the connection UU
 
 | Tool | Behavior |
 | --- | --- |
+| `openmango_propose_insert_documents` | Encrypt 1-100 exact insert post-images and persist a pending native-approval action. No document is inserted. Protected/Production targets are rejected until verified-backup support is added. |
+| `openmango_propose_replace_documents` | Freeze up to 100 exact before/after images, preserve `_id`, encrypt checkpoints, and persist a pending native-approval action. |
+| `openmango_propose_delete_documents` | Freeze and encrypt up to 100 exact before-images for a non-empty filter and persist a pending native-approval action. |
 | `openmango_propose_database_backup` | Validate and persist a pending backup action using an app-managed destination. No backup starts. |
 | `openmango_propose_database_sync` | Validate source/target/database replacement, gather preview data, hash the exact request, and persist it pending approval. No dump or mutation starts. |
 | `openmango_propose_operation_revert` | Create a pending revert action referencing an eligible operation and retained verified backup. Never accepts an arbitrary path. |
@@ -444,9 +447,9 @@ Never expose query history. A global saved query must not leak the connection UU
 | `openmango_get_operation` | Return durable phase/progress/result/recovery status. |
 | `openmango_cancel_operation` | Request cooperative cancellation of an operation created by the same client grant. Cancellation remains in audit history and may trigger rollback. |
 
-Proposal tools automatically surface the pending action in OpenMango's Agent Activity UI. **There is no MCP approve or execute tool.** The user's “Approve & Run” action creates and starts the operation.
+Bounded document proposals require a shared, connected, writable, non-protected connection with Reversible history enabled. Proposal tools automatically surface the pending action in OpenMango's Agent Activity UI. **There is no MCP approve or execute tool.** The user's “Approve & Run” action creates and starts the operation.
 
-Identical pending proposals from the same client are deduplicated by canonical hash and return the existing action ID.
+Identical database-level pending proposals from the same client are deduplicated by canonical hash. Document proposals receive fresh encrypted checkpoints so approval always binds to the exact state captured for that proposal.
 
 ### 7.5 Tools explicitly excluded
 
@@ -454,7 +457,7 @@ Identical pending proposals from the same client are deduplicated by canonical h
 - `runCommand`;
 - raw shell, filesystem, mongosh, or Forge execution;
 - arbitrary backup/import paths;
-- direct insert/update/delete/index writes in the initial release;
+- direct insert/update/delete/index writes; document mutation tools only create encrypted pending proposals;
 - connection credential import/export;
 - users, roles, profiling, server configuration, shutdown, and transactions;
 - documents as freely readable MCP Resources.
