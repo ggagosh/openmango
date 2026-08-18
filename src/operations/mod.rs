@@ -15,6 +15,9 @@ pub use model::{
 
 pub(crate) use backend::MongoMutationBackend;
 
+pub const MAX_REVERSIBLE_BULK_DOCUMENTS: usize = 100;
+pub const MAX_REVERSIBLE_BULK_BYTES: usize = 64 * 1024 * 1024;
+
 pub(crate) fn tracked_engine(
     enabled: bool,
     engine: Option<Arc<OperationEngine>>,

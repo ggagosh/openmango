@@ -205,8 +205,14 @@ impl CollectionView {
                 }
                 let affected_count = ids.len();
                 let filter = doc! { "_id": { "$in": ids } };
-                let message =
-                    format!("Delete {} documents? This cannot be undone.", affected_count);
+                let recovery =
+                    if this.state.read(cx).connection_reversible_history(session_key.connection_id)
+                    {
+                        " Each document gets a recovery checkpoint."
+                    } else {
+                        " This cannot be undone."
+                    };
+                let message = format!("Delete {affected_count} documents?{recovery}");
                 let state = this.state.clone();
                 let state_for_write = state.clone();
                 request_connection_write(

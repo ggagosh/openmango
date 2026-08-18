@@ -109,7 +109,7 @@ pub(crate) fn request_delete_confirmation(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (client, manager) = {
+    let (client, manager, history_enabled) = {
         let state_ref = state.read(cx);
         let Some(client) = state_ref.active_connection_client(session_key.connection_id) else {
             state.update(cx, |state, cx| {
@@ -118,7 +118,11 @@ pub(crate) fn request_delete_confirmation(
             });
             return;
         };
-        (client, state_ref.connection_manager())
+        (
+            client,
+            state_ref.connection_manager(),
+            state_ref.connection_reversible_history(session_key.connection_id),
+        )
     };
 
     state.update(cx, |state, cx| {
@@ -146,14 +150,31 @@ pub(crate) fn request_delete_confirmation(
                     cx.notify();
                 });
             }
+            Ok(count)
+                if history_enabled
+                    && count > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS as u64 =>
+            {
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(StatusMessage::error(format!(
+                        "Reversible bulk writes are limited to {} documents. Narrow the filter and try again.",
+                        crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
+                    ))));
+                    cx.notify();
+                });
+            }
             Ok(count) => {
                 state.update(cx, |state, cx| {
                     state.set_status_message(None);
                     cx.notify();
                 });
                 let filter_text = crate::bson::document_to_shell_string(&filter);
+                let recovery = if history_enabled {
+                    " Each document gets a recovery checkpoint."
+                } else {
+                    " This cannot be undone."
+                };
                 let message = format!(
-                    "Delete every {scope_label} document matching this filter from {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
+                    "Delete every {scope_label} document matching this filter from {database}.{collection}? {count} document{} currently match.{recovery}\n\nFilter: {filter_text}",
                     if count == 1 { "" } else { "s" }
                 );
                 let state_for_write = state.clone();

@@ -5,6 +5,28 @@ use crate::operations::{OperationContext, OperationId, OperationQuery};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 
 impl AppCommands {
+    pub(crate) fn collection_history_changed(
+        state: Entity<AppState>,
+        session_key: SessionKey,
+        cx: &mut App,
+    ) {
+        if state.read(cx).session_subview(&session_key)
+            == Some(crate::state::CollectionSubview::History)
+        {
+            Self::load_collection_history(state, session_key, cx);
+            return;
+        }
+        state.update(cx, |state, cx| {
+            if let Some(session) = state.session_mut(&session_key) {
+                session.data.history_request_id = session.data.history_request_id.wrapping_add(1);
+                session.data.history_loading = false;
+                session.data.history_loaded = false;
+                session.data.history_error = None;
+                cx.notify();
+            }
+        });
+    }
+
     pub fn load_collection_history(state: Entity<AppState>, session_key: SessionKey, cx: &mut App) {
         Self::load_collection_history_page(state, session_key, false, cx);
     }

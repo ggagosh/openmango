@@ -448,6 +448,14 @@ impl PropertyActionDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.state.read(cx).connection_reversible_history(self.session_key.connection_id) {
+            self.error_message = Some(
+                "Bulk property updates are not reversible yet. Use Bulk Replace or disable reversible history for this write."
+                    .to_string(),
+            );
+            cx.notify();
+            return;
+        }
         let (client, manager) = {
             let state = self.state.read(cx);
             let Some(client) = state.active_connection_client(self.session_key.connection_id)

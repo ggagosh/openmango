@@ -216,11 +216,8 @@ impl AppCommands {
                                 cx,
                             );
                         }
-                        if tracked_save
-                            && state.read(cx).session_subview(&session_key)
-                                == Some(crate::state::CollectionSubview::History)
-                        {
-                            AppCommands::load_collection_history(
+                        if tracked_save {
+                            AppCommands::collection_history_changed(
                                 state.clone(),
                                 session_key.clone(),
                                 cx,
