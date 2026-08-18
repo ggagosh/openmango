@@ -240,7 +240,13 @@ impl ConnectionManager {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().secondary_foreground)
-                                    .child("Encrypt recovery data for document writes and index create/drop operations, including bounded agent changes."),
+                                    .child("Encrypt recovery data for supported document, index, and collection operations."),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .child("Database-level operations, sharded collections, views, time-series collections, self-targeting $merge, and unsupported writes are not snapshotted and continue normally."),
                             ),
                     ),
             )

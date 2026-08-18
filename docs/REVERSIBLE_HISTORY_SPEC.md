@@ -16,7 +16,8 @@ The initial implementation is deliberately narrower than the full direction belo
 - recovery envelopes contain exact BSON before/after images and `_id` values, encrypted with AES-256-GCM using a random Keychain-held installation key;
 - bundled SQLite stores the authoritative operation projection, append-only lifecycle events, and encrypted item payloads through one serialized worker;
 - conditional insertion, replacement, and deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
-- grouped bulk revert, index replacement and other metadata/snapshot recipes, and retention/purge controls remain future slices.
+- grouped bulk revert, index replacement, supported collection snapshots, and retention/purge controls remain future slices;
+- database-level operations, sharded collections, views, time-series collections, self-targeting `$merge`, and unsupported writes continue through their existing paths without a snapshot; the connection setting warns about this coverage boundary.
 
 A missing Keychain key never replaces the key for an existing history database. Existing recovery data is preserved and tracked writes remain failed closed until the key problem is resolved.
 
@@ -83,7 +84,7 @@ Internally:
 - `crypto.rs` — authenticated encryption using a random per-install key stored in macOS Keychain;
 - `snapshot.rs` — adapter over the existing verified archive backup/restore implementation.
 
-`src/actions/` remains approval policy and proposal handling only. On native approval it calls `OperationEngine::execute`. `src/sync/` remains the snapshot execution implementation but no longer owns a separate notion of operation history.
+`src/actions/` remains approval policy and proposal handling for agent actions. `src/sync/` keeps the existing database backup/sync activity flow; supported collection snapshot recipes reuse its archive primitives without importing database-level operations into Reversible History.
 
 ### Durable store
 
@@ -173,9 +174,8 @@ MongoDB does not provide a conditional `dropIndexes` command. OpenMango re-reads
 
 Use where per-document inversion is unsafe or impractical.
 
-- collection/database drop;
-- database replacement and revert;
-- large imports or destructive transfers;
+- supported collection drop;
+- large collection imports or destructive transfers;
 - aggregation `$out`;
 - aggregation `$merge` unless a future bounded planner can prove and capture every affected document.
 
@@ -194,7 +194,8 @@ Reuse OpenMango's verified archive backup and restore implementation. Capture co
 | Drop index | Metadata specification | Recreate; may fail after data drift |
 | Create collection | Metadata specification | Drop only if the same collection remains empty/unchanged |
 | Rename collection | Metadata specification | Reverse only when namespace identity still matches |
-| Drop collection/database | Verified snapshot | Restore into staging, verify, then cut over |
+| Drop supported collection | Verified snapshot | Restore into staging, verify, then cut over |
+| Database-level mutation | Unsupported initially | Continue normally without a History snapshot; disclose this in connection settings |
 | `$out` | Verified target snapshot | Restore the previous destination collection |
 | `$merge` | Verified target snapshot initially | Restore the complete target; never assume the merge was all-or-nothing |
 | Unknown/admin command | Unsupported | No agent execution; manual execution must say it is not reversible |
@@ -298,13 +299,13 @@ Collection History:
 - before/after preview for document transitions;
 - conflict calculation before revert;
 - `Revert`, `Inspect conflicts`, and `Remove recovery data` actions;
-- database backup/sync/revert operations appear in the same timeline.
+- database backup/sync/revert operations remain in Agent Activity and are not presented as Reversible History snapshots.
 
 Policy:
 
-- manual users may explicitly continue with a non-reversible operation after a warning;
-- built-in AI and MCP clients cannot bypass recoverability;
-- unbounded or unsupported agent writes remain rejected.
+- unsupported snapshot targets continue through their existing paths for every origin after the usual write confirmation;
+- the connection setting clearly identifies operations and target types that are not snapshotted;
+- supported history operations still fail closed when their recovery data cannot be persisted.
 
 ## Delivery order
 
@@ -315,7 +316,7 @@ Policy:
 5. Route built-in AI document writes through the same seam.
 6. Expose bounded MCP document mutation tools.
 7. Add index metadata recipes.
-8. Integrate transfers, collection/database operations, `$out`, and `$merge` through verified snapshots.
+8. Integrate supported collection drops, collection transfers, `$out`, and `$merge` through verified snapshots. Keep database-level and unsupported collection operations outside snapshot History initially.
 
 The first implementation slice was **manual single-document update**. Manual single-document insert and delete use the same transition model with absent before/after states. Bounded clipboard, built-in AI, and MCP-proposed inserts, replacements, and deletes freeze at most 100 targets and execute the same durable transition once per document, so partial progress remains independently visible and revertible in History. Insert revert deletes only an unchanged post-image; delete restore inserts only while the `_id` remains absent. Bulk operator updates remain blocked while history is enabled until a bounded planner can persist exact post-images before applying them.
 
