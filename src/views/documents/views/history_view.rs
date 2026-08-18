@@ -196,6 +196,8 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         OperationKind::CreateIndex => format!("Created index {document_id}"),
         OperationKind::DropIndex => format!("Dropped index {document_id}"),
         OperationKind::RevertIndex => format!("Reverted index {document_id}"),
+        OperationKind::DropCollection => format!("Dropped collection {document_id}"),
+        OperationKind::RevertCollection => format!("Restored collection {document_id}"),
     };
     let preview = change_preview(&operation);
     let icon = match operation.kind {
@@ -206,6 +208,8 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         OperationKind::CreateIndex => IconName::Braces,
         OperationKind::DropIndex => IconName::Delete,
         OperationKind::RevertIndex => IconName::Undo2,
+        OperationKind::DropCollection => IconName::Delete,
+        OperationKind::RevertCollection => IconName::Undo2,
     };
 
     div()

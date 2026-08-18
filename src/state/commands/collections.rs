@@ -1,7 +1,8 @@
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::state::{AppEvent, AppState, StatusMessage};
+use crate::operations::{CollectionTarget, OperationContext, OperationError};
+use crate::state::{AppEvent, AppState, CollectionSubview, SessionKey, StatusMessage};
 
 use super::AppCommands;
 
@@ -208,12 +209,67 @@ impl AppCommands {
         let Some(client) = Self::active_client(&state, connection_id, cx) else {
             return;
         };
-        let manager = state.read(cx).connection_manager();
+        let prepared = {
+            let state_ref = state.read(cx);
+            (|| {
+                let history = crate::operations::tracked_engine(
+                    state_ref.connection_reversible_history(connection_id),
+                    state_ref.operation_engine(),
+                )
+                .map_err(OperationError::user_message)?;
+                let tool_uri = history
+                    .as_ref()
+                    .map(|_| state_ref.active_connection_tool_uri(connection_id))
+                    .transpose()
+                    .map_err(|_| "Reversible history is unavailable; no write was made.")?;
+                Ok::<_, &'static str>((
+                    history,
+                    state_ref.operation_backend(),
+                    state_ref.connection_manager(),
+                    state_ref.connection_name(connection_id).unwrap_or_else(|| "Connection".into()),
+                    tool_uri,
+                ))
+            })()
+        };
+        let (history, backend, manager, connection_name, tool_uri) = match prepared {
+            Ok(prepared) => prepared,
+            Err(message) => {
+                report_collection_drop_error(&state, message, cx);
+                return;
+            }
+        };
+        if let Some(tool_uri) = tool_uri {
+            backend.register_snapshot_connection(connection_id, client.clone(), tool_uri);
+        }
 
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move { manager.drop_collection(&client, &database, &collection) }
+            async move {
+                if let Some(history) = history {
+                    match history.drop_collection(
+                        OperationContext::user(),
+                        CollectionTarget {
+                            connection_id,
+                            connection_name,
+                            database: database.clone(),
+                            collection: collection.clone(),
+                        },
+                    ) {
+                        Ok(_) => Ok(true),
+                        Err(OperationError::Unsupported) => manager
+                            .drop_collection(&client, &database, &collection)
+                            .map(|_| false)
+                            .map_err(|error| error.to_string()),
+                        Err(error) => Err(error.user_message().to_string()),
+                    }
+                } else {
+                    manager
+                        .drop_collection(&client, &database, &collection)
+                        .map(|_| false)
+                        .map_err(|error| error.to_string())
+                }
+            }
         });
 
         cx.spawn({
@@ -221,21 +277,38 @@ impl AppCommands {
             let database = database.clone();
             let collection = collection.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<(), crate::error::Error> = task.await;
+                let result: Result<bool, String> = task.await;
                 let _ = cx.update(|cx| match result {
-                    Ok(()) => {
+                    Ok(tracked) => {
+                        let session_key =
+                            SessionKey::new(connection_id, database.clone(), collection.clone());
                         state.update(cx, |state, cx| {
                             if let Some(conn) = state.active_connection_mut(connection_id)
                                 && let Some(entry) = conn.collections.get_mut(&database)
                             {
                                 entry.retain(|name| name != &collection);
                             }
-                            state.close_tabs_for_collection(
-                                connection_id,
-                                &database,
-                                &collection,
-                                cx,
-                            );
+                            if tracked {
+                                if state.selected_connection_is(connection_id) {
+                                    state.select_collection(
+                                        database.clone(),
+                                        collection.clone(),
+                                        cx,
+                                    );
+                                }
+                                state.ensure_session(session_key.clone());
+                                state.set_collection_subview(
+                                    &session_key,
+                                    CollectionSubview::History,
+                                );
+                            } else {
+                                state.close_tabs_for_collection(
+                                    connection_id,
+                                    &database,
+                                    &collection,
+                                    cx,
+                                );
+                            }
                             state.set_status_message(Some(StatusMessage::info(format!(
                                 "Dropped collection {database}.{collection}"
                             ))));
@@ -249,12 +322,15 @@ impl AppCommands {
                             }
                             cx.notify();
                         });
+                        if tracked {
+                            AppCommands::load_collection_history(state.clone(), session_key, cx);
+                        }
                     }
-                    Err(e) => {
-                        log::error!("Failed to drop collection: {}", e);
+                    Err(error) => {
+                        log::error!("Failed to drop collection: {error}");
                         state.update(cx, |state, cx| {
                             state.set_status_message(Some(StatusMessage::error(format!(
-                                "Drop collection failed: {e}"
+                                "Drop collection failed: {error}"
                             ))));
                             cx.notify();
                         });
@@ -320,4 +396,11 @@ impl AppCommands {
         })
         .detach();
     }
+}
+
+fn report_collection_drop_error(state: &Entity<AppState>, message: &str, cx: &mut App) {
+    state.update(cx, |state, cx| {
+        state.set_status_message(Some(StatusMessage::error(message)));
+        cx.notify();
+    });
 }

@@ -1,3 +1,7 @@
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read as _, Write};
+use std::path::Path;
+
 use aes_gcm::aead::{Aead as _, KeyInit as _, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{Context as _, Result, bail};
@@ -9,6 +13,10 @@ use super::model::{DocumentTarget, OperationId, RecoveryPayload, StoredPayload};
 const LEGACY_PAYLOAD_VERSION: u32 = 1;
 const PAYLOAD_VERSION: u32 = 2;
 const NONCE_LEN: usize = 12;
+const ARTIFACT_MAGIC: &[u8; 8] = b"OMHART01";
+const ARTIFACT_CHUNK_BYTES: usize = 1024 * 1024;
+const ARTIFACT_DATA_RECORD: u8 = 1;
+const ARTIFACT_END_RECORD: u8 = 0;
 
 pub(crate) struct HistoryCipher {
     cipher: Aes256Gcm,
@@ -57,6 +65,96 @@ impl HistoryCipher {
             before_hash,
             after_hash,
         })
+    }
+
+    pub(crate) fn encrypt_artifact(
+        &self,
+        operation_id: OperationId,
+        source: &Path,
+        destination: &mut File,
+    ) -> Result<()> {
+        let mut source = BufReader::new(File::open(source)?);
+        let mut destination = BufWriter::new(destination);
+        destination.write_all(ARTIFACT_MAGIC)?;
+        let mut buffer = vec![0u8; ARTIFACT_CHUNK_BYTES];
+        let mut chunk = 0u64;
+        loop {
+            let bytes = source.read(&mut buffer)?;
+            if bytes == 0 {
+                write_artifact_record(
+                    &self.cipher,
+                    operation_id,
+                    chunk,
+                    ARTIFACT_END_RECORD,
+                    &[],
+                    &mut destination,
+                )?;
+                break;
+            }
+            write_artifact_record(
+                &self.cipher,
+                operation_id,
+                chunk,
+                ARTIFACT_DATA_RECORD,
+                &buffer[..bytes],
+                &mut destination,
+            )?;
+            chunk = chunk.checked_add(1).context("history artifact is too large")?;
+        }
+        destination.flush()?;
+        Ok(())
+    }
+
+    pub(crate) fn decrypt_artifact(
+        &self,
+        operation_id: OperationId,
+        source: &Path,
+        destination: &Path,
+    ) -> Result<()> {
+        let mut source = BufReader::new(File::open(source)?);
+        let mut magic = [0u8; ARTIFACT_MAGIC.len()];
+        source.read_exact(&mut magic)?;
+        if &magic != ARTIFACT_MAGIC {
+            bail!("unsupported history artifact");
+        }
+        let mut destination = BufWriter::new(File::create(destination)?);
+        let mut chunk = 0u64;
+        loop {
+            let mut record_type = [0u8; 1];
+            source.read_exact(&mut record_type).context("history artifact is truncated")?;
+            let record_type = record_type[0];
+            if !matches!(record_type, ARTIFACT_DATA_RECORD | ARTIFACT_END_RECORD) {
+                bail!("history artifact contains an invalid record");
+            }
+            let mut nonce = [0u8; NONCE_LEN];
+            source.read_exact(&mut nonce)?;
+            let mut length = [0u8; 4];
+            source.read_exact(&mut length)?;
+            let plaintext_len = u32::from_be_bytes(length) as usize;
+            if plaintext_len > ARTIFACT_CHUNK_BYTES
+                || (record_type == ARTIFACT_END_RECORD && plaintext_len != 0)
+            {
+                bail!("history artifact contains an invalid chunk");
+            }
+            let mut ciphertext = vec![0u8; plaintext_len + 16];
+            source.read_exact(&mut ciphertext)?;
+            let aad = artifact_associated_data(operation_id, chunk, record_type);
+            let plaintext = self
+                .cipher
+                .decrypt(Nonce::from_slice(&nonce), Payload { msg: &ciphertext, aad: &aad })
+                .map_err(|_| anyhow::anyhow!("could not authenticate history artifact"))?;
+            if record_type == ARTIFACT_END_RECORD {
+                let mut trailing = [0u8; 1];
+                if source.read(&mut trailing)? != 0 {
+                    bail!("history artifact contains trailing data");
+                }
+                break;
+            }
+            destination.write_all(&plaintext)?;
+            chunk = chunk.checked_add(1).context("history artifact is too large")?;
+        }
+        destination.flush()?;
+        Ok(())
     }
 
     pub(crate) fn decrypt(
@@ -161,9 +259,39 @@ fn associated_data(version: u32, operation_id: OperationId, target_hash: &[u8; 3
     aad
 }
 
+fn artifact_associated_data(operation_id: OperationId, chunk: u64, record_type: u8) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(16 + 8 + 1 + 24);
+    aad.extend_from_slice(b"openmango:artifact:v1:");
+    aad.extend_from_slice(operation_id.as_bytes());
+    aad.extend_from_slice(&chunk.to_be_bytes());
+    aad.push(record_type);
+    aad
+}
+
+fn write_artifact_record(
+    cipher: &Aes256Gcm,
+    operation_id: OperationId,
+    chunk: u64,
+    record_type: u8,
+    plaintext: &[u8],
+    destination: &mut impl Write,
+) -> Result<()> {
+    let nonce: [u8; NONCE_LEN] = rand::random();
+    let aad = artifact_associated_data(operation_id, chunk, record_type);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: plaintext, aad: &aad })
+        .map_err(|_| anyhow::anyhow!("could not encrypt history artifact"))?;
+    destination.write_all(&[record_type])?;
+    destination.write_all(&nonce)?;
+    destination.write_all(&(plaintext.len() as u32).to_be_bytes())?;
+    destination.write_all(&ciphertext)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use mongodb::bson::{Bson, doc};
+    use tempfile::{NamedTempFile, TempDir};
     use uuid::Uuid;
 
     use super::*;
@@ -205,6 +333,34 @@ mod tests {
         let absent_id = Uuid::new_v4();
         let stored = cipher.encrypt(absent_id, &absent).unwrap();
         assert_eq!(cipher.decrypt(absent_id, "Local".into(), &stored).unwrap().after, None);
+    }
+
+    #[test]
+    fn chunked_artifact_round_trip_authenticates_every_chunk_and_operation() {
+        let directory = TempDir::new().unwrap();
+        let source = directory.path().join("source.archive");
+        let restored = directory.path().join("restored.archive");
+        let bytes =
+            (0..ARTIFACT_CHUNK_BYTES * 2 + 37).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+        std::fs::write(&source, &bytes).unwrap();
+        let cipher = HistoryCipher::new([8; 32]).unwrap();
+        let operation_id = Uuid::new_v4();
+        let mut encrypted = NamedTempFile::new_in(directory.path()).unwrap();
+
+        cipher.encrypt_artifact(operation_id, &source, encrypted.as_file_mut()).unwrap();
+        encrypted.as_file_mut().sync_all().unwrap();
+        cipher.decrypt_artifact(operation_id, encrypted.path(), &restored).unwrap();
+
+        assert_eq!(std::fs::read(restored).unwrap(), bytes);
+        assert!(
+            cipher
+                .decrypt_artifact(
+                    Uuid::new_v4(),
+                    encrypted.path(),
+                    &directory.path().join("wrong.archive"),
+                )
+                .is_err()
+        );
     }
 
     #[test]

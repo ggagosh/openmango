@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
+use mongodb::bson::Bson;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -10,10 +11,12 @@ use crate::bson::bson_value_preview;
 use super::backend::{BackendError, MutationBackend};
 use super::crypto::{HistoryCipher, document_state_hash};
 use super::model::{
-    Mutation, OperationChangePreview, OperationContext, OperationDetails, OperationId,
-    OperationKind, OperationPreview, OperationQuery, OperationStatus, OperationSummary, Page,
-    PreparedOperation, ReconciliationReport, RecoveryPayload,
+    CollectionTarget, DocumentTarget, Mutation, OperationChangePreview, OperationContext,
+    OperationDetails, OperationId, OperationKind, OperationPreview, OperationQuery,
+    OperationStatus, OperationSummary, Page, PreparedOperation, ReconciliationReport,
+    RecoveryPayload,
 };
+use super::snapshot::SnapshotArtifacts;
 use super::store::OperationStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -32,6 +35,8 @@ pub enum OperationError {
     IndexMissing,
     #[error("document changed after it was opened for editing")]
     PreconditionConflict,
+    #[error("collection changed while its recovery snapshot was being created")]
+    SnapshotChanged,
     #[error("operation {operation_id} was blocked by a concurrent document change")]
     Conflict { operation_id: OperationId },
     #[error("operation {operation_id} has an uncertain outcome and requires reconciliation")]
@@ -54,7 +59,10 @@ impl OperationError {
             Self::IndexExists => "An index with this name already exists. Nothing was created.",
             Self::IndexMissing => "The index no longer exists. Nothing was changed.",
             Self::PreconditionConflict | Self::Conflict { .. } => {
-                "The document changed on the server. OpenMango did not overwrite it."
+                "The target changed on the server. OpenMango did not overwrite it."
+            }
+            Self::SnapshotChanged => {
+                "The collection changed while its recovery snapshot was being created. Nothing was dropped."
             }
             Self::Uncertain { .. } => {
                 "The write outcome is uncertain. Check the collection's History tab before retrying."
@@ -71,6 +79,7 @@ impl OperationError {
 pub struct OperationEngine {
     backend: Arc<dyn MutationBackend>,
     cipher: HistoryCipher,
+    artifacts: SnapshotArtifacts,
     store: OperationStore,
 }
 
@@ -80,9 +89,11 @@ impl OperationEngine {
         key: [u8; 32],
         backend: Arc<dyn MutationBackend>,
     ) -> Result<Self, OperationError> {
+        let artifacts = SnapshotArtifacts::open(&path).map_err(|_| OperationError::Unavailable)?;
         Ok(Self {
             backend,
             cipher: HistoryCipher::new(key).map_err(|_| OperationError::Unavailable)?,
+            artifacts,
             store: OperationStore::open(path).map_err(|_| OperationError::Unavailable)?,
         })
     }
@@ -94,6 +105,79 @@ impl OperationEngine {
     ) -> Result<OperationId, OperationError> {
         let (kind, payload) = self.plan_mutation(mutation)?;
         let operation_id = self.prepare_transition(context, kind, payload, None, None)?;
+        self.apply_prepared(operation_id)
+    }
+
+    pub fn drop_collection(
+        &self,
+        context: OperationContext,
+        target: CollectionTarget,
+    ) -> Result<OperationId, OperationError> {
+        let operation_id = Uuid::new_v4();
+        let target = DocumentTarget {
+            connection_id: target.connection_id,
+            connection_name: target.connection_name,
+            database: target.database,
+            collection: target.collection,
+            id: Bson::String(operation_id.to_string()),
+        };
+        let temporary =
+            self.artifacts.temporary_archive().map_err(|_| OperationError::Unavailable)?;
+        let before = match self.backend.capture_collection_snapshot(&target, temporary.path()) {
+            Ok(before) => before,
+            Err(BackendError::Unsupported) => return Err(OperationError::Unsupported),
+            Err(BackendError::Conflict) => return Err(OperationError::SnapshotChanged),
+            Err(
+                BackendError::Unavailable | BackendError::Failed | BackendError::RecoveryRequired,
+            ) => return Err(OperationError::Unavailable),
+        };
+        self.artifacts
+            .store(&self.cipher, operation_id, temporary.path())
+            .map_err(|_| OperationError::Unavailable)?;
+        let verification_target = target.clone();
+        let verification_before = before.clone();
+        let prepared = self.prepare_transition_with_status_and_id(
+            operation_id,
+            context,
+            OperationKind::DropCollection,
+            RecoveryPayload { target, before: Some(before), after: None },
+            OperationStatus::Prepared,
+            None,
+            None,
+        );
+        if prepared.is_err() {
+            self.artifacts.remove(operation_id);
+        }
+        prepared?;
+        if let Err(error) = self.backend.verify_collection_snapshot(
+            &verification_target,
+            temporary.path(),
+            &verification_before,
+        ) {
+            let recovery_required = error == BackendError::RecoveryRequired;
+            let _ = self.store.transition(
+                operation_id,
+                if recovery_required {
+                    OperationStatus::RecoveryRequired
+                } else {
+                    OperationStatus::Failed
+                },
+                "snapshot_verification_failed",
+                if recovery_required { "recovery_required" } else { "not_applied" },
+                Some(if recovery_required {
+                    "Snapshot verification left an unauthenticated staging collection that requires inspection."
+                } else {
+                    "The collection archive could not be restored and verified. Nothing was dropped."
+                }),
+            );
+            return Err(match error {
+                BackendError::Conflict => OperationError::SnapshotChanged,
+                BackendError::RecoveryRequired => OperationError::Uncertain { operation_id },
+                BackendError::Unavailable | BackendError::Failed | BackendError::Unsupported => {
+                    OperationError::Unavailable
+                }
+            });
+        }
         self.apply_prepared(operation_id)
     }
 
@@ -178,6 +262,8 @@ impl OperationEngine {
         }
         let revert_kind = if details.summary.kind.is_index() {
             OperationKind::RevertIndex
+        } else if details.summary.kind.is_snapshot() {
+            OperationKind::RevertCollection
         } else {
             OperationKind::RevertDocument
         };
@@ -190,6 +276,12 @@ impl OperationEngine {
             .cipher
             .decrypt(operation_id, details.summary.connection_name, &stored)
             .map_err(|_| OperationError::NotRevertible)?;
+        if details.summary.kind.is_snapshot() {
+            let artifact_id = snapshot_artifact_id(&original)?;
+            if !self.artifacts.exists(artifact_id) {
+                return Err(OperationError::NotRevertible);
+            }
+        }
         let reversed = RecoveryPayload {
             target: original.target,
             before: original.after,
@@ -228,6 +320,32 @@ impl OperationEngine {
 
     pub fn reconcile(&self) -> Result<ReconciliationReport, OperationError> {
         let mut report = ReconciliationReport::default();
+        for operation in self.store.list_snapshots().map_err(|_| OperationError::Internal)? {
+            let artifact_available = self
+                .store
+                .payload(operation.id)
+                .ok()
+                .flatten()
+                .and_then(|stored| {
+                    self.cipher
+                        .decrypt(operation.id, operation.connection_name.clone(), &stored)
+                        .ok()
+                })
+                .and_then(|payload| snapshot_artifact_id(&payload).ok())
+                .is_some_and(|artifact_id| self.artifacts.exists(artifact_id));
+            if !artifact_available {
+                self.store
+                    .transition(
+                        operation.id,
+                        OperationStatus::RecoveryRequired,
+                        "snapshot_artifact_missing",
+                        "recovery_required",
+                        Some("The encrypted collection snapshot is unavailable."),
+                    )
+                    .map_err(|_| OperationError::Internal)?;
+                report.recovery_required += 1;
+            }
+        }
         let operations = self.store.list_incomplete().map_err(|_| OperationError::Internal)?;
         for operation in operations {
             let Some(stored) =
@@ -265,10 +383,29 @@ impl OperationEngine {
                 };
             let current = match if operation.kind.is_index() {
                 self.backend.current_index(&payload.target)
+            } else if operation.kind.is_snapshot() {
+                self.backend.reconcile_collection(
+                    &payload.target,
+                    payload.before.as_ref(),
+                    payload.after.as_ref(),
+                )
             } else {
                 self.backend.current_document(&payload.target)
             } {
                 Ok(current) => current,
+                Err(BackendError::RecoveryRequired) => {
+                    self.store
+                        .transition(
+                            operation.id,
+                            OperationStatus::RecoveryRequired,
+                            "snapshot_staging_ownership_conflict",
+                            "recovery_required",
+                            Some("A temporary snapshot namespace could not be authenticated and was preserved."),
+                        )
+                        .map_err(|_| OperationError::Internal)?;
+                    report.recovery_required += 1;
+                    continue;
+                }
                 Err(_) => {
                     self.store
                         .record_recovery_status(
@@ -313,6 +450,17 @@ impl OperationEngine {
                         "reconciled_index_uncertain",
                         "recovery_required",
                         Some("An index with the expected name exists, but its exact created definition could not be authenticated."),
+                    )
+                    .map_err(|_| OperationError::Internal)?;
+                report.recovery_required += 1;
+            } else if operation.kind.is_snapshot() {
+                self.store
+                    .transition(
+                        operation.id,
+                        OperationStatus::RecoveryRequired,
+                        "reconciled_snapshot_uncertain",
+                        "recovery_required",
+                        Some("The collection matches neither recorded snapshot state."),
                     )
                     .map_err(|_| OperationError::Internal)?;
                 report.recovery_required += 1;
@@ -413,7 +561,11 @@ impl OperationEngine {
         {
             return Err(OperationError::Internal);
         }
-        summary.preview = Some(operation_preview(&payload));
+        summary.preview = Some(if summary.kind.is_snapshot() {
+            collection_snapshot_preview(&payload)
+        } else {
+            operation_preview(&payload)
+        });
         Ok(())
     }
 
@@ -444,7 +596,28 @@ impl OperationEngine {
         parent_operation_id: Option<OperationId>,
         reverts_operation_id: Option<OperationId>,
     ) -> Result<OperationId, OperationError> {
-        let operation_id = Uuid::new_v4();
+        self.prepare_transition_with_status_and_id(
+            Uuid::new_v4(),
+            context,
+            kind,
+            payload,
+            status,
+            parent_operation_id,
+            reverts_operation_id,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_transition_with_status_and_id(
+        &self,
+        operation_id: OperationId,
+        context: OperationContext,
+        kind: OperationKind,
+        payload: RecoveryPayload,
+        status: OperationStatus,
+        parent_operation_id: Option<OperationId>,
+        reverts_operation_id: Option<OperationId>,
+    ) -> Result<OperationId, OperationError> {
         let now = Utc::now();
         let encrypted =
             self.cipher.encrypt(operation_id, &payload).map_err(|_| OperationError::Unavailable)?;
@@ -497,6 +670,34 @@ impl OperationEngine {
             match (payload.before.as_ref(), payload.after.as_ref()) {
                 (Some(before), None) => self.backend.drop_index_if_current(&payload.target, before),
                 (None, Some(after)) => self.backend.create_index_if_absent(&payload.target, after),
+                _ => Err(BackendError::Failed),
+            }
+        } else if kind.is_snapshot() {
+            match (payload.before.as_ref(), payload.after.as_ref()) {
+                (Some(before), None) => {
+                    self.backend.drop_collection_if_current(&payload.target, before)
+                }
+                (None, Some(after)) => {
+                    let artifact_id = snapshot_artifact_id(&payload)?;
+                    let temporary =
+                        self.artifacts.temporary_archive().map_err(|_| OperationError::Internal)?;
+                    if self.artifacts.decrypt(&self.cipher, artifact_id, temporary.path()).is_err()
+                    {
+                        let _ = self.store.transition(
+                            operation_id,
+                            OperationStatus::RecoveryRequired,
+                            "snapshot_artifact_unreadable",
+                            "recovery_required",
+                            Some("The encrypted collection snapshot could not be authenticated."),
+                        );
+                        return Err(OperationError::NotRevertible);
+                    }
+                    self.backend.restore_collection_if_absent(
+                        &payload.target,
+                        temporary.path(),
+                        after,
+                    )
+                }
                 _ => Err(BackendError::Failed),
             }
         } else {
@@ -554,16 +755,31 @@ impl OperationEngine {
                 Ok(operation_id)
             }
             Err(BackendError::Conflict) => {
+                let message = if kind.is_snapshot() {
+                    "The collection no longer matches the recorded snapshot state."
+                } else {
+                    "Current document did not match the expected image."
+                };
                 let _ = self.store.transition(
                     operation_id,
                     OperationStatus::Conflict,
                     "conflict",
                     "conflict",
-                    Some("Current document did not match the expected image."),
+                    Some(message),
                 );
                 Err(OperationError::Conflict { operation_id })
             }
-            Err(BackendError::Unavailable | BackendError::Failed) => {
+            Err(BackendError::RecoveryRequired) => {
+                let _ = self.store.transition(
+                    operation_id,
+                    OperationStatus::RecoveryRequired,
+                    "snapshot_staging_ownership_conflict",
+                    "recovery_required",
+                    Some("A temporary snapshot namespace could not be authenticated and was preserved."),
+                );
+                Err(OperationError::Uncertain { operation_id })
+            }
+            Err(BackendError::Unavailable | BackendError::Failed | BackendError::Unsupported) => {
                 let _ = self.store.transition(
                     operation_id,
                     OperationStatus::Uncertain,
@@ -643,6 +859,34 @@ fn validate_index_definition(
         return Err(OperationError::Unsupported);
     }
     Ok(())
+}
+
+fn snapshot_artifact_id(payload: &RecoveryPayload) -> Result<OperationId, OperationError> {
+    payload
+        .target
+        .id
+        .as_str()
+        .ok_or(OperationError::Internal)?
+        .parse()
+        .map_err(|_| OperationError::Internal)
+}
+
+fn collection_snapshot_preview(payload: &RecoveryPayload) -> OperationPreview {
+    let state = |manifest: &Option<mongodb::bson::Document>| {
+        manifest.as_ref().map(|manifest| {
+            let count = manifest.get_i64("document_count").unwrap_or_default();
+            format!("Present ({count} documents)")
+        })
+    };
+    OperationPreview {
+        document_id: payload.target.collection.clone(),
+        changes: vec![OperationChangePreview {
+            field: "Collection".into(),
+            before: state(&payload.before),
+            after: state(&payload.after),
+        }],
+        total_changes: 1,
+    }
 }
 
 fn operation_preview(payload: &RecoveryPayload) -> OperationPreview {

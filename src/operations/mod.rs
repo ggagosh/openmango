@@ -2,15 +2,17 @@ mod backend;
 mod crypto;
 mod engine;
 mod model;
+mod snapshot;
 mod store;
 
 use std::sync::Arc;
 
 pub use engine::{OperationEngine, OperationError};
 pub use model::{
-    DocumentTarget, Mutation, OperationChangePreview, OperationContext, OperationDetails,
-    OperationEvent, OperationId, OperationKind, OperationOrigin, OperationPreview, OperationQuery,
-    OperationStatus, OperationSummary, Page, ReconciliationReport,
+    CollectionTarget, DocumentTarget, Mutation, OperationChangePreview, OperationContext,
+    OperationDetails, OperationEvent, OperationId, OperationKind, OperationOrigin,
+    OperationPreview, OperationQuery, OperationStatus, OperationSummary, Page,
+    ReconciliationReport,
 };
 
 #[cfg(test)]

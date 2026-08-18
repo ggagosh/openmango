@@ -3,7 +3,12 @@
 mod common;
 
 use common::MongoTestContainer;
-use mongodb::bson::doc;
+use futures::TryStreamExt as _;
+use mongodb::IndexModel;
+use mongodb::bson::{Document, doc};
+use mongodb::options::IndexOptions;
+use openmango::connection::ConnectionManager;
+use tempfile::TempDir;
 
 /// Test basic connection and database listing.
 #[tokio::test]
@@ -83,6 +88,86 @@ async fn test_create_and_drop_collection() {
 }
 
 /// Test connection string is valid.
+#[tokio::test]
+async fn collection_archive_restores_documents_validator_and_indexes() {
+    let mongo = MongoTestContainer::start().await;
+    let database = mongo.db_name("collection_snapshot");
+    let db = mongo.client.database(&database);
+    db.run_command(doc! {
+        "create": "users",
+        "validator": { "status": { "$in": ["active", "disabled"] } },
+        "validationLevel": "strict",
+    })
+    .await
+    .unwrap();
+    let collection = db.collection::<Document>("users");
+    collection
+        .insert_many([
+            doc! { "_id": 1, "email": "a@example.com", "status": "active" },
+            doc! { "_id": 2, "email": "b@example.com", "status": "disabled" },
+        ])
+        .await
+        .unwrap();
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(
+                    IndexOptions::builder().name("email_unique".to_string()).unique(true).build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let directory = TempDir::new().unwrap();
+    let archive = directory.path().join("users.archive");
+    let client = mongo.client.clone();
+    let uri = mongo.connection_string.clone();
+    let database_for_task = database.clone();
+    tokio::task::spawn_blocking(move || {
+        let manager = ConnectionManager::new();
+        manager.export_collection_archive(&uri, &database_for_task, "users", &archive)?;
+        manager.verify_collection_archive(&uri, &database_for_task, "users", &archive)?;
+        manager.rename_collection(&client, &database_for_task, "users", "users_quarantine")?;
+        manager.drop_collection(&client, &database_for_task, "users_quarantine")?;
+        manager.restore_collection_archive_as(
+            &uri,
+            &database_for_task,
+            "users",
+            &database_for_task,
+            "users_staged",
+            &archive,
+        )?;
+        manager.rename_collection(&client, &database_for_task, "users_staged", "users")
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    let restored = db.collection::<Document>("users");
+    let documents: Vec<Document> =
+        restored.find(doc! {}).sort(doc! { "_id": 1 }).await.unwrap().try_collect().await.unwrap();
+    assert_eq!(documents.len(), 2);
+    assert_eq!(documents[0].get_str("email").unwrap(), "a@example.com");
+    let indexes: Vec<IndexModel> =
+        restored.list_indexes().await.unwrap().try_collect().await.unwrap();
+    let email = indexes
+        .iter()
+        .find(|index| {
+            index.options.as_ref().and_then(|options| options.name.as_deref())
+                == Some("email_unique")
+        })
+        .expect("restored unique index missing");
+    assert_eq!(email.options.as_ref().and_then(|options| options.unique), Some(true));
+    let specs: Vec<_> = db.list_collections().await.unwrap().try_collect().await.unwrap();
+    let users = specs.iter().find(|spec| spec.name == "users").unwrap();
+    assert_eq!(
+        users.options.validator.as_ref(),
+        Some(&doc! { "status": { "$in": ["active", "disabled"] } })
+    );
+}
+
 #[tokio::test]
 async fn test_connection_string_format() {
     let mongo = MongoTestContainer::start().await;

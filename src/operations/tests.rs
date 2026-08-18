@@ -8,7 +8,8 @@ use uuid::Uuid;
 use super::backend::{BackendError, InMemoryMutationBackend, MutationBackend};
 use super::engine::{OperationEngine, OperationError};
 use super::model::{
-    DocumentTarget, Mutation, OperationContext, OperationOrigin, OperationQuery, OperationStatus,
+    CollectionTarget, DocumentTarget, Mutation, OperationContext, OperationOrigin, OperationQuery,
+    OperationStatus,
 };
 
 fn target(id: i32) -> DocumentTarget {
@@ -37,6 +38,19 @@ fn index_target(name: &str) -> DocumentTarget {
 
 fn index_definition(name: &str, field: &str) -> Document {
     doc! { "key": { field: 1 }, "name": name }
+}
+
+fn collection_target() -> CollectionTarget {
+    CollectionTarget {
+        connection_id: Uuid::from_u128(1),
+        connection_name: "Local".into(),
+        database: "app".into(),
+        collection: "users".into(),
+    }
+}
+
+fn collection_manifest(marker: &str) -> Document {
+    doc! { "format_version": 1, "document_count": 2_i64, "marker": marker }
 }
 
 fn engine_with(
@@ -327,6 +341,167 @@ fn changed_index_blocks_revert_without_dropping_the_new_definition() {
 
     assert!(matches!(error, OperationError::Conflict { .. }));
     assert_eq!(backend.index(&target), Some(changed));
+}
+
+#[test]
+fn collection_drop_fails_closed_when_archive_restore_verification_fails() {
+    struct UnverifiableBackend {
+        inner: Arc<InMemoryMutationBackend>,
+    }
+    impl MutationBackend for UnverifiableBackend {
+        fn current_document(
+            &self,
+            target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            self.inner.current_document(target)
+        }
+
+        fn replace_document_if_current(
+            &self,
+            target: &DocumentTarget,
+            expected: &Document,
+            replacement: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.replace_document_if_current(target, expected, replacement)
+        }
+
+        fn capture_collection_snapshot(
+            &self,
+            target: &DocumentTarget,
+            path: &std::path::Path,
+        ) -> Result<Document, BackendError> {
+            self.inner.capture_collection_snapshot(target, path)
+        }
+
+        fn verify_collection_snapshot(
+            &self,
+            _target: &DocumentTarget,
+            _path: &std::path::Path,
+            _expected: &Document,
+        ) -> Result<(), BackendError> {
+            Err(BackendError::Failed)
+        }
+
+        fn current_collection(
+            &self,
+            target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            self.inner.current_collection(target)
+        }
+
+        fn drop_collection_if_current(
+            &self,
+            target: &DocumentTarget,
+            expected: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.drop_collection_if_current(target, expected)
+        }
+    }
+
+    let directory = TempDir::new().unwrap();
+    let memory = Arc::new(InMemoryMutationBackend::default());
+    memory.set_collection(&target(0), collection_manifest("original"));
+    let engine =
+        engine_with(&directory, [27; 32], Arc::new(UnverifiableBackend { inner: memory.clone() }));
+
+    let error = engine.drop_collection(OperationContext::user(), collection_target()).unwrap_err();
+
+    assert_eq!(error, OperationError::Unavailable);
+    assert_eq!(memory.collection(&target(0)), Some(collection_manifest("original")));
+    let operation = engine.list(OperationQuery::default()).unwrap().items.remove(0);
+    assert_eq!(operation.status, OperationStatus::Failed);
+}
+
+#[test]
+fn collection_drop_uses_an_encrypted_snapshot_and_restores_it() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let manifest = collection_manifest("original");
+    backend.set_collection(&target(0), manifest.clone());
+    let engine = engine_with(&directory, [28; 32], backend.clone());
+
+    let operation = engine.drop_collection(OperationContext::user(), collection_target()).unwrap();
+
+    assert_eq!(backend.collection(&target(0)), None);
+    let details = engine.get(operation).unwrap().unwrap();
+    assert_eq!(details.summary.kind, super::model::OperationKind::DropCollection);
+    assert_eq!(details.summary.status, OperationStatus::Completed);
+    assert_eq!(details.summary.preview.unwrap().document_id, "users");
+    let artifact =
+        directory.path().join("operation-artifacts").join(format!("{operation}.archive.enc"));
+    let encrypted = fs::read(artifact).unwrap();
+    assert!(
+        !encrypted
+            .windows(b"verified collection snapshot".len())
+            .any(|window| { window == b"verified collection snapshot" })
+    );
+
+    let reverted = engine.revert(OperationContext::user(), operation).unwrap();
+
+    assert_eq!(backend.collection(&target(0)), Some(manifest));
+    assert_eq!(
+        engine.get(reverted).unwrap().unwrap().summary.kind,
+        super::model::OperationKind::RevertCollection
+    );
+}
+
+#[test]
+fn collection_restore_never_overwrites_a_reused_name() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    backend.set_collection(&target(0), collection_manifest("original"));
+    let engine = engine_with(&directory, [29; 32], backend.clone());
+    let operation = engine.drop_collection(OperationContext::user(), collection_target()).unwrap();
+    let replacement = collection_manifest("replacement");
+    backend.set_collection(&target(0), replacement.clone());
+
+    let error = engine.revert(OperationContext::user(), operation).unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(backend.collection(&target(0)), Some(replacement));
+}
+
+#[test]
+fn unreadable_collection_artifact_requires_recovery_without_restoring() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    backend.set_collection(&target(0), collection_manifest("original"));
+    let engine = engine_with(&directory, [30; 32], backend.clone());
+    let operation = engine.drop_collection(OperationContext::user(), collection_target()).unwrap();
+    fs::write(
+        directory.path().join("operation-artifacts").join(format!("{operation}.archive.enc")),
+        b"tampered",
+    )
+    .unwrap();
+
+    let error = engine.revert(OperationContext::user(), operation).unwrap_err();
+
+    assert_eq!(error, OperationError::NotRevertible);
+    assert_eq!(backend.collection(&target(0)), None);
+    let page = engine.list(OperationQuery::default()).unwrap();
+    assert!(page.items.iter().any(|item| {
+        item.kind == super::model::OperationKind::RevertCollection
+            && item.status == OperationStatus::RecoveryRequired
+    }));
+}
+
+#[test]
+fn reconciliation_marks_missing_collection_artifacts_as_recovery_required() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    backend.set_collection(&target(0), collection_manifest("original"));
+    let engine = engine_with(&directory, [31; 32], backend);
+    let operation = engine.drop_collection(OperationContext::user(), collection_target()).unwrap();
+    fs::remove_file(
+        directory.path().join("operation-artifacts").join(format!("{operation}.archive.enc")),
+    )
+    .unwrap();
+
+    assert_eq!(engine.reconcile().unwrap().recovery_required, 1);
+    assert_eq!(
+        engine.get(operation).unwrap().unwrap().summary.status,
+        OperationStatus::RecoveryRequired
+    );
 }
 
 #[test]

@@ -326,6 +326,24 @@ impl OperationStore {
         })
     }
 
+    pub(crate) fn list_snapshots(&self) -> Result<Vec<OperationSummary>> {
+        self.call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, kind, origin, connection_id, connection_name, database_name,
+                        collection_name, status, parent_operation_id, reverts_operation_id,
+                        created_at_ms, updated_at_ms, recovery_status
+                 FROM operations
+                 WHERE kind IN ('drop_collection', 'revert_collection')
+                   AND status != 'recovery_required'
+                 ORDER BY created_at_ms ASC, rowid ASC",
+            )?;
+            statement
+                .query_map([], raw_summary)?
+                .map(|row| summary_from_raw(row?))
+                .collect::<Result<Vec<_>>>()
+        })
+    }
+
     pub(crate) fn replace_payload(&self, id: OperationId, payload: StoredPayload) -> Result<()> {
         self.call(move |connection| {
             let changed = connection.execute(

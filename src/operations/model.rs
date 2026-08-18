@@ -13,6 +13,8 @@ pub enum OperationKind {
     CreateIndex,
     DropIndex,
     RevertIndex,
+    DropCollection,
+    RevertCollection,
 }
 
 impl OperationKind {
@@ -25,6 +27,8 @@ impl OperationKind {
             Self::CreateIndex => "create_index",
             Self::DropIndex => "drop_index",
             Self::RevertIndex => "revert_index",
+            Self::DropCollection => "drop_collection",
+            Self::RevertCollection => "revert_collection",
         }
     }
 
@@ -37,12 +41,18 @@ impl OperationKind {
             "create_index" => Ok(Self::CreateIndex),
             "drop_index" => Ok(Self::DropIndex),
             "revert_index" => Ok(Self::RevertIndex),
+            "drop_collection" => Ok(Self::DropCollection),
+            "revert_collection" => Ok(Self::RevertCollection),
             _ => anyhow::bail!("unsupported operation kind"),
         }
     }
 
     pub(crate) fn is_index(self) -> bool {
         matches!(self, Self::CreateIndex | Self::DropIndex | Self::RevertIndex)
+    }
+
+    pub(crate) fn is_snapshot(self) -> bool {
+        matches!(self, Self::DropCollection | Self::RevertCollection)
     }
 
     pub fn label(self) -> &'static str {
@@ -54,6 +64,8 @@ impl OperationKind {
             Self::CreateIndex => "Index creation",
             Self::DropIndex => "Index deletion",
             Self::RevertIndex => "Index restore",
+            Self::DropCollection => "Collection deletion",
+            Self::RevertCollection => "Collection restore",
         }
     }
 }
@@ -153,6 +165,14 @@ pub struct DocumentTarget {
     pub database: String,
     pub collection: String,
     pub id: Bson,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionTarget {
+    pub connection_id: Uuid,
+    pub connection_name: String,
+    pub database: String,
+    pub collection: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

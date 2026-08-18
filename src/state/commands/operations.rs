@@ -1,7 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::operations::{OperationContext, OperationId, OperationQuery};
+use crate::operations::{OperationContext, OperationId, OperationKind, OperationQuery};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 
 impl AppCommands {
@@ -134,21 +134,24 @@ impl AppCommands {
             });
             return;
         };
-        backend.register_client(connection_id, client);
+        if let Ok(tool_uri) = state.read(cx).active_connection_tool_uri(connection_id) {
+            backend.register_snapshot_connection(connection_id, client, tool_uri);
+        } else {
+            backend.register_client(connection_id, client);
+        }
         let task = cx.background_spawn(async move {
-            let index_change = engine
+            let kind = engine
                 .get(operation_id)?
                 .ok_or(crate::operations::OperationError::NotFound)?
                 .summary
-                .kind
-                .is_index();
+                .kind;
             engine.revert(OperationContext::user(), operation_id)?;
-            Ok::<_, crate::operations::OperationError>(index_change)
+            Ok::<_, crate::operations::OperationError>(kind)
         });
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let result = task.await;
             let succeeded = result.is_ok();
-            let index_change = matches!(&result, Ok(true));
+            let kind = result.as_ref().ok().copied();
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let message = match result {
@@ -160,19 +163,33 @@ impl AppCommands {
                 });
                 let session_key = SessionKey::new(connection_id, database, collection);
                 if succeeded {
-                    if index_change {
-                        AppCommands::load_collection_indexes(
-                            state.clone(),
-                            session_key.clone(),
-                            true,
-                            cx,
-                        );
-                    } else {
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                    match kind {
+                        Some(OperationKind::CreateIndex)
+                        | Some(OperationKind::DropIndex)
+                        | Some(OperationKind::RevertIndex) => {
+                            AppCommands::load_collection_indexes(
+                                state.clone(),
+                                session_key.clone(),
+                                true,
+                                cx,
+                            );
+                        }
+                        Some(OperationKind::DropCollection)
+                        | Some(OperationKind::RevertCollection) => {
+                            AppCommands::load_collections(
+                                state.clone(),
+                                connection_id,
+                                session_key.database.clone(),
+                                cx,
+                            );
+                        }
+                        _ => {
+                            AppCommands::load_documents_for_session(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                     }
                 }
                 AppCommands::load_collection_history(state.clone(), session_key, cx);
