@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use super::backend::{BackendError, InMemoryMutationBackend, MutationBackend};
 use super::engine::{OperationEngine, OperationError};
-use super::model::{DocumentTarget, Mutation, OperationContext, OperationQuery, OperationStatus};
+use super::model::{
+    DocumentTarget, Mutation, OperationContext, OperationOrigin, OperationQuery, OperationStatus,
+};
 
 fn target(id: i32) -> DocumentTarget {
     DocumentTarget {
@@ -142,6 +144,29 @@ fn successful_insert_can_be_reverted_while_document_is_unchanged() {
     engine.revert(OperationContext::user(), inserted_operation).unwrap();
 
     assert_eq!(backend.document(&target), None);
+}
+
+#[test]
+fn built_in_ai_origin_and_recovery_size_limit_are_persisted() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(14);
+    let engine = engine_with(&directory, [21; 32], backend);
+    let document = document(14, "inserted");
+
+    let operation = engine
+        .execute(
+            OperationContext::built_in_ai(),
+            Mutation::InsertDocument { target, document: document.clone() },
+        )
+        .unwrap();
+
+    assert_eq!(engine.get(operation).unwrap().unwrap().summary.origin, OperationOrigin::BuiltInAi);
+    assert!(super::ensure_reversible_bulk_size_with_limit([&document], usize::MAX).is_ok());
+    assert_eq!(
+        super::ensure_reversible_bulk_size_with_limit([&document], 0),
+        Err(OperationError::RecoveryLimitExceeded)
+    );
 }
 
 #[test]

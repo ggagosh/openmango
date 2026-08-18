@@ -8,8 +8,8 @@ use mongodb::{
 
 use crate::connection::{CancellationToken, ConnectionManager, FindDocumentsOptions};
 use crate::operations::{
-    DocumentTarget, MAX_REVERSIBLE_BULK_BYTES, MAX_REVERSIBLE_BULK_DOCUMENTS, MongoMutationBackend,
-    Mutation, OperationContext, OperationEngine, OperationError,
+    DocumentTarget, MAX_REVERSIBLE_BULK_DOCUMENTS, MongoMutationBackend, Mutation,
+    OperationContext, OperationEngine, OperationError, ensure_reversible_bulk_size,
 };
 use crate::state::AppCommands;
 use crate::state::{AppEvent, AppState, SessionKey};
@@ -81,28 +81,6 @@ fn target(
         collection: session_key.collection.clone(),
         id,
     }
-}
-
-fn ensure_recovery_size<'a>(
-    documents: impl IntoIterator<Item = &'a Document>,
-    max_bytes: usize,
-) -> Result<(), crate::error::Error> {
-    let mut bytes = 0usize;
-    for document in documents {
-        let encoded = mongodb::bson::to_vec(document).map_err(|error| {
-            crate::error::Error::Parse(format!("Could not encode recovery data: {error}"))
-        })?;
-        bytes = bytes
-            .checked_add(encoded.len())
-            .ok_or_else(|| crate::error::Error::Parse("Recovery data is too large.".to_string()))?;
-        if bytes > max_bytes {
-            return Err(crate::error::Error::Parse(format!(
-                "Reversible bulk recovery data is limited to {} MiB. Narrow the write and try again.",
-                MAX_REVERSIBLE_BULK_BYTES / (1024 * 1024)
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn exceeds_bulk_limit(total: u64, fetched: usize) -> bool {
@@ -210,7 +188,8 @@ impl AppCommands {
                     documents,
                 );
             };
-            ensure_recovery_size(documents.iter(), MAX_REVERSIBLE_BULK_BYTES)?;
+            ensure_reversible_bulk_size(documents.iter())
+                .map_err(|error| crate::error::Error::Parse(error.user_message().to_string()))?;
             history.backend.register_client(session_for_task.connection_id, client);
             let total = documents.len();
             for (completed, document) in documents.into_iter().enumerate() {
@@ -426,10 +405,10 @@ impl AppCommands {
                 cancellation.clone(),
             )?;
             let replacements = plan_replacements(documents, &replacement)?;
-            ensure_recovery_size(
+            ensure_reversible_bulk_size(
                 replacements.iter().flat_map(|(_, before, after)| [before, after]),
-                MAX_REVERSIBLE_BULK_BYTES,
-            )?;
+            )
+            .map_err(|error| crate::error::Error::Parse(error.user_message().to_string()))?;
             history.backend.register_client(session_for_task.connection_id, client);
             let total = replacements.len();
             let modified_count =
@@ -558,7 +537,8 @@ impl AppCommands {
                     "Matched document is missing _id; no deletes were attempted.".to_string(),
                 ));
             }
-            ensure_recovery_size(documents.iter(), MAX_REVERSIBLE_BULK_BYTES)?;
+            ensure_reversible_bulk_size(documents.iter())
+                .map_err(|error| crate::error::Error::Parse(error.user_message().to_string()))?;
             history.backend.register_client(session_for_task.connection_id, client);
             let total = documents.len();
             for (completed, document) in documents.into_iter().enumerate() {
@@ -631,8 +611,7 @@ mod tests {
     use mongodb::bson::{Bson, doc};
 
     use super::{
-        MAX_REVERSIBLE_BULK_BYTES, MAX_REVERSIBLE_BULK_DOCUMENTS, assign_missing_ids,
-        ensure_recovery_size, exceeds_bulk_limit, plan_replacements,
+        MAX_REVERSIBLE_BULK_DOCUMENTS, assign_missing_ids, exceeds_bulk_limit, plan_replacements,
     };
 
     #[test]
@@ -647,8 +626,6 @@ mod tests {
         assert!(!exceeds_bulk_limit(100, 100));
         assert!(exceeds_bulk_limit(100, 101));
         assert!(exceeds_bulk_limit(101, 100));
-        assert!(ensure_recovery_size(documents.iter(), MAX_REVERSIBLE_BULK_BYTES).is_ok());
-        assert!(ensure_recovery_size(documents.iter(), 0).is_err());
     }
 
     #[test]

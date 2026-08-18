@@ -74,7 +74,7 @@ const AUTO_EXECUTE_TOOLS: &[&str] = &[
 ];
 
 const CONFIRM_FIRST_TOOLS: &[&str] = &["insert_documents", "create_index"];
-const ALWAYS_CONFIRM_TOOLS: &[&str] = &["update_documents", "delete_documents", "drop_index"];
+const ALWAYS_CONFIRM_TOOLS: &[&str] = &["replace_documents", "delete_documents", "drop_index"];
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -103,8 +103,8 @@ pub fn classify_tool_call(tool_name: &str, args_json: &str) -> SafetyClassificat
         };
     }
 
-    // Check for blocked patterns on update/delete before tier assignment
-    if (tool_name == "update_documents" || tool_name == "delete_documents")
+    // Check for blocked patterns on replacement/delete before tier assignment
+    if (tool_name == "replace_documents" || tool_name == "delete_documents")
         && let Some(blocked) = check_blocked_patterns(tool_name, args_json)
     {
         return blocked;
@@ -125,7 +125,7 @@ pub fn classify_tool_call(tool_name: &str, args_json: &str) -> SafetyClassificat
 
     if ALWAYS_CONFIRM_TOOLS.contains(&tool_name) {
         let desc = match tool_name {
-            "update_documents" => "Update documents",
+            "replace_documents" => "Replace documents",
             "delete_documents" => "Delete documents",
             "drop_index" => "Drop index",
             _ => tool_name,
@@ -145,7 +145,7 @@ pub fn classify_tool_call(tool_name: &str, args_json: &str) -> SafetyClassificat
     }
 }
 
-/// Check for dangerous patterns in update/delete args.
+/// Check for dangerous patterns in replacement/delete args.
 fn check_blocked_patterns(tool_name: &str, args_json: &str) -> Option<SafetyClassification> {
     let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
 
@@ -156,7 +156,7 @@ fn check_blocked_patterns(tool_name: &str, args_json: &str) -> Option<SafetyClas
         return Some(SafetyClassification {
             tier: SafetyTier::Blocked,
             description: format!("{tool_name} without filter"),
-            reason: Some("A filter is required for update/delete operations".to_string()),
+            reason: Some("A filter is required for replacement/delete operations".to_string()),
         });
     }
 
@@ -218,10 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn update_is_always_confirm() {
+    fn replacement_is_always_confirm() {
         let c = classify_tool_call(
-            "update_documents",
-            r#"{"filter": "{\"status\": \"active\"}", "update": "{\"$set\": {\"x\": 1}}"}"#,
+            "replace_documents",
+            r#"{"filter": "{\"status\": \"active\"}", "replacement": "{\"status\": \"archived\"}"}"#,
         );
         assert_eq!(c.tier, SafetyTier::AlwaysConfirm);
     }
@@ -252,8 +252,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_filter_update_is_blocked() {
-        let c = classify_tool_call("update_documents", r#"{"filter": "{}"}"#);
+    fn empty_filter_replacement_is_blocked() {
+        let c = classify_tool_call("replace_documents", r#"{"filter": "{}"}"#);
         assert_eq!(c.tier, SafetyTier::Blocked);
     }
 

@@ -453,7 +453,7 @@ impl Render for ConnectionDialog {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Encrypt recovery data for document inserts, replacements, and deletions, including bounded bulk writes."),
+                                    .child("Encrypt recovery data for manual and built-in AI document writes, including bounded bulk changes."),
                             ),
                     ),
             )

@@ -5,7 +5,10 @@ use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
+use super::{
+    MongoContext, ToolError, ensure_writable, execute_reversible_mutations, require_confirmation,
+    require_reversible_history, resolve_collection, reversible_target,
+};
 
 pub struct InsertDocumentsTool(MongoContext);
 
@@ -20,8 +23,6 @@ pub struct InsertArgs {
     pub collection: Option<String>,
     pub documents: String,
 }
-
-const MAX_INSERT_COUNT: usize = 100;
 
 impl Tool for InsertDocumentsTool {
     const NAME: &'static str = "insert_documents";
@@ -54,6 +55,7 @@ impl Tool for InsertDocumentsTool {
 
     async fn call(&self, args: InsertArgs) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
+        require_reversible_history(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
 
         // Parse documents array
@@ -71,15 +73,16 @@ impl Tool for InsertDocumentsTool {
         if docs_array.is_empty() {
             return Err(ToolError::InvalidInput("No documents to insert".to_string()));
         }
-        if docs_array.len() > MAX_INSERT_COUNT {
+        if docs_array.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS {
             return Err(ToolError::InvalidInput(format!(
-                "Too many documents ({}). Maximum is {MAX_INSERT_COUNT}.",
-                docs_array.len()
+                "Too many documents ({}). Maximum is {}.",
+                docs_array.len(),
+                crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
             )));
         }
 
         // Convert to BSON documents
-        let bson_docs: Vec<bson::Document> = docs_array
+        let mut bson_docs: Vec<bson::Document> = docs_array
             .iter()
             .enumerate()
             .map(|(i, v)| {
@@ -108,13 +111,25 @@ impl Tool for InsertDocumentsTool {
             .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Execute
-        let collection =
-            self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
-        let result = collection.insert_many(bson_docs).await?;
+        for document in &mut bson_docs {
+            if !document.contains_key("_id") {
+                document.insert("_id", bson::oid::ObjectId::new());
+            }
+        }
+        crate::operations::ensure_reversible_bulk_size(bson_docs.iter())
+            .map_err(|error| ToolError::History(error.user_message().to_string()))?;
+        let mutations = bson_docs
+            .into_iter()
+            .map(|document| {
+                let id = document.get("_id").cloned().expect("assigned above");
+                crate::operations::Mutation::InsertDocument {
+                    target: reversible_target(&self.0, &col_name, id),
+                    document,
+                }
+            })
+            .collect();
+        let inserted_count = execute_reversible_mutations(&self.0, &col_name, mutations).await?;
 
-        Ok(serde_json::json!({
-            "inserted_count": result.inserted_ids.len(),
-        }))
+        Ok(serde_json::json!({ "inserted_count": inserted_count }))
     }
 }

@@ -32,6 +32,8 @@ pub enum OperationError {
     Conflict { operation_id: OperationId },
     #[error("operation {operation_id} has an uncertain outcome and requires reconciliation")]
     Uncertain { operation_id: OperationId },
+    #[error("reversible bulk recovery data exceeds the configured limit")]
+    RecoveryLimitExceeded,
     #[error("operation is not eligible for revert")]
     NotRevertible,
     #[error("operation history could not be updated; no further write was attempted")]
@@ -52,6 +54,9 @@ impl OperationError {
             }
             Self::Uncertain { .. } => {
                 "The write outcome is uncertain. Check the collection's History tab before retrying."
+            }
+            Self::RecoveryLimitExceeded => {
+                "Reversible bulk recovery data is too large. Narrow the write and try again."
             }
             Self::NotRevertible => "This operation is not eligible for revert.",
             Self::Internal => "Operation history could not be updated; no further write was made.",

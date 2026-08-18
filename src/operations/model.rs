@@ -45,22 +45,30 @@ impl OperationKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationOrigin {
     User,
+    BuiltInAi,
 }
 
 impl OperationOrigin {
     pub(crate) fn as_str(self) -> &'static str {
-        "user"
+        match self {
+            Self::User => "user",
+            Self::BuiltInAi => "built_in_ai",
+        }
     }
 
     pub(crate) fn parse(value: &str) -> anyhow::Result<Self> {
         match value {
             "user" => Ok(Self::User),
+            "built_in_ai" => Ok(Self::BuiltInAi),
             _ => anyhow::bail!("unsupported operation origin"),
         }
     }
 
     pub fn label(self) -> &'static str {
-        "User"
+        match self {
+            Self::User => "User",
+            Self::BuiltInAi => "Built-in AI",
+        }
     }
 }
 
@@ -150,6 +158,10 @@ pub struct OperationContext {
 impl OperationContext {
     pub fn user() -> Self {
         Self { origin: OperationOrigin::User }
+    }
+
+    pub fn built_in_ai() -> Self {
+        Self { origin: OperationOrigin::BuiltInAi }
     }
 }
 

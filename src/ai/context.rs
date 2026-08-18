@@ -123,13 +123,14 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
          - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
          - **list_collections**: List all collections in the database.\n\n\
          ### Write Operations\n\
-         Write operations require user confirmation before executing. The user will see a preview \
-         of affected documents and must approve. A built-in safety system validates all write \
-         operations — always call the tool and let the safety system handle validation.\n\n\
+         Document writes require Reversible history on the connection and user confirmation. The \
+         user will see a preview and must approve before encrypted recovery checkpoints are created. \
+         A built-in safety system validates all write operations — always call the tool and let the \
+         safety system handle validation.\n\n\
          - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
          array string. Max 100 documents per call.\n\
-         - **update_documents**: Update documents matching a filter. Pass `filter` and `update` \
-         as JSON strings. Set `many: false` for update_one. Default is update_many.\n\
+         - **replace_documents**: Replace up to 100 documents matching a filter with a complete \
+         replacement document. Original `_id` values are preserved. Set `many: false` for one.\n\
          - **delete_documents**: Delete documents matching a filter.\n\
          - **create_index**: Create an index on a collection. Pass `keys` as a JSON object. \
          Optional: `unique` (boolean), `name` (string).\n\

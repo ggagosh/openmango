@@ -28,7 +28,7 @@ use crate::ai::{
     ToolActivityStatus,
 };
 use crate::components::Button;
-use crate::state::{AiProvider, AppState};
+use crate::state::{AiProvider, AppCommands, AppState};
 use crate::theme::{islands, spacing};
 use gpui_component::{Icon, IconName, Size};
 
@@ -477,12 +477,14 @@ impl AiView {
                 let col = s.selected_collection_name();
                 let write_identity =
                     crate::models::ConnectionWriteIdentity::from(s.connection_by_id(id)?);
+                s.operation_backend().register_client(id, client.clone());
                 Some(MongoContext {
                     client,
                     database: db,
                     collection: col,
                     write_identity,
                     read_only: s.connection_read_only(id),
+                    operation_engine: s.operation_engine(),
                     event_tx: None,
                 })
             })
@@ -521,12 +523,22 @@ impl AiView {
                 }
                 let merged = coalesce_stream_events(std::mem::take(pending));
                 let _ = cx.update(|cx| {
-                    state.update(cx, |s, cx| {
-                        for event in merged {
-                            handle_stream_event(s, message_id, event);
-                        }
+                    let changed = state.update(cx, |s, cx| {
+                        let changed = merged
+                            .into_iter()
+                            .filter_map(|event| handle_stream_event(s, message_id, event))
+                            .collect::<Vec<_>>();
                         cx.notify();
+                        changed
                     });
+                    for session_key in changed {
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                        AppCommands::collection_history_changed(state.clone(), session_key, cx);
+                    }
                 });
             };
 
@@ -2276,16 +2288,26 @@ fn render_tool_row(
     }
 }
 
-fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEvent) {
+fn handle_stream_event(
+    state: &mut AppState,
+    message_id: Uuid,
+    event: StreamEvent,
+) -> Option<crate::state::SessionKey> {
     match event {
         StreamEvent::TextDelta(delta) => {
             state.ai_chat.append_turn_delta(message_id, &delta);
+            None
         }
         StreamEvent::ToolCallStart { name, args_preview, args_full } => {
             state.ai_chat.push_tool_start(name, args_preview, args_full);
+            None
         }
         StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
             state.ai_chat.complete_tool(&name, result_preview, result_json);
+            None
+        }
+        StreamEvent::DocumentsChanged { connection_id, database, collection } => {
+            Some(crate::state::SessionKey::new(connection_id, database, collection))
         }
         StreamEvent::ConfirmationRequired {
             tool_name,
@@ -2303,6 +2325,7 @@ fn handle_stream_event(state: &mut AppState, message_id: Uuid, event: StreamEven
                 write_identity,
                 response_tx,
             );
+            None
         }
     }
 }
@@ -2331,6 +2354,7 @@ fn confirmation_button_label(tool_name: &str) -> &'static str {
     match tool_name {
         "insert_documents" => "Insert",
         "update_documents" => "Update",
+        "replace_documents" => "Replace",
         "delete_documents" => "Delete",
         "create_index" => "Create Index",
         "drop_index" => "Drop Index",
@@ -2339,7 +2363,10 @@ fn confirmation_button_label(tool_name: &str) -> &'static str {
 }
 
 fn is_danger_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "update_documents" | "delete_documents" | "drop_index")
+    matches!(
+        tool_name,
+        "update_documents" | "replace_documents" | "delete_documents" | "drop_index"
+    )
 }
 
 fn ai_write_identity_is_current(
