@@ -1,17 +1,17 @@
 # OpenMango Reversible Operation History — Design Direction
 
-> **Status:** Manual single-document replacement and delete slices implemented
+> **Status:** Manual single-document insert, replacement, and delete slices implemented
 > **Scope:** General OpenMango feature used by users, built-in AI, and MCP clients
 
-## Implemented first slice
+## Implemented document slices
 
 The initial implementation is deliberately narrower than the full direction below:
 
-- manual existing-document replacement and deletion are tracked when the connection's default-off switch is enabled;
+- manual single-document insertion, existing-document replacement, and deletion are tracked when the connection's default-off switch is enabled;
 - recovery envelopes contain exact BSON before/after images and `_id` values, encrypted with AES-256-GCM using a random Keychain-held installation key;
 - bundled SQLite stores the authoritative operation projection, append-only lifecycle events, and encrypted item payloads through one serialized worker;
-- conditional replacement/deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
-- inserts, bulk/metadata/snapshot recipes, retention/purge controls, and agent/MCP routing remain future slices.
+- conditional insertion, replacement, and deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
+- bulk/metadata/snapshot recipes, retention/purge controls, and agent/MCP routing remain future slices.
 
 A missing Keychain key never replaces the key for an existing history database. Existing recovery data is preserved and tracked writes remain failed closed until the key problem is resolved.
 
@@ -310,7 +310,7 @@ Policy:
 7. Add index metadata recipes.
 8. Integrate transfers, collection/database operations, `$out`, and `$merge` through verified snapshots.
 
-The first implementation slice was **manual single-document update**. Manual single-document delete now uses the same transition model with an absent after-state and restores only while the `_id` remains absent. Together they exercise before/after capture, encryption, durable preparation, conditional application, conflict detection, restart reconciliation, History UI, and restore without requiring bulk or snapshot complexity.
+The first implementation slice was **manual single-document update**. Manual single-document insert and delete now use the same transition model with absent before/after states. Insert revert deletes only an unchanged post-image; delete restore inserts only while the `_id` remains absent. Together they exercise before/after capture, encryption, durable preparation, conditional application, conflict detection, restart reconciliation, History UI, and restore without requiring bulk or snapshot complexity.
 
 ## Primary sources
 

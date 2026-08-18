@@ -22,8 +22,10 @@ pub enum OperationError {
     Unavailable,
     #[error("operation was not found")]
     NotFound,
-    #[error("only existing single-document replacements and deletes are supported")]
+    #[error("only single-document inserts, replacements, and deletes are supported")]
     Unsupported,
+    #[error("a document with this id already exists")]
+    TargetExists,
     #[error("document changed after it was opened for editing")]
     PreconditionConflict,
     #[error("operation {operation_id} was blocked by a concurrent document change")]
@@ -42,8 +44,9 @@ impl OperationError {
             Self::Unavailable => "Reversible history is unavailable; no write was made.",
             Self::NotFound => "The operation was not found.",
             Self::Unsupported => {
-                "Reversible history currently supports existing single-document replacements and deletes only."
+                "Reversible history currently supports single-document inserts, replacements, and deletes only."
             }
+            Self::TargetExists => "A document with this _id already exists. Nothing was inserted.",
             Self::PreconditionConflict | Self::Conflict { .. } => {
                 "The document changed on the server. OpenMango did not overwrite it."
             }
@@ -81,6 +84,9 @@ impl OperationEngine {
         mutation: Mutation,
     ) -> Result<OperationId, OperationError> {
         let (target, after, editor_precondition, kind) = match mutation {
+            Mutation::InsertDocument { target, document } => {
+                (target, Some(document), None, OperationKind::InsertDocument)
+            }
             Mutation::ReplaceDocument { target, replacement, editor_precondition } => {
                 (target, Some(replacement), editor_precondition, OperationKind::ReplaceDocument)
             }
@@ -91,21 +97,27 @@ impl OperationEngine {
         if after.as_ref().is_some_and(|document| document.get("_id") != Some(&target.id)) {
             return Err(OperationError::Unsupported);
         }
-        let before = self
-            .backend
-            .current_document(&target)
-            .map_err(|_| OperationError::Unavailable)?
-            .ok_or(OperationError::Unsupported)?;
-        if before.get("_id") != Some(&target.id) {
-            return Err(OperationError::Unsupported);
-        }
-        if editor_precondition.as_ref().is_some_and(|expected| expected != &before) {
-            return Err(OperationError::PreconditionConflict);
-        }
+        let current =
+            self.backend.current_document(&target).map_err(|_| OperationError::Unavailable)?;
+        let before = if kind == OperationKind::InsertDocument {
+            if current.is_some() {
+                return Err(OperationError::TargetExists);
+            }
+            None
+        } else {
+            let before = current.ok_or(OperationError::Unsupported)?;
+            if before.get("_id") != Some(&target.id) {
+                return Err(OperationError::Unsupported);
+            }
+            if editor_precondition.as_ref().is_some_and(|expected| expected != &before) {
+                return Err(OperationError::PreconditionConflict);
+            }
+            Some(before)
+        };
         let operation_id = self.prepare_transition(
             context,
             kind,
-            RecoveryPayload { target, before: Some(before), after },
+            RecoveryPayload { target, before, after },
             None,
             None,
         )?;
@@ -394,6 +406,22 @@ impl OperationEngine {
             OperationContext::user(),
             OperationKind::ReplaceDocument,
             RecoveryPayload { target, before: Some(before), after: Some(after) },
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[cfg(test)]
+    pub(super) fn prepare_insert_for_test(
+        &self,
+        target: super::model::DocumentTarget,
+        after: mongodb::bson::Document,
+    ) -> OperationId {
+        self.prepare_transition(
+            OperationContext::user(),
+            OperationKind::InsertDocument,
+            RecoveryPayload { target, before: None, after: Some(after) },
             None,
             None,
         )

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;
@@ -442,20 +443,30 @@ fn open_unsaved_dialog(
 }
 
 #[derive(Clone)]
+struct PreparedHistory {
+    engine: Arc<crate::operations::OperationEngine>,
+    backend: Arc<crate::operations::MongoMutationBackend>,
+    connection_name: String,
+}
+
+#[derive(Clone)]
 enum PreparedSave {
     Inline {
         change: UnsavedChange,
         client: mongodb::Client,
+        history: Option<PreparedHistory>,
     },
     DetachedDocument {
         change: UnsavedChange,
         client: mongodb::Client,
         document: mongodb::bson::Document,
+        history: Option<PreparedHistory>,
     },
     DetachedInsert {
         change: UnsavedChange,
         client: mongodb::Client,
         document: mongodb::bson::Document,
+        history: Option<PreparedHistory>,
     },
 }
 
@@ -593,7 +604,8 @@ fn prepare_saves(
                         "The same document has multiple conflicting drafts.".to_string(),
                     ));
                 }
-                prepared.push(PreparedSave::Inline { change, client });
+                let history = prepare_history(state, session_key, cx)?;
+                prepared.push(PreparedSave::Inline { change, client, history });
             }
             UnsavedChange::DetachedEditor(session) => {
                 let document = parse_document_from_json(&session.content)
@@ -611,10 +623,26 @@ fn prepare_saves(
                                 "Edited document must keep the original _id.".to_string(),
                             ));
                         }
-                        prepared.push(PreparedSave::DetachedDocument { change, client, document });
+                        let history = prepare_history(state, &session.session_key, cx)?;
+                        prepared.push(PreparedSave::DetachedDocument {
+                            change,
+                            client,
+                            document,
+                            history,
+                        });
                     }
                     EditorSessionTarget::Insert => {
-                        prepared.push(PreparedSave::DetachedInsert { change, client, document })
+                        let history = prepare_history(state, &session.session_key, cx)?;
+                        let mut document = document;
+                        if history.is_some() && !document.contains_key("_id") {
+                            document.insert("_id", mongodb::bson::oid::ObjectId::new());
+                        }
+                        prepared.push(PreparedSave::DetachedInsert {
+                            change,
+                            client,
+                            document,
+                            history,
+                        });
                     }
                 }
             }
@@ -642,12 +670,30 @@ fn prepare_saves(
     Ok(prepared)
 }
 
+fn prepare_history(
+    state: &Entity<AppState>,
+    session_key: &crate::state::SessionKey,
+    cx: &App,
+) -> Result<Option<PreparedHistory>, Error> {
+    let state = state.read(cx);
+    let enabled = state.connection_reversible_history(session_key.connection_id);
+    let engine = crate::operations::tracked_engine(enabled, state.operation_engine())
+        .map_err(|error| Error::Parse(error.user_message().to_string()))?;
+    Ok(engine.map(|engine| PreparedHistory {
+        engine,
+        backend: state.operation_backend(),
+        connection_name: state
+            .connection_name(session_key.connection_id)
+            .unwrap_or_else(|| "Connection".to_string()),
+    }))
+}
+
 fn execute_save(
     manager: &crate::connection::ConnectionManager,
     save: &PreparedSave,
 ) -> Result<(), Error> {
     match save {
-        PreparedSave::Inline { change, client } => {
+        PreparedSave::Inline { change, client, history } => {
             let UnsavedChange::InlineDocument {
                 session_key,
                 original_id,
@@ -664,16 +710,17 @@ fn execute_save(
             let baseline_document = baseline_document.as_ref().ok_or_else(|| {
                 Error::Parse("Could not resolve the edited document's baseline.".to_string())
             })?;
-            manager.replace_document_if_current(
+            execute_prepared_replace(
+                manager,
+                history.as_ref(),
                 client,
-                &session_key.database,
-                &session_key.collection,
+                session_key,
                 original_id,
                 baseline_document,
-                document.clone(),
+                document,
             )
         }
-        PreparedSave::DetachedDocument { change, client, document } => {
+        PreparedSave::DetachedDocument { change, client, document, history } => {
             let UnsavedChange::DetachedEditor(session) = change else {
                 unreachable!();
             };
@@ -682,27 +729,107 @@ fn execute_save(
             else {
                 unreachable!();
             };
-            manager.replace_document_if_current(
+            execute_prepared_replace(
+                manager,
+                history.as_ref(),
                 client,
-                &session.session_key.database,
-                &session.session_key.collection,
+                &session.session_key,
                 original_id,
                 baseline_document,
-                document.clone(),
+                document,
             )
         }
-        PreparedSave::DetachedInsert { change, client, document } => {
+        PreparedSave::DetachedInsert { change, client, document, history } => {
             let UnsavedChange::DetachedEditor(session) = change else {
                 unreachable!();
             };
-            manager.insert_document(
+            execute_prepared_insert(
+                manager,
+                history.as_ref(),
                 client,
-                &session.session_key.database,
-                &session.session_key.collection,
-                document.clone(),
+                &session.session_key,
+                document,
             )
         }
     }
+}
+
+fn execute_prepared_replace(
+    manager: &crate::connection::ConnectionManager,
+    history: Option<&PreparedHistory>,
+    client: &mongodb::Client,
+    session_key: &crate::state::SessionKey,
+    original_id: &mongodb::bson::Bson,
+    baseline: &mongodb::bson::Document,
+    document: &mongodb::bson::Document,
+) -> Result<(), Error> {
+    let Some(history) = history else {
+        return manager.replace_document_if_current(
+            client,
+            &session_key.database,
+            &session_key.collection,
+            original_id,
+            baseline,
+            document.clone(),
+        );
+    };
+    history.backend.register_client(session_key.connection_id, client.clone());
+    history
+        .engine
+        .execute(
+            crate::operations::OperationContext::user(),
+            crate::operations::Mutation::ReplaceDocument {
+                target: crate::operations::DocumentTarget {
+                    connection_id: session_key.connection_id,
+                    connection_name: history.connection_name.clone(),
+                    database: session_key.database.clone(),
+                    collection: session_key.collection.clone(),
+                    id: original_id.clone(),
+                },
+                replacement: document.clone(),
+                editor_precondition: Some(baseline.clone()),
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| Error::Parse(error.user_message().to_string()))
+}
+
+fn execute_prepared_insert(
+    manager: &crate::connection::ConnectionManager,
+    history: Option<&PreparedHistory>,
+    client: &mongodb::Client,
+    session_key: &crate::state::SessionKey,
+    document: &mongodb::bson::Document,
+) -> Result<(), Error> {
+    let Some(history) = history else {
+        return manager.insert_document(
+            client,
+            &session_key.database,
+            &session_key.collection,
+            document.clone(),
+        );
+    };
+    let id = document.get("_id").cloned().ok_or_else(|| {
+        Error::Parse("Could not assign an _id for reversible insert.".to_string())
+    })?;
+    history.backend.register_client(session_key.connection_id, client.clone());
+    history
+        .engine
+        .execute(
+            crate::operations::OperationContext::user(),
+            crate::operations::Mutation::InsertDocument {
+                target: crate::operations::DocumentTarget {
+                    connection_id: session_key.connection_id,
+                    connection_name: history.connection_name.clone(),
+                    database: session_key.database.clone(),
+                    collection: session_key.collection.clone(),
+                    id,
+                },
+                document: document.clone(),
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| Error::Parse(error.user_message().to_string()))
 }
 
 fn apply_saved_change(

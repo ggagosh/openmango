@@ -119,6 +119,126 @@ fn successful_replacement_becomes_completed() {
 }
 
 #[test]
+fn successful_insert_can_be_reverted_while_document_is_unchanged() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(10);
+    let inserted = document(10, "inserted");
+    let engine = engine_with(&directory, [17; 32], backend.clone());
+
+    let inserted_operation = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::InsertDocument { target: target.clone(), document: inserted.clone() },
+        )
+        .unwrap();
+
+    assert_eq!(backend.document(&target), Some(inserted));
+    assert_eq!(
+        engine.get(inserted_operation).unwrap().unwrap().summary.kind,
+        super::model::OperationKind::InsertDocument
+    );
+
+    engine.revert(OperationContext::user(), inserted_operation).unwrap();
+
+    assert_eq!(backend.document(&target), None);
+}
+
+#[test]
+fn changed_insert_blocks_revert() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(13);
+    let engine = engine_with(&directory, [20; 32], backend.clone());
+    let inserted = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::InsertDocument { target: target.clone(), document: document(13, "inserted") },
+        )
+        .unwrap();
+    backend.set_document(&target, document(13, "changed"));
+
+    let error = engine.revert(OperationContext::user(), inserted).unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(backend.document(&target), Some(document(13, "changed")));
+}
+
+#[test]
+fn insert_fails_before_prepare_when_id_already_exists() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let target = target(11);
+    backend.set_document(&target, document(11, "existing"));
+    let engine = engine_with(&directory, [18; 32], backend.clone());
+
+    let error = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::InsertDocument { target: target.clone(), document: document(11, "new") },
+        )
+        .unwrap_err();
+
+    assert_eq!(error, OperationError::TargetExists);
+    assert_eq!(backend.document(&target), Some(document(11, "existing")));
+    assert!(engine.list(OperationQuery::default()).unwrap().items.is_empty());
+}
+
+#[test]
+fn concurrent_insert_blocks_tracked_insert() {
+    struct RacingInsertBackend {
+        inner: Arc<InMemoryMutationBackend>,
+        concurrent: Document,
+    }
+    impl MutationBackend for RacingInsertBackend {
+        fn current_document(
+            &self,
+            target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            self.inner.current_document(target)
+        }
+
+        fn replace_document_if_current(
+            &self,
+            target: &DocumentTarget,
+            expected: &Document,
+            replacement: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.replace_document_if_current(target, expected, replacement)
+        }
+
+        fn insert_document_if_absent(
+            &self,
+            target: &DocumentTarget,
+            document: &Document,
+        ) -> Result<(), BackendError> {
+            self.inner.set_document(target, self.concurrent.clone());
+            self.inner.insert_document_if_absent(target, document)
+        }
+    }
+
+    let directory = TempDir::new().unwrap();
+    let memory = Arc::new(InMemoryMutationBackend::default());
+    let target = target(12);
+    let concurrent = document(12, "concurrent");
+    let engine = engine_with(
+        &directory,
+        [19; 32],
+        Arc::new(RacingInsertBackend { inner: memory.clone(), concurrent: concurrent.clone() }),
+    );
+
+    let error = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::InsertDocument { target: target.clone(), document: document(12, "new") },
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(memory.document(&target), Some(concurrent));
+}
+
+#[test]
 fn successful_delete_can_be_restored_while_id_remains_absent() {
     let directory = TempDir::new().unwrap();
     let backend = Arc::new(InMemoryMutationBackend::default());
@@ -453,6 +573,9 @@ fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() 
     let ambiguous_target = target(3);
     let missing_target = target(4);
     let deleted_target = target(5);
+    let unapplied_insert_target = target(6);
+    let applied_insert_target = target(7);
+    let conflicting_insert_target = target(8);
     let unapplied = engine.prepare_for_test(
         unapplied_target.clone(),
         document(1, "before"),
@@ -471,20 +594,40 @@ fn reconciliation_recognizes_unapplied_applied_conflicting_and_missing_states() 
     let missing =
         engine.prepare_for_test(missing_target, document(4, "before"), document(4, "after"));
     let deleted = engine.prepare_delete_for_test(deleted_target, document(5, "before"));
+    let unapplied_insert =
+        engine.prepare_insert_for_test(unapplied_insert_target.clone(), document(6, "inserted"));
+    let applied_insert =
+        engine.prepare_insert_for_test(applied_insert_target.clone(), document(7, "inserted"));
+    let conflicting_insert =
+        engine.prepare_insert_for_test(conflicting_insert_target.clone(), document(8, "inserted"));
     backend.set_document(&unapplied_target, document(1, "before"));
     backend.set_document(&applied_target, document(2, "after"));
     backend.set_document(&ambiguous_target, document(3, "other"));
+    backend.set_document(&applied_insert_target, document(7, "inserted"));
+    backend.set_document(&conflicting_insert_target, document(8, "other"));
 
     let report = engine.reconcile().unwrap();
 
-    assert_eq!(report.not_applied, 1);
-    assert_eq!(report.completed, 2);
-    assert_eq!(report.conflicted, 2);
+    assert_eq!(report.not_applied, 2);
+    assert_eq!(report.completed, 3);
+    assert_eq!(report.conflicted, 3);
     assert_eq!(engine.get(unapplied).unwrap().unwrap().summary.status, OperationStatus::Failed);
     assert_eq!(engine.get(applied).unwrap().unwrap().summary.status, OperationStatus::Completed);
     assert_eq!(engine.get(ambiguous).unwrap().unwrap().summary.status, OperationStatus::Conflict);
     assert_eq!(engine.get(missing).unwrap().unwrap().summary.status, OperationStatus::Conflict);
     assert_eq!(engine.get(deleted).unwrap().unwrap().summary.status, OperationStatus::Completed);
+    assert_eq!(
+        engine.get(unapplied_insert).unwrap().unwrap().summary.status,
+        OperationStatus::Failed
+    );
+    assert_eq!(
+        engine.get(applied_insert).unwrap().unwrap().summary.status,
+        OperationStatus::Completed
+    );
+    assert_eq!(
+        engine.get(conflicting_insert).unwrap().unwrap().summary.status,
+        OperationStatus::Conflict
+    );
 }
 
 #[test]

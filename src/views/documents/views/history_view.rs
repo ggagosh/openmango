@@ -51,9 +51,9 @@ pub(crate) fn render_history_view(
                 "History is disabled"
             },
             if enabled {
-                "Document replacements and deletions saved from now on will appear here."
+                "Document inserts, replacements, and deletions saved from now on will appear here."
             } else {
-                "Enable Reversible history in this connection's settings to track future replacements and deletions."
+                "Enable Reversible history in this connection's settings to track future document changes."
             },
             cx,
         )
@@ -189,12 +189,14 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         .map(|preview| preview.document_id.as_str())
         .unwrap_or("unknown document");
     let title = match operation.kind {
+        OperationKind::InsertDocument => format!("Inserted document {document_id}"),
         OperationKind::ReplaceDocument => format!("Updated document {document_id}"),
         OperationKind::DeleteDocument => format!("Deleted document {document_id}"),
-        OperationKind::RevertDocument => format!("Restored document {document_id}"),
+        OperationKind::RevertDocument => format!("Reverted document {document_id}"),
     };
     let preview = change_preview(&operation);
     let icon = match operation.kind {
+        OperationKind::InsertDocument => IconName::Plus,
         OperationKind::ReplaceDocument => IconName::Replace,
         OperationKind::DeleteDocument => IconName::Delete,
         OperationKind::RevertDocument => IconName::Undo2,
@@ -303,7 +305,7 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
                     Button::new(("restore-collection-operation", operation_id.as_u128() as u64))
                         .ghost()
                         .compact()
-                        .label("Restore")
+                        .label("Revert")
                         .on_click(move |_, window, cx| {
                             let state_for_write = state.clone();
                             let database = database.clone();
@@ -313,7 +315,7 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
                                 WriteRequest::new(
                                     connection_id,
                                     target.clone(),
-                                    "Restore the document's previous value",
+                                    "Revert this document change",
                                     None,
                                 ),
                                 window,

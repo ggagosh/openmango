@@ -6,6 +6,7 @@ pub type OperationId = Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {
+    InsertDocument,
     ReplaceDocument,
     DeleteDocument,
     RevertDocument,
@@ -14,6 +15,7 @@ pub enum OperationKind {
 impl OperationKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::InsertDocument => "insert_document",
             Self::ReplaceDocument => "replace_document",
             Self::DeleteDocument => "delete_document",
             Self::RevertDocument => "revert_document",
@@ -22,6 +24,7 @@ impl OperationKind {
 
     pub(crate) fn parse(value: &str) -> anyhow::Result<Self> {
         match value {
+            "insert_document" => Ok(Self::InsertDocument),
             "replace_document" => Ok(Self::ReplaceDocument),
             "delete_document" => Ok(Self::DeleteDocument),
             "revert_document" => Ok(Self::RevertDocument),
@@ -31,6 +34,7 @@ impl OperationKind {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::InsertDocument => "Document insertion",
             Self::ReplaceDocument => "Document replacement",
             Self::DeleteDocument => "Document deletion",
             Self::RevertDocument => "Document restore",
@@ -121,6 +125,10 @@ pub struct DocumentTarget {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mutation {
+    InsertDocument {
+        target: DocumentTarget,
+        document: Document,
+    },
     ReplaceDocument {
         target: DocumentTarget,
         replacement: Document,
