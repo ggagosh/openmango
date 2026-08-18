@@ -1,11 +1,13 @@
-use mongodb::bson;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
+use super::{
+    MongoContext, ToolError, ensure_writable, execute_reversible_index_mutation,
+    require_confirmation, require_reversible_history, resolve_collection, reversible_target,
+};
 
 pub struct DropIndexTool(MongoContext);
 
@@ -52,6 +54,7 @@ impl Tool for DropIndexTool {
 
     async fn call(&self, args: DropIndexArgs) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
+        require_reversible_history(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
 
         // Block dropping the _id_ index
@@ -73,13 +76,15 @@ impl Tool for DropIndexTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Execute
-        let collection =
-            self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
-        collection.drop_index(args.index_name.clone()).await?;
+        execute_reversible_index_mutation(
+            &self.0,
+            &col_name,
+            crate::operations::Mutation::DropIndex {
+                target: reversible_target(&self.0, &col_name, args.index_name.clone().into()),
+            },
+        )
+        .await?;
 
-        Ok(serde_json::json!({
-            "dropped": args.index_name,
-        }))
+        Ok(serde_json::json!({ "dropped": args.index_name }))
     }
 }

@@ -531,12 +531,21 @@ impl AiView {
                         cx.notify();
                         changed
                     });
-                    for session_key in changed {
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                    for (session_key, indexes_changed) in changed {
+                        if indexes_changed {
+                            AppCommands::load_collection_indexes(
+                                state.clone(),
+                                session_key.clone(),
+                                true,
+                                cx,
+                            );
+                        } else {
+                            AppCommands::load_documents_for_session(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                         AppCommands::collection_history_changed(state.clone(), session_key, cx);
                     }
                 });
@@ -2292,7 +2301,7 @@ fn handle_stream_event(
     state: &mut AppState,
     message_id: Uuid,
     event: StreamEvent,
-) -> Option<crate::state::SessionKey> {
+) -> Option<(crate::state::SessionKey, bool)> {
     match event {
         StreamEvent::TextDelta(delta) => {
             state.ai_chat.append_turn_delta(message_id, &delta);
@@ -2307,7 +2316,10 @@ fn handle_stream_event(
             None
         }
         StreamEvent::DocumentsChanged { connection_id, database, collection } => {
-            Some(crate::state::SessionKey::new(connection_id, database, collection))
+            Some((crate::state::SessionKey::new(connection_id, database, collection), false))
+        }
+        StreamEvent::IndexesChanged { connection_id, database, collection } => {
+            Some((crate::state::SessionKey::new(connection_id, database, collection), true))
         }
         StreamEvent::ConfirmationRequired {
             tool_name,

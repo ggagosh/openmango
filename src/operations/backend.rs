@@ -44,6 +44,26 @@ pub(crate) trait MutationBackend: Send + Sync {
     ) -> Result<(), BackendError> {
         Err(BackendError::Failed)
     }
+
+    fn current_index(&self, _target: &DocumentTarget) -> Result<Option<Document>, BackendError> {
+        Err(BackendError::Failed)
+    }
+
+    fn create_index_if_absent(
+        &self,
+        _target: &DocumentTarget,
+        _definition: &Document,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::Failed)
+    }
+
+    fn drop_index_if_current(
+        &self,
+        _target: &DocumentTarget,
+        _expected: &Document,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::Failed)
+    }
 }
 
 pub(crate) struct MongoMutationBackend {
@@ -137,12 +157,59 @@ impl MutationBackend for MongoMutationBackend {
             Err(_) => Err(BackendError::Failed),
         }
     }
+
+    fn current_index(&self, target: &DocumentTarget) -> Result<Option<Document>, BackendError> {
+        let client = self.client(target.connection_id)?;
+        let name = target.id.as_str().ok_or(BackendError::Failed)?;
+        self.manager
+            .find_index_document(&client, &target.database, &target.collection, name)
+            .map_err(|_| BackendError::Unavailable)
+    }
+
+    fn create_index_if_absent(
+        &self,
+        target: &DocumentTarget,
+        definition: &Document,
+    ) -> Result<(), BackendError> {
+        let client = self.client(target.connection_id)?;
+        match self.manager.create_index_if_absent_matches(
+            &client,
+            &target.database,
+            &target.collection,
+            definition.clone(),
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BackendError::Conflict),
+            Err(_) => Err(BackendError::Failed),
+        }
+    }
+
+    fn drop_index_if_current(
+        &self,
+        target: &DocumentTarget,
+        expected: &Document,
+    ) -> Result<(), BackendError> {
+        let client = self.client(target.connection_id)?;
+        let name = target.id.as_str().ok_or(BackendError::Failed)?;
+        match self.manager.drop_index_if_current_matches(
+            &client,
+            &target.database,
+            &target.collection,
+            name,
+            expected,
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(BackendError::Conflict),
+            Err(_) => Err(BackendError::Failed),
+        }
+    }
 }
 
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemoryMutationBackend {
     documents: Mutex<HashMap<Vec<u8>, Document>>,
+    indexes: Mutex<HashMap<Vec<u8>, Document>>,
 }
 
 #[cfg(test)]
@@ -153,6 +220,14 @@ impl InMemoryMutationBackend {
 
     pub(crate) fn document(&self, target: &DocumentTarget) -> Option<Document> {
         self.documents.lock().unwrap().get(&target_key(target)).cloned()
+    }
+
+    pub(crate) fn set_index(&self, target: &DocumentTarget, definition: Document) {
+        self.indexes.lock().unwrap().insert(target_key(target), definition);
+    }
+
+    pub(crate) fn index(&self, target: &DocumentTarget) -> Option<Document> {
+        self.indexes.lock().unwrap().get(&target_key(target)).cloned()
     }
 }
 
@@ -204,6 +279,38 @@ impl MutationBackend for InMemoryMutationBackend {
             return Err(BackendError::Conflict);
         }
         documents.insert(key, document.clone());
+        Ok(())
+    }
+
+    fn current_index(&self, target: &DocumentTarget) -> Result<Option<Document>, BackendError> {
+        Ok(self.index(target))
+    }
+
+    fn create_index_if_absent(
+        &self,
+        target: &DocumentTarget,
+        definition: &Document,
+    ) -> Result<(), BackendError> {
+        let mut indexes = self.indexes.lock().map_err(|_| BackendError::Failed)?;
+        let key = target_key(target);
+        if indexes.contains_key(&key) {
+            return Err(BackendError::Conflict);
+        }
+        indexes.insert(key, definition.clone());
+        Ok(())
+    }
+
+    fn drop_index_if_current(
+        &self,
+        target: &DocumentTarget,
+        expected: &Document,
+    ) -> Result<(), BackendError> {
+        let mut indexes = self.indexes.lock().map_err(|_| BackendError::Failed)?;
+        let key = target_key(target);
+        if indexes.get(&key) != Some(expected) {
+            return Err(BackendError::Conflict);
+        }
+        indexes.remove(&key);
         Ok(())
     }
 }

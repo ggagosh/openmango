@@ -135,15 +135,24 @@ impl AppCommands {
             return;
         };
         backend.register_client(connection_id, client);
-        let task = cx
-            .background_spawn(async move { engine.revert(OperationContext::user(), operation_id) });
+        let task = cx.background_spawn(async move {
+            let index_change = engine
+                .get(operation_id)?
+                .ok_or(crate::operations::OperationError::NotFound)?
+                .summary
+                .kind
+                .is_index();
+            engine.revert(OperationContext::user(), operation_id)?;
+            Ok::<_, crate::operations::OperationError>(index_change)
+        });
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let result = task.await;
             let succeeded = result.is_ok();
+            let index_change = matches!(&result, Ok(true));
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let message = match result {
-                        Ok(_) => StatusMessage::info("Document revert completed."),
+                        Ok(_) => StatusMessage::info("Tracked change revert completed."),
                         Err(error) => StatusMessage::error(error.user_message()),
                     };
                     state.set_status_message(Some(message));
@@ -151,7 +160,20 @@ impl AppCommands {
                 });
                 let session_key = SessionKey::new(connection_id, database, collection);
                 if succeeded {
-                    AppCommands::load_documents_for_session(state.clone(), session_key.clone(), cx);
+                    if index_change {
+                        AppCommands::load_collection_indexes(
+                            state.clone(),
+                            session_key.clone(),
+                            true,
+                            cx,
+                        );
+                    } else {
+                        AppCommands::load_documents_for_session(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    }
                 }
                 AppCommands::load_collection_history(state.clone(), session_key, cx);
             });

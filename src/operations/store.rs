@@ -326,6 +326,27 @@ impl OperationStore {
         })
     }
 
+    pub(crate) fn replace_payload(&self, id: OperationId, payload: StoredPayload) -> Result<()> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE operation_items
+                 SET payload_version = ?2, encrypted_payload = ?3, target_hash = ?4,
+                     before_hash = ?5, after_hash = ?6
+                 WHERE operation_id = ?1",
+                params![
+                    id.to_string(),
+                    payload.version,
+                    payload.encrypted,
+                    payload.target_hash.as_slice(),
+                    payload.before_hash.as_slice(),
+                    payload.after_hash.as_slice(),
+                ],
+            )?;
+            anyhow::ensure!(changed == 1, "operation payload was not found");
+            Ok(())
+        })
+    }
+
     pub(crate) fn payload(&self, id: OperationId) -> Result<Option<StoredPayload>> {
         self.call(move |connection| {
             connection

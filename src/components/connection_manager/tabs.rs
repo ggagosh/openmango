@@ -240,7 +240,7 @@ impl ConnectionManager {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().secondary_foreground)
-                                    .child("Encrypt recovery data for manual and built-in AI document writes, including bounded bulk changes."),
+                                    .child("Encrypt recovery data for document writes and index create/drop operations, including bounded agent changes."),
                             ),
                     ),
             )

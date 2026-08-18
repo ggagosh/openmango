@@ -10,6 +10,9 @@ pub enum OperationKind {
     ReplaceDocument,
     DeleteDocument,
     RevertDocument,
+    CreateIndex,
+    DropIndex,
+    RevertIndex,
 }
 
 impl OperationKind {
@@ -19,6 +22,9 @@ impl OperationKind {
             Self::ReplaceDocument => "replace_document",
             Self::DeleteDocument => "delete_document",
             Self::RevertDocument => "revert_document",
+            Self::CreateIndex => "create_index",
+            Self::DropIndex => "drop_index",
+            Self::RevertIndex => "revert_index",
         }
     }
 
@@ -28,8 +34,15 @@ impl OperationKind {
             "replace_document" => Ok(Self::ReplaceDocument),
             "delete_document" => Ok(Self::DeleteDocument),
             "revert_document" => Ok(Self::RevertDocument),
+            "create_index" => Ok(Self::CreateIndex),
+            "drop_index" => Ok(Self::DropIndex),
+            "revert_index" => Ok(Self::RevertIndex),
             _ => anyhow::bail!("unsupported operation kind"),
         }
+    }
+
+    pub(crate) fn is_index(self) -> bool {
+        matches!(self, Self::CreateIndex | Self::DropIndex | Self::RevertIndex)
     }
 
     pub fn label(self) -> &'static str {
@@ -38,6 +51,9 @@ impl OperationKind {
             Self::ReplaceDocument => "Document replacement",
             Self::DeleteDocument => "Document deletion",
             Self::RevertDocument => "Document restore",
+            Self::CreateIndex => "Index creation",
+            Self::DropIndex => "Index deletion",
+            Self::RevertIndex => "Index restore",
         }
     }
 }
@@ -155,6 +171,13 @@ pub enum Mutation {
     DeleteDocument {
         target: DocumentTarget,
         editor_precondition: Option<Document>,
+    },
+    CreateIndex {
+        target: DocumentTarget,
+        definition: Document,
+    },
+    DropIndex {
+        target: DocumentTarget,
     },
 }
 

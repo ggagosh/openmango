@@ -8,6 +8,7 @@ use common::MongoTestContainer;
 use mongodb::bson::{Document, doc};
 use openmango::ai::safety::SafetyTier;
 use openmango::ai::tools::aggregate::{AggregateArgs, AggregateTool};
+use openmango::ai::tools::create_index::{CreateIndexArgs, CreateIndexTool};
 use openmango::ai::tools::insert::{InsertArgs, InsertDocumentsTool};
 use openmango::ai::tools::replace::{ReplaceArgs, ReplaceDocumentsTool};
 use openmango::ai::tools::{MongoContext, StreamEvent};
@@ -52,6 +53,35 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
     assert!(error.to_string().contains("read-only"));
     let stored = collection.find_one(doc! { "_id": "one" }).await.unwrap().unwrap();
     assert_eq!(stored.get_str("status").unwrap(), "before");
+}
+
+#[tokio::test]
+async fn read_only_ai_index_creation_is_rejected() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "ai_read_only_index");
+    collection.insert_one(doc! { "email": "ada@example.com" }).await.unwrap();
+    let tool = CreateIndexTool::new(MongoContext {
+        client: mongo.client.clone(),
+        database: mongo.db_name("test_db"),
+        collection: Some("ai_read_only_index".to_string()),
+        write_identity: write_identity(true),
+        read_only: true,
+        operation_engine: None,
+        event_tx: None,
+    });
+
+    let error = tool
+        .call(CreateIndexArgs {
+            collection: None,
+            keys: r#"{"email":1}"#.to_string(),
+            unique: Some(true),
+            name: Some("email_unique".to_string()),
+        })
+        .await
+        .expect_err("Read-only AI index creation must be rejected");
+
+    assert!(error.to_string().contains("read-only"));
+    assert!(!collection.list_index_names().await.unwrap().contains(&"email_unique".to_string()));
 }
 
 #[tokio::test]

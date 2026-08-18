@@ -25,6 +25,20 @@ fn document(id: i32, value: &str) -> Document {
     doc! { "_id": id, "value": value }
 }
 
+fn index_target(name: &str) -> DocumentTarget {
+    DocumentTarget {
+        connection_id: Uuid::from_u128(1),
+        connection_name: "Local".into(),
+        database: "app".into(),
+        collection: "users".into(),
+        id: name.into(),
+    }
+}
+
+fn index_definition(name: &str, field: &str) -> Document {
+    doc! { "key": { field: 1 }, "name": name }
+}
+
 fn engine_with(
     directory: &TempDir,
     key: [u8; 32],
@@ -118,6 +132,201 @@ fn successful_replacement_becomes_completed() {
 
     assert_eq!(engine.get(id).unwrap().unwrap().summary.status, OperationStatus::Completed);
     assert_eq!(backend.document(&target), Some(document(1, "after")));
+}
+
+#[test]
+fn index_create_and_drop_are_reversible_with_exact_definition_checks() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let engine = engine_with(&directory, [23; 32], backend.clone());
+    let created_target = index_target("email_1");
+    let created_definition = index_definition("email_1", "email");
+    let created = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::CreateIndex {
+                target: created_target.clone(),
+                definition: created_definition.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(backend.index(&created_target), Some(created_definition.clone()));
+
+    engine.revert(OperationContext::user(), created).unwrap();
+    assert_eq!(backend.index(&created_target), None);
+
+    let dropped_target = index_target("name_1");
+    let dropped_definition = index_definition("name_1", "name");
+    backend.set_index(&dropped_target, dropped_definition.clone());
+    let dropped = engine
+        .execute(OperationContext::user(), Mutation::DropIndex { target: dropped_target.clone() })
+        .unwrap();
+    assert_eq!(backend.index(&dropped_target), None);
+
+    engine.revert(OperationContext::user(), dropped).unwrap();
+    assert_eq!(backend.index(&dropped_target), Some(dropped_definition));
+}
+
+#[test]
+fn created_index_records_the_server_normalized_post_image_before_completion() {
+    struct NormalizingIndexBackend {
+        index: Mutex<Option<Document>>,
+        fail_after_create: bool,
+        fail_current_after_create: bool,
+    }
+    impl MutationBackend for NormalizingIndexBackend {
+        fn current_document(
+            &self,
+            _target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            Ok(None)
+        }
+
+        fn replace_document_if_current(
+            &self,
+            _target: &DocumentTarget,
+            _expected: &Document,
+            _replacement: &Document,
+        ) -> Result<(), BackendError> {
+            Err(BackendError::Failed)
+        }
+
+        fn current_index(
+            &self,
+            _target: &DocumentTarget,
+        ) -> Result<Option<Document>, BackendError> {
+            let index = self.index.lock().unwrap().clone();
+            if self.fail_current_after_create && index.is_some() {
+                Err(BackendError::Unavailable)
+            } else {
+                Ok(index)
+            }
+        }
+
+        fn create_index_if_absent(
+            &self,
+            _target: &DocumentTarget,
+            definition: &Document,
+        ) -> Result<(), BackendError> {
+            let mut index = self.index.lock().unwrap();
+            if index.is_some() {
+                return Err(BackendError::Conflict);
+            }
+            let mut normalized = definition.clone();
+            normalized.insert("v", 2);
+            *index = Some(normalized);
+            if self.fail_after_create { Err(BackendError::Failed) } else { Ok(()) }
+        }
+
+        fn drop_index_if_current(
+            &self,
+            _target: &DocumentTarget,
+            expected: &Document,
+        ) -> Result<(), BackendError> {
+            let mut index = self.index.lock().unwrap();
+            if index.as_ref() != Some(expected) {
+                return Err(BackendError::Conflict);
+            }
+            *index = None;
+            Ok(())
+        }
+    }
+
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(NormalizingIndexBackend {
+        index: Mutex::new(None),
+        fail_after_create: false,
+        fail_current_after_create: false,
+    });
+    let engine = engine_with(&directory, [25; 32], backend.clone());
+    let target = index_target("email_1");
+    let operation = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::CreateIndex { target, definition: index_definition("email_1", "email") },
+        )
+        .unwrap();
+
+    engine.revert(OperationContext::user(), operation).unwrap();
+
+    assert_eq!(*backend.index.lock().unwrap(), None);
+
+    let uncertain_backend = Arc::new(NormalizingIndexBackend {
+        index: Mutex::new(None),
+        fail_after_create: true,
+        fail_current_after_create: false,
+    });
+    let uncertain_engine = engine_with(&directory, [26; 32], uncertain_backend.clone());
+    let uncertain_target = index_target("uncertain_1");
+    let error = uncertain_engine
+        .execute(
+            OperationContext::user(),
+            Mutation::CreateIndex {
+                target: uncertain_target.clone(),
+                definition: index_definition("uncertain_1", "value"),
+            },
+        )
+        .unwrap_err();
+    let operation_id = match error {
+        OperationError::Uncertain { operation_id } => operation_id,
+        other => panic!("expected uncertain index creation, got {other:?}"),
+    };
+    assert!(uncertain_backend.index.lock().unwrap().is_some());
+    assert_eq!(
+        uncertain_engine.get(operation_id).unwrap().unwrap().summary.status,
+        OperationStatus::Uncertain
+    );
+    assert_eq!(uncertain_engine.reconcile().unwrap().recovery_required, 1);
+    assert_eq!(
+        uncertain_engine.get(operation_id).unwrap().unwrap().summary.status,
+        OperationStatus::RecoveryRequired
+    );
+
+    let post_image_backend = Arc::new(NormalizingIndexBackend {
+        index: Mutex::new(None),
+        fail_after_create: false,
+        fail_current_after_create: true,
+    });
+    let post_image_engine = engine_with(&directory, [27; 32], post_image_backend);
+    let error = post_image_engine
+        .execute(
+            OperationContext::user(),
+            Mutation::CreateIndex {
+                target: index_target("post_image_1"),
+                definition: index_definition("post_image_1", "value"),
+            },
+        )
+        .unwrap_err();
+    let operation_id = match error {
+        OperationError::Uncertain { operation_id } => operation_id,
+        other => panic!("expected uncertain post-image, got {other:?}"),
+    };
+    assert_eq!(
+        post_image_engine.get(operation_id).unwrap().unwrap().summary.status,
+        OperationStatus::Uncertain
+    );
+}
+
+#[test]
+fn changed_index_blocks_revert_without_dropping_the_new_definition() {
+    let directory = TempDir::new().unwrap();
+    let backend = Arc::new(InMemoryMutationBackend::default());
+    let engine = engine_with(&directory, [24; 32], backend.clone());
+    let target = index_target("email_1");
+    let original = index_definition("email_1", "email");
+    let operation = engine
+        .execute(
+            OperationContext::user(),
+            Mutation::CreateIndex { target: target.clone(), definition: original },
+        )
+        .unwrap();
+    let changed = index_definition("email_1", "alternate_email");
+    backend.set_index(&target, changed.clone());
+
+    let error = engine.revert(OperationContext::user(), operation).unwrap_err();
+
+    assert!(matches!(error, OperationError::Conflict { .. }));
+    assert_eq!(backend.index(&target), Some(changed));
 }
 
 #[test]

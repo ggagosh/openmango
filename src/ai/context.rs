@@ -132,8 +132,8 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
          - **replace_documents**: Replace up to 100 documents matching a filter with a complete \
          replacement document. Original `_id` values are preserved. Set `many: false` for one.\n\
          - **delete_documents**: Delete documents matching a filter.\n\
-         - **create_index**: Create an index on a collection. Pass `keys` as a JSON object. \
-         Optional: `unique` (boolean), `name` (string).\n\
+         - **create_index**: Create a reversible named index. Pass `keys` as a JSON object and \
+         an explicit `name`; `unique` is optional.\n\
          - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
          ### Cross-Collection Access\n\
          All tools except list_collections accept an optional `collection` parameter. Pass it to \

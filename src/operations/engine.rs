@@ -22,10 +22,14 @@ pub enum OperationError {
     Unavailable,
     #[error("operation was not found")]
     NotFound,
-    #[error("only single-document inserts, replacements, and deletes are supported")]
+    #[error("operation is unsupported for reversible history")]
     Unsupported,
     #[error("a document with this id already exists")]
     TargetExists,
+    #[error("an index with this name already exists")]
+    IndexExists,
+    #[error("the index no longer exists")]
+    IndexMissing,
     #[error("document changed after it was opened for editing")]
     PreconditionConflict,
     #[error("operation {operation_id} was blocked by a concurrent document change")]
@@ -45,10 +49,10 @@ impl OperationError {
         match self {
             Self::Unavailable => "Reversible history is unavailable; no write was made.",
             Self::NotFound => "The operation was not found.",
-            Self::Unsupported => {
-                "Reversible history currently supports single-document inserts, replacements, and deletes only."
-            }
+            Self::Unsupported => "This operation is not supported by reversible history.",
             Self::TargetExists => "A document with this _id already exists. Nothing was inserted.",
+            Self::IndexExists => "An index with this name already exists. Nothing was created.",
+            Self::IndexMissing => "The index no longer exists. Nothing was changed.",
             Self::PreconditionConflict | Self::Conflict { .. } => {
                 "The document changed on the server. OpenMango did not overwrite it."
             }
@@ -172,6 +176,11 @@ impl OperationEngine {
         if !details.summary.can_revert() {
             return Err(OperationError::NotRevertible);
         }
+        let revert_kind = if details.summary.kind.is_index() {
+            OperationKind::RevertIndex
+        } else {
+            OperationKind::RevertDocument
+        };
         let stored = self
             .store
             .payload(operation_id)
@@ -188,7 +197,7 @@ impl OperationEngine {
         };
         let revert_id = self.prepare_transition(
             context,
-            OperationKind::RevertDocument,
+            revert_kind,
             reversed,
             Some(operation_id),
             Some(operation_id),
@@ -254,7 +263,11 @@ impl OperationEngine {
                         continue;
                     }
                 };
-            let current = match self.backend.current_document(&payload.target) {
+            let current = match if operation.kind.is_index() {
+                self.backend.current_index(&payload.target)
+            } else {
+                self.backend.current_document(&payload.target)
+            } {
                 Ok(current) => current,
                 Err(_) => {
                     self.store
@@ -292,6 +305,17 @@ impl OperationEngine {
                     )
                     .map_err(|_| OperationError::Internal)?;
                 report.not_applied += 1;
+            } else if operation.kind.is_index() && payload.before.is_none() && current.is_some() {
+                self.store
+                    .transition(
+                        operation.id,
+                        OperationStatus::RecoveryRequired,
+                        "reconciled_index_uncertain",
+                        "recovery_required",
+                        Some("An index with the expected name exists, but its exact created definition could not be authenticated."),
+                    )
+                    .map_err(|_| OperationError::Internal)?;
+                report.recovery_required += 1;
             } else {
                 self.store
                     .transition(
@@ -321,6 +345,33 @@ impl OperationEngine {
             }
             Mutation::DeleteDocument { target, editor_precondition } => {
                 (target, None, editor_precondition, OperationKind::DeleteDocument)
+            }
+            Mutation::CreateIndex { target, definition } => {
+                validate_index_definition(&target, &definition)?;
+                if self
+                    .backend
+                    .current_index(&target)
+                    .map_err(|_| OperationError::Unavailable)?
+                    .is_some()
+                {
+                    return Err(OperationError::IndexExists);
+                }
+                return Ok((
+                    OperationKind::CreateIndex,
+                    RecoveryPayload { target, before: None, after: Some(definition) },
+                ));
+            }
+            Mutation::DropIndex { target } => {
+                let before = self
+                    .backend
+                    .current_index(&target)
+                    .map_err(|_| OperationError::Unavailable)?
+                    .ok_or(OperationError::IndexMissing)?;
+                validate_index_definition(&target, &before)?;
+                return Ok((
+                    OperationKind::DropIndex,
+                    RecoveryPayload { target, before: Some(before), after: None },
+                ));
             }
         };
         if after.as_ref().is_some_and(|document| document.get("_id") != Some(&target.id)) {
@@ -426,12 +477,13 @@ impl OperationEngine {
             .get(operation_id)
             .map_err(|_| OperationError::Internal)?
             .ok_or(OperationError::NotFound)?;
+        let kind = details.summary.kind;
         let stored = self
             .store
             .payload(operation_id)
             .map_err(|_| OperationError::Internal)?
             .ok_or(OperationError::NotFound)?;
-        let payload = self
+        let mut payload = self
             .cipher
             .decrypt(operation_id, details.summary.connection_name, &stored)
             .map_err(|_| OperationError::Internal)?;
@@ -441,18 +493,51 @@ impl OperationEngine {
         self.store
             .transition(operation_id, OperationStatus::Running, "running", "running", None)
             .map_err(|_| OperationError::Internal)?;
-        let result = match (payload.before.as_ref(), payload.after.as_ref()) {
-            (Some(before), Some(after)) => {
-                self.backend.replace_document_if_current(&payload.target, before, after)
+        let result = if kind.is_index() {
+            match (payload.before.as_ref(), payload.after.as_ref()) {
+                (Some(before), None) => self.backend.drop_index_if_current(&payload.target, before),
+                (None, Some(after)) => self.backend.create_index_if_absent(&payload.target, after),
+                _ => Err(BackendError::Failed),
             }
-            (Some(before), None) => {
-                self.backend.delete_document_if_current(&payload.target, before)
+        } else {
+            match (payload.before.as_ref(), payload.after.as_ref()) {
+                (Some(before), Some(after)) => {
+                    self.backend.replace_document_if_current(&payload.target, before, after)
+                }
+                (Some(before), None) => {
+                    self.backend.delete_document_if_current(&payload.target, before)
+                }
+                (None, Some(after)) => {
+                    self.backend.insert_document_if_absent(&payload.target, after)
+                }
+                (None, None) => unreachable!(),
             }
-            (None, Some(after)) => self.backend.insert_document_if_absent(&payload.target, after),
-            (None, None) => unreachable!(),
         };
         match result {
             Ok(()) => {
+                if kind.is_index() && payload.before.is_none() && payload.after.is_some() {
+                    let finalized = (|| {
+                        let actual = self
+                            .backend
+                            .current_index(&payload.target)
+                            .map_err(|_| ())?
+                            .ok_or(())?;
+                        payload.after = Some(actual);
+                        let encrypted =
+                            self.cipher.encrypt(operation_id, &payload).map_err(|_| ())?;
+                        self.store.replace_payload(operation_id, encrypted).map_err(|_| ())
+                    })();
+                    if finalized.is_err() {
+                        let _ = self.store.transition(
+                            operation_id,
+                            OperationStatus::Uncertain,
+                            "index_post_image_uncertain",
+                            "uncertain",
+                            Some("The index was created, but its exact server-normalized definition could not be persisted."),
+                        );
+                        return Err(OperationError::Uncertain { operation_id });
+                    }
+                }
                 if self
                     .store
                     .transition(
@@ -544,6 +629,20 @@ impl OperationEngine {
     pub(super) fn store_path(&self) -> &std::path::Path {
         self.store.path()
     }
+}
+
+fn validate_index_definition(
+    target: &super::model::DocumentTarget,
+    definition: &mongodb::bson::Document,
+) -> Result<(), OperationError> {
+    let name = target.id.as_str().ok_or(OperationError::Unsupported)?;
+    if definition.get_str("name").ok() != Some(name)
+        || definition.get_document("key").is_err()
+        || definition.get_document("key").is_ok_and(|keys| keys.is_empty())
+    {
+        return Err(OperationError::Unsupported);
+    }
+    Ok(())
 }
 
 fn operation_preview(payload: &RecoveryPayload) -> OperationPreview {

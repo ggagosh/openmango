@@ -51,7 +51,7 @@ pub(crate) fn render_history_view(
                 "History is disabled"
             },
             if enabled {
-                "Document inserts, replacements, and deletions saved from now on will appear here."
+                "Tracked document changes and named index create/drop operations will appear here."
             } else {
                 "Enable Reversible history in this connection's settings to track future document changes."
             },
@@ -193,6 +193,9 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         OperationKind::ReplaceDocument => format!("Updated document {document_id}"),
         OperationKind::DeleteDocument => format!("Deleted document {document_id}"),
         OperationKind::RevertDocument => format!("Reverted document {document_id}"),
+        OperationKind::CreateIndex => format!("Created index {document_id}"),
+        OperationKind::DropIndex => format!("Dropped index {document_id}"),
+        OperationKind::RevertIndex => format!("Reverted index {document_id}"),
     };
     let preview = change_preview(&operation);
     let icon = match operation.kind {
@@ -200,6 +203,9 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
         OperationKind::ReplaceDocument => IconName::Replace,
         OperationKind::DeleteDocument => IconName::Delete,
         OperationKind::RevertDocument => IconName::Undo2,
+        OperationKind::CreateIndex => IconName::Braces,
+        OperationKind::DropIndex => IconName::Delete,
+        OperationKind::RevertIndex => IconName::Undo2,
     };
 
     div()
@@ -315,7 +321,7 @@ fn operation_row(state: Entity<AppState>, operation: OperationSummary, cx: &App)
                                 WriteRequest::new(
                                     connection_id,
                                     target.clone(),
-                                    "Revert this document change",
+                                    "Revert this tracked change",
                                     None,
                                 ),
                                 window,

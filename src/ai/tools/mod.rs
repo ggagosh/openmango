@@ -65,6 +65,11 @@ pub enum StreamEvent {
         database: String,
         collection: String,
     },
+    IndexesChanged {
+        connection_id: uuid::Uuid,
+        database: String,
+        collection: String,
+    },
     ConfirmationRequired {
         tool_name: String,
         description: String,
@@ -167,6 +172,27 @@ pub async fn execute_reversible_mutations(
     task_result
         .map_err(|error| ToolError::History(format!("History task failed: {error}")))?
         .map_err(|(_, error)| ToolError::History(error))
+}
+
+pub async fn execute_reversible_index_mutation(
+    ctx: &MongoContext,
+    collection: &str,
+    mutation: crate::operations::Mutation,
+) -> Result<(), ToolError> {
+    let engine = require_reversible_history(ctx)?;
+    let result = tokio::task::spawn_blocking(move || {
+        engine.execute(crate::operations::OperationContext::built_in_ai(), mutation)
+    })
+    .await
+    .map_err(|error| ToolError::History(format!("History task failed: {error}")))?;
+    if let Some(tx) = &ctx.event_tx {
+        let _ = tx.send(StreamEvent::IndexesChanged {
+            connection_id: ctx.write_identity.id,
+            database: ctx.database.clone(),
+            collection: collection.to_string(),
+        });
+    }
+    result.map(|_| ()).map_err(|error| ToolError::History(error.user_message().to_string()))
 }
 
 pub fn ensure_writable(ctx: &MongoContext) -> Result<(), ToolError> {
@@ -331,8 +357,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        MongoContext, StreamEvent, ToolError, execute_reversible_mutations,
-        require_reversible_history, reversible_target,
+        MongoContext, StreamEvent, ToolError, execute_reversible_index_mutation,
+        execute_reversible_mutations, require_reversible_history, reversible_target,
     };
 
     #[tokio::test]
@@ -414,6 +440,20 @@ mod tests {
                 .iter()
                 .all(|operation| operation.origin == crate::operations::OperationOrigin::BuiltInAi)
         );
+
+        let index = reversible_target(&context, "users", "email_1".into());
+        execute_reversible_index_mutation(
+            &context,
+            "users",
+            crate::operations::Mutation::CreateIndex {
+                target: index.clone(),
+                definition: doc! { "key": { "email": 1 }, "name": "email_1" },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(event_rx.recv().await, Some(StreamEvent::IndexesChanged { .. })));
+        assert_eq!(backend.index(&index), Some(doc! { "key": { "email": 1 }, "name": "email_1" }));
 
         let completed = reversible_target(&context, "users", 3.into());
         let conflict = reversible_target(&context, "users", 4.into());

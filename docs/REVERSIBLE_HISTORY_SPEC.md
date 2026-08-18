@@ -1,6 +1,6 @@
 # OpenMango Reversible Operation History — Design Direction
 
-> **Status:** Manual, built-in AI, and MCP-proposed document transition slices implemented
+> **Status:** Document transitions and named index create/drop recipes implemented
 > **Scope:** General OpenMango feature used by users, built-in AI, and MCP clients
 
 ## Implemented document slices
@@ -12,10 +12,11 @@ The initial implementation is deliberately narrower than the full direction belo
 - bulk operator updates remain blocked while reversible history is enabled because OpenMango cannot durably compute every MongoDB post-image before applying the write;
 - built-in AI inserts, bounded replacements, and bounded deletes require reversible history plus native confirmation and use the same per-document transition engine with a `Built-in AI` origin;
 - MCP insert, replacement, and delete tools only create immutable pending actions backed by encrypted `MCP` transition checkpoints; MongoDB changes wait for native approval and are applied with exact-state checks;
+- manual and built-in AI named index creation/drop use encrypted metadata specifications; revert drops only a matching created definition or recreates a dropped definition only while its name is absent;
 - recovery envelopes contain exact BSON before/after images and `_id` values, encrypted with AES-256-GCM using a random Keychain-held installation key;
 - bundled SQLite stores the authoritative operation projection, append-only lifecycle events, and encrypted item payloads through one serialized worker;
 - conditional insertion, replacement, and deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
-- grouped bulk revert, metadata/snapshot recipes, and retention/purge controls remain future slices.
+- grouped bulk revert, index replacement and other metadata/snapshot recipes, and retention/purge controls remain future slices.
 
 A missing Keychain key never replaces the key for an existing history database. Existing recovery data is preserved and tracked writes remain failed closed until the key problem is resolved.
 
@@ -166,6 +167,8 @@ Use for index and compatible collection metadata operations.
 - prefer hide/unhide over drop where that satisfies the user's intent;
 - rename collection: store namespace identities and reverse only if the same collection still occupies the expected target.
 
+MongoDB does not provide a conditional `dropIndexes` command. OpenMango re-reads and compares the definition immediately before dropping, but an external actor can still drop/recreate the same name in the final check-to-drop window. OpenMango could then drop that replacement and cannot prove the race afterward. Index drop/revert is therefore guarded and recoverable under normal app-owned use, but not fully conflict-proof against concurrent external same-name replacement.
+
 ### 3. Verified namespace snapshots
 
 Use where per-document inversion is unsafe or impractical.
@@ -187,7 +190,7 @@ Reuse OpenMango's verified archive backup and restore implementation. Capture co
 | Update/replace | Document transitions | Restore before-image only if current document equals recorded post-image |
 | Delete one/many | Document transitions | Reinsert only if `_id` is absent |
 | Bounded bulk mutation | Per-document transitions | Revert confirmed successes in reverse order; conflicts stay unresolved |
-| Create index | Metadata specification | Drop only if current index equals recorded specification |
+| Create index | Metadata specification | Compare current definition immediately before drop; external same-name replacement remains a non-atomic race |
 | Drop index | Metadata specification | Recreate; may fail after data drift |
 | Create collection | Metadata specification | Drop only if the same collection remains empty/unchanged |
 | Rename collection | Metadata specification | Reverse only when namespace identity still matches |
