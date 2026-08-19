@@ -123,8 +123,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
          - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
          - **list_collections**: List all collections in the database.\n\n\
          ### Write Operations\n\
-         Document writes require Reversible history on the connection and user confirmation. The \
-         user will see a preview and must approve before encrypted recovery checkpoints are created. \
+         Document writes require user confirmation. The user will see a preview before execution. \
          A built-in safety system validates all write operations — always call the tool and let the \
          safety system handle validation.\n\n\
          - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
@@ -132,7 +131,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
          - **replace_documents**: Replace up to 100 documents matching a filter with a complete \
          replacement document. Original `_id` values are preserved. Set `many: false` for one.\n\
          - **delete_documents**: Delete documents matching a filter.\n\
-         - **create_index**: Create a reversible named index. Pass `keys` as a JSON object and \
+         - **create_index**: Create a named index. Pass `keys` as a JSON object and \
          an explicit `name`; `unique` is optional.\n\
          - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
          ### Cross-Collection Access\n\

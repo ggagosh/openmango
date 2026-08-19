@@ -240,17 +240,6 @@ impl BulkUpdateDialog {
             cx.notify();
             return;
         }
-        let history_enabled =
-            self.state.read(cx).connection_reversible_history(self.session_key.connection_id);
-        if history_enabled && self.mode == BulkUpdateMode::Update {
-            self.error_message = Some(
-                "Bulk operator updates are not reversible yet. Use Replace mode or disable reversible history for this write."
-                    .to_string(),
-            );
-            cx.notify();
-            return;
-        }
-
         self.error_message = None;
         let update_raw = self.update_state.read(cx).value().to_string();
         let update_doc = match parse_update_doc(&update_raw) {
@@ -286,13 +275,8 @@ impl BulkUpdateDialog {
 
         if scope == BulkUpdateScope::SelectedDocument {
             let view = cx.entity();
-            let recovery = if history_enabled {
-                " A recovery checkpoint will be created."
-            } else {
-                " This cannot be undone."
-            };
             let message = format!(
-                "{} 1 document in {}.{}?{recovery}",
+                "{} 1 document in {}.{}? This cannot be undone.",
                 mode.label(),
                 session_key.database,
                 session_key.collection
@@ -356,19 +340,6 @@ impl BulkUpdateDialog {
                         cx.notify();
                     });
                 }
-                Ok(count)
-                    if history_enabled
-                        && count > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS as u64 =>
-                {
-                    let _ = view.update(cx, |this, cx| {
-                        this.updating = false;
-                        this.error_message = Some(format!(
-                            "Reversible bulk writes are limited to {} documents. Narrow the filter and try again.",
-                            crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
-                        ));
-                        cx.notify();
-                    });
-                }
                 Ok(count) => {
                     if view
                         .update(cx, |this, cx| {
@@ -381,11 +352,7 @@ impl BulkUpdateDialog {
                     }
                     let confirm_view = view.clone();
                     let filter_text = crate::bson::document_to_shell_string(&filter);
-                    let recovery = if history_enabled {
-                        " Each document gets a recovery checkpoint."
-                    } else {
-                        " This cannot be undone."
-                    };
+                    let recovery = " This cannot be undone.";
                     let message = format!(
                         "{} every document matching this filter in {database}.{collection}? {count} document{} currently match.{recovery}\n\nFilter: {filter_text}",
                         mode.label(),

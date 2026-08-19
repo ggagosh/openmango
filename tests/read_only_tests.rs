@@ -37,7 +37,6 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
         collection: Some("ai_read_only_update".to_string()),
         write_identity: write_identity(true),
         read_only: true,
-        operation_engine: None,
         event_tx: None,
     });
     let error = tool
@@ -66,7 +65,6 @@ async fn read_only_ai_index_creation_is_rejected() {
         collection: Some("ai_read_only_index".to_string()),
         write_identity: write_identity(true),
         read_only: true,
-        operation_engine: None,
         event_tx: None,
     });
 
@@ -85,26 +83,32 @@ async fn read_only_ai_index_creation_is_rejected() {
 }
 
 #[tokio::test]
-async fn ai_write_fails_closed_without_reversible_history() {
+async fn ai_write_requires_confirmation_but_not_history() {
     let mongo = MongoTestContainer::start().await;
-    let collection = mongo.collection::<Document>("test_db", "ai_missing_confirmation");
-
+    let collection = mongo.collection::<Document>("test_db", "ai_confirmed_insert");
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = InsertDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
-        collection: Some("ai_missing_confirmation".to_string()),
+        collection: Some("ai_confirmed_insert".to_string()),
         write_identity: write_identity(false),
         read_only: false,
-        operation_engine: None,
-        event_tx: None,
+        event_tx: Some(event_tx),
     });
-    let error = tool
-        .call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
+    let call = tokio::spawn(async move {
+        tool.call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
+            .await
+    });
+    let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
         .await
-        .expect_err("AI write without reversible history must fail closed");
-
-    assert!(error.to_string().contains("Reversible history"));
-    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 0);
+        .expect("AI insert did not request confirmation")
+        .expect("AI confirmation channel closed");
+    match event {
+        StreamEvent::ConfirmationRequired { response_tx, .. } => response_tx.respond(true),
+        other => panic!("Unexpected AI event: {other:?}"),
+    }
+    call.await.expect("AI insert task panicked").expect("Confirmed insert failed");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -119,7 +123,6 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
         collection: Some("ai_read_only_aggregate".to_string()),
         write_identity: write_identity(true),
         read_only: true,
-        operation_engine: None,
         event_tx: None,
     });
     let error = tool
@@ -151,7 +154,6 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
         collection: Some("ai_confirmed_aggregate".to_string()),
         write_identity: write_identity(false),
         read_only: false,
-        operation_engine: None,
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {

@@ -477,14 +477,12 @@ impl AiView {
                 let col = s.selected_collection_name();
                 let write_identity =
                     crate::models::ConnectionWriteIdentity::from(s.connection_by_id(id)?);
-                s.operation_backend().register_client(id, client.clone());
                 Some(MongoContext {
                     client,
                     database: db,
                     collection: col,
                     write_identity,
                     read_only: s.connection_read_only(id),
-                    operation_engine: s.operation_engine(),
                     event_tx: None,
                 })
             })

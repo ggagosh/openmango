@@ -310,123 +310,74 @@ impl AppRoot {
         .detach();
     }
 
-    fn start_operation_history(state: Entity<AppState>, cx: &mut Context<Self>) {
+    fn start_history(state: Entity<AppState>, cx: &mut Context<Self>) {
         let key_read = KeyStore::read_history_key(cx);
-        let path = state.read(cx).config.operation_history_path();
-        let history_exists = path.exists();
-        let backend = state.read(cx).operation_backend();
+        let path = state.read(cx).config.history_path();
         let runtime = state.read(cx).connection_manager().runtime_handle();
+        let open_runtime = runtime.clone();
         cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let key = match key_read.await {
                 Ok(Some(key)) => match <[u8; 32]>::try_from(key) {
                     Ok(key) => key,
                     Err(_) => {
-                        log::error!("Reversible history key has an invalid length");
+                        log::error!("History key has an invalid length");
                         return;
                     }
                 },
                 Ok(None) => {
-                    if history_exists {
-                        log::error!(
-                            "Reversible history key is missing; existing recovery data was preserved"
-                        );
-                        return;
-                    }
                     let key: [u8; 32] = rand::random();
                     let Ok(write) = cx.update(|cx| KeyStore::write_history_key(cx, &key)) else {
-                        log::error!("Reversible history key could not be stored");
+                        log::error!("History key could not be stored");
                         return;
                     };
                     if write.await.is_err() {
-                        log::error!("Reversible history key could not be stored");
+                        log::error!("History key could not be stored");
                         return;
                     }
                     key
                 }
-                Err(_) => {
-                    log::error!("Reversible history key could not be read");
+                Err(error) => {
+                    log::error!("History key could not be read: {error}");
                     return;
                 }
             };
-            let opened = runtime
+            let opened = open_runtime
                 .spawn_blocking(move || {
-                    crate::operations::OperationEngine::open(path, key, backend).map(Arc::new)
+                    crate::history::HistoryService::open(path, key, runtime).map(Arc::new)
                 })
                 .await;
-            match opened {
-                Ok(Ok(engine)) => {
-                    let action_store = if let Ok((backend, active, action_store)) = cx.update(|cx| {
-                        let state = state.read(cx);
-                        (
-                            state.operation_backend(),
-                            state.active_connections_snapshot(),
-                            state.action_broker().store(),
-                        )
-                    }) {
-                        for (connection_id, connection) in active {
-                            backend.register_client(connection_id, connection.client);
-                        }
-                        Some(action_store)
-                    } else {
-                        None
-                    };
-                    let reconcile_engine = engine.clone();
-                    let pending_actions = runtime
-                        .spawn_blocking(move || {
-                            let _ = reconcile_engine.reconcile();
-                            let Some(action_store) = action_store else {
-                                return Vec::new();
-                            };
-                            let pending_actions = action_store
-                                .list_actions()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter(|action| action.is_pending(chrono::Utc::now()))
-                                .filter(|action| {
-                                    matches!(
-                                        action.content.request,
-                                        crate::actions::model::ActionRequest::DocumentTransitions {
-                                            ..
-                                        }
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            let retained = pending_actions
-                                .iter()
-                                .filter_map(|action| match &action.content.request {
-                                    crate::actions::model::ActionRequest::DocumentTransitions {
-                                        operation_ids,
-                                        ..
-                                    } => Some(operation_ids.iter().copied()),
-                                    _ => None,
-                                })
-                                .flatten()
-                                .collect();
-                            let _ = reconcile_engine.cancel_unreferenced_pending(&retained);
-                            let _ = AppCommands::reconcile_document_action_operations(
-                                &reconcile_engine,
-                                &action_store,
-                            );
-                            pending_actions
-                        })
-                        .await
-                        .unwrap_or_default();
-                    let _ = cx.update(|cx| {
-                        state.update(cx, |state, cx| {
-                            state.set_operation_engine(engine);
-                            cx.notify();
-                        });
-                        for action in pending_actions {
-                            AppCommands::schedule_document_action_expiry(
-                                state.clone(),
-                                action,
-                                cx,
-                            );
-                        }
-                    });
+            let Ok(Ok(service)) = opened else {
+                log::error!("History could not be initialized");
+                return;
+            };
+            let _ = service.reconcile();
+            let active =
+                cx.update(|cx| state.read(cx).active_connections_snapshot()).unwrap_or_default();
+            let configurations =
+                cx.update(|cx| state.read(cx).connections.clone()).unwrap_or_default();
+            let enabled_connections = active
+                .into_keys()
+                .filter(|connection_id| {
+                    configurations.iter().any(|configuration| {
+                        configuration.id == *connection_id && configuration.history_enabled
+                    })
+                })
+                .collect::<Vec<_>>();
+            let _ = cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.set_history_service(service);
+                    cx.notify();
+                });
+                for connection_id in enabled_connections {
+                    AppCommands::inspect_history_eligibility(
+                        state.clone(),
+                        connection_id,
+                        false,
+                        false,
+                        cx,
+                    );
                 }
-                _ => log::error!("Reversible history could not be initialized"),
-            }
+            });
         })
         .detach();
     }
@@ -436,7 +387,7 @@ impl AppRoot {
         let state = cx.new(|_| AppState::new());
 
         Self::hydrate_connection_secrets(state.clone(), cx);
-        Self::start_operation_history(state.clone(), cx);
+        Self::start_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;
         let mcp_access_signature = Self::mcp_access_signature(state.read(cx));
         let mcp_shutdown = Self::start_mcp_if_enabled(state.clone(), cx);
@@ -797,7 +748,6 @@ impl Render for AppRoot {
                     Some(CollectionSubview::Stats) => key_context.push_str(" Stats"),
                     Some(CollectionSubview::Aggregation) => key_context.push_str(" Aggregation"),
                     Some(CollectionSubview::Schema) => key_context.push_str(" Schema"),
-                    Some(CollectionSubview::History) => key_context.push_str(" History"),
                     _ => {}
                 }
             }

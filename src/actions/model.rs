@@ -41,7 +41,6 @@ pub enum OperationPhase {
     BackingUpTarget,
     VerifyingBackup,
     ReplacingTarget,
-    ApplyingDocuments,
     VerifyingTarget,
     RestoringTargetBackup,
     VerifyingRecovery,
@@ -53,14 +52,6 @@ pub enum OperationPhase {
 pub enum SyncMode {
     #[default]
     Replace,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DocumentActionKind {
-    Insert,
-    Replace,
-    Delete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,13 +70,6 @@ pub enum ActionRequest {
     },
     OperationRevert {
         operation_id: Uuid,
-    },
-    DocumentTransitions {
-        connection_id: Uuid,
-        database: String,
-        collection: String,
-        action: DocumentActionKind,
-        operation_ids: Vec<Uuid>,
     },
 }
 

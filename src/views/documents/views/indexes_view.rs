@@ -242,16 +242,7 @@ impl CollectionView {
                                                     if drop_name == "_id_" {
                                                         return;
                                                     }
-                                                    let recovery = if state
-                                                        .read(cx)
-                                                        .connection_reversible_history(
-                                                            session_key.connection_id,
-                                                        )
-                                                    {
-                                                        " You can recreate it from History if its name remains available."
-                                                    } else {
-                                                        " This cannot be undone."
-                                                    };
+                                                    let recovery = " This cannot be undone.";
                                                     let message =
                                                         format!("Drop index {drop_name}?{recovery}");
                                                     let state_for_write = state.clone();

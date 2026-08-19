@@ -18,8 +18,8 @@ use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
 use crate::components::{Button, open_confirm_dialog, request_app_quit};
 use crate::state::{
-    AiProvider, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS,
-    InsertMode, McpClientKind, TransferFormat,
+    AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
+    FILENAME_PLACEHOLDERS, InsertMode, McpClientKind, TransferFormat,
 };
 use crate::theme::{borders, islands, sizing, spacing};
 
@@ -1393,11 +1393,59 @@ fn render_agent_connections_section(
             .children(connections.into_iter().map(|connection| {
                 let connection_id = connection.id;
                 let shared = connection.agent_shared;
+                let agent_writable = connection.agent_writable;
+                let connected = state.read(cx).is_connected(connection.id);
+                let history_enabled = connection.history_enabled;
+                let history_max_age_days = connection.history_max_age_days;
+                let history_max_bytes = connection.history_max_bytes;
+                let history_report = state.read(cx).history_eligibility(connection_id).cloned();
+                let history_inspecting = state.read(cx).history_inspecting(connection_id);
+                let history_eligible = history_report.as_ref().is_some_and(|report| {
+                    report.status == crate::history::EligibilityStatus::Eligible
+                });
+                let history_needs_setup = history_report.as_ref().is_some_and(|report| {
+                    report.status == crate::history::EligibilityStatus::NeedsSetup
+                });
+                let history_reason = history_report
+                    .as_ref()
+                    .and_then(|report| report.exact_reason())
+                    .unwrap_or(if connected {
+                        "Inspect eligibility before enabling History."
+                    } else {
+                        "Connect before inspecting History eligibility."
+                    })
+                    .to_string();
+                let history_usage = state
+                    .read(cx)
+                    .history_service()
+                    .and_then(|service| service.cached_usage(connection_id))
+                    .or_else(|| state.read(cx).history_usage(connection_id));
+                let history_coverage = history_report
+                    .as_ref()
+                    .map(|report| {
+                        report
+                            .collections
+                            .iter()
+                            .filter_map(|coverage| {
+                                coverage.reason.as_ref().map(|reason| {
+                                    format!("{}.{}: {reason}", coverage.database, coverage.collection)
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    })
+                    .filter(|coverage| !coverage.is_empty());
                 let protected = connection.protected
                     || connection.environment
                         == Some(crate::models::ConnectionEnvironment::Production);
-                let connected = state.read(cx).is_connected(connection.id);
-                let state = state.clone();
+                let state_for_share = state.clone();
+                let state_for_writes = state.clone();
+                let state_for_history = state.clone();
+                let state_for_inspection = state.clone();
+                let state_for_setup = state.clone();
+                let state_for_age = state.clone();
+                let state_for_bytes = state.clone();
+                let state_for_clear = state.clone();
                 div()
                     .flex()
                     .items_start()
@@ -1438,41 +1486,281 @@ fn render_agent_connections_section(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().warning)
-                                        .child("Visible to agents; mutations require protected approval."),
+                                        .child(if agent_writable {
+                                            "Agents have direct write access to this protected connection."
+                                        } else {
+                                            "Visible to agents; direct writes are disabled."
+                                        }),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if history_eligible {
+                                        cx.theme().success
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(if history_eligible {
+                                        "History eligible: all covered regular collections have pre/post images."
+                                            .to_string()
+                                    } else {
+                                        history_reason.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .max_w(px(620.0))
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("History records supported changes from every client observed by OpenMango on this device, can contain gaps, and is not a backup or audit log."),
+                            )
+                            .when_some(history_coverage, |content, coverage| {
+                                content.child(
+                                    div()
+                                        .max_w(px(620.0))
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child(coverage),
+                                )
+                            })
+                            .when_some(history_usage, |content, usage| {
+                                content.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "History storage: {} MiB · {} batches · {} items",
+                                            usage.encrypted_bytes / (1024 * 1024),
+                                            usage.batches,
+                                            usage.items,
+                                        )),
                                 )
                             }),
                     )
                     .child(
-                        Switch::new(("agent-share-connection", connection_id.as_u128() as u64))
-                            .checked(shared)
-                            .small()
-                            .on_click(move |checked, window, cx| {
-                                let apply = {
-                                    let state = state.clone();
-                                    let checked = *checked;
-                                    move |_window: &mut Window, cx: &mut App| {
-                                        state.update(cx, |state, cx| {
-                                            state.set_connection_agent_shared(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .gap(spacing::sm())
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(div().text_xs().child("Share with agents"))
+                                    .child(
+                                        Switch::new(("agent-share-connection", connection_id.as_u128() as u64))
+                                            .checked(shared)
+                                            .small()
+                                            .on_click(move |checked, window, cx| {
+                                                let apply = {
+                                                    let state = state_for_share.clone();
+                                                    let checked = *checked;
+                                                    move |_window: &mut Window, cx: &mut App| {
+                                                        state.update(cx, |state, cx| {
+                                                            state.set_connection_agent_shared(
+                                                                connection_id,
+                                                                checked,
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                };
+                                                if *checked && protected {
+                                                    open_confirm_dialog(
+                                                        window,
+                                                        cx,
+                                                        "Share protected connection",
+                                                        "Agents will be able to see this connection and read database metadata. Credentials remain hidden. Direct writes remain disabled until separately enabled.",
+                                                        "Share connection",
+                                                        false,
+                                                        apply,
+                                                    );
+                                                } else {
+                                                    apply(window, cx);
+                                                }
+                                            }),
+                                    ),
+                            )
+                            .when(shared, |controls| {
+                                controls.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(spacing::sm())
+                                        .child(div().text_xs().child("Allow agent writes"))
+                                        .child(
+                                            Switch::new(("agent-write-connection", connection_id.as_u128() as u64))
+                                                .checked(agent_writable)
+                                                .small()
+                                                .disabled(connection.read_only)
+                                                .on_click(move |checked, window, cx| {
+                                                    let apply = {
+                                                        let state = state_for_writes.clone();
+                                                        let checked = *checked;
+                                                        move |_window: &mut Window, cx: &mut App| {
+                                                            state.update(cx, |state, cx| {
+                                                                state.set_connection_agent_writable(
+                                                                    connection_id,
+                                                                    checked,
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        }
+                                                    };
+                                                    if *checked && protected {
+                                                        open_confirm_dialog(
+                                                            window,
+                                                            cx,
+                                                            "Allow direct agent writes",
+                                                            "Authenticated MCP clients will be able to insert, update, replace, and delete documents directly on this protected or Production connection without per-operation approval. History is not a backup and is not required for these writes.",
+                                                            "Allow agent writes",
+                                                            true,
+                                                            apply,
+                                                        );
+                                                    } else {
+                                                        apply(window, cx);
+                                                    }
+                                                }),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(div().text_xs().child("History"))
+                                    .child(
+                                        Switch::new(("history-connection", connection_id.as_u128() as u64))
+                                            .checked(history_enabled)
+                                            .small()
+                                            .disabled(
+                                                history_inspecting
+                                                    || (!history_enabled && !history_eligible),
+                                            )
+                                            .on_click(move |checked, _window, cx| {
+                                                state_for_history.update(cx, |state, cx| {
+                                                    state.set_connection_history_enabled(
+                                                        connection_id,
+                                                        *checked,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .when(!history_eligible, |controls| {
+                                controls.child(
+                                    Button::new(("inspect-history", connection_id.as_u128() as u64))
+                                        .ghost()
+                                        .compact()
+                                        .label(if history_inspecting {
+                                            "Inspecting…"
+                                        } else if history_needs_setup {
+                                            "Enable pre/post images"
+                                        } else {
+                                            "Inspect eligibility"
+                                        })
+                                        .disabled(!connected || history_inspecting)
+                                        .on_click(move |_, _, cx| {
+                                            AppCommands::inspect_history_eligibility(
+                                                if history_needs_setup {
+                                                    state_for_setup.clone()
+                                                } else {
+                                                    state_for_inspection.clone()
+                                                },
                                                 connection_id,
-                                                checked,
+                                                history_needs_setup,
+                                                history_needs_setup,
                                                 cx,
                                             );
-                                        });
-                                    }
-                                };
-                                if *checked && protected {
-                                    open_confirm_dialog(
-                                        window,
-                                        cx,
-                                        "Share protected connection",
-                                        "Agents will be able to see this connection and read database metadata. Credentials remain hidden and every mutation still requires native approval.",
-                                        "Share connection",
-                                        false,
-                                        apply,
-                                    );
+                                        }),
+                                )
+                            })
+                            .when(history_enabled, |controls| {
+                                let next_age = if history_max_age_days <= 7 {
+                                    30
+                                } else if history_max_age_days <= 30 {
+                                    90
                                 } else {
-                                    apply(window, cx);
-                                }
+                                    7
+                                };
+                                let mib = 1024 * 1024;
+                                let next_bytes = if history_max_bytes <= 256 * mib {
+                                    1024 * mib
+                                } else if history_max_bytes <= 1024 * mib {
+                                    5 * 1024 * mib
+                                } else {
+                                    256 * mib
+                                };
+                                controls.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(spacing::xs())
+                                        .child(
+                                            Button::new(("history-age", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label(format!("{} days", history_max_age_days))
+                                                .on_click(move |_, _, cx| {
+                                                    state_for_age.update(cx, |state, cx| {
+                                                        state.set_connection_history_retention(
+                                                            connection_id,
+                                                            next_age,
+                                                            history_max_bytes,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(("history-size", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label(format!(
+                                                    "{} MiB",
+                                                    history_max_bytes / mib
+                                                ))
+                                                .on_click(move |_, _, cx| {
+                                                    state_for_bytes.update(cx, |state, cx| {
+                                                        state.set_connection_history_retention(
+                                                            connection_id,
+                                                            history_max_age_days,
+                                                            next_bytes,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(("clear-connection-history", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label("Clear connection")
+                                                .on_click(move |_, window, cx| {
+                                                    let state = state_for_clear.clone();
+                                                    open_confirm_dialog(
+                                                        window,
+                                                        cx,
+                                                        "Clear connection History",
+                                                        "Delete all non-active encrypted History batches, gaps, and resume state for this connection. Recording restarts from the current point and this cannot be undone.",
+                                                        "Clear History",
+                                                        true,
+                                                        move |_, cx| {
+                                                            AppCommands::clear_connection_history(
+                                                                state.clone(),
+                                                                connection_id,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    );
+                                                }),
+                                        ),
+                                )
                             }),
                     )
             }))
@@ -1494,7 +1782,30 @@ fn render_agent_connections_section(
                         "Agents see only enabled connections. Credentials and connection strings are never exposed.",
                     ),
             )
-            .child(content),
+            .child(content)
+            .child(
+                Button::new("clear-all-history")
+                    .ghost()
+                    .compact()
+                    .label("Clear all History")
+                    .on_click({
+                        let state = state.clone();
+                        move |_, window, cx| {
+                            let state_for_clear = state.clone();
+                            open_confirm_dialog(
+                                window,
+                                cx,
+                                "Clear all History",
+                                "Delete every non-active local encrypted History batch, gap, and resume cursor. Recording restarts from the current point. This cannot be undone.",
+                                "Clear all History",
+                                true,
+                                move |_, cx| {
+                                    AppCommands::clear_all_history(state_for_clear.clone(), cx);
+                                },
+                            );
+                        }
+                    }),
+            ),
         &settings.appearance,
         cx,
     )

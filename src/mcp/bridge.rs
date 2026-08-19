@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use gpui::{App, AppContext as _, AsyncApp, Context, Entity, WeakEntity};
+use gpui::{AsyncApp, Context, Entity, WeakEntity};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -9,14 +7,14 @@ use mongodb::Client;
 use crate::actions::model::{
     BackupManifest, OperationRecord, ProposedAction, ProposedActionContent,
 };
-use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
+use crate::state::{AppEvent, AppState};
 use crate::sync::plan::ActionPreflight;
 
 use super::{McpConnection, policy::PolicyEvaluator};
 
-pub struct McpDocumentWriteContext {
-    pub preflight: ActionPreflight,
-    pub engine: Arc<crate::operations::OperationEngine>,
+pub(crate) struct AuthorizedDirectWrite {
+    pub client: Client,
+    pub history: Option<std::sync::Arc<crate::history::HistoryService>>,
 }
 
 #[derive(Clone)]
@@ -34,9 +32,9 @@ enum BridgeRequest {
         connection_id: Uuid,
         response: oneshot::Sender<Result<Client, String>>,
     },
-    ResolveDocumentWrite {
+    ResolveDirectWrite {
         connection_id: Uuid,
-        response: oneshot::Sender<Result<McpDocumentWriteContext, String>>,
+        response: oneshot::Sender<Result<AuthorizedDirectWrite, String>>,
     },
     ResolveAction {
         source_connection_id: Option<Uuid>,
@@ -96,55 +94,14 @@ impl McpBridge {
                         let result = shared_client(state.read(cx), connection_id);
                         let _ = response.send(result);
                     }
-                    BridgeRequest::ResolveDocumentWrite { connection_id, response } => {
+                    BridgeRequest::ResolveDirectWrite { connection_id, response } => {
                         let state = state.read(cx);
-                        let policy = PolicyEvaluator::new(state);
-                        let result = (|| {
-                            let connection = state
-                                .connection_by_id(connection_id)
-                                .filter(|connection| connection.agent_shared)
-                                .ok_or_else(|| "Connection is not shared with agents".to_string())?;
-                            if !connection.reversible_history {
-                                return Err(
-                                    "MCP document writes require Reversible history on the target connection."
-                                        .to_string(),
-                                );
-                            }
-                            let target = policy.authorize_action_connection(connection_id, true)?;
-                            if target.snapshot.protected {
-                                return Err(
-                                    "Protected or Production targets require a verified backup; bounded MCP document proposals are unavailable."
-                                        .to_string(),
-                                );
-                            }
-                            let engine = state.operation_engine().ok_or_else(|| {
-                                "Reversible history is unavailable; no proposal was created."
-                                    .to_string()
-                            })?;
-                            state
-                                .operation_backend()
-                                .register_client(connection_id, target.client.clone());
-                            let broker = state.action_broker();
-                            let recovery_interlocks = broker
-                                .store()
-                                .list_operations()
-                                .map_err(|error| error.to_string())?
-                                .into_iter()
-                                .filter(|operation| operation.recovery_interlock)
-                                .map(|operation| {
-                                    (operation.target_connection_id, operation.target_database)
-                                })
-                                .collect();
-                            Ok(McpDocumentWriteContext {
-                                preflight: ActionPreflight {
-                                    source: None,
-                                    target,
-                                    backup_root: broker.store().backups_root(),
-                                    recovery_interlocks,
-                                },
-                                engine,
-                            })
-                        })();
+                        let result = PolicyEvaluator::new(state)
+                            .authorize_direct_write(connection_id)
+                            .map(|client| AuthorizedDirectWrite {
+                                client,
+                                history: state.history_service(),
+                            });
                         let _ = response.send(result);
                     }
                     BridgeRequest::ResolveAction {
@@ -195,62 +152,17 @@ impl McpBridge {
                         let _ = response.send(label);
                     }
                     BridgeRequest::ProposeAction { content, response } => {
-                        let document_action = match &content.request {
-                            crate::actions::model::ActionRequest::DocumentTransitions {
-                                connection_id,
-                                database,
-                                collection,
-                                operation_ids,
-                                ..
-                            } => Some((
-                                SessionKey::new(
-                                    *connection_id,
-                                    database.clone(),
-                                    collection.clone(),
-                                ),
-                                operation_ids.clone(),
-                            )),
-                            _ => None,
-                        };
-                        if response.is_closed() {
-                            if let Some((_, operation_ids)) = document_action {
-                                let engine = state.read(cx).operation_engine();
-                                cancel_document_transitions(engine, operation_ids, cx);
-                            }
-                        } else {
+                        if !response.is_closed() {
                             let result = state
-                            .read(cx)
-                            .action_broker()
-                            .propose(*content)
-                            .map_err(|error| error.to_string());
-                        let proposed = result.is_ok();
-                        if let Ok(action) = &result {
-                            AppCommands::schedule_document_action_expiry(
-                                state.clone(),
-                                action.clone(),
-                                cx,
-                            );
-                        }
-                        if !proposed
-                            && let Some((_, operation_ids)) = &document_action
-                        {
-                            let engine = state.read(cx).operation_engine();
-                            cancel_document_transitions(engine, operation_ids.clone(), cx);
-                        }
-                        let _ = response.send(result);
-                        state.update(cx, |_state, cx| {
-                            cx.emit(AppEvent::AgentActivityChanged);
-                            cx.notify();
-                        });
-                            if proposed
-                                && let Some((session_key, _)) = document_action
-                            {
-                                AppCommands::collection_history_changed(
-                                    state.clone(),
-                                    session_key,
-                                    cx,
-                                );
-                            }
+                                .read(cx)
+                                .action_broker()
+                                .propose(*content)
+                                .map_err(|error| error.to_string());
+                            let _ = response.send(result);
+                            state.update(cx, |_state, cx| {
+                                cx.emit(AppEvent::AgentActivityChanged);
+                                cx.notify();
+                            });
                         }
                     }
                     BridgeRequest::GetAction { action_id, grant_id, response } => {
@@ -335,13 +247,13 @@ impl McpBridge {
         receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
     }
 
-    pub async fn resolve_document_write(
+    pub(crate) async fn resolve_direct_write(
         &self,
         connection_id: Uuid,
-    ) -> Result<McpDocumentWriteContext, String> {
+    ) -> Result<AuthorizedDirectWrite, String> {
         let (response, receiver) = oneshot::channel();
         self.requests
-            .send(BridgeRequest::ResolveDocumentWrite { connection_id, response })
+            .send(BridgeRequest::ResolveDirectWrite { connection_id, response })
             .await
             .map_err(|_| "OpenMango is shutting down".to_string())?;
         receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
@@ -459,8 +371,25 @@ impl McpBridge {
         receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, debug_assertions))]
     pub fn fixed(connections: Vec<McpConnection>) -> Self {
+        Self::fixed_with_clients(connections, std::collections::HashMap::new())
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub fn fixed_with_clients(
+        connections: Vec<McpConnection>,
+        clients: std::collections::HashMap<Uuid, Client>,
+    ) -> Self {
+        Self::fixed_with_clients_and_history(connections, clients, None)
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub fn fixed_with_clients_and_history(
+        connections: Vec<McpConnection>,
+        clients: std::collections::HashMap<Uuid, Client>,
+        history: Option<std::sync::Arc<crate::history::HistoryService>>,
+    ) -> Self {
         let (requests, mut receiver) = mpsc::channel(16);
         tokio::spawn(async move {
             while let Some(request) = receiver.recv().await {
@@ -481,12 +410,39 @@ impl McpBridge {
                             });
                         let _ = response.send(result);
                     }
-                    BridgeRequest::ResolveRead { response, .. } => {
-                        drop(response);
+                    BridgeRequest::ResolveRead { connection_id, response } => {
+                        let result = clients
+                            .get(&connection_id)
+                            .cloned()
+                            .ok_or_else(|| "Read client is unavailable in this test".into());
+                        let _ = response.send(result);
                     }
-                    BridgeRequest::ResolveDocumentWrite { response, .. } => {
-                        let _ = response
-                            .send(Err("Document preflight is unavailable in this test".into()));
+                    BridgeRequest::ResolveDirectWrite { connection_id, response } => {
+                        let result = connections
+                            .iter()
+                            .find(|connection| connection.id == connection_id)
+                            .ok_or_else(|| "Connection is not shared with agents".to_string())
+                            .and_then(|connection| {
+                                if connection.read_only {
+                                    Err("Target connection is read-only".to_string())
+                                } else if !connection.writable {
+                                    Err("Agent writes are not enabled for this connection"
+                                        .to_string())
+                                } else {
+                                    clients
+                                        .get(&connection_id)
+                                        .cloned()
+                                        .map(|client| AuthorizedDirectWrite {
+                                            client,
+                                            history: history.clone(),
+                                        })
+                                        .ok_or_else(|| {
+                                            "Direct write client is unavailable in this test"
+                                                .to_string()
+                                        })
+                                }
+                            });
+                        let _ = response.send(result);
                     }
                     BridgeRequest::ResolveAction { response, .. } => {
                         let _ = response
@@ -517,22 +473,6 @@ impl McpBridge {
         });
         Self { requests }
     }
-}
-
-fn cancel_document_transitions(
-    engine: Option<Arc<crate::operations::OperationEngine>>,
-    operation_ids: Vec<Uuid>,
-    cx: &mut App,
-) {
-    let Some(engine) = engine else {
-        return;
-    };
-    cx.background_spawn(async move {
-        for operation_id in operation_ids {
-            let _ = engine.cancel_pending(operation_id);
-        }
-    })
-    .detach();
 }
 
 fn shared_connections(state: &AppState) -> Vec<McpConnection> {

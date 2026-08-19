@@ -15,6 +15,23 @@ pub fn render_subview_tabs(
     cx: &App,
 ) -> TabBar {
     let appearance = state.read(cx).settings.appearance.clone();
+    let history_visible = session_key.as_ref().is_some_and(|session| {
+        state.read(cx).collection_history_available(
+            session.connection_id,
+            &session.database,
+            &session.collection,
+        )
+    });
+    let mut tabs = vec![
+        Tab::new().label("Documents"),
+        Tab::new().label("Indexes"),
+        Tab::new().label("Stats"),
+        Tab::new().label("Aggregation"),
+        Tab::new().label("Schema"),
+    ];
+    if history_visible {
+        tabs.push(Tab::new().label("History"));
+    }
 
     islands::tab_bar(TabBar::new("collection-subview-tabs"), &appearance)
         .xsmall()
@@ -56,12 +73,5 @@ pub fn render_subview_tabs(
                 }
             }
         })
-        .children(vec![
-            Tab::new().label("Documents"),
-            Tab::new().label("Indexes"),
-            Tab::new().label("Stats"),
-            Tab::new().label("Aggregation"),
-            Tab::new().label("Schema"),
-            Tab::new().label("History"),
-        ])
+        .children(tabs)
 }

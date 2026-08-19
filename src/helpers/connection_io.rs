@@ -36,7 +36,11 @@ pub struct ExportedConnection {
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
-    pub reversible_history: bool,
+    pub history_enabled: bool,
+    #[serde(default)]
+    pub history_max_age_days: u32,
+    #[serde(default)]
+    pub history_max_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,7 +114,9 @@ pub fn build_export(
                 confirm_production_writes: conn.confirm_production_writes,
                 uri: strip_uri_secrets(&conn.uri),
                 read_only: conn.read_only,
-                reversible_history: conn.reversible_history,
+                history_enabled: conn.history_enabled,
+                history_max_age_days: conn.history_max_age_days,
+                history_max_bytes: conn.history_max_bytes,
                 encrypted_password: None,
                 encrypted_transport: None,
                 ssh: sanitized_ssh,
@@ -136,7 +142,9 @@ pub fn build_export(
                     confirm_production_writes: conn.confirm_production_writes,
                     uri: strip_uri_secrets(&conn.uri),
                     read_only: conn.read_only,
-                    reversible_history: conn.reversible_history,
+                    history_enabled: conn.history_enabled,
+                    history_max_age_days: conn.history_max_age_days,
+                    history_max_bytes: conn.history_max_bytes,
                     encrypted_password: encrypted,
                     encrypted_transport,
                     ssh: sanitized_ssh,
@@ -208,7 +216,13 @@ pub fn resolve_import(
             conn.environment = ec.environment;
             conn.confirm_production_writes = ec.confirm_production_writes;
             conn.read_only = ec.read_only;
-            conn.reversible_history = ec.reversible_history;
+            conn.history_enabled = ec.history_enabled;
+            if ec.history_max_age_days > 0 {
+                conn.history_max_age_days = ec.history_max_age_days;
+            }
+            if ec.history_max_bytes > 0 {
+                conn.history_max_bytes = ec.history_max_bytes;
+            }
             conn.ssh = ec.ssh.clone();
             conn.proxy = ec.proxy.clone();
             conn
@@ -280,8 +294,11 @@ mod tests {
                 last_connected: None,
                 read_only: false,
                 agent_shared: false,
+                agent_writable: false,
                 protected: false,
-                reversible_history: false,
+                history_enabled: false,
+                history_max_age_days: 30,
+                history_max_bytes: 1024 * 1024 * 1024,
                 ssh: Some(SshConfig {
                     enabled: true,
                     host: "bastion".into(),
@@ -314,8 +331,11 @@ mod tests {
                 last_connected: Some(Utc::now()),
                 read_only: true,
                 agent_shared: false,
+                agent_writable: false,
                 protected: false,
-                reversible_history: false,
+                history_enabled: false,
+                history_max_age_days: 30,
+                history_max_bytes: 1024 * 1024 * 1024,
                 ssh: None,
                 proxy: None,
                 secret_id: None,
@@ -446,8 +466,11 @@ mod tests {
             last_connected: None,
             read_only: false,
             agent_shared: false,
+            agent_writable: false,
             protected: false,
-            reversible_history: false,
+            history_enabled: false,
+            history_max_age_days: 30,
+            history_max_bytes: 1024 * 1024 * 1024,
             ssh: None,
             proxy: None,
             secret_id: None,
@@ -466,7 +489,9 @@ mod tests {
                     confirm_production_writes: true,
                     uri: "mongodb://localhost:27017".into(),
                     read_only: false,
-                    reversible_history: true,
+                    history_enabled: true,
+                    history_max_age_days: 30,
+                    history_max_bytes: 1024 * 1024 * 1024,
                     encrypted_password: None,
                     encrypted_transport: None,
                     ssh: None,
@@ -479,7 +504,9 @@ mod tests {
                     confirm_production_writes: false,
                     uri: "mongodb+srv://cluster0.abc.mongodb.net".into(),
                     read_only: true,
-                    reversible_history: false,
+                    history_enabled: false,
+                    history_max_age_days: 30,
+                    history_max_bytes: 1024 * 1024 * 1024,
                     encrypted_password: None,
                     encrypted_transport: None,
                     ssh: None,
@@ -494,7 +521,7 @@ mod tests {
         assert_eq!(resolved[0].color, Some(ConnectionColor::Blue));
         assert_eq!(resolved[0].environment, Some(ConnectionEnvironment::Production));
         assert!(resolved[0].confirm_production_writes);
-        assert!(resolved[0].reversible_history);
+        assert!(resolved[0].history_enabled);
         assert_eq!(resolved[1].name, "Atlas");
         // New UUIDs
         assert_ne!(resolved[0].id, existing[0].id);
@@ -512,8 +539,11 @@ mod tests {
             last_connected: None,
             read_only: false,
             agent_shared: false,
+            agent_writable: false,
             protected: false,
-            reversible_history: false,
+            history_enabled: false,
+            history_max_age_days: 30,
+            history_max_bytes: 1024 * 1024 * 1024,
             ssh: None,
             proxy: None,
             secret_id: None,

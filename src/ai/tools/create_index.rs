@@ -6,8 +6,8 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, ensure_writable, execute_reversible_index_mutation, parse_json_to_doc,
-    require_confirmation, require_reversible_history, resolve_collection, reversible_target,
+    MongoContext, StreamEvent, ToolError, ensure_writable, parse_json_to_doc, require_confirmation,
+    resolve_collection,
 };
 
 pub struct CreateIndexTool(MongoContext);
@@ -65,13 +65,10 @@ impl Tool for CreateIndexTool {
 
     async fn call(&self, args: CreateIndexArgs) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
-        require_reversible_history(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let keys = parse_json_to_doc(&args.keys)?;
         let name = args.name.clone().filter(|name| !name.trim().is_empty()).ok_or_else(|| {
-            ToolError::InvalidInput(
-                "Reversible index creation requires an explicit name".to_string(),
-            )
+            ToolError::InvalidInput("Index creation requires an explicit name".to_string())
         })?;
 
         // Preview: show the index definition (no docs affected)
@@ -93,20 +90,24 @@ impl Tool for CreateIndexTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        let mut definition = bson::doc! { "key": keys, "name": name.clone() };
-        if let Some(unique) = args.unique {
-            definition.insert("unique", unique);
+        let options = mongodb::options::IndexOptions::builder()
+            .name(name.clone())
+            .unique(args.unique)
+            .build();
+        let model = mongodb::IndexModel::builder().keys(keys).options(options).build();
+        self.0
+            .client
+            .database(&self.0.database)
+            .collection::<bson::Document>(&col_name)
+            .create_index(model)
+            .await?;
+        if let Some(tx) = &self.0.event_tx {
+            let _ = tx.send(StreamEvent::IndexesChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
         }
-        execute_reversible_index_mutation(
-            &self.0,
-            &col_name,
-            crate::operations::Mutation::CreateIndex {
-                target: reversible_target(&self.0, &col_name, name.clone().into()),
-                definition,
-            },
-        )
-        .await?;
-
         Ok(serde_json::json!({ "index_name": name }))
     }
 }

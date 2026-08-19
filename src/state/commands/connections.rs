@@ -66,17 +66,6 @@ impl AppCommands {
 
                 let _ = cx.update(|cx| match result {
                     Ok((client, databases, runtime_meta)) => {
-                        let (history, backend) = {
-                            let state = state.read(cx);
-                            (state.operation_engine(), state.operation_backend())
-                        };
-                        backend.register_client(connection_id, client.clone());
-                        if let Some(history) = history {
-                            cx.background_spawn(async move {
-                                let _ = history.reconcile();
-                            })
-                            .detach();
-                        }
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
                             saved.last_connected = Some(Utc::now());
@@ -84,13 +73,13 @@ impl AppCommands {
                                 connection_id,
                                 ActiveConnection {
                                     config: saved.clone(),
-                                    client,
+                                    client: client.clone(),
                                     databases: databases.clone(),
                                     collections: std::collections::HashMap::new(),
                                     runtime_meta,
                                 },
                             );
-                            state.update_connection(saved, cx);
+                            state.update_connection(saved.clone(), cx);
                             state.select_connection(Some(connection_id), cx);
                             state.update_workspace_from_state();
                             let connected = AppEvent::Connected(connection_id);
@@ -102,6 +91,15 @@ impl AppCommands {
                             cx.emit(loaded);
                             cx.notify();
                         });
+                        if saved.history_enabled {
+                            Self::inspect_history_eligibility(
+                                state.clone(),
+                                connection_id,
+                                false,
+                                false,
+                                cx,
+                            );
+                        }
                     }
                     Err(e) => {
                         log::error!("Failed to connect: {}", e);
@@ -125,6 +123,9 @@ impl AppCommands {
 
         let manager = state.read(cx).connection_manager();
         manager.disconnect(connection_id);
+        if let Some(history) = state.read(cx).history_service() {
+            history.stop(connection_id);
+        }
 
         state.update(cx, |state, cx| {
             state.remove_active_connection(connection_id);

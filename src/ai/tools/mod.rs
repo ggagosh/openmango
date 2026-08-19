@@ -13,7 +13,6 @@ pub mod replace;
 pub mod sample_values;
 pub mod schema;
 
-use mongodb::bson;
 use rig::tool::ToolDyn;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
@@ -27,7 +26,6 @@ pub struct MongoContext {
     pub collection: Option<String>,
     pub write_identity: ConnectionWriteIdentity,
     pub read_only: bool,
-    pub operation_engine: Option<std::sync::Arc<crate::operations::OperationEngine>>,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
 }
 
@@ -42,8 +40,6 @@ pub enum ToolError {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Rejected(String),
-    #[error("Reversible history error: {0}")]
-    History(String),
 }
 
 /// Stream events emitted by the provider during generation.
@@ -106,93 +102,6 @@ pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
     }
 
     tools
-}
-
-pub fn require_reversible_history(
-    ctx: &MongoContext,
-) -> Result<std::sync::Arc<crate::operations::OperationEngine>, ToolError> {
-    if !ctx.write_identity.reversible_history {
-        return Err(ToolError::Rejected(
-            "Built-in AI document writes require Reversible history on this connection."
-                .to_string(),
-        ));
-    }
-    ctx.operation_engine
-        .clone()
-        .ok_or_else(|| ToolError::History("History is unavailable; no write was made.".to_string()))
-}
-
-pub fn reversible_target(
-    ctx: &MongoContext,
-    collection: &str,
-    id: bson::Bson,
-) -> crate::operations::DocumentTarget {
-    crate::operations::DocumentTarget {
-        connection_id: ctx.write_identity.id,
-        connection_name: ctx.write_identity.name.clone(),
-        database: ctx.database.clone(),
-        collection: collection.to_string(),
-        id,
-    }
-}
-
-pub async fn execute_reversible_mutations(
-    ctx: &MongoContext,
-    collection: &str,
-    mutations: Vec<crate::operations::Mutation>,
-) -> Result<usize, ToolError> {
-    let engine = require_reversible_history(ctx)?;
-    let total = mutations.len();
-    let task_result = tokio::task::spawn_blocking(move || {
-        for (completed, mutation) in mutations.into_iter().enumerate() {
-            engine.execute(crate::operations::OperationContext::built_in_ai(), mutation).map_err(
-                |error| {
-                    (
-                        completed,
-                        format!(
-                            "write stopped after {completed} of {total} documents: {}",
-                            error.user_message()
-                        ),
-                    )
-                },
-            )?;
-        }
-        Ok(total)
-    })
-    .await;
-    if total > 0
-        && let Some(tx) = &ctx.event_tx
-    {
-        let _ = tx.send(StreamEvent::DocumentsChanged {
-            connection_id: ctx.write_identity.id,
-            database: ctx.database.clone(),
-            collection: collection.to_string(),
-        });
-    }
-    task_result
-        .map_err(|error| ToolError::History(format!("History task failed: {error}")))?
-        .map_err(|(_, error)| ToolError::History(error))
-}
-
-pub async fn execute_reversible_index_mutation(
-    ctx: &MongoContext,
-    collection: &str,
-    mutation: crate::operations::Mutation,
-) -> Result<(), ToolError> {
-    let engine = require_reversible_history(ctx)?;
-    let result = tokio::task::spawn_blocking(move || {
-        engine.execute(crate::operations::OperationContext::built_in_ai(), mutation)
-    })
-    .await
-    .map_err(|error| ToolError::History(format!("History task failed: {error}")))?;
-    if let Some(tx) = &ctx.event_tx {
-        let _ = tx.send(StreamEvent::IndexesChanged {
-            connection_id: ctx.write_identity.id,
-            database: ctx.database.clone(),
-            collection: collection.to_string(),
-        });
-    }
-    result.map(|_| ()).map_err(|error| ToolError::History(error.user_message().to_string()))
 }
 
 pub fn ensure_writable(ctx: &MongoContext) -> Result<(), ToolError> {
@@ -333,14 +242,14 @@ pub fn resolve_collection(arg: &Option<String>, ctx: &MongoContext) -> Result<St
 /// Supports MongoDB extended JSON (`{"$oid": "..."}`, `{"$date": "..."}`) and
 /// shell syntax (`ObjectId("...")`, `ISODate("...")`) so that LLM-generated
 /// filters with ObjectId references are correctly converted to BSON types.
-pub fn parse_json_to_doc(json_str: &str) -> Result<bson::Document, ToolError> {
+pub fn parse_json_to_doc(json_str: &str) -> Result<mongodb::bson::Document, ToolError> {
     crate::bson::parse_document_from_json(json_str).map_err(ToolError::InvalidInput)
 }
 
 /// Convert a BSON document to a relaxed JSON value.
-pub fn doc_to_json(doc: &bson::Document) -> serde_json::Value {
+pub fn doc_to_json(doc: &mongodb::bson::Document) -> serde_json::Value {
     // Use Bson's extended JSON serialization for clean output
-    let bson_val = bson::Bson::Document(doc.clone());
+    let bson_val = mongodb::bson::Bson::Document(doc.clone());
     serde_json::to_value(bson_val).unwrap_or(serde_json::Value::Null)
 }
 
@@ -348,148 +257,3 @@ const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_FIND_LIMIT: i64 = 50;
 
 pub mod drop_index;
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use mongodb::bson::doc;
-    use tempfile::TempDir;
-
-    use super::{
-        MongoContext, StreamEvent, ToolError, execute_reversible_index_mutation,
-        execute_reversible_mutations, require_reversible_history, reversible_target,
-    };
-
-    #[tokio::test]
-    async fn ai_document_writes_fail_closed_without_reversible_history() {
-        let connection = crate::models::SavedConnection::new(
-            "Local".to_string(),
-            "mongodb://localhost:27017".to_string(),
-        );
-        let context = MongoContext {
-            client: mongodb::Client::with_uri_str("mongodb://localhost:27017").await.unwrap(),
-            database: "app".to_string(),
-            collection: Some("users".to_string()),
-            write_identity: crate::models::ConnectionWriteIdentity::from(&connection),
-            read_only: false,
-            operation_engine: None,
-            event_tx: None,
-        };
-
-        assert!(matches!(require_reversible_history(&context), Err(ToolError::Rejected(_))));
-
-        let mut enabled = context;
-        enabled.write_identity.reversible_history = true;
-        assert!(matches!(require_reversible_history(&enabled), Err(ToolError::History(_))));
-    }
-
-    #[tokio::test]
-    async fn ai_mutations_use_built_in_origin_and_keep_partial_progress_revertible() {
-        let directory = TempDir::new().unwrap();
-        let backend = Arc::new(crate::operations::InMemoryMutationBackend::default());
-        let engine = Arc::new(
-            crate::operations::OperationEngine::open(
-                directory.path().join("history.sqlite3"),
-                [31; 32],
-                backend.clone(),
-            )
-            .unwrap(),
-        );
-        let mut connection = crate::models::SavedConnection::new(
-            "Local".to_string(),
-            "mongodb://localhost:27017".to_string(),
-        );
-        connection.reversible_history = true;
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let context = MongoContext {
-            client: mongodb::Client::with_uri_str("mongodb://localhost:27017").await.unwrap(),
-            database: "app".to_string(),
-            collection: Some("users".to_string()),
-            write_identity: crate::models::ConnectionWriteIdentity::from(&connection),
-            read_only: false,
-            operation_engine: Some(engine.clone()),
-            event_tx: Some(event_tx),
-        };
-        let first = reversible_target(&context, "users", 1.into());
-        let second = reversible_target(&context, "users", 2.into());
-        let inserted = execute_reversible_mutations(
-            &context,
-            "users",
-            vec![
-                crate::operations::Mutation::InsertDocument {
-                    target: first,
-                    document: doc! { "_id": 1, "value": "first" },
-                },
-                crate::operations::Mutation::InsertDocument {
-                    target: second,
-                    document: doc! { "_id": 2, "value": "second" },
-                },
-            ],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(inserted, 2);
-        assert!(matches!(event_rx.recv().await, Some(StreamEvent::DocumentsChanged { .. })));
-        assert!(
-            engine
-                .list(crate::operations::OperationQuery::default())
-                .unwrap()
-                .items
-                .iter()
-                .all(|operation| operation.origin == crate::operations::OperationOrigin::BuiltInAi)
-        );
-
-        let index = reversible_target(&context, "users", "email_1".into());
-        execute_reversible_index_mutation(
-            &context,
-            "users",
-            crate::operations::Mutation::CreateIndex {
-                target: index.clone(),
-                definition: doc! { "key": { "email": 1 }, "name": "email_1" },
-            },
-        )
-        .await
-        .unwrap();
-        assert!(matches!(event_rx.recv().await, Some(StreamEvent::IndexesChanged { .. })));
-        assert_eq!(backend.index(&index), Some(doc! { "key": { "email": 1 }, "name": "email_1" }));
-
-        let completed = reversible_target(&context, "users", 3.into());
-        let conflict = reversible_target(&context, "users", 4.into());
-        backend.set_document(&conflict, doc! { "_id": 4, "value": "existing" });
-        let error = execute_reversible_mutations(
-            &context,
-            "users",
-            vec![
-                crate::operations::Mutation::InsertDocument {
-                    target: completed.clone(),
-                    document: doc! { "_id": 3, "value": "completed" },
-                },
-                crate::operations::Mutation::InsertDocument {
-                    target: conflict.clone(),
-                    document: doc! { "_id": 4, "value": "blocked" },
-                },
-            ],
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(error, ToolError::History(_)));
-        assert!(matches!(event_rx.recv().await, Some(StreamEvent::DocumentsChanged { .. })));
-        assert_eq!(backend.document(&completed), Some(doc! { "_id": 3, "value": "completed" }));
-        assert_eq!(backend.document(&conflict), Some(doc! { "_id": 4, "value": "existing" }));
-
-        execute_reversible_mutations(
-            &context,
-            "users",
-            vec![crate::operations::Mutation::InsertDocument {
-                target: conflict,
-                document: doc! { "_id": 4, "value": "still blocked" },
-            }],
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(event_rx.recv().await, Some(StreamEvent::DocumentsChanged { .. })));
-    }
-}

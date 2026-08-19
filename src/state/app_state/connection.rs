@@ -147,8 +147,8 @@ impl AppState {
         )
     }
 
-    pub fn connection_reversible_history(&self, connection_id: Uuid) -> bool {
-        self.connection_by_id(connection_id).is_some_and(|connection| connection.reversible_history)
+    pub fn connection_history_enabled(&self, connection_id: Uuid) -> bool {
+        self.connection_by_id(connection_id).is_some_and(|connection| connection.history_enabled)
     }
 
     pub fn connection_requires_production_write_confirmation(&self, connection_id: Uuid) -> bool {
@@ -444,14 +444,156 @@ impl AppState {
         if self.connections[index].agent_shared == shared {
             return;
         }
+        let previous_writable = self.connections[index].agent_writable;
         self.connections[index].agent_shared = shared;
+        if !shared {
+            self.connections[index].agent_writable = false;
+        }
         if let Err(error) = self.config.save_connections(&self.connections) {
             self.connections[index].agent_shared = !shared;
+            self.connections[index].agent_writable = previous_writable;
             self.set_status_message(Some(crate::state::StatusMessage::error(format!(
                 "Could not update agent sharing: {error}"
             ))));
             cx.notify();
             return;
+        }
+        cx.emit(AppEvent::ConnectionUpdated);
+        cx.notify();
+    }
+
+    pub fn set_connection_agent_writable(
+        &mut self,
+        connection_id: Uuid,
+        writable: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let Some(index) = self.connections.iter().position(|item| item.id == connection_id) else {
+            return;
+        };
+        if writable && !self.connections[index].agent_shared {
+            self.set_status_message(Some(crate::state::StatusMessage::error(
+                "Share the connection before allowing agent writes.",
+            )));
+            cx.notify();
+            return;
+        }
+        if self.connections[index].agent_writable == writable {
+            return;
+        }
+        self.connections[index].agent_writable = writable;
+        if let Err(error) = self.config.save_connections(&self.connections) {
+            self.connections[index].agent_writable = !writable;
+            self.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                "Could not update agent write access: {error}"
+            ))));
+            cx.notify();
+            return;
+        }
+        cx.emit(AppEvent::ConnectionUpdated);
+        cx.notify();
+    }
+
+    pub fn set_connection_history_enabled(
+        &mut self,
+        connection_id: Uuid,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let Some(index) = self.connections.iter().position(|item| item.id == connection_id) else {
+            return;
+        };
+        if enabled
+            && !self
+                .history_eligibility(connection_id)
+                .is_some_and(|report| report.status == crate::history::EligibilityStatus::Eligible)
+        {
+            self.set_status_message(Some(crate::state::StatusMessage::error(
+                "Inspect History eligibility and enable pre/post images before recording.",
+            )));
+            cx.notify();
+            return;
+        }
+        if self.connections[index].history_enabled == enabled {
+            return;
+        }
+        self.connections[index].history_enabled = enabled;
+        if let Err(error) = self.config.save_connections(&self.connections) {
+            self.connections[index].history_enabled = !enabled;
+            self.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                "Could not update History: {error}"
+            ))));
+            cx.notify();
+            return;
+        }
+        if let Some(history) = self.history_service() {
+            if enabled {
+                if let Some(active) = self.active_connection_by_id(connection_id) {
+                    let configuration = &self.connections[index];
+                    history.start(crate::history::HistoryConnection {
+                        id: connection_id,
+                        name: configuration.name.clone(),
+                        client: active.client.clone(),
+                        databases: active.databases.clone(),
+                        max_age_days: configuration.history_max_age_days,
+                        max_bytes: configuration.history_max_bytes,
+                    });
+                }
+            } else {
+                history.stop(connection_id);
+            }
+        }
+        cx.emit(AppEvent::ConnectionUpdated);
+        cx.notify();
+    }
+
+    pub fn set_connection_history_retention(
+        &mut self,
+        connection_id: Uuid,
+        max_age_days: u32,
+        max_bytes: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_changes_allowed(cx) {
+            return;
+        }
+        let Some(index) = self.connections.iter().position(|item| item.id == connection_id) else {
+            return;
+        };
+        let previous = (
+            self.connections[index].history_max_age_days,
+            self.connections[index].history_max_bytes,
+        );
+        self.connections[index].history_max_age_days = max_age_days.max(1);
+        self.connections[index].history_max_bytes = max_bytes.max(1);
+        if let Err(error) = self.config.save_connections(&self.connections) {
+            self.connections[index].history_max_age_days = previous.0;
+            self.connections[index].history_max_bytes = previous.1;
+            self.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                "Could not update History retention: {error}"
+            ))));
+            cx.notify();
+            return;
+        }
+        if self.connections[index].history_enabled
+            && let Some(history) = self.history_service()
+            && let Some(active) = self.active_connection_by_id(connection_id)
+        {
+            let configuration = &self.connections[index];
+            history.start(crate::history::HistoryConnection {
+                id: connection_id,
+                name: configuration.name.clone(),
+                client: active.client.clone(),
+                databases: active.databases.clone(),
+                max_age_days: configuration.history_max_age_days,
+                max_bytes: configuration.history_max_bytes,
+            });
         }
         cx.emit(AppEvent::ConnectionUpdated);
         cx.notify();
@@ -803,6 +945,9 @@ fn apply_agent_sharing_safety(existing: &SavedConnection, updated: &mut SavedCon
         || existing.proxy != updated.proxy;
     if became_protected || became_production || identity_changed {
         updated.agent_shared = false;
+        updated.agent_writable = false;
+    } else if !updated.agent_shared {
+        updated.agent_writable = false;
     }
 }
 
@@ -831,24 +976,25 @@ mod tests {
     }
 
     #[test]
-    fn reversible_history_is_scoped_per_connection_and_defaults_off() {
+    fn history_is_scoped_per_connection_and_defaults_off() {
         let mut state = AppState::new();
         state.connections.clear();
         let disabled = SavedConnection::new("Disabled".into(), "mongodb://disabled".into());
         let disabled_id = disabled.id;
         let mut enabled = SavedConnection::new("Enabled".into(), "mongodb://enabled".into());
-        enabled.reversible_history = true;
+        enabled.history_enabled = true;
         let enabled_id = enabled.id;
         state.connections = vec![disabled, enabled];
 
-        assert!(!state.connection_reversible_history(disabled_id));
-        assert!(state.connection_reversible_history(enabled_id));
+        assert!(!state.connection_history_enabled(disabled_id));
+        assert!(state.connection_history_enabled(enabled_id));
     }
 
     #[test]
     fn sensitive_connection_changes_disable_agent_sharing() {
         let mut existing = SavedConnection::new("Local".into(), "mongodb://localhost".into());
         existing.agent_shared = true;
+        existing.agent_writable = true;
 
         let mut updated = existing.clone();
         updated.protected = true;

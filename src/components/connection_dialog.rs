@@ -1,6 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
@@ -35,8 +36,9 @@ pub struct ConnectionDialog {
     confirm_production_writes: bool,
     read_only: bool,
     agent_shared: bool,
+    agent_writable: bool,
     protected: bool,
-    reversible_history: bool,
+    history_enabled: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
     pending_test_uri: Option<String>,
@@ -126,8 +128,9 @@ impl ConnectionDialog {
             confirm_production_writes: false,
             read_only: false,
             agent_shared: false,
+            agent_writable: false,
             protected: false,
-            reversible_history: false,
+            history_enabled: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
             pending_test_uri: None,
@@ -194,8 +197,9 @@ impl ConnectionDialog {
             confirm_production_writes: existing.confirm_production_writes,
             read_only: existing.read_only,
             agent_shared: existing.agent_shared,
+            agent_writable: existing.agent_writable,
             protected: existing.protected,
-            reversible_history: existing.reversible_history,
+            history_enabled: existing.history_enabled,
             status: TestStatus::Success,
             last_tested_uri: Some(redacted_default),
             pending_test_uri: None,
@@ -322,6 +326,7 @@ impl Render for ConnectionDialog {
                                 && this.environment != Some(ConnectionEnvironment::Production)
                             {
                                 this.agent_shared = false;
+                                this.agent_writable = false;
                             }
                             this.environment = Some(environment);
                             cx.notify();
@@ -430,14 +435,15 @@ impl Render for ConnectionDialog {
                     .items_center()
                     .gap(spacing::sm())
                     .child(
-                        Switch::new("connection-reversible-history")
-                            .checked(self.reversible_history)
+                        Switch::new("connection-history")
+                            .checked(self.history_enabled)
                             .small()
+                            .disabled(!self.history_enabled)
                             .on_click({
                                 let view = view.clone();
                                 move |checked, _window, cx| {
                                     view.update(cx, |this, cx| {
-                                        this.reversible_history = *checked;
+                                        this.history_enabled = *checked;
                                         cx.notify();
                                     });
                                 }
@@ -448,18 +454,18 @@ impl Render for ConnectionDialog {
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .child("Reversible history")
+                            .child("History")
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Encrypt recovery data for supported document, index, and collection operations."),
+                                    .child("Record encrypted update, replace, and delete events from all clients when the server is eligible."),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().warning)
-                                    .child("Database-level operations, sharded collections, views, time-series collections, self-targeting $merge, and unsupported writes are not snapshotted and continue normally."),
+                                    .child("Connect and use Settings to inspect eligibility, enable pre/post images, and configure retention."),
                             ),
                     ),
             )
@@ -477,6 +483,9 @@ impl Render for ConnectionDialog {
                                 move |checked, _window, cx| {
                                     view.update(cx, |this, cx| {
                                         this.agent_shared = *checked;
+                                        if !*checked {
+                                            this.agent_writable = false;
+                                        }
                                         cx.notify();
                                     });
                                 }
@@ -516,6 +525,7 @@ impl Render for ConnectionDialog {
                                     view.update(cx, |this, cx| {
                                         if *checked {
                                             this.agent_shared = false;
+                                            this.agent_writable = false;
                                         }
                                         this.protected = *checked;
                                         cx.notify();
@@ -534,7 +544,7 @@ impl Render for ConnectionDialog {
                         div()
                             .text_xs()
                             .text_color(cx.theme().warning)
-                            .child("This protected connection will be visible to agents. Mutations still require native approval."),
+                            .child("This protected connection will be visible to agents. Direct writes remain disabled until explicitly enabled in Settings."),
                     )
                 },
             )
@@ -609,8 +619,9 @@ impl Render for ConnectionDialog {
                                 let confirm_production_writes = self.confirm_production_writes;
                                 let read_only = self.read_only;
                                 let agent_shared = self.agent_shared;
+                                let agent_writable = self.agent_writable;
                                 let protected = self.protected;
-                                let reversible_history = self.reversible_history;
+                                let history_enabled = self.history_enabled;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
@@ -655,8 +666,11 @@ impl Render for ConnectionDialog {
                                                     last_connected: existing.last_connected,
                                                     read_only,
                                                     agent_shared,
+                                                    agent_writable,
                                                     protected,
-                                                    reversible_history,
+                                                    history_enabled,
+                                                    history_max_age_days: existing.history_max_age_days,
+                                                    history_max_bytes: existing.history_max_bytes,
                                                     ssh: existing.ssh,
                                                     proxy: existing.proxy,
                                                     secret_id: existing.secret_id,
@@ -670,8 +684,9 @@ impl Render for ConnectionDialog {
                                                     confirm_production_writes;
                                                 connection.read_only = read_only;
                                                 connection.agent_shared = agent_shared;
+                                                connection.agent_writable = agent_writable;
                                                 connection.protected = protected;
-                                                connection.reversible_history = reversible_history;
+                                                connection.history_enabled = history_enabled;
                                                 connection_id = Some(connection.id);
                                                 state.add_connection(connection, cx);
                                             }

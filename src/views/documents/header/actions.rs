@@ -123,17 +123,8 @@ fn render_delete_menu(
                             };
                             if count == 1 {
                                 let doc_key = selected_docs[0].clone();
-                                let message = if state_for_delete
-                                    .read(cx)
-                                    .connection_reversible_history(session_key.connection_id)
-                                {
-                                    format!(
-                                        "Delete document {}? You can restore it from History.",
-                                        doc_key
-                                    )
-                                } else {
-                                    format!("Delete document {}? This cannot be undone.", doc_key)
-                                };
+                                let message =
+                                    format!("Delete document {}? This cannot be undone.", doc_key);
                                 let state_for_write = state_for_delete.clone();
                                 request_connection_write(
                                     state_for_delete.clone(),
@@ -176,14 +167,7 @@ fn render_delete_menu(
                                 }
                                 let affected_count = ids.len();
                                 let filter = mongodb::bson::doc! { "_id": { "$in": ids } };
-                                let recovery = if state_for_delete
-                                    .read(cx)
-                                    .connection_reversible_history(session_key.connection_id)
-                                {
-                                    " Each document gets a recovery checkpoint."
-                                } else {
-                                    " This cannot be undone."
-                                };
+                                let recovery = " This cannot be undone.";
                                 let message =
                                     format!("Delete {affected_count} documents?{recovery}");
                                 let state_for_write = state_for_delete.clone();

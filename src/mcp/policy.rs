@@ -34,6 +34,7 @@ impl<'a> PolicyEvaluator<'a> {
                     protected: connection.protected
                         || connection.environment == Some(ConnectionEnvironment::Production),
                     read_only: connection.read_only,
+                    writable: connection.agent_writable && !connection.read_only,
                     connected: active.is_some(),
                     databases: active.map(|active| active.databases.clone()).unwrap_or_default(),
                 }
@@ -43,6 +44,19 @@ impl<'a> PolicyEvaluator<'a> {
 
     pub fn authorize_read(&self, connection_id: Uuid) -> Result<Client, String> {
         self.shared_connection(connection_id)?;
+        self.state
+            .active_connection_client(connection_id)
+            .ok_or_else(|| "Connection is not connected".to_string())
+    }
+
+    pub fn authorize_direct_write(&self, connection_id: Uuid) -> Result<Client, String> {
+        let connection = self.shared_connection(connection_id)?;
+        if !connection.agent_writable {
+            return Err("Agent writes are not enabled for this connection".to_string());
+        }
+        if connection.read_only {
+            return Err("Target connection is read-only".to_string());
+        }
         self.state
             .active_connection_client(connection_id)
             .ok_or_else(|| "Connection is not connected".to_string())
@@ -77,7 +91,6 @@ impl<'a> PolicyEvaluator<'a> {
             "environment": stripped.environment,
             "protected": stripped.protected,
             "read_only": stripped.read_only,
-            "reversible_history": stripped.reversible_history,
             "ssh": stripped.ssh,
             "proxy": stripped.proxy,
             "secret_id": stripped.secret_id,
@@ -133,5 +146,26 @@ mod tests {
 
         assert!(policy.visible_connections().is_empty());
         assert_eq!(policy.authorize_read(id).unwrap_err(), "Connection is not shared with agents");
+    }
+
+    #[test]
+    fn direct_write_requires_explicit_authority_and_read_only_overrides_it() {
+        let mut state = AppState::new();
+        state.connections.clear();
+        let mut connection = SavedConnection::new("Shared".into(), "mongodb://localhost".into());
+        connection.agent_shared = true;
+        let id = connection.id;
+        state.connections.push(connection);
+        assert_eq!(
+            PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
+            "Agent writes are not enabled for this connection"
+        );
+
+        state.connections[0].agent_writable = true;
+        state.connections[0].read_only = true;
+        assert_eq!(
+            PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
+            "Target connection is read-only"
+        );
     }
 }

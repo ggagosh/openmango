@@ -5,6 +5,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::collapsible::Collapsible;
 use gpui_component::input::Input;
@@ -93,6 +94,7 @@ impl ConnectionManager {
                                 && this.draft.environment != Some(ConnectionEnvironment::Production)
                             {
                                 this.draft.agent_shared = false;
+                                this.draft.agent_writable = false;
                             }
                             this.draft.environment = Some(environment);
                             cx.notify();
@@ -212,14 +214,15 @@ impl ConnectionManager {
                     .items_center()
                     .gap(spacing::sm())
                     .child(
-                        Switch::new("connection-reversible-history")
-                            .checked(self.draft.reversible_history)
+                        Switch::new("connection-history")
+                            .checked(self.draft.history_enabled)
                             .small()
+                            .disabled(!self.draft.history_enabled)
                             .on_click({
                                 let view = view.clone();
                                 move |checked, _window, cx| {
                                     view.update(cx, |this, cx| {
-                                        this.draft.reversible_history = *checked;
+                                        this.draft.history_enabled = *checked;
                                         cx.notify();
                                     });
                                 }
@@ -234,19 +237,19 @@ impl ConnectionManager {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().foreground)
-                                    .child("Reversible history"),
+                                    .child("History"),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().secondary_foreground)
-                                    .child("Encrypt recovery data for supported document, index, and collection operations."),
+                                    .child("Record encrypted update, replace, and delete events from all clients when the server is eligible."),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().warning)
-                                    .child("Database-level operations, sharded collections, views, time-series collections, self-targeting $merge, and unsupported writes are not snapshotted and continue normally."),
+                                    .child("Connect and use Settings to inspect eligibility, enable pre/post images, and configure retention."),
                             ),
                     ),
             )
@@ -270,6 +273,9 @@ impl ConnectionManager {
                                         move |checked, _window, cx| {
                                             view.update(cx, |this, cx| {
                                                 this.draft.agent_shared = *checked;
+                                                if !*checked {
+                                                    this.draft.agent_writable = false;
+                                                }
                                                 cx.notify();
                                             });
                                         }
@@ -309,6 +315,7 @@ impl ConnectionManager {
                                             view.update(cx, |this, cx| {
                                                 if *checked {
                                                     this.draft.agent_shared = false;
+                                                    this.draft.agent_writable = false;
                                                 }
                                                 this.draft.protected = *checked;
                                                 cx.notify();
@@ -331,7 +338,7 @@ impl ConnectionManager {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().secondary_foreground)
-                                            .child("Require Production-level safeguards for agent-proposed mutations."),
+                                            .child("Require Production-level safeguards for agent access."),
                                     ),
                             ),
                     )
@@ -345,7 +352,7 @@ impl ConnectionManager {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().warning)
-                                    .child("This protected connection will be visible to agents. Every mutation still requires native approval."),
+                                    .child("This protected connection will be visible to agents. Direct writes remain disabled unless explicitly enabled in Settings."),
                             )
                         },
                     ),

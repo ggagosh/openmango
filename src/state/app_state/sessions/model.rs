@@ -177,6 +177,21 @@ impl AppState {
             } else {
                 Vec::new()
             },
+            history_gaps: if subview == CollectionSubview::History {
+                session.data.history_gaps.clone()
+            } else {
+                Vec::new()
+            },
+            history_details: if subview == CollectionSubview::History {
+                session.data.history_details.clone()
+            } else {
+                Default::default()
+            },
+            history_detail_loading: if subview == CollectionSubview::History {
+                session.data.history_detail_loading.clone()
+            } else {
+                Default::default()
+            },
             history_loading: session.data.history_loading,
             history_loaded: session.data.history_loaded,
             history_total: session.data.history_total,

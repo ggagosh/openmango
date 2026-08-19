@@ -160,13 +160,7 @@ impl CollectionView {
             }
             if selected_docs.len() == 1 {
                 let doc_key = selected_docs.into_iter().next().unwrap();
-                let message =
-                    if this.state.read(cx).connection_reversible_history(session_key.connection_id)
-                    {
-                        format!("Delete document {}? You can restore it from History.", doc_key)
-                    } else {
-                        format!("Delete document {}? This cannot be undone.", doc_key)
-                    };
+                let message = format!("Delete document {}? This cannot be undone.", doc_key);
                 let state = this.state.clone();
                 let state_for_write = state.clone();
                 request_connection_write(
@@ -205,13 +199,7 @@ impl CollectionView {
                 }
                 let affected_count = ids.len();
                 let filter = doc! { "_id": { "$in": ids } };
-                let recovery =
-                    if this.state.read(cx).connection_reversible_history(session_key.connection_id)
-                    {
-                        " Each document gets a recovery checkpoint."
-                    } else {
-                        " This cannot be undone."
-                    };
+                let recovery = " This cannot be undone.";
                 let message = format!("Delete {affected_count} documents?{recovery}");
                 let state = this.state.clone();
                 let state_for_write = state.clone();
@@ -687,6 +675,13 @@ impl CollectionView {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
+            if !this.state.read(cx).collection_history_available(
+                session_key.connection_id,
+                &session_key.database,
+                &session_key.collection,
+            ) {
+                return;
+            }
             this.state.update(cx, |state, cx| {
                 state.set_collection_subview(&session_key, CollectionSubview::History);
                 cx.notify();

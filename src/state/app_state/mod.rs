@@ -115,9 +115,11 @@ pub struct AppState {
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
 
-    // Durable mutation history
-    operation_engine: Option<Arc<crate::operations::OperationEngine>>,
-    operation_backend: Arc<crate::operations::MongoMutationBackend>,
+    // Passive all-client History recorder
+    history_service: Option<Arc<crate::history::HistoryService>>,
+    history_eligibility: HashMap<Uuid, crate::history::EligibilityReport>,
+    history_usage: HashMap<Uuid, crate::history::Usage>,
+    history_inspecting: HashSet<Uuid>,
 
     // Agent action persistence
     action_broker: Arc<crate::actions::ActionBroker>,
@@ -205,8 +207,6 @@ impl AppState {
         let action_broker = Arc::new(crate::actions::ActionBroker::new(action_store.clone()));
         let sync_executor =
             Arc::new(crate::sync::SyncExecutor::new(connection_manager.clone(), action_store));
-        let operation_backend =
-            Arc::new(crate::operations::MongoMutationBackend::new(connection_manager.clone()));
 
         Self {
             connections,
@@ -237,8 +237,10 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
-            operation_engine: None,
-            operation_backend,
+            history_service: None,
+            history_eligibility: HashMap::new(),
+            history_usage: HashMap::new(),
+            history_inspecting: HashSet::new(),
             action_broker,
             sync_executor,
             config,
@@ -260,16 +262,65 @@ impl AppState {
         self.connection_manager.clone()
     }
 
-    pub fn operation_engine(&self) -> Option<Arc<crate::operations::OperationEngine>> {
-        self.operation_engine.clone()
+    pub fn history_service(&self) -> Option<Arc<crate::history::HistoryService>> {
+        self.history_service.clone()
     }
 
-    pub(crate) fn operation_backend(&self) -> Arc<crate::operations::MongoMutationBackend> {
-        self.operation_backend.clone()
+    pub(crate) fn set_history_service(&mut self, service: Arc<crate::history::HistoryService>) {
+        self.history_service = Some(service);
     }
 
-    pub(crate) fn set_operation_engine(&mut self, engine: Arc<crate::operations::OperationEngine>) {
-        self.operation_engine = Some(engine);
+    pub fn history_eligibility(
+        &self,
+        connection_id: Uuid,
+    ) -> Option<&crate::history::EligibilityReport> {
+        self.history_eligibility.get(&connection_id)
+    }
+
+    pub fn history_usage(&self, connection_id: Uuid) -> Option<crate::history::Usage> {
+        self.history_usage.get(&connection_id).copied()
+    }
+
+    pub fn collection_history_available(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        self.connection_history_enabled(connection_id)
+            && self.history_service.is_some()
+            && self
+                .history_eligibility(connection_id)
+                .is_some_and(|report| report.collection_available(database, collection))
+    }
+
+    pub(crate) fn refresh_history_usage(&mut self, connection_id: Uuid) {
+        if let Some(service) = &self.history_service
+            && let Ok(usage) = service.usage(Some(connection_id))
+        {
+            self.history_usage.insert(connection_id, usage);
+        }
+    }
+
+    pub fn history_inspecting(&self, connection_id: Uuid) -> bool {
+        self.history_inspecting.contains(&connection_id)
+    }
+
+    pub(crate) fn begin_history_inspection(&mut self, connection_id: Uuid) -> bool {
+        self.history_inspecting.insert(connection_id)
+    }
+
+    pub(crate) fn finish_history_inspection(
+        &mut self,
+        connection_id: Uuid,
+        report: crate::history::EligibilityReport,
+        usage: Option<crate::history::Usage>,
+    ) {
+        self.history_inspecting.remove(&connection_id);
+        self.history_eligibility.insert(connection_id, report);
+        if let Some(usage) = usage {
+            self.history_usage.insert(connection_id, usage);
+        }
     }
 
     pub fn action_broker(&self) -> Arc<crate::actions::ActionBroker> {

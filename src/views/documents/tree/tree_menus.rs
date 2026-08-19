@@ -510,26 +510,14 @@ pub(crate) fn paste_documents_from_clipboard(
         })
         .collect::<Vec<_>>();
 
-    let history_enabled = state.read(cx).connection_reversible_history(session_key.connection_id);
-    if history_enabled && docs.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS {
-        state.update(cx, |state, cx| {
-            state.set_status_message(Some(StatusMessage::error(format!(
-                "Reversible bulk writes are limited to {} documents.",
-                crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
-            ))));
-            cx.notify();
-        });
-        return;
-    }
     let state_for_write = state.clone();
     let target = session_key.namespace();
-    let recovery = if history_enabled { " with per-document recovery checkpoints" } else { "" };
     request_connection_write(
         state,
         crate::components::WriteRequest::new(
             session_key.connection_id,
             target,
-            format!("Insert {} documents from the clipboard{recovery}", docs.len()),
+            format!("Insert {} documents from the clipboard", docs.len()),
             None,
         ),
         window,

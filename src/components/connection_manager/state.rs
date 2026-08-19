@@ -86,8 +86,9 @@ impl ConnectionDraft {
             confirm_production_writes: false,
             read_only: false,
             agent_shared: false,
+            agent_writable: false,
             protected: false,
-            reversible_history: false,
+            history_enabled: false,
             direct_connection: false,
             tls: false,
             tls_insecure: false,
@@ -156,8 +157,9 @@ impl ConnectionDraft {
         self.confirm_production_writes = false;
         self.read_only = false;
         self.agent_shared = false;
+        self.agent_writable = false;
         self.protected = false;
-        self.reversible_history = false;
+        self.history_enabled = false;
         self.direct_connection = false;
         self.tls = false;
         self.tls_insecure = false;

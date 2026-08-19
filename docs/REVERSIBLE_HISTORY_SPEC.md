@@ -1,335 +1,92 @@
-# OpenMango Reversible Operation History — Design Direction
+# History Specification
 
-> **Status:** Document transitions, named index recipes, and supported collection-drop snapshots implemented
-> **Scope:** General OpenMango feature used by users, built-in AI, and MCP clients
+## Status and scope
 
-## Implemented document slices
+History is an optional, passive MongoDB change-stream recorder. It is disabled by default and never participates in the write path. A failed, unavailable, or disabled recorder must never block a MongoDB write.
 
-The initial implementation is deliberately narrower than the full direction below:
+History records supported changes observed by OpenMango on this device. It may include writes from OpenMango UI, MCP, Forge, shells, drivers, jobs, or other applications and can contain gaps. It is not a backup, an audit/compliance log, or a guaranteed complete journal.
 
-- manual single-document insertion, existing-document replacement, and deletion are tracked when the connection's default-off switch is enabled;
-- clipboard bulk inserts plus filter-based bulk replacements and deletes are tracked as independent per-document checkpoints, capped at 100 documents and 64 MiB of recovery BSON;
-- bulk operator updates remain blocked while reversible history is enabled because OpenMango cannot durably compute every MongoDB post-image before applying the write;
-- built-in AI inserts, bounded replacements, and bounded deletes require reversible history plus native confirmation and use the same per-document transition engine with a `Built-in AI` origin;
-- MCP insert, replacement, and delete tools only create immutable pending actions backed by encrypted `MCP` transition checkpoints; MongoDB changes wait for native approval and are applied with exact-state checks;
-- manual and built-in AI named index creation/drop use encrypted metadata specifications; revert drops only a matching created definition or recreates a dropped definition only while its name is absent;
-- supported manual collection drops create a verified, chunk-encrypted archive before the drop; restore decrypts into a temporary collection, verifies documents, options, validators, and indexes, then renames only while the original name remains absent;
-- recovery envelopes contain exact BSON before/after images and `_id` values, encrypted with AES-256-GCM using a random Keychain-held installation key;
-- bundled SQLite stores the authoritative operation projection, append-only lifecycle events, and encrypted item payloads through one serialized worker;
-- conditional insertion, replacement, and deletion, linked conflict-safe restore, paginated collection History with document and field previews, and startup/connection reconciliation are implemented;
-- grouped bulk revert, index replacement, collection transfer and aggregation-output snapshots, and retention/purge controls remain future slices;
-- database-level operations, sharded collections, views, time-series collections, self-targeting `$merge`, and unsupported writes continue through their existing paths without a snapshot; the connection setting warns about this coverage boundary.
+The first version records only document **update**, **replace**, and **delete** events. Inserts, indexes, views, time-series collections, collection/database DDL, and other event types are not recovery items.
 
-A missing Keychain key never replaces the key for an existing history database. Existing recovery data is preserved and tracked writes remain failed closed until the key problem is resolved.
+Database backup, sync/replacement, and database-operation revert are separate Arcula workflows. They keep verified backups, recovery interlocks, progress, cancellation, Agent Activity, and native approval. History does not replace or weaken them.
 
-## Decision
+## Eligibility and setup
 
-OpenMango should provide **application-owned reversible history** for mutations executed through OpenMango. It must not claim to capture writes made by other applications, shells, drivers, or server-side jobs.
+A connection is eligible only when all mandatory requirements can be proven:
 
-The feature is broader than AI:
+- MongoDB 6.0 or newer;
+- replica-set or sharded topology (standalone is unsupported);
+- WiredTiger storage;
+- change streams available to the authenticated user;
+- covered regular collections are readable and have `changeStreamPreAndPostImages` enabled.
 
-- users enable reversible history independently for each connection;
-- manual, built-in AI, and MCP writes use the same mutation seam;
-- every operation records its origin;
-- revert creates a new operation instead of deleting or rewriting history;
-- agents may execute only operations for which OpenMango can create a verified recovery recipe;
-- read-only queries and aggregations remain in Query History, not Operation History.
+Views and time-series collections are explicitly uncovered. The UI disables History and reports the exact failed requirement when version, topology, storage, `find`, or `changeStream` checks fail.
 
-Studio 3T is a useful product reference, but its public Collection History is narrower: it locally records selected document updates and deletes, groups documents by operation, previews before/after values, calculates restore conflicts, and supports age/size purging. It does not document general rollback for inserts, indexes, collections, databases, scripts, or write aggregations.
+Enabling is an explicit two-step operation:
 
-## Architecture
+1. **Inspect eligibility** reads server/topology metadata and collection options.
+2. **Enable pre/post images** offers an explicit `collMod` setup action for uncovered regular collections. Missing `collMod` privilege is reported; OpenMango never silently disables pre/post images later because another application may depend on them.
 
-### Domain terms
+When a regular collection appears while recording is enabled, the deployment-level supervisor retries the already-authorized setup. Failure creates a visible coverage gap. No standalone or pre-6.0 fallback exists.
 
-- **Operation** — one durable OpenMango mutation attempt. It has an origin, target, lifecycle, outcomes, and optional recovery recipe.
-- **Action proposal** — an immutable request awaiting approval. It is not an operation and does not imply execution.
-- **Recovery recipe** — encrypted material and rules required to reverse an operation safely.
-- **Revert operation** — a new operation that applies another operation's recovery recipe. The original record remains unchanged.
-- **Conflict** — current MongoDB state does not match the state the recovery recipe expects.
-- **History** — a queryable projection of operations, not a second execution system.
+## Recorder boundary
 
-### One deep module
+`src/history/` is the deep module boundary. UI and command callers use a small service API for lifecycle, eligibility/setup, paginated batches/details, restore, gaps, retention, usage, and clear operations. Callers do not manage cursors, tokens, encryption, batching, or restore recipes.
 
-Create `src/operations/` as the only mutation seam used by manual UI, built-in AI, and MCP clients:
+The recorder runs MongoDB and SQLite work off the GPUI thread. One connection supervisor owns database-level watchers; there is never one watcher per open tab.
 
-```text
-Manual UI ─┐
-Built-in AI ├─ MutationRequest + Origin ─> OperationEngine ─> MongoDB
-MCP client ─┘                                  │
-Action approval ───────────────────────────────┘
-                                               │
-                                      DurableOperationStore
-                                               │
-                                      encrypted recovery data
-```
+Each watcher requests:
 
-The small external interface is:
+- `fullDocumentBeforeChange: "whenAvailable"`;
+- `fullDocument: "whenAvailable"`.
 
-```text
-execute(context, mutation) -> OperationId
-revert(context, operation_id) -> OperationId
-get(operation_id) -> OperationDetails
-list(query) -> Page<OperationSummary>
-reconcile() -> ReconciliationReport
-```
+`updateLookup` is never used as a recovery image because it can observe a later concurrent version. Servers that support it use `$changeStreamSplitLargeEvent`; unsupported oversized-event failures become gaps.
 
-Callers never capture before-images, persist records, issue inverse writes, or select a recovery strategy themselves. That behavior stays behind the module interface.
+## Durable local model
 
-Internally:
+The clean SQLite schema contains:
 
-- `model.rs` — pure operation, origin, status, event, target, conflict, and recipe types;
-- `engine.rs` — prepare/apply/record/revert/reconcile state machine;
-- `planner.rs` — classifies requests and builds bounded recovery recipes;
-- `mongodb.rs` — real MongoDB adapter for conditional document transitions and metadata checks;
-- `store.rs` — SQLite metadata, events, item outcomes, retention, and schema migrations;
-- `crypto.rs` — authenticated encryption using a random per-install key stored in macOS Keychain;
-- `snapshot.rs` — adapter over the existing verified archive backup/restore implementation.
+- `history_batches`: displayed change sets and aggregate restore state;
+- `history_items`: AES-256-GCM encrypted document key and exact before/after images;
+- `history_cursors`: AES-256-GCM encrypted resume state per connection/database;
+- `history_gaps`: durable discontinuities and coverage/storage failures.
 
-`src/actions/` remains approval policy and proposal handling for agent actions. `src/sync/` keeps the existing database backup/sync activity flow; supported collection snapshot recipes reuse its archive primitives without importing database-level operations into Reversible History.
+The installation key is generated once and kept in macOS Keychain. Connection URIs and credentials are never stored in History.
 
-### Durable store
+An event item and its new cursor are committed in one SQLite transaction. A unique resume-token hash deduplicates replay. On reconnect/restart the watcher resumes from the encrypted token. Missing, invalid, or expired tokens create a durable visible gap before recording restarts at the current point. Missing exact images likewise advance the cursor only after recording a gap; no false recovery item is created.
 
-Use bundled SQLite through `rusqlite`, rather than directory-scanned JSON, Turso Cloud, libSQL, or the newer Turso embedded engine. Operation history is expected to contain many operations and potentially many item outcomes; it needs indexed pagination, atomic state transitions, retention queries, and migrations—not concurrent-write throughput.
+If encryption or persistence fails, that recorder stops and attempts to persist/surface a gap. The originating database write remains unaffected.
 
-Why not Turso here:
+## Change-set grouping
 
-- Turso's strongest published performance advantage comes from experimental MVCC under contended concurrent writers. OpenMango should deliberately serialize local journal writes through one worker, so that advantage does not apply; Turso's own benchmark reports SQLite faster for its single-thread/no-compute case.
-- The Turso engine is still approaching full SQLite compatibility, with partial SQL/PRAGMA support and documented behavior differences. The operation journal is recovery-critical and gains nothing from adopting a younger reimplementation.
-- Turso's embedded encryption is currently listed as experimental. OpenMango needs application-controlled authenticated encryption for document payloads regardless, so database-engine encryption does not replace the payload design.
-- Turso Cloud or embedded-replica sync would create a second remote copy of sensitive history and a network dependency. Reversible history is intentionally local-only.
-- `rusqlite` can bundle a known SQLite release and exposes SQLite's backup, hooks, and BLOB support if later required.
+History never presents one top-level row per document.
 
-Keep the SQL conventional and the store module private so replacing the adapter remains possible if measured local journal contention ever becomes material.
+- **Transaction (exact):** events sharing `lsid + txnNumber`.
+- **Attributed (best effort):** an OpenMango-controlled command has a local trace ID, command time window, namespace/family, and returned affected count. OpenMango attaches `{ openmango_trace_id: ... }` as the MongoDB command `comment`, but comments are absent from change events, so correlation is explicitly not guaranteed.
+- **Observed change set:** adjacent compatible events in the same namespace/family. This is a local burst, not a claim about one original MongoDB command.
 
-Suggested tables:
+Observed batches use a 1-second idle boundary, 30-second maximum duration, and 100,000-item continuation ceiling. A 10,000-document `updateMany` normally appears as one or a few batch rows while preserving all exact encrypted per-document images internally. Items are decrypted only for detail pagination or restore.
 
-```text
-operations          current operation projection and parent/revert links
-operation_events    append-only lifecycle events
-operation_items     per-document/per-metadata outcome and encrypted payload
-operation_artifacts snapshot manifests and external encrypted file references
-actions             immutable approval proposals and decisions
-schema_migrations   local format version
-```
+The Collection History UI shows grouping quality, namespace, family, item/revertible/conflict counts, time range, encrypted size, status, document-key samples on demand, and prominent gaps. It does not claim complete coverage while any gap or uncovered collection exists.
 
-The current operation row is the fast query model; `operation_events` is the durable diagnostic trail. This is not full event sourcing: the current row is authoritative, while events explain how it reached that state.
+## Conflict-safe restore
 
-Keep document bodies and identifiers inside authenticated-encrypted item payloads. Store only bounded display metadata, opaque connection identity, status, timestamps, counts, recipe type, hashes, and artifact sizes in queryable columns. Large snapshots remain chunked files referenced by the database.
+Restore requires native write/Production confirmation and runs in bounded background chunks with durable progress.
 
-Use one SQLite transaction for every local transition, including native approval changing an action and creating its operation. Use a single background store worker, WAL mode, `synchronous=FULL`, a bounded busy timeout, foreign keys, startup integrity/version checks, and explicit checkpointing during clean shutdown. All database work runs off the GPUI thread.
+- Update/replace: restore `before` only if the current document exactly equals recorded `after`.
+- Delete: insert `before` only if that `_id` remains absent.
+- Existing `before` state is treated as already restored; any other current state is a conflict.
 
-### Internal test seam
+Restore never force-overwrites. It records restored, skipped, conflicted, and failed counts. Cancellation and restart retain honest partial state; interrupted applying items become failed/partial rather than being reported as successful. Restore writes are ordinary MongoDB writes and therefore produce ordinary change-stream events.
 
-The engine has one internal `MutationBackend` interface with two adapters:
+Because observed batches can be heuristic, confirmation shows namespace, grouping quality, time range, item count, and the conflict-safe rule before execution.
 
-- production MongoDB adapter;
-- deterministic in-memory adapter for state-machine and fault tests.
+## Retention and clearing
 
-The store is tested using real temporary SQLite databases rather than a mock. Time, operation IDs, and injected crash points are controlled in tests without appearing in the public interface.
+Every connection has persisted maximum age and encrypted-byte limits. Defaults are 30 days and 1 GiB. Retention purges oldest batches first and never deletes a batch with active restore work. Current encrypted bytes, batch count, and item count are displayed.
 
-### Views, not duplicate systems
+Supported clear scopes are one batch, one collection, one connection, and all History. Active restores are excluded. Storage-limit failures become visible gaps rather than blocking database writes.
 
-- **Collection History** queries operations for the active connection/database/collection regardless of origin.
-- **Agent Activity** queries pending action proposals plus operations whose origin is built-in AI or MCP.
-- Database backup/sync/revert cards and document edit rows are projections of the same store.
+## Non-goals
 
-## One history, several recovery recipes
-
-There is no safe universal inverse for every MongoDB command. OpenMango should project one durable operation store through collection History while selecting one of three internal recovery recipes.
-
-### 1. Document transitions
-
-Use for bounded inserts, replacements, updates, and deletes.
-
-```text
-DocumentTransition {
-    namespace identity,
-    document _id,
-    before: Document | Absent,
-    after:  Document | Absent,
-    before hash,
-    after hash
-}
-```
-
-The same model covers CRUD:
-
-- insert: `Absent -> Document`;
-- update/replace: `Document A -> Document B`;
-- delete: `Document -> Absent`.
-
-Revert flips the transition, but only when the current document still matches the recorded `after` state. A mismatch is a conflict, never an automatic overwrite.
-
-### 2. Metadata specifications
-
-Use for index and compatible collection metadata operations.
-
-- create index: store the exact resulting name, keys, and options; revert drops it only if its current definition still matches;
-- drop index: store the exact index definition; revert recreates it, while reporting uniqueness or data-drift failures;
-- prefer hide/unhide over drop where that satisfies the user's intent;
-- rename collection: store namespace identities and reverse only if the same collection still occupies the expected target.
-
-MongoDB does not provide conditional index or collection drops. OpenMango re-reads and compares the current definition immediately before dropping, but an external actor can still replace or modify the same name in the final check-to-drop window. These drops are therefore guarded and recoverable under normal app-owned use, but not fully conflict-proof against concurrent external replacement. Collection restore is stricter: it stages and verifies the archive, then renames without `dropTarget`, so it never overwrites a reused collection name.
-
-### 3. Verified namespace snapshots
-
-Use where per-document inversion is unsafe or impractical.
-
-- supported collection drop;
-- large collection imports or destructive transfers;
-- aggregation `$out`;
-- aggregation `$merge` unless a future bounded planner can prove and capture every affected document.
-
-Reuse OpenMango's verified archive backup and restore implementation. Capture collection options, validators, and index definitions in addition to documents. Atlas Search, triggers, users/roles, encryption metadata, and sharding configuration require separate support and must not be advertised as recoverable until verified.
-
-## Operation classification
-
-| Operation | History strategy | Safe revert condition |
-| --- | --- | --- |
-| Read query / normal aggregation | Query History only | No mutation |
-| Insert one/many | Document transitions | Delete only if current document equals recorded post-image |
-| Update/replace | Document transitions | Restore before-image only if current document equals recorded post-image |
-| Delete one/many | Document transitions | Reinsert only if `_id` is absent |
-| Bounded bulk mutation | Per-document transitions | Revert confirmed successes in reverse order; conflicts stay unresolved |
-| Create index | Metadata specification | Compare current definition immediately before drop; external same-name replacement remains a non-atomic race |
-| Drop index | Metadata specification | Recreate; may fail after data drift |
-| Create collection | Metadata specification | Drop only if the same collection remains empty/unchanged |
-| Rename collection | Metadata specification | Reverse only when namespace identity still matches |
-| Drop supported collection | Verified snapshot | Restore into staging, verify, then cut over |
-| Database-level mutation | Unsupported initially | Continue normally without a History snapshot; disclose this in connection settings |
-| `$out` | Verified target snapshot | Restore the previous destination collection |
-| `$merge` | Verified target snapshot initially | Restore the complete target; never assume the merge was all-or-nothing |
-| Unknown/admin command | Unsupported | No agent execution; manual execution must say it is not reversible |
-
-## Durable execution protocol
-
-MongoDB and a local desktop journal cannot participate in one atomic transaction. OpenMango therefore needs a write-ahead protocol:
-
-1. **Plan** — resolve exact targets, capture before-state and expected after-state, classify the recovery recipe, and enforce size limits.
-2. **Prepare** — encrypt and durably persist the recovery payload, then atomically persist operation state `prepared`.
-3. **Apply** — execute only if the server's current state still matches the captured precondition.
-4. **Record** — persist per-item outcomes and transition to `completed`, `partial`, `failed`, or `uncertain`.
-5. **Reconcile** — after restart, compare current state with before/after hashes for every `prepared`, `running`, or `uncertain` operation.
-6. **Revert** — create a linked operation with reversed transitions or a restore plan; never mutate the original record.
-
-Recommended operation states:
-
-```text
-prepared -> running -> completed
-                    -> partial
-                    -> failed
-                    -> uncertain
-completed/partial -> reverting -> reverted
-                              -> conflicts
-                              -> recovery_required
-```
-
-The existing durable action/operation store, atomic file replacement, recovery interlock, target lease, and archive verification should be reused. Approval remains separate: manual tracked edits create operations directly; Arcula-class proposals still require native approval before creating an operation.
-
-## Concurrency rules
-
-MongoDB guarantees single-document atomicity, not whole-operation atomicity for `updateMany` or other multi-document writes. MongoDB recommends including the expected current value in the write filter to prevent lost updates.
-
-OpenMango should therefore:
-
-- never revert by `_id` alone;
-- use expected-current-state conditions when applying and reverting;
-- treat zero matched documents as conflicts;
-- offer `Skip`, `Inspect`, and explicit `Force overwrite` for users;
-- never allow agents to force through a conflict;
-- use transactions for bounded multi-document work when the deployment supports them, but not depend on transactions because standalone MongoDB does not support them and `$out`/`$merge` cannot run inside them.
-
-`findOneAndUpdate` and `findOneAndDelete` can return affected documents atomically, but they do not atomically persist OpenMango's local journal. They are useful execution primitives, not a complete history design.
-
-## Why change streams and the oplog are not the foundation
-
-Change streams are optional verification and conflict-detection inputs, not the source of truth for history:
-
-- they require a replica set or sharded cluster;
-- document pre/post images require MongoDB 6.0+ and per-collection enablement;
-- images can expire or disappear with their oplog event;
-- `updateLookup` can return a later document version;
-- enabling pre/post images adds storage and processing overhead;
-- time-series collections do not support normal document change streams.
-
-OpenMango should not alter customer collections to enable pre/post images merely to implement local history. The oplog is rolling replication history and does not provide guaranteed full before-images or indefinite retention.
-
-## Write aggregations
-
-`$out` and `$merge` must be treated differently from read aggregations.
-
-- `$out` builds a temporary collection and atomically renames it over the destination, but MongoDB does not retain the previous destination. OpenMango must snapshot the destination first.
-- `$merge` can insert, replace, merge, keep, discard, fail, or run an update pipeline. It can leave earlier writes applied after a later failure, cannot run in a transaction, and can repeatedly update documents when writing into its own source collection. Initial support therefore requires a verified destination snapshot.
-
-Normal read-only aggregation runs stay outside Operation History.
-
-## Storage and privacy
-
-History duplicates potentially sensitive production data. Store metadata and payload separately:
-
-```text
-operation.json      metadata, status, counts, hashes, origin, no document bodies
-payload.enc         encrypted BSON transitions or recovery manifest
-backup/             verified encrypted or access-controlled snapshot artifacts
-```
-
-Requirements:
-
-- generate a per-install history key and keep it in macOS Keychain;
-- encrypt recovery payloads with authenticated encryption;
-- use owner-only directories/files;
-- never put document bodies, filters, pipelines, or secrets in audit logs or telemetry;
-- expose disk usage, retention age, and byte quota;
-- support immediate purge and per-connection disablement;
-- never purge unresolved, reverting, or `recovery_required` operations automatically;
-- warn that purging payloads removes revert capability while retaining minimal audit metadata.
-
-## Product behavior
-
-Connection settings:
-
-- per-connection **Reversible history** switch, default off;
-- future retention period and storage quota;
-- future disk usage and **Clear history**.
-
-Collection History:
-
-- a History subview beside Documents, Indexes, Stats, Aggregation, and Schema;
-- a collection-scoped timeline for User, built-in AI, and MCP origins;
-- operation kind, affected count, status, and expiry;
-- before/after preview for document transitions;
-- conflict calculation before revert;
-- `Revert`, `Inspect conflicts`, and `Remove recovery data` actions;
-- database backup/sync/revert operations remain in Agent Activity and are not presented as Reversible History snapshots.
-
-Policy:
-
-- unsupported snapshot targets continue through their existing paths for every origin after the usual write confirmation;
-- the connection setting clearly identifies operations and target types that are not snapshotted;
-- supported history operations still fail closed when their recovery data cannot be persisted.
-
-## Delivery order
-
-1. General operation model, encrypted payload store, connection setting, retention, and collection History UI.
-2. Manual single-document insert/update/delete through document transitions.
-3. Conflict calculation and revert as a new operation.
-4. Bounded multi-document edits with per-document checkpoints.
-5. Route built-in AI document writes through the same seam.
-6. Expose bounded MCP document mutation tools.
-7. Add index metadata recipes.
-8. Integrate supported collection drops, collection transfers, `$out`, and `$merge` through verified snapshots. Keep database-level and unsupported collection operations outside snapshot History initially.
-
-The first implementation slice was **manual single-document update**. Manual single-document insert and delete use the same transition model with absent before/after states. Bounded clipboard, built-in AI, and MCP-proposed inserts, replacements, and deletes freeze at most 100 targets and execute the same durable transition once per document, so partial progress remains independently visible and revertible in History. Insert revert deletes only an unchanged post-image; delete restore inserts only while the `_id` remains absent. Bulk operator updates remain blocked while history is enabled until a bounded planner can persist exact post-images before applying them.
-
-## Primary sources
-
-- [Studio 3T: Insert, Update, and Restore MongoDB Documents](https://studio3t.com/knowledge-base/articles/mongodb-documents-beginners-guide/)
-- [MongoDB: Atomicity and Transactions](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/)
-- [MongoDB: Transactions](https://www.mongodb.com/docs/manual/core/transactions/)
-- [MongoDB: Change Streams](https://www.mongodb.com/docs/manual/changestreams/)
-- [MongoDB: `changeStreamOptions`](https://www.mongodb.com/docs/manual/reference/cluster-parameters/changestreamoptions/)
-- [MongoDB: `findOneAndUpdate`](https://www.mongodb.com/docs/manual/reference/method/db.collection.findoneandupdate/)
-- [MongoDB: `findOneAndDelete`](https://www.mongodb.com/docs/manual/reference/method/db.collection.findoneanddelete/)
-- [MongoDB: `$out`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/out/)
-- [MongoDB: `$merge`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/merge/)
-- [MongoDB: Replica Set Oplog](https://www.mongodb.com/docs/manual/core/replica-set-oplog/)
+History does not provide insert undo, DDL/index recovery, collection snapshots, encrypted archive artifacts, pre-write recipes, verified backup guarantees, universal origin attribution, profiler-based tracing, or trace fields in user documents.

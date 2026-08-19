@@ -179,9 +179,15 @@ pub struct SavedConnection {
     #[serde(default)]
     pub agent_shared: bool,
     #[serde(default)]
+    pub agent_writable: bool,
+    #[serde(default)]
     pub protected: bool,
     #[serde(default)]
-    pub reversible_history: bool,
+    pub history_enabled: bool,
+    #[serde(default = "default_history_max_age_days")]
+    pub history_max_age_days: u32,
+    #[serde(default = "default_history_max_bytes")]
+    pub history_max_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<SshConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,7 +212,6 @@ pub struct ConnectionWriteIdentity {
     pub environment: Option<ConnectionEnvironment>,
     pub confirm_production_writes: bool,
     pub read_only: bool,
-    pub reversible_history: bool,
     pub transport: Box<ConnectionTransportIdentity>,
 }
 
@@ -232,7 +237,6 @@ impl From<&SavedConnection> for ConnectionWriteIdentity {
             environment: stripped.environment,
             confirm_production_writes: stripped.confirm_production_writes,
             read_only: stripped.read_only,
-            reversible_history: stripped.reversible_history,
             transport: Box::new(ConnectionTransportIdentity {
                 ssh: stripped.ssh,
                 proxy: stripped.proxy,
@@ -240,6 +244,14 @@ impl From<&SavedConnection> for ConnectionWriteIdentity {
             }),
         }
     }
+}
+
+fn default_history_max_age_days() -> u32 {
+    30
+}
+
+fn default_history_max_bytes() -> u64 {
+    1024 * 1024 * 1024
 }
 
 impl SavedConnection {
@@ -254,8 +266,11 @@ impl SavedConnection {
             last_connected: None,
             read_only: false,
             agent_shared: false,
+            agent_writable: false,
             protected: false,
-            reversible_history: false,
+            history_enabled: false,
+            history_max_age_days: default_history_max_age_days(),
+            history_max_bytes: default_history_max_bytes(),
             ssh: None,
             proxy: None,
             secret_id: None,
@@ -309,8 +324,11 @@ mod tests {
         let connection: SavedConnection = serde_json::from_value(legacy).unwrap();
         assert_eq!(connection.environment, None);
         assert!(!connection.agent_shared);
+        assert!(!connection.agent_writable);
         assert!(!connection.protected);
-        assert!(!connection.reversible_history);
+        assert!(!connection.history_enabled);
+        assert_eq!(connection.history_max_age_days, 30);
+        assert_eq!(connection.history_max_bytes, 1024 * 1024 * 1024);
         assert!(!connection.confirm_production_writes);
         assert!(!connection.requires_production_write_confirmation());
 

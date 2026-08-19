@@ -111,9 +111,6 @@ impl SyncExecutor {
             ActionRequest::OperationRevert { operation_id } => {
                 self.execute_revert(operation, operation_id, &connections.target, cancellation)
             }
-            ActionRequest::DocumentTransitions { .. } => {
-                Err("Document transitions require the document operation executor".to_string())
-            }
         }
     }
 
@@ -300,9 +297,7 @@ impl SyncExecutor {
         let recovery_backup_id = match original.request {
             ActionRequest::DatabaseSync { .. } => original.backup_id,
             ActionRequest::OperationRevert { .. } => original.safety_backup_id,
-            ActionRequest::DatabaseBackup { .. } | ActionRequest::DocumentTransitions { .. } => {
-                None
-            }
+            ActionRequest::DatabaseBackup { .. } => None,
         }
         .ok_or_else(|| "Original operation has no recovery backup".to_string())?;
         let recovery = self.store.load_backup_manifest(recovery_backup_id).map_err(safe_error)?;

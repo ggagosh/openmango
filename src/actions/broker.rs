@@ -256,22 +256,15 @@ impl ActionBroker {
 fn validate_proposal(content: &ProposedActionContent) -> Result<()> {
     anyhow::ensure!(content.policy.version > 0, "Proposal policy version is missing");
     anyhow::ensure!(content.policy.target_shared, "Target is not shared with agents");
-    let document_action =
-        matches!(content.request, super::model::ActionRequest::DocumentTransitions { .. });
-    if !document_action {
-        anyhow::ensure!(
-            content.prerequisites.database_tools_available,
-            "MongoDB Database Tools are unavailable"
-        );
-        anyhow::ensure!(
-            content.prerequisites.backup_storage_available,
-            "Backup storage is unavailable"
-        );
-    }
+    anyhow::ensure!(
+        content.prerequisites.database_tools_available,
+        "MongoDB Database Tools are unavailable"
+    );
+    anyhow::ensure!(
+        content.prerequisites.backup_storage_available,
+        "Backup storage is unavailable"
+    );
     anyhow::ensure!(content.prerequisites.target_reachable, "Target is unreachable");
-    if document_action {
-        anyhow::ensure!(content.policy.target_writable, "Target is read-only");
-    }
     if matches!(
         content.request,
         super::model::ActionRequest::DatabaseSync { .. }
@@ -418,6 +411,9 @@ mod tests {
         let second = broker.propose(content).unwrap();
 
         assert_eq!(first.id, second.id);
+        assert_eq!(first.status, ActionStatus::PendingApproval);
+        assert!(first.operation_id.is_none());
+        assert!(broker.store.list_operations().unwrap().is_empty());
     }
 
     #[test]

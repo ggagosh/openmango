@@ -7,9 +7,8 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, doc_to_json, ensure_writable, execute_reversible_mutations,
-    parse_json_to_doc, require_confirmation, require_reversible_history, resolve_collection,
-    reversible_target,
+    MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable, parse_json_to_doc,
+    require_confirmation, resolve_collection,
 };
 
 pub struct ReplaceDocumentsTool(MongoContext);
@@ -54,7 +53,7 @@ impl Tool for ReplaceDocumentsTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Replace up to 100 documents matching a filter with a complete document. \
-                Each original _id is preserved and every replacement is reversible."
+                Each original _id is preserved and local confirmation is required."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -83,7 +82,6 @@ impl Tool for ReplaceDocumentsTool {
 
     async fn call(&self, args: ReplaceArgs) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
-        require_reversible_history(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;
         let replacement = parse_json_to_doc(&args.replacement)?;
@@ -94,12 +92,6 @@ impl Tool for ReplaceDocumentsTool {
         let many = args.many.unwrap_or(true);
         let matching_count = collection.count_documents(filter.clone()).await?;
         let affected_count = if many { matching_count } else { matching_count.min(1) };
-        if affected_count > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS as u64 {
-            return Err(ToolError::Rejected(format!(
-                "Built-in AI writes are limited to {} documents. Narrow the filter.",
-                crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS
-            )));
-        }
         let cursor = collection
             .find(filter.clone())
             .sort(target_sort())
@@ -121,47 +113,30 @@ impl Tool for ReplaceDocumentsTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        let limit =
-            if many { (crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS + 1) as i64 } else { 1 };
+        let limit = if many { 0 } else { 1 };
         let cursor = collection.find(filter).sort(target_sort()).limit(limit).await?;
         let documents: Vec<bson::Document> = cursor.try_collect().await?;
-        if documents.len() > crate::operations::MAX_REVERSIBLE_BULK_DOCUMENTS {
-            return Err(ToolError::Rejected(
-                "More documents matched after confirmation. Narrow the filter and retry."
-                    .to_string(),
-            ));
+        let mut matched_count = 0u64;
+        let mut modified_count = 0u64;
+        for before in documents {
+            let id = before.get("_id").cloned().ok_or_else(|| {
+                ToolError::InvalidInput("A matched document has no _id".to_string())
+            })?;
+            let mut after = replacement.clone();
+            after.insert("_id", id.clone());
+            let result = collection.replace_one(bson::doc! { "_id": id }, after).await?;
+            matched_count += result.matched_count;
+            modified_count += result.modified_count;
         }
-        if documents.iter().any(|document| !document.contains_key("_id")) {
-            return Err(ToolError::History(
-                "A matched document has no _id; no writes were attempted.".to_string(),
-            ));
+        if matched_count > 0
+            && let Some(tx) = &self.0.event_tx
+        {
+            let _ = tx.send(StreamEvent::DocumentsChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
         }
-
-        let planned = documents
-            .into_iter()
-            .map(|before| {
-                let id = before.get("_id").cloned().expect("validated above");
-                let mut after = replacement.clone();
-                after.insert("_id", id.clone());
-                (id, before, after)
-            })
-            .collect::<Vec<_>>();
-        crate::operations::ensure_reversible_bulk_size(
-            planned.iter().flat_map(|(_, before, after)| [before, after]),
-        )
-        .map_err(|error| ToolError::History(error.user_message().to_string()))?;
-        let matched_count = planned.len();
-        let modified_count = planned.iter().filter(|(_, before, after)| before != after).count();
-        let mutations = planned
-            .into_iter()
-            .map(|(id, before, after)| crate::operations::Mutation::ReplaceDocument {
-                target: reversible_target(&self.0, &col_name, id),
-                replacement: after,
-                editor_precondition: Some(before),
-            })
-            .collect();
-        execute_reversible_mutations(&self.0, &col_name, mutations).await?;
-
         Ok(serde_json::json!({
             "matched_count": matched_count,
             "modified_count": modified_count,
