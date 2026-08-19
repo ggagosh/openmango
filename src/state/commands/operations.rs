@@ -1,8 +1,25 @@
+use std::sync::Arc;
+
 use gpui::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
-use crate::history::BatchQuery;
+use crate::history::{BatchQuery, EligibilityReport, HistoryConnection, HistoryService, Usage};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
+
+fn spawn_history_inspection(
+    runtime: tokio::runtime::Handle,
+    service: Arc<HistoryService>,
+    connection: HistoryConnection,
+    setup: bool,
+) -> tokio::task::JoinHandle<(EligibilityReport, Option<Usage>, Option<String>)> {
+    runtime.spawn(async move {
+        let setup_error =
+            if setup { service.setup_pre_post_images(&connection).await.err() } else { None };
+        let report = HistoryService::eligibility(&connection).await;
+        let usage = service.usage(Some(connection.id)).ok();
+        (report, usage, setup_error)
+    })
+}
 
 impl AppCommands {
     pub(crate) fn collection_history_changed(
@@ -66,6 +83,7 @@ impl AppCommands {
         let Some(service) = state.read(cx).history_service() else {
             return;
         };
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         let Some((request_id, offset)) = state.update(cx, |state, cx| {
             let session = state.session_mut(&session_key)?;
             let offset = if append { session.data.history_next_offset? } else { 0 };
@@ -86,17 +104,20 @@ impl AppCommands {
         };
         let service_for_task = service.clone();
         let session_for_task = session_key.clone();
-        let task = cx.background_spawn(async move {
+        let task = runtime.spawn_blocking(move || {
             let page = service_for_task.list_batches(query);
-            let gaps = service_for_task.list_gaps(
+            let gaps = service_for_task.list_collection_gaps(
                 session_for_task.connection_id,
-                Some(&session_for_task.database),
-                Some(&session_for_task.collection),
+                &session_for_task.database,
+                &session_for_task.collection,
             );
             page.and_then(|page| gaps.map(|gaps| (page, gaps)))
         });
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-            let result = task.await;
+            let result = match task.await {
+                Ok(result) => result,
+                Err(error) => Err(anyhow::anyhow!("History query task failed: {error}")),
+            };
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let Some(session) = state.session_mut(&session_key) else {
@@ -131,32 +152,48 @@ impl AppCommands {
         .detach();
     }
 
-    pub fn load_history_batch_details(
+    pub fn toggle_history_batch_details(
         state: Entity<AppState>,
         session_key: SessionKey,
         batch_id: Uuid,
-        append: bool,
         cx: &mut App,
     ) {
+        let hidden = state.update(cx, |state, cx| {
+            let Some(session) = state.session_mut(&session_key) else {
+                return false;
+            };
+            let hidden = session.data.history_details.remove(&batch_id).is_some();
+            if hidden {
+                cx.notify();
+            }
+            hidden
+        });
+        if hidden {
+            return;
+        }
         let Some(service) = state.read(cx).history_service() else {
             return;
         };
-        let offset = state.update(cx, |state, cx| {
-            let session = state.session_mut(&session_key)?;
-            if !session.data.history_detail_loading.insert(batch_id) {
-                return None;
+        let runtime = state.read(cx).connection_manager().runtime_handle();
+        let should_load = state.update(cx, |state, cx| {
+            let Some(session) = state.session_mut(&session_key) else {
+                return false;
+            };
+            let inserted = session.data.history_detail_loading.insert(batch_id);
+            if inserted {
+                cx.notify();
             }
-            let offset =
-                if append { session.data.history_details.get(&batch_id)?.next_offset? } else { 0 };
-            cx.notify();
-            Some(offset)
+            inserted
         });
-        let Some(offset) = offset else {
+        if !should_load {
             return;
-        };
-        let task = cx.background_spawn(async move { service.get_batch(batch_id, offset, 20) });
+        }
+        let task = runtime.spawn_blocking(move || service.get_batch(batch_id, 0, 3));
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-            let result = task.await;
+            let result = match task.await {
+                Ok(result) => result,
+                Err(error) => Err(anyhow::anyhow!("History details task failed: {error}")),
+            };
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let Some(session) = state.session_mut(&session_key) else {
@@ -164,13 +201,6 @@ impl AppCommands {
                     };
                     session.data.history_detail_loading.remove(&batch_id);
                     match result {
-                        Ok(details) if append => {
-                            if let Some(existing) = session.data.history_details.get_mut(&batch_id)
-                            {
-                                existing.items.extend(details.items);
-                                existing.next_offset = details.next_offset;
-                            }
-                        }
                         Ok(details) => {
                             session.data.history_details.insert(batch_id, details);
                         }
@@ -193,7 +223,7 @@ impl AppCommands {
         enable_after_setup: bool,
         cx: &mut App,
     ) {
-        let Some((service, connection)) = state.update(cx, |state, cx| {
+        let Some((service, connection, runtime)) = state.update(cx, |state, cx| {
             let service = state.history_service()?;
             let configuration = state.connection_by_id(connection_id)?.clone();
             let active = state.active_connection_by_id(connection_id)?.clone();
@@ -211,6 +241,7 @@ impl AppCommands {
                     max_age_days: configuration.history_max_age_days,
                     max_bytes: configuration.history_max_bytes,
                 },
+                state.connection_manager().runtime_handle(),
             ))
         }) else {
             state.update(cx, |state, cx| {
@@ -221,19 +252,23 @@ impl AppCommands {
             });
             return;
         };
-        let service_for_task = service.clone();
-        let task = cx.background_spawn(async move {
-            let setup_error = if setup {
-                service_for_task.setup_pre_post_images(&connection).await.err()
-            } else {
-                None
-            };
-            let report = crate::history::HistoryService::eligibility(&connection).await;
-            let usage = service_for_task.usage(Some(connection_id)).ok();
-            (report, usage, setup_error)
-        });
+        let task = spawn_history_inspection(runtime, service.clone(), connection, setup);
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-            let (report, usage, setup_error) = task.await;
+            let (report, usage, setup_error) = match task.await {
+                Ok(result) => result,
+                Err(error) => (
+                    EligibilityReport {
+                        status: crate::history::EligibilityStatus::Unavailable,
+                        version: None,
+                        topology: None,
+                        storage_engine: None,
+                        failures: vec![format!("History inspection task failed: {error}")],
+                        collections: Vec::new(),
+                    },
+                    None,
+                    None,
+                ),
+            };
             let eligible = report.status == crate::history::EligibilityStatus::Eligible;
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
@@ -447,5 +482,47 @@ impl AppCommands {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_inspection_runs_on_the_mongodb_runtime() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let client = runtime.block_on(async {
+            mongodb::Client::with_uri_str(
+                "mongodb://127.0.0.1:1/?directConnection=true&serverSelectionTimeoutMS=10",
+            )
+            .await
+            .unwrap()
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let service = Arc::new(
+            HistoryService::open(
+                directory.path().join("history.sqlite3"),
+                [31; 32],
+                runtime.handle().clone(),
+            )
+            .unwrap(),
+        );
+        let task = spawn_history_inspection(
+            runtime.handle().clone(),
+            service,
+            HistoryConnection {
+                id: Uuid::new_v4(),
+                name: "Unavailable test server".into(),
+                client,
+                databases: Vec::new(),
+                max_age_days: 30,
+                max_bytes: 1024,
+            },
+            false,
+        );
+
+        let (report, _, _) = runtime.block_on(task).unwrap();
+        assert_eq!(report.status, crate::history::EligibilityStatus::Unavailable);
     }
 }

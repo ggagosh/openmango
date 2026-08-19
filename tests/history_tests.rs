@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
@@ -49,6 +49,48 @@ async fn wait_for_items(service: &HistoryService, connection_id: uuid::Uuid, min
     })
     .await
     .expect("History did not record expected events");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_stream_does_not_exhaust_the_mongodb_connection_pool() {
+    let (_container, client) = replica_set().await;
+    let prefix = format!("history_pool_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let databases = (0..32).map(|index| format!("{prefix}_{index}")).collect::<Vec<_>>();
+    for database in &databases {
+        client
+            .database(database)
+            .collection::<Document>("items")
+            .insert_one(doc! { "value": 1 })
+            .await
+            .unwrap();
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let connection_id = uuid::Uuid::new_v4();
+    let service = HistoryService::open(
+        directory.path().join("history.sqlite3"),
+        [29; 32],
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
+    service.start(HistoryConnection {
+        id: connection_id,
+        name: "Many databases".into(),
+        client: client.clone(),
+        databases: databases.clone(),
+        max_age_days: 30,
+        max_bytes: 64 * 1024 * 1024,
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        client.database(&databases[0]).collection::<Document>("items").find_one(doc! {}),
+    )
+    .await
+    .expect("History exhausted the MongoDB connection pool")
+    .unwrap();
+    service.stop(connection_id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -198,6 +240,138 @@ async fn replica_set_history_captures_all_clients_groups_and_restores_without_ov
     );
     mcp.cancel().await.unwrap();
     handle.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_history_restore_is_bounded_and_complete() {
+    let (_container, client) = replica_set().await;
+    let database = format!("history_bulk_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let collection = client.database(&database).collection::<Document>("items");
+    const DOCUMENT_COUNT: u64 = 2_500;
+    collection
+        .insert_many((0..DOCUMENT_COUNT).map(|id| doc! { "_id": id as i64, "value": 0 }))
+        .await
+        .unwrap();
+    client
+        .database(&database)
+        .run_command(doc! {
+            "collMod": "items",
+            "changeStreamPreAndPostImages": { "enabled": true },
+        })
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let connection_id = uuid::Uuid::new_v4();
+    let service = HistoryService::open(
+        directory.path().join("history.sqlite3"),
+        [31; 32],
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
+    service.start(HistoryConnection {
+        id: connection_id,
+        name: "Bulk restore".into(),
+        client: client.clone(),
+        databases: vec![database.clone()],
+        max_age_days: 30,
+        max_bytes: 64 * 1024 * 1024,
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collection.update_many(doc! {}, doc! { "$set": { "value": 1 } }).await.unwrap();
+    wait_for_items(&service, connection_id, DOCUMENT_COUNT).await;
+    let page = service
+        .list_batches(BatchQuery {
+            connection_id,
+            database: Some(database),
+            collection: Some("items".into()),
+            offset: 0,
+            limit: 10,
+        })
+        .unwrap();
+    let batch = page.items.iter().find(|batch| batch.item_count == DOCUMENT_COUNT).unwrap();
+
+    let restore_started = Instant::now();
+    service.revert_batch(batch.id).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let progress = service.restore_progress(batch.id).unwrap();
+            if progress.done {
+                assert_eq!(progress.restored, DOCUMENT_COUNT);
+                assert_eq!(progress.conflicted, 0);
+                assert_eq!(progress.failed, 0);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("2,500-document History restore exceeded ten seconds");
+    println!("2,500-document restore: {} ms", restore_started.elapsed().as_millis());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_delete_restore_is_bounded_and_complete() {
+    let (_container, client) = replica_set().await;
+    let database = format!("history_bulk_delete_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let collection = client.database(&database).collection::<Document>("items");
+    const DOCUMENT_COUNT: u64 = 2_500;
+    collection.insert_many((0..DOCUMENT_COUNT).map(|id| doc! { "_id": id as i64 })).await.unwrap();
+    client
+        .database(&database)
+        .run_command(doc! {
+            "collMod": "items",
+            "changeStreamPreAndPostImages": { "enabled": true },
+        })
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let connection_id = uuid::Uuid::new_v4();
+    let service = HistoryService::open(
+        directory.path().join("history.sqlite3"),
+        [37; 32],
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
+    service.start(HistoryConnection {
+        id: connection_id,
+        name: "Bulk delete restore".into(),
+        client: client.clone(),
+        databases: vec![database.clone()],
+        max_age_days: 30,
+        max_bytes: 64 * 1024 * 1024,
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    collection.delete_many(doc! {}).await.unwrap();
+    wait_for_items(&service, connection_id, DOCUMENT_COUNT).await;
+    let page = service
+        .list_batches(BatchQuery {
+            connection_id,
+            database: Some(database),
+            collection: Some("items".into()),
+            offset: 0,
+            limit: 10,
+        })
+        .unwrap();
+    let batch = page.items.iter().find(|batch| batch.item_count == DOCUMENT_COUNT).unwrap();
+
+    let restore_started = Instant::now();
+    service.revert_batch(batch.id).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let progress = service.restore_progress(batch.id).unwrap();
+            if progress.done {
+                assert_eq!(progress.restored, DOCUMENT_COUNT);
+                assert_eq!(progress.conflicted, 0);
+                assert_eq!(progress.failed, 0);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("2,500-document delete restore exceeded ten seconds");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), DOCUMENT_COUNT);
+    println!("2,500-document delete restore: {} ms", restore_started.elapsed().as_millis());
 }
 
 #[tokio::test(flavor = "multi_thread")]

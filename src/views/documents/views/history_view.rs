@@ -74,7 +74,9 @@ pub(crate) fn render_history_view(
     div()
         .flex()
         .flex_col()
-        .size_full()
+        .flex_1()
+        .min_w(px(0.0))
+        .overflow_hidden()
         .bg(cx.theme().background)
         .child(history_header(total, gaps.len(), state.clone(), session_key.clone(), cx))
         .child(column_header(cx))
@@ -83,8 +85,7 @@ pub(crate) fn render_history_view(
                 .flex()
                 .flex_col()
                 .flex_1()
-                .min_h_0()
-                .w_full()
+                .min_w(px(0.0))
                 .overflow_y_scrollbar()
                 .children(gaps.into_iter().map(|gap| gap_row(gap, cx)))
                 .children(batches.into_iter().map(|batch| {
@@ -127,82 +128,80 @@ fn history_header(
     session_key: SessionKey,
     cx: &App,
 ) -> Div {
+    let state_for_refresh = state.clone();
+    let session_for_refresh = session_key.clone();
     div()
         .flex()
         .items_center()
-        .justify_between()
         .flex_shrink_0()
         .w_full()
-        .min_h(px(72.0))
-        .gap(spacing::lg())
+        .h(px(40.0))
+        .gap(spacing::sm())
         .px(spacing::lg())
-        .py(spacing::sm())
         .bg(cx.theme().tab_bar)
         .border_b_1()
         .border_color(cx.theme().border)
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(3.0))
+                .flex_1()
                 .min_w(px(0.0))
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("History"))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("History records supported changes observed by OpenMango on this device. It may include writes from other clients and can contain gaps. It is not a backup or audit log."),
-                ),
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(format!("History · {total} change set{}", if total == 1 { "" } else { "s" })),
+        )
+        .when(gaps > 0, |element| {
+            element.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .child("Coverage incomplete"),
+            )
+        })
+        .child(
+            Button::new("refresh-collection-history")
+                .ghost()
+                .compact()
+                .label("Refresh")
+                .on_click(move |_, _, cx| {
+                    AppCommands::load_collection_history(
+                        state_for_refresh.clone(),
+                        session_for_refresh.clone(),
+                        cx,
+                    );
+                }),
         )
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .items_end()
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("{total} change set{}", if total == 1 { "" } else { "s" }))
-                .when(gaps > 0, |element| {
-                    element.child(
-                        div()
-                            .text_color(cx.theme().warning)
-                            .child(format!("{gaps} visible coverage gap{}", if gaps == 1 { "" } else { "s" })),
-                    )
-                })
-                .child(
-                    Button::new("clear-collection-history")
-                        .ghost()
-                        .compact()
-                        .label("Clear collection")
-                        .on_click(move |_, window, cx| {
-                            let state_for_clear = state.clone();
-                            let session_for_clear = session_key.clone();
-                            request_connection_write(
-                                state.clone(),
-                                WriteRequest::new(
-                                    session_key.connection_id,
-                                    format!("{}.{} local History", session_key.database, session_key.collection),
-                                    "Delete local encrypted History data",
-                                    Some(WriteConfirmation {
-                                        title: "Clear collection History".into(),
-                                        message: "Delete all non-active History batches and collection-scoped gaps for this collection. This cannot be undone.".into(),
-                                        confirm_label: "Clear History".into(),
-                                        destructive: true,
-                                    }),
-                                ),
-                                window,
+            Button::new("clear-collection-history")
+                .ghost()
+                .compact()
+                .label("Clear collection")
+                .on_click(move |_, window, cx| {
+                    let state_for_clear = state.clone();
+                    let session_for_clear = session_key.clone();
+                    request_connection_write(
+                        state.clone(),
+                        WriteRequest::new(
+                            session_key.connection_id,
+                            format!("{}.{} local History", session_key.database, session_key.collection),
+                            "Delete local encrypted History data",
+                            Some(WriteConfirmation {
+                                title: "Clear collection History".into(),
+                                message: "Delete all non-active History batches and collection-scoped gaps for this collection. This cannot be undone.".into(),
+                                confirm_label: "Clear History".into(),
+                                destructive: true,
+                            }),
+                        ),
+                        window,
+                        cx,
+                        move |_, cx| {
+                            AppCommands::clear_collection_history(
+                                state_for_clear.clone(),
+                                session_for_clear.clone(),
                                 cx,
-                                move |_, cx| {
-                                    AppCommands::clear_collection_history(
-                                        state_for_clear.clone(),
-                                        session_for_clear.clone(),
-                                        cx,
-                                    );
-                                },
                             );
-                        }),
-                ),
+                        },
+                    );
+                }),
         )
 }
 
@@ -221,16 +220,17 @@ fn column_header(cx: &App) -> Div {
         .child(div().flex_1().child("Observed change set"))
         .child(div().w(px(130.0)).child("Grouping"))
         .child(div().w(px(112.0)).child("When"))
-        .child(div().w(px(88.0)).text_align(TextAlign::Right).child("Action"))
+        .child(div().w(px(208.0)).text_align(TextAlign::Right).child("Actions"))
 }
 
 fn gap_row(gap: HistoryGap, cx: &App) -> Div {
+    let (title, description) = gap_copy(&gap.kind, &gap.reason);
     div()
         .flex()
         .items_center()
         .gap(spacing::md())
         .px(spacing::lg())
-        .py(spacing::md())
+        .py(spacing::sm())
         .border_b_1()
         .border_color(cx.theme().sidebar_border)
         .bg(cx.theme().warning.opacity(0.08))
@@ -246,9 +246,9 @@ fn gap_row(gap: HistoryGap, cx: &App) -> Div {
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(cx.theme().warning)
-                        .child(format!("Coverage gap: {}", gap.kind)),
+                        .child(title),
                 )
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(gap.reason)),
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(description)),
         )
         .child(
             div()
@@ -272,35 +272,10 @@ fn batch_row(
     let database = batch.database.clone();
     let collection = batch.collection.clone();
     let target = format!("{database}.{collection}");
-    let sample_keys = details
-        .as_ref()
-        .map(|details| {
-            details
-                .items
-                .iter()
-                .take(5)
-                .map(|item| crate::bson::document_to_shell_string(&item.document_key))
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_else(|| "Load details to review representative document keys".into());
-    let conflict_rule = match batch.family {
-        crate::history::OperationFamily::Delete => {
-            "Deleted documents are reinserted only while their keys remain absent."
-        }
-        crate::history::OperationFamily::Update | crate::history::OperationFamily::Replace => {
-            "Before-images replace documents only while current documents exactly equal recorded after-images."
-        }
-    };
-    let restore_description = format!(
-        "Namespace: {target}\nGrouping: {}\nTime: {}\nItems: {} ({} revertible)\nSamples: {}\n\n{} Conflicts are skipped and never overwritten.",
-        batch.grouping.label(),
-        format_time_range(batch.first_wall_time, batch.last_wall_time),
-        batch.item_count,
-        batch.revertible_count,
-        sample_keys,
-        conflict_rule,
-    );
+    let pending_restore_count = batch.pending_restore_count();
+    let resuming = batch.status == BatchStatus::PartiallyRestored;
+    let (restore_title, restore_description, restore_label) =
+        restore_copy(batch.family, pending_restore_count, resuming);
     let status_color = match batch.status {
         BatchStatus::Restoring => cx.theme().primary,
         BatchStatus::Restored => cx.theme().success,
@@ -308,38 +283,57 @@ fn batch_row(
         BatchStatus::Open | BatchStatus::Closed => cx.theme().muted_foreground,
     };
     let details_loaded = details.is_some();
-    let has_more_details = details.as_ref().is_some_and(|details| details.next_offset.is_some());
     let detail_panel = details.map(|details| {
+        let shown = details.items.len();
         div()
-            .mt(spacing::xs())
-            .pl(spacing::sm())
-            .border_l_2()
+            .px(spacing::lg())
+            .pt(spacing::sm())
+            .pb(spacing::md())
+            .border_t_1()
             .border_color(cx.theme().border)
+            .bg(cx.theme().tab_bar)
             .flex()
             .flex_col()
-            .gap(px(2.0))
-            .children(details.items.into_iter().map(|item| {
-                let key = crate::bson::document_to_shell_string(&item.document_key);
+            .gap(spacing::xs())
+            .child(
                 div()
-                    .font_family(fonts::mono())
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "{} · {}",
-                        crate::bson::truncate_for_preview(&key, 100),
-                        item.outcome
-                    ))
+                    .child("Document samples")
+                    .child(format!("Showing {shown} of {}", batch.item_count)),
+            )
+            .children(details.items.into_iter().map(|item| {
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(spacing::sm())
+                    .font_family(fonts::mono())
+                    .text_xs()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(cx.theme().secondary_foreground)
+                            .child(compact_document_key(&item.document_key)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(item.outcome.to_string()),
+                    )
             }))
     });
-    div()
+    let row = div()
         .flex()
         .items_center()
         .gap(spacing::md())
         .px(spacing::lg())
         .py(spacing::md())
-        .border_b_1()
-        .border_color(cx.theme().sidebar_border)
-        .hover(|row| row.bg(cx.theme().list_hover))
         .child(
             div()
                 .flex()
@@ -355,25 +349,10 @@ fn batch_row(
                 )))
                 .child(
                     div()
-                        .font_family(fonts::mono())
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "{}.{} · {} revertible · {} restored · {} skipped · {} conflicts · {} failed · {} encrypted bytes",
-                            batch.database,
-                            batch.collection,
-                            batch.revertible_count,
-                            batch.restored_count,
-                            batch.skipped_count,
-                            batch.conflict_count,
-                            batch.failed_count,
-                            batch.encrypted_bytes
-                        )),
-                )
-                .child(
-                    div().text_xs().text_color(status_color).child(format!("{:?}", batch.status)),
-                )
-                .children(detail_panel),
+                        .text_color(status_color)
+                        .child(batch_summary(&batch)),
+                ),
         )
         .child(
             div()
@@ -394,10 +373,10 @@ fn batch_row(
         )
         .child(
             div()
-                .w(px(88.0))
+                .w(px(208.0))
                 .flex()
-                .flex_col()
-                .items_end()
+                .items_center()
+                .justify_end()
                 .gap(spacing::xs())
                 .child(
                     Button::new(("history-batch-details", batch_id.as_u128() as u64))
@@ -405,23 +384,20 @@ fn batch_row(
                         .compact()
                         .label(if detail_loading {
                             "Loading…"
-                        } else if !details_loaded {
-                            "Details"
-                        } else if has_more_details {
-                            "More"
+                        } else if details_loaded {
+                            "Hide"
                         } else {
-                            "Loaded"
+                            "Details"
                         })
-                        .disabled(detail_loading || (details_loaded && !has_more_details))
+                        .disabled(detail_loading)
                         .on_click({
                             let state = state.clone();
                             let session_key = session_key.clone();
                             move |_, _, cx| {
-                                AppCommands::load_history_batch_details(
+                                AppCommands::toggle_history_batch_details(
                                     state.clone(),
                                     session_key.clone(),
                                     batch_id,
-                                    details_loaded,
                                     cx,
                                 );
                             }
@@ -482,8 +458,7 @@ fn batch_row(
                         Button::new(("restore-history-batch", batch_id.as_u128() as u64))
                             .ghost()
                             .compact()
-                            .label("Restore")
-                            .disabled(!details_loaded)
+                            .label(if resuming { "Resume" } else { "Restore" })
                             .on_click(move |_, window, cx| {
                                 let state_for_write = state.clone();
                                 let database = database.clone();
@@ -495,10 +470,10 @@ fn batch_row(
                                         target.clone(),
                                         "Restore this observed History change set",
                                         Some(WriteConfirmation {
-                                            title: "Confirm History restore".into(),
+                                            title: restore_title.clone(),
                                             message: restore_description.clone(),
-                                            confirm_label: "Restore without overwriting conflicts".into(),
-                                            destructive: true,
+                                            confirm_label: restore_label.clone(),
+                                            destructive: false,
                                         }),
                                     ),
                                     window,
@@ -517,7 +492,93 @@ fn batch_row(
                             }),
                     )
                 }),
-        )
+        );
+
+    div()
+        .flex()
+        .flex_col()
+        .border_b_1()
+        .border_color(cx.theme().sidebar_border)
+        .hover(|container| container.bg(cx.theme().list_hover))
+        .child(row)
+        .children(detail_panel)
+}
+
+fn batch_summary(batch: &BatchSummary) -> String {
+    let pending = batch.pending_restore_count();
+    let processed = batch.revertible_count.saturating_sub(pending);
+    let mut parts = match batch.status {
+        BatchStatus::Open => {
+            vec!["Recording".to_string(), format!("{} documents", batch.revertible_count)]
+        }
+        BatchStatus::Closed => {
+            vec!["Ready to restore".to_string(), format!("{} documents", batch.revertible_count)]
+        }
+        BatchStatus::Restoring => {
+            vec!["Restoring".to_string(), format!("{processed} of {}", batch.revertible_count)]
+        }
+        BatchStatus::PartiallyRestored if pending > 0 => {
+            vec!["Paused".to_string(), format!("{pending} remaining")]
+        }
+        BatchStatus::PartiallyRestored => vec!["Completed with issues".to_string()],
+        BatchStatus::Restored => {
+            vec!["Restored".to_string(), format!("{} documents", batch.restored_count)]
+        }
+        BatchStatus::Failed => vec!["Restore failed".to_string(), format!("{pending} remaining")],
+    };
+    if batch.restored_count > 0
+        && !matches!(batch.status, BatchStatus::Restoring | BatchStatus::Restored)
+    {
+        parts.push(format!("{} restored", batch.restored_count));
+    }
+    if batch.skipped_count > 0 {
+        parts.push(format!("{} skipped", batch.skipped_count));
+    }
+    if batch.conflict_count > 0 {
+        parts.push(format!("{} conflicts", batch.conflict_count));
+    }
+    if batch.failed_count > 0 {
+        parts.push(format!("{} failed", batch.failed_count));
+    }
+    parts.join(" · ")
+}
+
+fn compact_document_key(key: &mongodb::bson::Document) -> String {
+    let value =
+        crate::bson::document_to_shell_string(key).split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::bson::truncate_for_preview(&value, 96)
+}
+
+fn restore_copy(
+    family: crate::history::OperationFamily,
+    count: u64,
+    resuming: bool,
+) -> (String, String, String) {
+    let action = if resuming { "Resume" } else { "Restore" };
+    let label = format!("{action} {count}");
+    match family {
+        crate::history::OperationFamily::Delete => (
+            format!("{action} {count} deleted document{}?", if count == 1 { "" } else { "s" }),
+            "Deleted documents are reinserted only when their original keys are still absent. Existing documents are skipped.".into(),
+            label,
+        ),
+        crate::history::OperationFamily::Update | crate::history::OperationFamily::Replace => (
+            format!("{action} {count} previous document version{}?", if count == 1 { "" } else { "s" }),
+            "Documents are restored only when they still match the version captured after this change set. Later changes are skipped.".into(),
+            label,
+        ),
+    }
+}
+
+fn gap_copy(kind: &str, reason: &str) -> (String, String) {
+    match kind {
+        "missing_resume_token" => (
+            "Restore coverage was interrupted".into(),
+            "Changes made during this gap are unavailable to History and cannot be restored."
+                .into(),
+        ),
+        _ => ("History coverage gap".into(), reason.into()),
+    }
 }
 
 fn empty_state(icon: IconName, title: &str, description: &str, cx: &App) -> Div {
@@ -568,5 +629,30 @@ fn format_time_range(first: DateTime<Utc>, last: DateTime<Utc>) -> String {
         first.format("%H:%M:%S").to_string()
     } else {
         format!("{}–{}", first.format("%H:%M:%S"), last.format("%H:%M:%S"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gap_copy, restore_copy};
+
+    #[test]
+    fn restore_confirmation_is_short_and_does_not_require_samples() {
+        let (title, message, label) =
+            restore_copy(crate::history::OperationFamily::Delete, 22, false);
+
+        assert_eq!(title, "Restore 22 deleted documents?");
+        assert_eq!(label, "Restore 22");
+        assert!(message.contains("Existing documents are skipped"));
+        assert!(!message.contains("Samples"));
+    }
+
+    #[test]
+    fn missing_resume_token_uses_plain_language() {
+        let (title, message) = gap_copy("missing_resume_token", "technical reason");
+
+        assert_eq!(title, "Restore coverage was interrupted");
+        assert!(message.contains("cannot be restored"));
+        assert!(!message.contains("resume_token"));
     }
 }

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use mongodb::bson::{Document, doc};
 use mongodb::change_stream::event::{ChangeStreamEvent, OperationType};
 use mongodb::options::{FullDocumentBeforeChangeType, FullDocumentType};
@@ -21,7 +21,14 @@ pub use model::{
     Page, RestoreProgress, SetupReport, TraceDescriptor, Usage,
 };
 use model::{RESTORE_CHUNK_ITEMS, RecordedEvent};
-use store::{HistoryStore, RestoreItem};
+use store::{CONNECTION_CURSOR_SCOPE, HistoryStore, RestoreItem};
+
+const RESTORE_CONCURRENCY: usize = 32;
+const RESTORE_PROGRESS_CHUNK: usize = 100;
+
+fn is_history_database(database: &str) -> bool {
+    !matches!(database, "admin" | "config" | "local" | "$external")
+}
 
 #[derive(Debug, Clone)]
 struct TraceState {
@@ -59,8 +66,9 @@ impl HistoryService {
         })
     }
 
-    /// Start one connection-level supervisor. It owns one watcher per database, never per UI tab.
-    pub fn start(&self, connection: HistoryConnection) {
+    /// Start one connection-level supervisor and one deployment-wide change stream.
+    pub fn start(&self, mut connection: HistoryConnection) {
+        connection.databases.retain(|database| is_history_database(database));
         self.stop(connection.id);
         if let Ok(mut clients) = self.clients.lock() {
             clients.insert(connection.id, connection.client.clone());
@@ -71,25 +79,27 @@ impl HistoryService {
         }
         let watched =
             Arc::new(Mutex::new(connection.databases.iter().cloned().collect::<HashSet<_>>()));
-        for database in connection.databases.clone() {
-            self.spawn_database_watcher(connection.clone(), database, cancellation.child_token());
-        }
+        self.spawn_connection_watcher(connection.clone(), cancellation.child_token());
         let service = self.clone();
         let cancellation = cancellation.child_token();
         self.runtime.spawn(async move {
-            let _ = service.store.apply_retention(
-                connection.id,
-                connection.max_age_days,
-                connection.max_bytes,
-            );
-            service.refresh_usage_cache(connection.id);
+            service
+                .maintain_storage(
+                    connection.id,
+                    connection.max_age_days,
+                    connection.max_bytes,
+                )
+                .await;
             while !cancellation.is_cancelled() {
                 tokio::select! {
                     _ = cancellation.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {
                         match connection.client.list_database_names().await {
                             Ok(databases) => {
-                                for database in databases {
+                                for database in databases
+                                    .into_iter()
+                                    .filter(|database| is_history_database(database))
+                                {
                                     let is_new = watched.lock().is_ok_and(|mut watched| watched.insert(database.clone()));
                                     if is_new {
                                         let _ = service.store.record_gap(
@@ -110,11 +120,7 @@ impl HistoryService {
                                                 &error,
                                             );
                                         }
-                                        service.spawn_database_watcher(
-                                            database_connection,
-                                            database,
-                                            cancellation.child_token(),
-                                        );
+                                        // The connection-wide stream already observes this database.
                                     }
                                 }
                             }
@@ -143,30 +149,61 @@ impl HistoryService {
                                 }
                             }
                         }
-                        if let Err(error) = service.setup_pre_post_images(&connection).await {
-                            let _ = service.store.record_gap(
+                        service
+                            .maintain_storage(
                                 connection.id,
-                                None,
-                                None,
-                                "coverage_setup_failed",
-                                &error,
-                            );
-                        }
+                                connection.max_age_days,
+                                connection.max_bytes,
+                            )
+                            .await;
                     }
                 }
             }
         });
     }
 
-    fn spawn_database_watcher(
+    async fn maintain_storage(&self, connection_id: Uuid, max_age_days: u32, max_bytes: u64) {
+        let service = self.clone();
+        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            service.store.apply_retention(connection_id, max_age_days, max_bytes)?;
+            service.refresh_usage_cache(connection_id);
+            Ok(())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => self.surface_stopped_gap(
+                connection_id,
+                None,
+                None,
+                "storage_limit",
+                &format!("History maintenance failed: {error}"),
+            ),
+            Err(error) => self.surface_stopped_gap(
+                connection_id,
+                None,
+                None,
+                "maintenance_failed",
+                &format!("History maintenance task failed: {error}"),
+            ),
+        }
+    }
+
+    async fn persist_event(&self, event: RecordedEvent) -> anyhow::Result<Option<Uuid>> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.record_event(event))
+            .await
+            .map_err(|error| anyhow::anyhow!("History persistence task failed: {error}"))?
+    }
+
+    fn spawn_connection_watcher(
         &self,
         connection: HistoryConnection,
-        database: String,
         cancellation: CancellationToken,
     ) {
         let service = self.clone();
         self.runtime.spawn(async move {
-            service.watch_database(connection, database, cancellation).await;
+            service.watch_connection(connection, cancellation).await;
         });
     }
 
@@ -224,6 +261,20 @@ impl HistoryService {
             );
         }
         gaps.sort_by_key(|gap| std::cmp::Reverse(gap.created_at));
+        Ok(gaps)
+    }
+
+    pub fn list_collection_gaps(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> anyhow::Result<Vec<HistoryGap>> {
+        let mut gaps = self.list_gaps(connection_id, Some(database), Some(collection))?;
+        gaps.retain(|gap| {
+            gap.database.as_deref() == Some(database)
+                && gap.collection.as_deref() == Some(collection)
+        });
         Ok(gaps)
     }
 
@@ -382,20 +433,19 @@ impl HistoryService {
         self.store.restore_progress(batch_id)
     }
 
-    async fn watch_database(
+    async fn watch_connection(
         &self,
         connection: HistoryConnection,
-        database: String,
         cancellation: CancellationToken,
     ) {
-        let mut resume = match self.store.load_cursor(connection.id, &database) {
+        let mut resume = match self.store.load_cursor(connection.id, CONNECTION_CURSOR_SCOPE) {
             Ok(resume) => resume,
             Err(error) => {
                 if self
                     .store
                     .record_gap_and_clear_cursor(
                         connection.id,
-                        database.clone(),
+                        None,
                         "resume_token_unreadable",
                         &format!("Stored resume token could not be decrypted: {error}"),
                     )
@@ -403,7 +453,7 @@ impl HistoryService {
                 {
                     self.surface_stopped_gap(
                         connection.id,
-                        Some(database.clone()),
+                        None,
                         None,
                         "recorder_stopped",
                         "History stopped because its resume state and gap marker could not be persisted.",
@@ -414,21 +464,21 @@ impl HistoryService {
             }
         };
         if resume.is_none()
-            && self.store.has_items_for_database(connection.id, &database).unwrap_or(false)
+            && self.store.has_items_for_connection(connection.id).unwrap_or(false)
             && self
                 .store
                 .record_gap(
                     connection.id,
-                    Some(database.clone()),
+                    None,
                     None,
                     "missing_resume_token",
-                    "Stored events exist without a resume token; recording restarted at the current point.",
+                    "Stored events exist without a connection resume token; recording restarted at the current point.",
                 )
                 .is_err()
         {
             self.surface_stopped_gap(
                 connection.id,
-                Some(database.clone()),
+                None,
                 None,
                 "recorder_stopped",
                 "History stopped because a missing-token gap could not be persisted.",
@@ -440,13 +490,14 @@ impl HistoryService {
             if cancellation.is_cancelled() {
                 break;
             }
-            let watched_database = connection.client.database(&database);
-            let pipeline = if split_large_events {
-                vec![doc! { "$changeStreamSplitLargeEvent": {} }]
-            } else {
-                Vec::new()
-            };
-            let watch = watched_database
+            let mut pipeline = vec![doc! {
+                "$match": { "ns.db": { "$nin": ["admin", "config", "local", "$external"] } }
+            }];
+            if split_large_events {
+                pipeline.push(doc! { "$changeStreamSplitLargeEvent": {} });
+            }
+            let watch = connection
+                .client
                 .watch()
                 .pipeline(pipeline)
                 .full_document(FullDocumentType::WhenAvailable)
@@ -463,7 +514,7 @@ impl HistoryService {
                             .store
                             .record_gap_and_clear_cursor(
                                 connection.id,
-                                database.clone(),
+                                None,
                                 "resume_token_invalid",
                                 &format!("Stored resume token is malformed: {error}"),
                             )
@@ -471,7 +522,7 @@ impl HistoryService {
                         {
                             self.surface_stopped_gap(
                                 connection.id,
-                                Some(database.clone()),
+                                None,
                                 None,
                                 "recorder_stopped",
                                 "History stopped because an invalid resume token could not be surfaced.",
@@ -497,7 +548,7 @@ impl HistoryService {
                             .store
                             .record_gap_and_clear_cursor(
                                 connection.id,
-                                database.clone(),
+                                None,
                                 "resume_token_expired",
                                 &format!("MongoDB rejected the stored resume point: {error}"),
                             )
@@ -505,7 +556,7 @@ impl HistoryService {
                         {
                             self.surface_stopped_gap(
                                 connection.id,
-                                Some(database.clone()),
+                                None,
                                 None,
                                 "recorder_stopped",
                                 "History stopped because an expired resume point could not be surfaced.",
@@ -516,7 +567,7 @@ impl HistoryService {
                     } else if resume.is_none() {
                         let _ = self.store.record_gap(
                             connection.id,
-                            Some(database.clone()),
+                            None,
                             None,
                             "change_stream_unavailable",
                             &format!("Could not open the change stream: {error}"),
@@ -540,17 +591,12 @@ impl HistoryService {
                     Err(NextEventError::Discontinuity { kind, reason }) => {
                         if self
                             .store
-                            .record_gap_and_clear_cursor(
-                                connection.id,
-                                database.clone(),
-                                kind,
-                                &reason,
-                            )
+                            .record_gap_and_clear_cursor(connection.id, None, kind, &reason)
                             .is_err()
                         {
                             self.surface_stopped_gap(
                                 connection.id,
-                                Some(database.clone()),
+                                None,
                                 None,
                                 "recorder_stopped",
                                 "History stopped because a stream discontinuity could not be surfaced.",
@@ -566,7 +612,7 @@ impl HistoryService {
                     Err(error) => {
                         let _ = self.store.record_gap(
                             connection.id,
-                            Some(database.clone()),
+                            None,
                             None,
                             "resume_token_invalid",
                             &error.to_string(),
@@ -581,37 +627,45 @@ impl HistoryService {
                     .unwrap_or_else(Utc::now);
                 let cluster_time =
                     event.cluster_time.map(|value| format!("{}:{}", value.time, value.increment));
+                let event_database = event.ns.as_ref().map(|namespace| namespace.db.clone());
+                let event_collection =
+                    event.ns.as_ref().and_then(|namespace| namespace.coll.clone());
                 let family = match event.operation_type {
                     OperationType::Update => Some(OperationFamily::Update),
                     OperationType::Replace => Some(OperationFamily::Replace),
                     OperationType::Delete => Some(OperationFamily::Delete),
                     OperationType::Rename | OperationType::Other(_) => {
-                        if let Err(error) = self.setup_pre_post_images(&connection).await {
-                            let namespace = event.ns.as_ref();
-                            if self
-                                .store
-                                .record_gap_and_advance_cursor(
-                                    connection.id,
-                                    database.clone(),
-                                    namespace.and_then(|ns| ns.coll.clone()),
-                                    "uncovered_collection",
-                                    &error,
-                                    token.clone(),
-                                    cluster_time.clone(),
-                                    wall_time.timestamp_millis(),
-                                )
-                                .is_err()
+                        if let Some(database) = event_database.clone() {
+                            let mut database_connection = connection.clone();
+                            database_connection.databases = vec![database.clone()];
+                            if let Err(error) =
+                                self.setup_pre_post_images(&database_connection).await
                             {
-                                self.surface_stopped_gap(
-                                    connection.id,
-                                    Some(database.clone()),
-                                    namespace.and_then(|ns| ns.coll.clone()),
-                                    "recorder_stopped",
-                                    "History stopped because new-collection coverage could not be persisted.",
-                                );
-                                return;
+                                if self
+                                    .store
+                                    .record_gap_and_advance_cursor(
+                                        connection.id,
+                                        Some(database.clone()),
+                                        event_collection.clone(),
+                                        "uncovered_collection",
+                                        &error,
+                                        token.clone(),
+                                        cluster_time.clone(),
+                                        wall_time.timestamp_millis(),
+                                    )
+                                    .is_err()
+                                {
+                                    self.surface_stopped_gap(
+                                        connection.id,
+                                        Some(database),
+                                        event_collection,
+                                        "recorder_stopped",
+                                        "History stopped because new-collection coverage could not be persisted.",
+                                    );
+                                    return;
+                                }
+                                continue;
                             }
-                            continue;
                         }
                         None
                     }
@@ -622,7 +676,7 @@ impl HistoryService {
                         .store
                         .advance_cursor(
                             connection.id,
-                            database.clone(),
+                            CONNECTION_CURSOR_SCOPE.to_string(),
                             token,
                             cluster_time,
                             wall_time.timestamp_millis(),
@@ -631,8 +685,8 @@ impl HistoryService {
                     {
                         self.surface_stopped_gap(
                             connection.id,
-                            Some(database.clone()),
-                            None,
+                            event_database,
+                            event_collection,
                             "recorder_stopped",
                             "History stopped because resume state could not be persisted.",
                         );
@@ -641,15 +695,19 @@ impl HistoryService {
                     continue;
                 };
                 let Some(namespace) = event.ns else {
-                    let _ = self.store.record_gap(
+                    let _ = self.store.record_gap_and_advance_cursor(
                         connection.id,
-                        Some(database.clone()),
+                        None,
                         None,
                         "event_missing_namespace",
                         "A supported change event had no namespace.",
+                        token,
+                        cluster_time,
+                        wall_time.timestamp_millis(),
                     );
                     continue;
                 };
+                let database = namespace.db;
                 let collection = namespace.coll.unwrap_or_default();
                 let before = event.full_document_before_change;
                 let after = event.full_document;
@@ -664,7 +722,7 @@ impl HistoryService {
                         .store
                         .record_gap_and_advance_cursor(
                             connection.id,
-                            database.clone(),
+                            Some(database.clone()),
                             Some(collection.clone()),
                             "missing_pre_post_image",
                             "MongoDB did not return the exact required pre/post image for a supported change.",
@@ -676,7 +734,7 @@ impl HistoryService {
                     {
                         self.surface_stopped_gap(
                             connection.id,
-                            Some(database.clone()),
+                            Some(database),
                             Some(collection),
                             "recorder_stopped",
                             "History stopped because a missing-image gap could not be persisted.",
@@ -697,20 +755,22 @@ impl HistoryService {
                 });
                 let trace_id =
                     self.match_trace(connection.id, &database, &collection, family, wall_time);
-                let recorded = self.store.record_event(RecordedEvent {
-                    connection_id: connection.id,
-                    database: database.clone(),
-                    collection,
-                    family,
-                    document_key,
-                    before,
-                    after,
-                    resume_token: token,
-                    cluster_time,
-                    wall_time,
-                    transaction_key,
-                    trace_id,
-                });
+                let recorded = self
+                    .persist_event(RecordedEvent {
+                        connection_id: connection.id,
+                        database: database.clone(),
+                        collection,
+                        family,
+                        document_key,
+                        before,
+                        after,
+                        resume_token: token,
+                        cluster_time,
+                        wall_time,
+                        transaction_key,
+                        trace_id,
+                    })
+                    .await;
                 if let Err(error) = recorded {
                     if self
                         .store
@@ -725,7 +785,7 @@ impl HistoryService {
                     {
                         self.surface_stopped_gap(
                             connection.id,
-                            Some(database.clone()),
+                            Some(database),
                             None,
                             "recorder_stopped",
                             &format!("History persistence failed: {error}"),
@@ -733,33 +793,6 @@ impl HistoryService {
                     }
                     return;
                 }
-                if let Err(error) = self.store.apply_retention(
-                    connection.id,
-                    connection.max_age_days,
-                    connection.max_bytes,
-                ) {
-                    if self
-                        .store
-                        .record_gap(
-                            connection.id,
-                            Some(database.clone()),
-                            None,
-                            "storage_limit",
-                            &error.to_string(),
-                        )
-                        .is_err()
-                    {
-                        self.surface_stopped_gap(
-                            connection.id,
-                            Some(database.clone()),
-                            None,
-                            "recorder_stopped",
-                            &format!("History retention failed: {error}"),
-                        );
-                    }
-                    return;
-                }
-                self.refresh_usage_cache(connection.id);
             }
             tokio::select! {
                 _ = cancellation.cancelled() => break,
@@ -846,33 +879,42 @@ impl HistoryService {
             if items.is_empty() {
                 break;
             }
-            for item in &items {
+            for chunk in items.chunks(RESTORE_PROGRESS_CHUNK) {
                 if cancellation.is_cancelled() {
                     self.store.finish_restore(batch_id, true).map_err(|error| error.to_string())?;
                     return Ok(());
                 }
                 self.store
-                    .mark_item_outcome(batch_id, item.id, "applying", None)
-                    .map_err(|error| error.to_string())?;
-                let outcome = restore_item(&client, item).await;
-                match outcome {
-                    Ok("restored") => {
-                        self.store.mark_item_outcome(batch_id, item.id, "restored", None)
-                    }
-                    Ok("skipped") => {
-                        self.store.mark_item_outcome(batch_id, item.id, "skipped", None)
-                    }
-                    Ok(_) => self.store.mark_item_outcome(
+                    .mark_item_outcomes(
                         batch_id,
-                        item.id,
-                        "conflicted",
-                        Some("current_document_mismatch"),
-                    ),
-                    Err(error) => {
-                        self.store.mark_item_outcome(batch_id, item.id, "failed", Some(&error))
-                    }
+                        chunk.iter().map(|item| (item.id, "applying".into(), None)).collect(),
+                    )
+                    .map_err(|error| error.to_string())?;
+
+                let mut groups = HashMap::<Vec<u8>, Vec<RestoreItem>>::new();
+                for item in chunk.iter().cloned() {
+                    let key = mongodb::bson::to_vec(&doc! {
+                        "database": &item.database,
+                        "collection": &item.collection,
+                        "document_key": &item.document_key,
+                    })
+                    .unwrap_or_else(|_| item.id.as_bytes().to_vec());
+                    groups.entry(key).or_default().push(item);
                 }
-                .map_err(|error| error.to_string())?;
+                let outcomes = futures::stream::iter(groups.into_values().map(|items| {
+                    let client = client.clone();
+                    let cancellation = cancellation.clone();
+                    async move { restore_item_group(&client, items, &cancellation).await }
+                }))
+                .buffer_unordered(RESTORE_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+                self.store
+                    .mark_item_outcomes(batch_id, outcomes)
+                    .map_err(|error| error.to_string())?;
             }
         }
         self.store.finish_restore(batch_id, false).map_err(|error| error.to_string())?;
@@ -883,52 +925,85 @@ impl HistoryService {
     }
 }
 
+async fn restore_item_group(
+    client: &mongodb::Client,
+    items: Vec<RestoreItem>,
+    cancellation: &CancellationToken,
+) -> Vec<(Uuid, String, Option<String>)> {
+    let mut outcomes = Vec::with_capacity(items.len());
+    for item in items {
+        if cancellation.is_cancelled() {
+            break;
+        }
+        let id = item.id;
+        outcomes.push(match restore_item(client, &item).await {
+            Ok(RestoreItemOutcome::Restored) => (id, "restored".into(), None),
+            Ok(RestoreItemOutcome::Skipped) => (id, "skipped".into(), None),
+            Ok(RestoreItemOutcome::Conflicted) => {
+                (id, "conflicted".into(), Some("current_document_mismatch".into()))
+            }
+            Err(error) => (id, "failed".into(), Some(error)),
+        });
+    }
+    outcomes
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreItemOutcome {
+    Restored,
+    Skipped,
+    Conflicted,
+}
+
 async fn restore_item(
     client: &mongodb::Client,
     item: &RestoreItem,
-) -> Result<&'static str, String> {
+) -> Result<RestoreItemOutcome, String> {
     let collection = client.database(&item.database).collection::<Document>(&item.collection);
     match item.family {
         OperationFamily::Update | OperationFamily::Replace => {
             let Some(before) = item.before.clone() else {
-                return Ok("skipped");
+                return Ok(RestoreItemOutcome::Skipped);
             };
             let Some(after) = item.after.clone() else {
-                return Ok("skipped");
+                return Ok(RestoreItemOutcome::Skipped);
             };
+            let mut filter = item.document_key.clone();
+            filter.insert("$expr", doc! { "$eq": ["$$ROOT", { "$literal": after }] });
+            let result = collection
+                .replace_one(filter, before.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+            if result.matched_count == 1 {
+                return Ok(RestoreItemOutcome::Restored);
+            }
             let current = collection
                 .find_one(item.document_key.clone())
                 .await
                 .map_err(|error| error.to_string())?;
-            if current.as_ref() == Some(&before) {
-                return Ok("restored");
-            }
-            if current.as_ref() != Some(&after) {
-                return Ok("conflicted");
-            }
-            let mut filter = item.document_key.clone();
-            filter.insert("$expr", doc! { "$eq": ["$$ROOT", { "$literal": after }] });
-            let result =
-                collection.replace_one(filter, before).await.map_err(|error| error.to_string())?;
-            Ok(if result.matched_count == 1 { "restored" } else { "conflicted" })
+            Ok(if current.as_ref() == Some(&before) {
+                RestoreItemOutcome::Restored
+            } else {
+                RestoreItemOutcome::Conflicted
+            })
         }
         OperationFamily::Delete => {
             let Some(before) = item.before.clone() else {
-                return Ok("skipped");
+                return Ok(RestoreItemOutcome::Skipped);
             };
-            let current = collection
-                .find_one(item.document_key.clone())
-                .await
-                .map_err(|error| error.to_string())?;
-            if current.as_ref() == Some(&before) {
-                return Ok("restored");
-            }
-            if current.is_some() {
-                return Ok("conflicted");
-            }
-            match collection.insert_one(before).await {
-                Ok(_) => Ok("restored"),
-                Err(error) if is_duplicate_key(&error) => Ok("conflicted"),
+            match collection.insert_one(before.clone()).await {
+                Ok(_) => Ok(RestoreItemOutcome::Restored),
+                Err(error) if is_duplicate_key(&error) => {
+                    let current = collection
+                        .find_one(item.document_key.clone())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    Ok(if current.as_ref() == Some(&before) {
+                        RestoreItemOutcome::Restored
+                    } else {
+                        RestoreItemOutcome::Conflicted
+                    })
+                }
                 Err(error) => Err(error.to_string()),
             }
         }
@@ -1103,7 +1178,7 @@ pub async fn eligibility(connection: &HistoryConnection) -> EligibilityReport {
         }
     };
     let mut collections = Vec::new();
-    for database in &connection.databases {
+    for database in connection.databases.iter().filter(|database| is_history_database(database)) {
         let specifications = match connection.client.database(database).list_collections().await {
             Ok(specifications) => specifications,
             Err(error) => {
@@ -1233,7 +1308,7 @@ fn evaluate_requirements(
 
 pub async fn setup_pre_post_images(connection: &HistoryConnection) -> Result<SetupReport, String> {
     let mut report = SetupReport::default();
-    for database in &connection.databases {
+    for database in connection.databases.iter().filter(|database| is_history_database(database)) {
         let specifications = connection
             .client
             .database(database)
@@ -1276,6 +1351,14 @@ pub async fn setup_pre_post_images(connection: &HistoryConnection) -> Result<Set
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_databases_are_not_history_targets() {
+        for database in ["admin", "config", "local", "$external"] {
+            assert!(!is_history_database(database), "{database}");
+        }
+        assert!(is_history_database("application"));
+    }
 
     #[test]
     fn eligibility_requires_version_topology_storage_and_collection_coverage() {
@@ -1410,6 +1493,41 @@ mod tests {
         for code in [6, 7, 89, 91, 11600] {
             assert!(!resume_history_code_is_invalid(code));
         }
+    }
+
+    #[tokio::test]
+    async fn collection_history_excludes_connection_and_database_gaps() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = HistoryService::open(
+            directory.path().join("history.sqlite3"),
+            [41; 32],
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let connection_id = Uuid::new_v4();
+        service
+            .store
+            .record_gap(connection_id, None, None, "connection_gap", "connection")
+            .unwrap();
+        service
+            .store
+            .record_gap(connection_id, Some("app".into()), None, "database_gap", "database")
+            .unwrap();
+        service
+            .store
+            .record_gap(
+                connection_id,
+                Some("app".into()),
+                Some("items".into()),
+                "collection_gap",
+                "collection",
+            )
+            .unwrap();
+
+        let gaps = service.list_collection_gaps(connection_id, "app", "items").unwrap();
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, "collection_gap");
+        assert_eq!(service.list_gaps(connection_id, None, None).unwrap().len(), 3);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use gpui_component::ActiveTheme as _;
 use gpui_component::button::ButtonVariants as _;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::scroll::{ScrollableElement as _, Scrollbar, ScrollbarAxis};
 use gpui_component::switch::Switch;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
@@ -67,6 +67,7 @@ pub struct SettingsView {
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
     active_subtab: SettingsSubtab,
+    agents_scroll_handle: ScrollHandle,
     keybindings_view: Entity<KeybindingsView>,
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
@@ -97,6 +98,7 @@ impl SettingsView {
             state,
             _subscriptions: subscriptions,
             active_subtab: SettingsSubtab::default(),
+            agents_scroll_handle: ScrollHandle::default(),
             keybindings_view,
             template_input_state: None,
             batch_size_input_state: None,
@@ -320,6 +322,7 @@ impl Render for SettingsView {
         // Header
         let header = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .justify_between()
             .h(sizing::header_height())
@@ -412,60 +415,84 @@ impl Render for SettingsView {
                     cx,
                 ))
                 .into_any_element(),
-            SettingsSubtab::Agents => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
-                .child(
-                    div()
-                        .w_full()
-                        .max_w(px(760.0))
-                        .mx_auto()
-                        .pb(spacing::lg())
-                        .flex()
-                        .flex_col()
-                        .gap(spacing::lg())
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(spacing::xs())
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(cx.theme().foreground)
-                                        .child("Agent access"),
-                                )
-                                .child(
-                                    div()
-                                        .max_w(px(620.0))
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(
-                                            "Connect trusted local clients, then choose exactly which MongoDB connections they can inspect.",
-                                        ),
-                                ),
-                        )
-                        .child(render_mcp_section(state.clone(), &settings, cx))
-                        .child(render_mcp_grants_section(state.clone(), &settings, cx))
-                        .child(render_agent_connections_section(state.clone(), &settings, cx)),
-                )
-                .into_any_element(),
+            SettingsSubtab::Agents => {
+                let scroll_handle = self.agents_scroll_handle.clone();
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("agent-settings-scroll")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(760.0))
+                                    .mx_auto()
+                                    .pb(spacing::lg())
+                                    .flex()
+                                    .flex_col()
+                                    .gap(spacing::lg())
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(spacing::xs())
+                                            .child(
+                                                div()
+                                                    .text_base()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(cx.theme().foreground)
+                                                    .child("Agent access"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .max_w(px(620.0))
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(
+                                                        "Connect trusted local clients, then choose exactly which MongoDB connections they can inspect.",
+                                                    ),
+                                            ),
+                                    )
+                                    .child(render_mcp_section(state.clone(), &settings, cx))
+                                    .child(render_mcp_grants_section(state.clone(), &settings, cx))
+                                    .child(render_agent_connections_section(
+                                        state.clone(),
+                                        &settings,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div().absolute().top_0().left_0().right_0().bottom_0().child(
+                            Scrollbar::new(&scroll_handle)
+                                .id("agent-settings-scrollbar")
+                                .axis(ScrollbarAxis::Vertical),
+                        ),
+                    )
+                    .into_any_element()
+            }
         };
 
         div()
             .flex()
             .flex_col()
-            .flex_1()
+            .size_full()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
             .bg(islands::content_bg(&appearance, cx))
             .child(header)
-            .child(div().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
+            .child(div().flex_shrink_0().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
             .child(
                 div()
                     .flex()
@@ -1367,6 +1394,47 @@ fn mcp_client_setup_note(client: McpClientKind) -> &'static str {
     }
 }
 
+fn history_coverage_summary(report: &crate::history::EligibilityReport) -> Option<String> {
+    let needs_setup = report
+        .collections
+        .iter()
+        .filter(|coverage| {
+            coverage.regular
+                && coverage.reason.as_deref() == Some("changeStreamPreAndPostImages is not enabled")
+        })
+        .count();
+    let unavailable = report
+        .collections
+        .iter()
+        .filter(|coverage| {
+            coverage.regular
+                && coverage.reason.is_some()
+                && coverage.reason.as_deref() != Some("changeStreamPreAndPostImages is not enabled")
+        })
+        .count();
+    let excluded = report.collections.iter().filter(|coverage| !coverage.regular).count();
+    let mut summaries = Vec::new();
+    if needs_setup > 0 {
+        summaries.push(format!(
+            "Pre/post images are disabled on {needs_setup} collection{}.",
+            if needs_setup == 1 { "" } else { "s" }
+        ));
+    }
+    if unavailable > 0 {
+        summaries.push(format!(
+            "{unavailable} regular collection{} cannot be covered.",
+            if unavailable == 1 { "" } else { "s" }
+        ));
+    }
+    if excluded > 0 {
+        summaries.push(format!(
+            "{excluded} unsupported view or time-series collection{} excluded.",
+            if excluded == 1 { " is" } else { "s are" }
+        ));
+    }
+    (!summaries.is_empty()).then(|| summaries.join(" "))
+}
+
 fn render_agent_connections_section(
     state: Entity<AppState>,
     settings: &AppSettings,
@@ -1420,21 +1488,18 @@ fn render_agent_connections_section(
                     .history_service()
                     .and_then(|service| service.cached_usage(connection_id))
                     .or_else(|| state.read(cx).history_usage(connection_id));
-                let history_coverage = history_report
-                    .as_ref()
-                    .map(|report| {
-                        report
-                            .collections
-                            .iter()
-                            .filter_map(|coverage| {
-                                coverage.reason.as_ref().map(|reason| {
-                                    format!("{}.{}: {reason}", coverage.database, coverage.collection)
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    })
-                    .filter(|coverage| !coverage.is_empty());
+                let history_gap_count = if history_enabled {
+                    state
+                        .read(cx)
+                        .history_service()
+                        .and_then(|service| service.list_gaps(connection_id, None, None).ok())
+                        .map(|gaps| gaps.into_iter().filter(|gap| !gap.resolved).count())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let history_coverage =
+                    history_report.as_ref().and_then(history_coverage_summary);
                 let protected = connection.protected
                     || connection.environment
                         == Some(crate::models::ConnectionEnvironment::Production);
@@ -1448,8 +1513,9 @@ fn render_agent_connections_section(
                 let state_for_clear = state.clone();
                 div()
                     .flex()
+                    .flex_col()
+                    .w_full()
                     .items_start()
-                    .justify_between()
                     .gap(spacing::md())
                     .py(spacing::md())
                     .border_t_1()
@@ -1458,6 +1524,8 @@ fn render_agent_connections_section(
                         div()
                             .flex()
                             .flex_col()
+                            .w_full()
+                            .min_w(px(0.0))
                             .gap(px(2.0))
                             .child(
                                 div()
@@ -1524,6 +1592,18 @@ fn render_agent_connections_section(
                                         .child(coverage),
                                 )
                             })
+                            .when(history_gap_count > 0, |content| {
+                                content.child(
+                                    div()
+                                        .max_w(px(620.0))
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child(format!(
+                                            "History coverage: {history_gap_count} interruption{}. Some changes may not be restorable.",
+                                            if history_gap_count == 1 { "" } else { "s" }
+                                        )),
+                                )
+                            })
                             .when_some(history_usage, |content, usage| {
                                 content.child(
                                     div()
@@ -1542,6 +1622,7 @@ fn render_agent_connections_section(
                         div()
                             .flex()
                             .flex_col()
+                            .w_full()
                             .items_end()
                             .gap(spacing::sm())
                             .child(
@@ -2491,6 +2572,7 @@ fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(spacing::md())
         .child(
             div()
@@ -2511,6 +2593,7 @@ fn group(
     div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(spacing::sm())
         .p(spacing::md())
         .bg(islands::card_bg(appearance, cx))
@@ -2572,6 +2655,38 @@ fn setting_row_with_description(
 #[cfg(test)]
 mod mcp_tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn history_coverage_is_summarized_instead_of_listing_every_namespace() {
+        let report = crate::history::EligibilityReport {
+            status: crate::history::EligibilityStatus::NeedsSetup,
+            version: Some("7.0.0".into()),
+            topology: Some("replica_set".into()),
+            storage_engine: Some("wiredTiger".into()),
+            failures: Vec::new(),
+            collections: vec![
+                crate::history::CollectionCoverage {
+                    database: "app".into(),
+                    collection: "users".into(),
+                    regular: true,
+                    pre_post_images: false,
+                    reason: Some("changeStreamPreAndPostImages is not enabled".into()),
+                },
+                crate::history::CollectionCoverage {
+                    database: "app".into(),
+                    collection: "orders".into(),
+                    regular: true,
+                    pre_post_images: false,
+                    reason: Some("changeStreamPreAndPostImages is not enabled".into()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            history_coverage_summary(&report).as_deref(),
+            Some("Pre/post images are disabled on 2 collections.")
+        );
+    }
 
     #[::core::prelude::v1::test]
     fn client_configs_use_native_secret_mechanisms() {

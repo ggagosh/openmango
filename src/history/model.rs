@@ -146,9 +146,14 @@ pub struct BatchSummary {
 }
 
 impl BatchSummary {
+    pub fn pending_restore_count(&self) -> u64 {
+        self.revertible_count.saturating_sub(
+            self.restored_count + self.skipped_count + self.conflict_count + self.failed_count,
+        )
+    }
+
     pub fn can_restore(&self) -> bool {
-        self.revertible_count > 0
-            && !matches!(self.status, BatchStatus::Restoring | BatchStatus::Restored)
+        self.pending_restore_count() > 0 && self.status != BatchStatus::Restoring
     }
 }
 

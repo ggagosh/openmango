@@ -33,9 +33,9 @@ When a regular collection appears while recording is enabled, the deployment-lev
 
 `src/history/` is the deep module boundary. UI and command callers use a small service API for lifecycle, eligibility/setup, paginated batches/details, restore, gaps, retention, usage, and clear operations. Callers do not manage cursors, tokens, encryption, batching, or restore recipes.
 
-The recorder runs MongoDB and SQLite work off the GPUI thread. One connection supervisor owns database-level watchers; there is never one watcher per open tab.
+The recorder runs MongoDB and SQLite work off the GPUI thread. Each connection supervisor owns one deployment-level change stream, regardless of database count, so History cannot consume the MongoDB connection pool with long-lived database cursors.
 
-Each watcher requests:
+The watcher requests:
 
 - `fullDocumentBeforeChange: "whenAvailable"`;
 - `fullDocument: "whenAvailable"`.
@@ -48,7 +48,7 @@ The clean SQLite schema contains:
 
 - `history_batches`: displayed change sets and aggregate restore state;
 - `history_items`: AES-256-GCM encrypted document key and exact before/after images;
-- `history_cursors`: AES-256-GCM encrypted resume state per connection/database;
+- `history_cursors`: AES-256-GCM encrypted deployment resume state per connection;
 - `history_gaps`: durable discontinuities and coverage/storage failures.
 
 The installation key is generated once and kept in macOS Keychain. Connection URIs and credentials are never stored in History.
@@ -67,19 +67,19 @@ History never presents one top-level row per document.
 
 Observed batches use a 1-second idle boundary, 30-second maximum duration, and 100,000-item continuation ceiling. A 10,000-document `updateMany` normally appears as one or a few batch rows while preserving all exact encrypted per-document images internally. Items are decrypted only for detail pagination or restore.
 
-The Collection History UI shows grouping quality, namespace, family, item/revertible/conflict counts, time range, encrypted size, status, document-key samples on demand, and prominent gaps. It does not claim complete coverage while any gap or uncovered collection exists.
+The Collection History UI shows family, grouping quality, time range, restore status/progress, non-zero outcomes, and three compact document-key samples on demand. It shows only gaps scoped to that collection. Connection- and database-wide coverage interruptions appear once under Settings → Agents for the affected connection instead of repeating in every collection.
 
 ## Conflict-safe restore
 
-Restore requires native write/Production confirmation and runs in bounded background chunks with durable progress.
+Restore requires native write/Production confirmation and runs with bounded concurrency. Changes for the same document remain newest-first and sequential; independent documents run concurrently. Outcome state is committed in progress chunks so polling stays responsive without one SQLite transaction per item.
 
 - Update/replace: restore `before` only if the current document exactly equals recorded `after`.
 - Delete: insert `before` only if that `_id` remains absent.
 - Existing `before` state is treated as already restored; any other current state is a conflict.
 
-Restore never force-overwrites. It records restored, skipped, conflicted, and failed counts. Cancellation and restart retain honest partial state; interrupted applying items become failed/partial rather than being reported as successful. Restore writes are ordinary MongoDB writes and therefore produce ordinary change-stream events.
+Restore never force-overwrites. It records restored, skipped, conflicted, and failed counts. Cancellation and restart retain honest partial state; pending/applying items remain resumable and are never reported as successful. Restore writes are ordinary MongoDB writes and therefore produce ordinary change-stream events.
 
-Because observed batches can be heuristic, confirmation shows namespace, grouping quality, time range, item count, and the conflict-safe rule before execution.
+Confirmation shows connection identity, target, remaining item count, and the conflict-safe rule. Document samples remain optional and are not required to restore.
 
 ## Retention and clearing
 

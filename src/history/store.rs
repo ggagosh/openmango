@@ -19,6 +19,7 @@ use super::model::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const QUEUE_CAPACITY: usize = 128;
 const PAGE_LIMIT: u32 = 100;
+pub(crate) const CONNECTION_CURSOR_SCOPE: &str = "__connection__";
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
 
@@ -120,7 +121,7 @@ impl HistoryStore {
         )?;
         let encrypted_cursor = self.cipher.encrypt_cursor(
             event.connection_id,
-            &event.database,
+            CONNECTION_CURSOR_SCOPE,
             &event.resume_token,
         )?;
         let bytes = encrypted_payload.len() as u64;
@@ -135,7 +136,7 @@ impl HistoryStore {
                 upsert_cursor(
                     &transaction,
                     event.connection_id,
-                    &event.database,
+                    CONNECTION_CURSOR_SCOPE,
                     encrypted_cursor,
                     &token_hash,
                     event.cluster_time.as_deref(),
@@ -230,7 +231,7 @@ impl HistoryStore {
             upsert_cursor(
                 &transaction,
                 event.connection_id,
-                &event.database,
+                CONNECTION_CURSOR_SCOPE,
                 encrypted_cursor,
                 &token_hash,
                 event.cluster_time.as_deref(),
@@ -302,18 +303,13 @@ impl HistoryStore {
         })
     }
 
-    pub(crate) fn has_items_for_database(
-        &self,
-        connection_id: Uuid,
-        database: &str,
-    ) -> Result<bool> {
-        let database = database.to_string();
+    pub(crate) fn has_items_for_connection(&self, connection_id: Uuid) -> Result<bool> {
         self.call(move |connection| {
             Ok(connection.query_row(
                 "SELECT EXISTS(
-                    SELECT 1 FROM history_batches WHERE connection_id = ?1 AND database_name = ?2
+                    SELECT 1 FROM history_batches WHERE connection_id = ?1
                  )",
-                params![connection_id.to_string(), database],
+                params![connection_id.to_string()],
                 |row| row.get(0),
             )?)
         })
@@ -348,7 +344,7 @@ impl HistoryStore {
     pub(crate) fn record_gap_and_advance_cursor(
         &self,
         connection_id: Uuid,
-        database: String,
+        database: Option<String>,
         collection: Option<String>,
         kind: &str,
         reason: &str,
@@ -359,13 +355,14 @@ impl HistoryStore {
         let kind = sanitize(kind, 64);
         let reason = sanitize(reason, 500);
         let token_hash = token_hash(&token);
-        let encrypted = self.cipher.encrypt_cursor(connection_id, &database, &token)?;
+        let encrypted =
+            self.cipher.encrypt_cursor(connection_id, CONNECTION_CURSOR_SCOPE, &token)?;
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let id = insert_gap(
                 &transaction,
                 connection_id,
-                Some(&database),
+                database.as_deref(),
                 collection.as_deref(),
                 &kind,
                 &reason,
@@ -373,7 +370,7 @@ impl HistoryStore {
             upsert_cursor(
                 &transaction,
                 connection_id,
-                &database,
+                CONNECTION_CURSOR_SCOPE,
                 encrypted,
                 &token_hash,
                 cluster_time.as_deref(),
@@ -387,7 +384,7 @@ impl HistoryStore {
     pub(crate) fn record_gap_and_clear_cursor(
         &self,
         connection_id: Uuid,
-        database: String,
+        database: Option<String>,
         kind: &str,
         reason: &str,
     ) -> Result<Uuid> {
@@ -396,10 +393,10 @@ impl HistoryStore {
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let id =
-                insert_gap(&transaction, connection_id, Some(&database), None, &kind, &reason)?;
+                insert_gap(&transaction, connection_id, database.as_deref(), None, &kind, &reason)?;
             transaction.execute(
                 "DELETE FROM history_cursors WHERE connection_id = ?1 AND database_name = ?2",
-                params![connection_id.to_string(), database],
+                params![connection_id.to_string(), CONNECTION_CURSOR_SCOPE],
             )?;
             transaction.commit()?;
             Ok(id)
@@ -573,21 +570,25 @@ impl HistoryStore {
         })
     }
 
-    pub(crate) fn mark_item_outcome(
+    pub(crate) fn mark_item_outcomes(
         &self,
         batch_id: Uuid,
-        item_id: Uuid,
-        outcome: &str,
-        error_code: Option<&str>,
+        outcomes: Vec<(Uuid, String, Option<String>)>,
     ) -> Result<()> {
-        let outcome = outcome.to_string();
-        let error_code = error_code.map(|value| sanitize(value, 128));
+        let outcomes = outcomes
+            .into_iter()
+            .map(|(id, outcome, error)| (id, outcome, error.map(|value| sanitize(&value, 128))))
+            .collect::<Vec<_>>();
         self.call(move |connection| {
             let transaction = connection.transaction()?;
-            transaction.execute(
-                "UPDATE history_items SET restore_outcome = ?2, error_code = ?3 WHERE id = ?1",
-                params![item_id.to_string(), outcome, error_code],
-            )?;
+            {
+                let mut statement = transaction.prepare(
+                    "UPDATE history_items SET restore_outcome = ?2, error_code = ?3 WHERE id = ?1",
+                )?;
+                for (id, outcome, error) in outcomes {
+                    statement.execute(params![id.to_string(), outcome, error])?;
+                }
+            }
             update_restore_counts(&transaction, batch_id)?;
             transaction.commit()?;
             Ok(())
@@ -1180,7 +1181,7 @@ mod tests {
         let event = event(connection_id, 1, Utc::now());
         assert!(store.record_event(event.clone()).unwrap().is_some());
         assert!(store.record_event(event).unwrap().is_none());
-        assert!(store.load_cursor(connection_id, "app").unwrap().is_some());
+        assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_some());
         let page = store
             .list_batches(BatchQuery {
                 connection_id,
@@ -1292,7 +1293,7 @@ mod tests {
         store
             .record_gap_and_advance_cursor(
                 connection_id,
-                "app".into(),
+                Some("app".into()),
                 Some("items".into()),
                 "missing_pre_post_image",
                 "exact image unavailable",
@@ -1301,7 +1302,10 @@ mod tests {
                 Utc::now().timestamp_millis(),
             )
             .unwrap();
-        assert_eq!(store.load_cursor(connection_id, "app").unwrap(), Some(vec![9, 8, 7]));
+        assert_eq!(
+            store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap(),
+            Some(vec![9, 8, 7])
+        );
         let gaps = store.list_gaps(connection_id, Some("app"), Some("items")).unwrap();
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].kind, "missing_pre_post_image");
@@ -1312,18 +1316,18 @@ mod tests {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
         store.record_event(event(connection_id, 1, Utc::now())).unwrap();
-        assert!(store.load_cursor(connection_id, "app").unwrap().is_some());
+        assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_some());
 
         store
             .record_gap_and_clear_cursor(
                 connection_id,
-                "app".into(),
+                Some("app".into()),
                 "resume_token_expired",
                 "MongoDB rejected the stored resume point",
             )
             .unwrap();
 
-        assert!(store.load_cursor(connection_id, "app").unwrap().is_none());
+        assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_none());
         let gaps = store.list_gaps(connection_id, Some("app"), None).unwrap();
         assert!(gaps.iter().any(|gap| gap.kind == "resume_token_expired"));
     }
@@ -1333,8 +1337,8 @@ mod tests {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
         store.record_event(event(connection_id, 1, Utc::now())).unwrap();
-        store.delete_cursor_for_test(connection_id, "app").unwrap();
-        assert!(store.load_cursor(connection_id, "app").unwrap().is_none());
+        store.delete_cursor_for_test(connection_id, CONNECTION_CURSOR_SCOPE).unwrap();
+        assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_none());
         let first = store
             .record_gap(
                 connection_id,
@@ -1366,23 +1370,46 @@ mod tests {
         store.record_event(event(connection_id, 2, now)).unwrap();
         let details = store.get_batch(batch, 0, 10).unwrap();
         store.begin_restore(batch).unwrap();
-        store.mark_item_outcome(batch, details.items[0].id, "restored", None).unwrap();
         store
-            .mark_item_outcome(
+            .mark_item_outcomes(
                 batch,
-                details.items[1].id,
-                "conflicted",
-                Some("current_document_mismatch"),
+                vec![
+                    (details.items[0].id, "restored".into(), None),
+                    (
+                        details.items[1].id,
+                        "conflicted".into(),
+                        Some("current_document_mismatch".into()),
+                    ),
+                ],
             )
             .unwrap();
         let progress = store.finish_restore(batch, false).unwrap();
         assert_eq!(progress.restored, 1);
         assert_eq!(progress.conflicted, 1);
         assert_eq!(progress.processed, 2);
-        assert_eq!(
-            store.get_batch(batch, 0, 10).unwrap().summary.status,
-            BatchStatus::PartiallyRestored
-        );
+        let summary = store.get_batch(batch, 0, 10).unwrap().summary;
+        assert_eq!(summary.status, BatchStatus::PartiallyRestored);
+        assert!(!summary.can_restore(), "fully processed conflicts cannot be retried");
+    }
+
+    #[test]
+    fn cancelled_restore_keeps_pending_items_resumable() {
+        let (_directory, store) = store();
+        let connection_id = Uuid::new_v4();
+        let now = Utc::now();
+        let batch = store.record_event(event(connection_id, 1, now)).unwrap().unwrap();
+        store.record_event(event(connection_id, 2, now)).unwrap();
+        let details = store.get_batch(batch, 0, 10).unwrap();
+        store.begin_restore(batch).unwrap();
+        store
+            .mark_item_outcomes(batch, vec![(details.items[0].id, "restored".into(), None)])
+            .unwrap();
+        store.finish_restore(batch, true).unwrap();
+
+        let summary = store.get_batch(batch, 0, 10).unwrap().summary;
+        assert_eq!(summary.status, BatchStatus::PartiallyRestored);
+        assert_eq!(summary.pending_restore_count(), 1);
+        assert!(summary.can_restore());
     }
 
     #[test]

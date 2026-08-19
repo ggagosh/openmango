@@ -3,6 +3,7 @@ use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, format_relaxed_json_compact};
 use crate::connection::FindDocumentsOptions;
+use crate::connection::ops::documents::find_documents_page_async;
 use crate::state::{
     AppEvent, AppState, DocumentQuery, QueryContent, QueryDefinition, SessionData, SessionDocument,
     SessionKey, StatusMessage,
@@ -146,7 +147,7 @@ impl AppCommands {
         };
 
         // Cancel actual driver/server work before replacing it with a newer request.
-        let manager = state.read(cx).connection_manager();
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         let cancellation = crate::connection::types::CancellationToken::new();
         state.update(cx, |state, cx| {
             let session = state.ensure_session(session_key.clone());
@@ -154,12 +155,11 @@ impl AppCommands {
             cx.notify();
         });
 
-        // Run blocking MongoDB operation in background thread
-        let task = cx.background_spawn({
+        let task = runtime.spawn({
             let database_for_task = database.clone();
             let collection_for_task = collection.clone();
             async move {
-                manager.find_documents(
+                find_documents_page_async(
                     &client,
                     &database_for_task,
                     &collection_for_task,
@@ -173,6 +173,7 @@ impl AppCommands {
                         cancellation,
                     },
                 )
+                .await
             }
         });
 
@@ -181,7 +182,12 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<(Vec<Document>, u64), crate::error::Error> = task.await;
+                let result: Result<(Vec<Document>, u64), crate::error::Error> = match task.await {
+                    Ok(result) => result,
+                    Err(error) => Err(crate::error::Error::Parse(format!(
+                        "Document query task failed: {error}"
+                    ))),
+                };
 
                 let _ = cx.update(|cx| match result {
                     Ok((documents, total)) => {

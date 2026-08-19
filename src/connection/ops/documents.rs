@@ -46,6 +46,87 @@ pub async fn count_documents_async(
     Ok(coll.count_documents(filter).max_time(max_time).await?)
 }
 
+pub async fn find_documents_page_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    opts: FindDocumentsOptions,
+) -> Result<(Vec<Document>, u64)> {
+    let FindDocumentsOptions { filter, sort, projection, skip, limit, max_time, cancellation } =
+        opts;
+    let filter = filter.unwrap_or_default();
+    let coll = client.database(database).collection::<Document>(collection);
+    let cancelled = || async {
+        while !cancellation.is_cancelled() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+
+    let total = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
+    };
+    let options = mongodb::options::FindOptions::builder()
+        .skip(skip)
+        .limit(limit)
+        .sort(sort)
+        .projection(projection)
+        .max_time(max_time)
+        .build();
+    let cursor = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = coll.find(filter).with_options(options) => result?,
+    };
+    let documents = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = cursor.try_collect() => result?,
+    };
+    Ok((documents, total))
+}
+
+pub async fn replace_document_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+    replacement: Document,
+) -> Result<()> {
+    client
+        .database(database)
+        .collection::<Document>(collection)
+        .replace_one(doc! { "_id": id }, replacement)
+        .await?;
+    Ok(())
+}
+
+pub async fn replace_document_if_current_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+    expected: Document,
+    replacement: Document,
+) -> Result<()> {
+    let result = client
+        .database(database)
+        .collection::<Document>(collection)
+        .replace_one(
+            doc! {
+                "_id": id,
+                "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
+            },
+            replacement,
+        )
+        .await?;
+    if result.matched_count == 1 {
+        Ok(())
+    } else {
+        Err(crate::error::Error::Parse(
+            "Document changed on the server; reload before saving.".to_string(),
+        ))
+    }
+}
+
 impl ConnectionManager {
     /// Find documents in a collection with pagination (runs in Tokio runtime)
     pub fn find_documents(
@@ -55,54 +136,7 @@ impl ConnectionManager {
         collection: &str,
         opts: FindDocumentsOptions,
     ) -> Result<(Vec<Document>, u64)> {
-        use futures::TryStreamExt;
-
-        let client = client.clone();
-        let database = database.to_string();
-        let collection = collection.to_string();
-        let crate::connection::types::FindDocumentsOptions {
-            filter,
-            sort,
-            projection,
-            skip,
-            limit,
-            max_time,
-            cancellation,
-        } = opts;
-        let filter = filter.unwrap_or_default();
-
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            let cancelled = || async {
-                while !cancellation.is_cancelled() {
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                }
-            };
-
-            // Apply maxTimeMS to both server commands and drop in-flight driver futures on cancel.
-            let total = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
-            };
-
-            let mut options = mongodb::options::FindOptions::default();
-            options.skip = Some(skip);
-            options.limit = Some(limit);
-            options.sort = sort;
-            options.projection = projection;
-            options.max_time = Some(max_time);
-
-            let cursor = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = coll.find(filter).with_options(options) => result?,
-            };
-            let documents: Vec<Document> = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = cursor.try_collect() => result?,
-            };
-
-            Ok((documents, total))
-        })
+        self.runtime.block_on(find_documents_page_async(client, database, collection, opts))
     }
 
     /// Count documents matching an exact filter (runs in Tokio runtime).
@@ -281,11 +315,13 @@ impl ConnectionManager {
         let collection = collection.to_string();
         let id = id.clone();
 
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            coll.replace_one(doc! { "_id": id }, replacement).await?;
-            Ok(())
-        })
+        self.runtime.block_on(replace_document_async(
+            &client,
+            &database,
+            &collection,
+            id,
+            replacement,
+        ))
     }
 
     /// Replace every document matching a frozen filter while preserving each `_id`.
@@ -368,20 +404,20 @@ impl ConnectionManager {
         expected: &Document,
         replacement: Document,
     ) -> Result<()> {
-        if self.replace_document_if_current_matches(
-            client,
-            database,
-            collection,
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+        let expected = expected.clone();
+
+        self.runtime.block_on(replace_document_if_current_async(
+            &client,
+            &database,
+            &collection,
             id,
             expected,
             replacement,
-        )? {
-            Ok(())
-        } else {
-            Err(crate::error::Error::Parse(
-                "Document changed on the server; reload before saving.".to_string(),
-            ))
-        }
+        ))
     }
 
     /// Return whether an exact-current-state replacement matched its document.
