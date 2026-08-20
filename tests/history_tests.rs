@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
 use openmango::history::{
-    BatchQuery, EligibilityStatus, GroupingKind, HistoryConnection, HistoryService, OperationFamily,
+    BatchQuery, BatchSummary, EligibilityStatus, GroupingKind, HistoryConnection, HistoryService,
+    OperationFamily,
 };
 use openmango::mcp::{McpBridge, McpConnection, McpServer, McpServerHandle};
 use rmcp::ServiceExt as _;
@@ -49,6 +50,33 @@ async fn wait_for_items(service: &HistoryService, connection_id: uuid::Uuid, min
     })
     .await
     .expect("History did not record expected events");
+}
+
+async fn restore_batches(service: &HistoryService, batches: &[BatchSummary], expected_count: u64) {
+    assert_eq!(batches.iter().map(|batch| batch.item_count).sum::<u64>(), expected_count);
+    for batch in batches {
+        service.revert_batch(batch.id).unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let progress = batches
+                .iter()
+                .map(|batch| service.restore_progress(batch.id).unwrap())
+                .collect::<Vec<_>>();
+            if progress.iter().all(|progress| progress.done) {
+                assert_eq!(
+                    progress.iter().map(|progress| progress.restored).sum::<u64>(),
+                    expected_count
+                );
+                assert_eq!(progress.iter().map(|progress| progress.conflicted).sum::<u64>(), 0);
+                assert_eq!(progress.iter().map(|progress| progress.failed).sum::<u64>(), 0);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("2,500-document History restore exceeded ten seconds");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -408,24 +436,8 @@ async fn bulk_history_restore_is_bounded_and_complete() {
             limit: 10,
         })
         .unwrap();
-    let batch = page.items.iter().find(|batch| batch.item_count == DOCUMENT_COUNT).unwrap();
-
     let restore_started = Instant::now();
-    service.revert_batch(batch.id).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let progress = service.restore_progress(batch.id).unwrap();
-            if progress.done {
-                assert_eq!(progress.restored, DOCUMENT_COUNT);
-                assert_eq!(progress.conflicted, 0);
-                assert_eq!(progress.failed, 0);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("2,500-document History restore exceeded ten seconds");
+    restore_batches(&service, &page.items, DOCUMENT_COUNT).await;
     println!("2,500-document restore: {} ms", restore_started.elapsed().as_millis());
 }
 
@@ -472,24 +484,8 @@ async fn bulk_delete_restore_is_bounded_and_complete() {
             limit: 10,
         })
         .unwrap();
-    let batch = page.items.iter().find(|batch| batch.item_count == DOCUMENT_COUNT).unwrap();
-
     let restore_started = Instant::now();
-    service.revert_batch(batch.id).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let progress = service.restore_progress(batch.id).unwrap();
-            if progress.done {
-                assert_eq!(progress.restored, DOCUMENT_COUNT);
-                assert_eq!(progress.conflicted, 0);
-                assert_eq!(progress.failed, 0);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("2,500-document delete restore exceeded ten seconds");
+    restore_batches(&service, &page.items, DOCUMENT_COUNT).await;
     assert_eq!(collection.count_documents(doc! {}).await.unwrap(), DOCUMENT_COUNT);
     println!("2,500-document delete restore: {} ms", restore_started.elapsed().as_millis());
 }
