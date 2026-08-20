@@ -1,11 +1,9 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
-use crate::state::AppCommands;
-use crate::state::{AppEvent, AppState, SessionKey};
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 
 impl AppCommands {
-    /// Insert multiple documents into a collection.
     pub fn insert_documents(
         state: Entity<AppState>,
         session_key: SessionKey,
@@ -19,16 +17,12 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
-        let manager = state.read(cx).connection_manager();
-
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            async move { manager.insert_documents(&client, &database, &collection, documents) }
+        let task = cx.background_spawn(async move {
+            manager.insert_documents(&client, &database, &collection, documents)
         });
-
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
@@ -42,29 +36,21 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                        AppCommands::load_documents_for_session(state, session_key, cx);
                     }
-                    Err(e) => {
-                        log::error!("Failed to insert documents: {}", e);
-                        state.update(cx, |state, cx| {
-                            let event =
-                                AppEvent::DocumentsInsertFailed { count, error: e.to_string() };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
-                            cx.notify();
-                        });
-                    }
+                    Err(error) => state.update(cx, |state, cx| {
+                        let event =
+                            AppEvent::DocumentsInsertFailed { count, error: error.to_string() };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    }),
                 });
             }
         })
         .detach();
     }
 
-    /// Update multiple documents by filter.
     pub fn update_documents_by_filter(
         state: Entity<AppState>,
         session_key: SessionKey,
@@ -78,17 +64,12 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
-        let manager = state.read(cx).connection_manager();
-
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            let update = update.clone();
-            async move { manager.update_many(&client, &database, &collection, filter, update) }
+        let task = cx.background_spawn(async move {
+            manager.update_many(&client, &database, &collection, filter, update)
         });
-
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
@@ -108,31 +89,23 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                        AppCommands::load_documents_for_session(state, session_key, cx);
                     }
-                    Err(e) => {
-                        log::error!("Failed to update documents: {}", e);
-                        state.update(cx, |state, cx| {
-                            let event = AppEvent::DocumentsUpdateFailed {
-                                session: session_key.clone(),
-                                error: e.to_string(),
-                            };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
-                            cx.notify();
-                        });
-                    }
+                    Err(error) => state.update(cx, |state, cx| {
+                        let event = AppEvent::DocumentsUpdateFailed {
+                            session: session_key.clone(),
+                            error: error.to_string(),
+                        };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    }),
                 });
             }
         })
         .detach();
     }
 
-    /// Replace each document matching a filter while preserving its original `_id`.
     pub fn replace_documents_by_filter(
         state: Entity<AppState>,
         session_key: SessionKey,
@@ -147,25 +120,19 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
-        let manager = state.read(cx).connection_manager();
-
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            async move {
-                manager.replace_documents_by_filter(
-                    &client,
-                    &database,
-                    &collection,
-                    filter,
-                    replacement,
-                    cancellation,
-                )
-            }
+        let task = cx.background_spawn(async move {
+            manager.replace_documents_by_filter(
+                &client,
+                &database,
+                &collection,
+                filter,
+                replacement,
+                cancellation,
+            )
         });
-
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
@@ -187,35 +154,23 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                        AppCommands::load_documents_for_session(state, session_key, cx);
                     }
-                    Err(error) => {
-                        state.update(cx, |state, cx| {
-                            let event = AppEvent::DocumentsUpdateFailed {
-                                session: session_key.clone(),
-                                error: error.to_string(),
-                            };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
-                            cx.notify();
-                        });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
-                    }
+                    Err(error) => state.update(cx, |state, cx| {
+                        let event = AppEvent::DocumentsUpdateFailed {
+                            session: session_key.clone(),
+                            error: error.to_string(),
+                        };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    }),
                 });
             }
         })
         .detach();
     }
 
-    /// Delete multiple documents by filter.
     pub fn delete_documents_by_filter(
         state: Entity<AppState>,
         session_key: SessionKey,
@@ -228,16 +183,12 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
-        let manager = state.read(cx).connection_manager();
-
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            async move { manager.delete_documents(&client, &database, &collection, filter) }
+        let task = cx.background_spawn(async move {
+            manager.delete_documents(&client, &database, &collection, filter)
         });
-
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
@@ -254,24 +205,17 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                        AppCommands::load_documents_for_session(state, session_key, cx);
                     }
-                    Err(e) => {
-                        log::error!("Failed to delete documents: {}", e);
-                        state.update(cx, |state, cx| {
-                            let event = AppEvent::DocumentsDeleteFailed {
-                                session: session_key.clone(),
-                                error: e.to_string(),
-                            };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
-                            cx.notify();
-                        });
-                    }
+                    Err(error) => state.update(cx, |state, cx| {
+                        let event = AppEvent::DocumentsDeleteFailed {
+                            session: session_key.clone(),
+                            error: error.to_string(),
+                        };
+                        state.update_status_from_event(&event);
+                        cx.emit(event);
+                        cx.notify();
+                    }),
                 });
             }
         })

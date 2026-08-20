@@ -152,8 +152,9 @@ pub(crate) fn request_delete_confirmation(
                     cx.notify();
                 });
                 let filter_text = crate::bson::document_to_shell_string(&filter);
+                let recovery = " This cannot be undone.";
                 let message = format!(
-                    "Delete every {scope_label} document matching this filter from {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
+                    "Delete every {scope_label} document matching this filter from {database}.{collection}? {count} document{} currently match.{recovery}\n\nFilter: {filter_text}",
                     if count == 1 { "" } else { "s" }
                 );
                 let state_for_write = state.clone();

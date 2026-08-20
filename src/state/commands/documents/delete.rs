@@ -1,10 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
-use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
-use crate::state::{AppEvent, AppState, SessionKey};
-
-use crate::state::AppCommands;
+use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
 
 impl AppCommands {
     /// Delete a document by _id in MongoDB.
@@ -21,8 +18,8 @@ impl AppCommands {
             return;
         };
         let (database, collection, original_id) = {
-            let state = state.read(cx);
-            let Some(original) = state.document_for_key(&session_key, &doc_key) else {
+            let state_ref = state.read(cx);
+            let Some(original) = state_ref.document_for_key(&session_key, &doc_key) else {
                 return;
             };
             let Some(id) = original.get("_id") else {
@@ -82,12 +79,12 @@ impl AppCommands {
                             cx.notify();
                         });
                     }
-                    Err(e) => {
-                        log::error!("Failed to delete document: {}", e);
+                    Err(error) => {
+                        log::error!("Failed to delete document");
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentDeleteFailed {
                                 session: session_key.clone(),
-                                error: e.to_string(),
+                                error: error.to_string(),
                             };
                             state.update_status_from_event(&event);
                             cx.emit(event);

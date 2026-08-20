@@ -410,6 +410,9 @@ impl AppRoot {
             "view:schema" => {
                 Self::show_collection_subview(state, CollectionSubview::Schema, cx);
             }
+            "view:history" => {
+                Self::show_collection_subview(state, CollectionSubview::History, cx);
+            }
             "cmd:check-updates" => {
                 AppCommands::check_for_updates(state.clone(), cx);
             }
@@ -537,6 +540,9 @@ impl AppRoot {
                     CollectionSubview::Schema => {
                         AppCommands::analyze_collection_schema(self.state.clone(), session_key, cx);
                     }
+                    CollectionSubview::History => {
+                        AppCommands::load_collection_history(self.state.clone(), session_key, cx);
+                    }
                 }
             }
             View::Database => {
@@ -545,7 +551,11 @@ impl AppRoot {
                 };
                 AppCommands::reload_database(self.state.clone(), database_key, cx);
             }
-            View::Transfer | View::Forge | View::Settings | View::Changelog => {}
+            View::Transfer
+            | View::Forge
+            | View::AgentActivity
+            | View::Settings
+            | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {
                 let state_ref = self.state.read(cx);
                 if let Some(conn_id) = state_ref.selected_connection_id()

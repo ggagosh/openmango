@@ -73,6 +73,7 @@ actions!(
         ShowStatsSubview,
         ShowAggregationSubview,
         ShowSchemaSubview,
+        ShowHistorySubview,
         RunAggregation,
         FormatAggregationStage,
         ClearAggregationStage,

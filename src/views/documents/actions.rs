@@ -14,8 +14,8 @@ use crate::keyboard::{
     FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
     NextSearchMatch, PasteDocuments, PrevSearchMatch, RemoveMatchingValues, RemoveSelectedField,
     RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
-    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview,
-    ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
+    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
+    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
 };
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
 
@@ -199,8 +199,8 @@ impl CollectionView {
                 }
                 let affected_count = ids.len();
                 let filter = doc! { "_id": { "$in": ids } };
-                let message =
-                    format!("Delete {} documents? This cannot be undone.", affected_count);
+                let recovery = " This cannot be undone.";
+                let message = format!("Delete {affected_count} documents?{recovery}");
                 let state = this.state.clone();
                 let state_for_write = state.clone();
                 request_connection_write(
@@ -670,6 +670,23 @@ impl CollectionView {
                 state.set_collection_subview(&session_key, CollectionSubview::Aggregation);
                 cx.notify();
             });
+        }))
+        .on_action(cx.listener(|this, _: &ShowHistorySubview, _window, cx| {
+            let Some(session_key) = this.view_model.current_session() else {
+                return;
+            };
+            if !this.state.read(cx).collection_history_available(
+                session_key.connection_id,
+                &session_key.database,
+                &session_key.collection,
+            ) {
+                return;
+            }
+            this.state.update(cx, |state, cx| {
+                state.set_collection_subview(&session_key, CollectionSubview::History);
+                cx.notify();
+            });
+            AppCommands::load_collection_history(this.state.clone(), session_key, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowSchemaSubview, _window, cx| {
             let Some(session_key) = this.view_model.current_session() else {

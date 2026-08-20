@@ -9,7 +9,7 @@ use gpui_component::dialog::Dialog;
 use uuid::Uuid;
 
 use crate::bson::parse_document_from_json;
-use crate::components::{Button, with_scoped_production_authorizations};
+use crate::components::{Button, open_confirm_dialog, with_scoped_production_authorizations};
 use crate::error::Error;
 use crate::models::ConnectionWriteIdentity;
 use crate::state::{
@@ -49,18 +49,83 @@ fn write_counts(inventory: &UnsavedInventory) -> HashMap<Uuid, usize> {
 pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     let state_for_quit = state.clone();
     request_unsaved_action(state, UnsavedScope::App, window, cx, move |window, cx| {
-        state_for_quit.update(cx, |state, _| {
-            state.update_workspace_from_state();
-            state.flush_workspace_now();
-        });
-        let this_window = window.window_handle();
-        for handle in cx.windows() {
-            if handle != this_window {
-                handle.update(cx, |_, window, _cx| window.remove_window()).ok();
-            }
+        let running = state_for_quit
+            .read(cx)
+            .action_broker()
+            .store()
+            .list_operations()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|operation| {
+                matches!(
+                    operation.status,
+                    crate::actions::model::OperationStatus::Queued
+                        | crate::actions::model::OperationStatus::Running
+                        | crate::actions::model::OperationStatus::CancelRequested
+                )
+            })
+            .map(|operation| operation.id)
+            .collect::<Vec<_>>();
+        if running.is_empty() {
+            finish_app_quit(state_for_quit.clone(), cx);
+            return;
         }
-        cx.quit();
+        let state = state_for_quit.clone();
+        open_confirm_dialog(
+            window,
+            cx,
+            "Operations are still running",
+            "Cancel running agent operations, wait for rollback or recovery state, then quit?",
+            "Cancel operations & quit",
+            true,
+            move |_window, cx| {
+                let broker = state.read(cx).action_broker();
+                for operation_id in &running {
+                    let _ = broker.cancel_operation_from_ui(*operation_id);
+                }
+                let state = state.clone();
+                cx.spawn(async move |cx: &mut AsyncApp| loop {
+                    Timer::after(std::time::Duration::from_millis(200)).await;
+                    let finished = cx
+                        .update(|cx| {
+                            state
+                                .read(cx)
+                                .action_broker()
+                                .store()
+                                .list_operations()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|operation| running.contains(&operation.id))
+                                .all(|operation| {
+                                    !matches!(
+                                        operation.status,
+                                        crate::actions::model::OperationStatus::Queued
+                                            | crate::actions::model::OperationStatus::Running
+                                            | crate::actions::model::OperationStatus::CancelRequested
+                                    )
+                                })
+                        })
+                        .unwrap_or(true);
+                    if finished {
+                        let _ = cx.update(|cx| finish_app_quit(state.clone(), cx));
+                        break;
+                    }
+                })
+                .detach();
+            },
+        );
     });
+}
+
+fn finish_app_quit(state: Entity<AppState>, cx: &mut App) {
+    state.update(cx, |state, _| {
+        state.update_workspace_from_state();
+        state.flush_workspace_now();
+    });
+    for handle in cx.windows() {
+        handle.update(cx, |_, window, _cx| window.remove_window()).ok();
+    }
+    cx.quit();
 }
 
 pub fn request_disconnect_connection(

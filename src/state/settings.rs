@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::app_state::{InsertMode, TransferFormat};
 use crate::ai::settings::AiSettings;
@@ -18,6 +20,8 @@ pub struct AppSettings {
     pub ai: AiSettings,
     #[serde(default)]
     pub keybindings: KeybindingSettings,
+    #[serde(default)]
+    pub mcp: McpSettings,
     #[serde(default = "default_interactive_query_timeout_ms")]
     pub interactive_query_timeout_ms: u64,
     #[serde(default = "default_current_version")]
@@ -33,10 +37,74 @@ impl Default for AppSettings {
             transfer: TransferSettings::default(),
             ai: AiSettings::default(),
             keybindings: KeybindingSettings::default(),
+            mcp: McpSettings::default(),
             interactive_query_timeout_ms: default_interactive_query_timeout_ms(),
             last_seen_version: default_current_version(),
             auto_update: true,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub grants: Vec<McpClientGrant>,
+    #[serde(default = "default_true")]
+    pub legacy_access: bool,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self { enabled: false, port: 0, grants: Vec::new(), legacy_access: true }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpClientKind {
+    #[default]
+    Pi,
+    ClaudeCode,
+    Codex,
+    Cursor,
+    VsCode,
+}
+
+impl McpClientKind {
+    pub const ALL: [Self; 5] =
+        [Self::Pi, Self::ClaudeCode, Self::Codex, Self::Cursor, Self::VsCode];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pi => "Pi",
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex / ChatGPT",
+            Self::Cursor => "Cursor",
+            Self::VsCode => "VS Code / Copilot",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpClientGrant {
+    pub id: Uuid,
+    pub label: String,
+    #[serde(default)]
+    pub client: McpClientKind,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl McpClientGrant {
+    pub fn active(&self) -> bool {
+        self.revoked_at.is_none()
     }
 }
 
@@ -328,6 +396,10 @@ mod tests {
         assert_eq!(settings.transfer.default_batch_size, 1000);
         assert_eq!(settings.transfer.export_filename_template, DEFAULT_FILENAME_TEMPLATE);
         assert!(settings.keybindings.overrides.is_empty());
+        assert!(!settings.mcp.enabled);
+        assert_eq!(settings.mcp.port, 0);
+        assert!(settings.mcp.grants.is_empty());
+        assert!(settings.mcp.legacy_access);
         assert!(!settings.ai.enabled);
         assert_eq!(settings.ai.model, "gemini-3-flash-preview");
         assert_eq!(settings.interactive_query_timeout_ms, 30_000);
@@ -348,6 +420,35 @@ mod tests {
 
         assert_eq!(restored.keybindings, settings.keybindings);
         assert!(legacy.keybindings.overrides.is_empty());
+    }
+
+    #[test]
+    fn mcp_grants_round_trip_without_tokens() {
+        let mut settings = AppSettings::default();
+        settings.mcp.grants.push(McpClientGrant {
+            id: Uuid::new_v4(),
+            label: "Pi".into(),
+            client: McpClientKind::Pi,
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+        });
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.mcp.grants, settings.mcp.grants);
+        assert!(!json.contains("token"));
+    }
+
+    #[test]
+    fn legacy_mcp_grants_default_to_pi() {
+        let id = Uuid::new_v4();
+        let json = format!(r#"{{"id":"{id}","label":"Pi","created_at":"2026-01-01T00:00:00Z"}}"#);
+
+        let grant: McpClientGrant = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(grant.client, McpClientKind::Pi);
     }
 
     #[test]

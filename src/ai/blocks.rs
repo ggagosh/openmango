@@ -194,7 +194,7 @@ pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock>
             let stats = serde_json::json!({"title": "Insert Result", "metrics": metrics});
             Some(ContentBlock::Stats { json: stats.to_string() })
         }
-        "update_documents" => {
+        "update_documents" | "replace_documents" => {
             let matched = val.get("matched_count").map(|v| v.to_string()).unwrap_or_default();
             let modified = val.get("modified_count").map(|v| v.to_string()).unwrap_or_default();
             let metrics = vec![

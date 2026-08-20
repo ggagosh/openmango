@@ -1,5 +1,8 @@
 //! Index operations for MongoDB collections.
 
+use std::time::Duration;
+
+use futures::TryStreamExt;
 use mongodb::Client;
 use mongodb::IndexModel;
 use mongodb::bson::{Document, doc};
@@ -12,6 +15,13 @@ pub(crate) fn index_model_to_create_document(index: &IndexModel) -> Result<Docum
         .map_err(|error| Error::Parse(format!("Invalid index metadata: {error}")))?;
     // Returned by listIndexes for clustered indexes, but createIndexes rejects it.
     document.remove("clustered");
+    Ok(document)
+}
+
+pub(crate) fn canonical_index_document(index: &IndexModel) -> Result<Document> {
+    let mut document = index_model_to_create_document(index)?;
+    document.remove("v");
+    document.remove("ns");
     Ok(document)
 }
 
@@ -35,6 +45,16 @@ fn validate_index_document(index: &Document) -> Result<()> {
     Ok(())
 }
 
+pub async fn list_indexes_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    max_time: Duration,
+) -> Result<Vec<IndexModel>> {
+    let coll = client.database(database).collection::<Document>(collection);
+    Ok(coll.list_indexes().max_time(max_time).await?.try_collect().await?)
+}
+
 impl ConnectionManager {
     /// List indexes for a collection (runs in Tokio runtime)
     pub fn list_indexes(
@@ -43,18 +63,16 @@ impl ConnectionManager {
         database: &str,
         collection: &str,
     ) -> Result<Vec<IndexModel>> {
-        use futures::TryStreamExt;
-
         let client = client.clone();
         let database = database.to_string();
         let collection = collection.to_string();
 
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            let cursor = coll.list_indexes().await?;
-            let indexes: Vec<IndexModel> = cursor.try_collect().await?;
-            Ok(indexes)
-        })
+        self.runtime.block_on(list_indexes_async(
+            &client,
+            &database,
+            &collection,
+            Duration::from_secs(30),
+        ))
     }
 
     /// Create an index for a collection (runs in Tokio runtime)
@@ -74,6 +92,67 @@ impl ConnectionManager {
             db.run_command(doc! { "createIndexes": collection, "indexes": [index] }).await?;
             Ok(())
         })
+    }
+
+    pub fn find_index_document(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        name: &str,
+    ) -> Result<Option<Document>> {
+        self.list_indexes(client, database, collection)?
+            .iter()
+            .find(|index| {
+                index.options.as_ref().and_then(|options| options.name.as_deref()) == Some(name)
+            })
+            .map(canonical_index_document)
+            .transpose()
+    }
+
+    pub fn create_index_if_absent_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        index: Document,
+    ) -> Result<bool> {
+        let name = index
+            .get_str("name")
+            .map_err(|_| Error::Parse("Tracked index requires a name".to_string()))?
+            .to_string();
+        if self.find_index_document(client, database, collection, &name)?.is_some() {
+            return Ok(false);
+        }
+        match self.create_index(client, database, collection, index) {
+            Ok(()) => Ok(true),
+            Err(error)
+                if self.find_index_document(client, database, collection, &name)?.is_some() =>
+            {
+                Err(Error::Parse(format!(
+                    "Index creation returned an error, but {name} now exists; the outcome is uncertain: {error}"
+                )))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn drop_index_if_current_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        name: &str,
+        expected: &Document,
+    ) -> Result<bool> {
+        if self.find_index_document(client, database, collection, name)?.as_ref() != Some(expected)
+        {
+            return Ok(false);
+        }
+        // ponytail: MongoDB has no conditional dropIndexes primitive. A concurrent external
+        // drop/recreate after this check can be dropped and cannot be distinguished afterward.
+        self.drop_index(client, database, collection, name)?;
+        Ok(true)
     }
 
     /// Create multiple indexes in a single command (runs in Tokio runtime)

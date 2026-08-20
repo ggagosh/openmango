@@ -2,6 +2,9 @@ use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
 use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
+use crate::connection::ops::documents::{
+    replace_document_async, replace_document_if_current_async,
+};
 use crate::state::{AppEvent, AppState, EditorSessionId, SessionKey, StatusMessage};
 
 use crate::state::AppCommands;
@@ -83,30 +86,36 @@ impl AppCommands {
                 doc_index.is_none(),
             )
         };
-        let manager = state.read(cx).connection_manager();
+        let runtime = state.read(cx).connection_manager().runtime_handle();
+        state.update(cx, |state, cx| {
+            state.set_status_message(Some(StatusMessage::info("Saving document…")));
+            cx.notify();
+        });
 
         let updated_for_task = updated.clone();
-        let task = cx.background_spawn({
+        let task = runtime.spawn({
             let database = database.clone();
             let collection = collection.clone();
             async move {
                 if let Some(baseline_document) = baseline_document {
-                    manager.replace_document_if_current(
+                    replace_document_if_current_async(
                         &client,
                         &database,
                         &collection,
-                        &original_id,
-                        &baseline_document,
+                        original_id,
+                        baseline_document,
                         updated_for_task,
                     )
+                    .await
                 } else {
-                    manager.replace_document(
+                    replace_document_async(
                         &client,
                         &database,
                         &collection,
-                        &original_id,
+                        original_id,
                         updated_for_task,
                     )
+                    .await
                 }
             }
         });
@@ -117,7 +126,13 @@ impl AppCommands {
             let doc_key = doc_key.clone();
             let updated = updated.clone();
             async move |cx: &mut gpui::AsyncApp| {
-                let result: Result<(), crate::error::Error> = task.await;
+                let result: Result<(), crate::error::Error> = match task.await {
+                    Ok(result) => result,
+                    Err(error) => Err(crate::error::Error::Parse(format!(
+                        "Document save task failed: {error}"
+                    ))),
+                };
+                let saved = result.is_ok();
 
                 let _ = cx.update(|cx| match result {
                     Ok(()) => {
@@ -157,7 +172,7 @@ impl AppCommands {
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to save document: {}", e);
+                        log::error!("Failed to save document");
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentSaveFailed {
                                 session: session_key.clone(),
@@ -171,6 +186,16 @@ impl AppCommands {
                         });
                     }
                 });
+                if saved {
+                    gpui::Timer::after(std::time::Duration::from_millis(750)).await;
+                    let _ = cx.update(|cx| {
+                        AppCommands::collection_history_changed(
+                            state.clone(),
+                            session_key.clone(),
+                            cx,
+                        );
+                    });
+                }
             }
         })
         .detach();

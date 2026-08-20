@@ -186,6 +186,9 @@ impl Sidebar {
                 | AppEvent::SchemaAnalyzed { .. }
                 | AppEvent::SchemaFailed { .. }
                 | AppEvent::UpdateAvailable { .. } => {}
+                AppEvent::AgentActivityChanged => {
+                    cx.notify();
+                }
                 AppEvent::ViewChanged => {
                     this.sync_selection_from_state(cx);
                 }

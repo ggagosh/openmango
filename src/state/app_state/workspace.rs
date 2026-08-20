@@ -109,6 +109,9 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Forge;
                     }
+                    TabKey::AgentActivity => {
+                        self.current_view = View::AgentActivity;
+                    }
                     TabKey::Settings => {
                         self.current_view = View::Settings;
                     }

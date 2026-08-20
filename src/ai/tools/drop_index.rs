@@ -1,11 +1,12 @@
-use mongodb::bson;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
+use super::{
+    MongoContext, StreamEvent, ToolError, ensure_writable, require_confirmation, resolve_collection,
+};
 
 pub struct DropIndexTool(MongoContext);
 
@@ -73,13 +74,19 @@ impl Tool for DropIndexTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Execute
-        let collection =
-            self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
-        collection.drop_index(args.index_name.clone()).await?;
-
-        Ok(serde_json::json!({
-            "dropped": args.index_name,
-        }))
+        self.0
+            .client
+            .database(&self.0.database)
+            .collection::<mongodb::bson::Document>(&col_name)
+            .drop_index(&args.index_name)
+            .await?;
+        if let Some(tx) = &self.0.event_tx {
+            let _ = tx.send(StreamEvent::IndexesChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
+        }
+        Ok(serde_json::json!({ "dropped": args.index_name }))
     }
 }

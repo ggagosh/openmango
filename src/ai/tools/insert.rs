@@ -5,7 +5,9 @@ use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
-use super::{MongoContext, ToolError, ensure_writable, require_confirmation, resolve_collection};
+use super::{
+    MongoContext, StreamEvent, ToolError, ensure_writable, require_confirmation, resolve_collection,
+};
 
 pub struct InsertDocumentsTool(MongoContext);
 
@@ -20,8 +22,6 @@ pub struct InsertArgs {
     pub collection: Option<String>,
     pub documents: String,
 }
-
-const MAX_INSERT_COUNT: usize = 100;
 
 impl Tool for InsertDocumentsTool {
     const NAME: &'static str = "insert_documents";
@@ -71,13 +71,6 @@ impl Tool for InsertDocumentsTool {
         if docs_array.is_empty() {
             return Err(ToolError::InvalidInput("No documents to insert".to_string()));
         }
-        if docs_array.len() > MAX_INSERT_COUNT {
-            return Err(ToolError::InvalidInput(format!(
-                "Too many documents ({}). Maximum is {MAX_INSERT_COUNT}.",
-                docs_array.len()
-            )));
-        }
-
         // Convert to BSON documents
         let bson_docs: Vec<bson::Document> = docs_array
             .iter()
@@ -108,13 +101,20 @@ impl Tool for InsertDocumentsTool {
             .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Execute
-        let collection =
-            self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
-        let result = collection.insert_many(bson_docs).await?;
-
-        Ok(serde_json::json!({
-            "inserted_count": result.inserted_ids.len(),
-        }))
+        let inserted_count = bson_docs.len();
+        self.0
+            .client
+            .database(&self.0.database)
+            .collection::<bson::Document>(&col_name)
+            .insert_many(bson_docs)
+            .await?;
+        if let Some(tx) = &self.0.event_tx {
+            let _ = tx.send(StreamEvent::DocumentsChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
+        }
+        Ok(serde_json::json!({ "inserted_count": inserted_count }))
     }
 }

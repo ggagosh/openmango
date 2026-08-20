@@ -7,8 +7,8 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, doc_to_json, ensure_writable, parse_json_to_doc, require_confirmation,
-    resolve_collection,
+    MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable, parse_json_to_doc,
+    require_confirmation, resolve_collection,
 };
 
 pub struct DeleteDocumentsTool(MongoContext);
@@ -81,11 +81,16 @@ impl Tool for DeleteDocumentsTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Execute
-        let result = collection.delete_many(filter).await?;
-
-        Ok(serde_json::json!({
-            "deleted_count": result.deleted_count,
-        }))
+        let deleted_count = collection.delete_many(filter).await?.deleted_count;
+        if deleted_count > 0
+            && let Some(tx) = &self.0.event_tx
+        {
+            let _ = tx.send(StreamEvent::DocumentsChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
+        }
+        Ok(serde_json::json!({ "deleted_count": deleted_count }))
     }
 }

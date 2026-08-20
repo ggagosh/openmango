@@ -1188,22 +1188,13 @@ impl AgentLoop {
 }
 ```
 
-### Undo Support
+### History interaction
 
-For confirmed mutations, capture pre-images for rollback:
-
-```rust
-pub struct UndoSnapshot {
-    pub id: uuid::Uuid,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub operation: String,
-    pub collection: String,
-    pub filter: bson::Document,
-    pub original_documents: Vec<bson::Document>,
-}
-
-// Store in a local SQLite database or in-memory with configurable retention
-```
+Built-in AI writes retain their local confirmation flow, but they do not capture private undo
+snapshots and are never gated on History. When optional passive History is enabled on an eligible
+MongoDB deployment, its change stream may observe the resulting update, replace, or delete just as
+it observes writes from every other client. That recording can contain gaps and is not a backup or
+a guaranteed per-command undo facility.
 
 ---
 
@@ -1421,7 +1412,7 @@ src/ai/
 │   ├── index.rs            // ListIndexesTool, CreateIndexTool, DropIndexTool
 │   ├── explain.rs          // ExplainQueryTool
 │   ├── mutation.rs         // InsertDocumentsTool, UpdateDocumentsTool, DeleteDocumentsTool
-│   └── undo.rs             // UndoSnapshot, snapshot/restore logic
+│   └── mutation.rs         // Confirmed typed mutation execution
 └── ui/
     ├── mod.rs              // ChatPanel GPUI view
     ├── message_view.rs     // Renders individual ChatBlock as GPUI element
@@ -1475,7 +1466,7 @@ src/ai/
 
 ### Phase 3 — Write Operations and Safety (Weeks 7-9)
 
-**Goal:** Write tools with confirmation flow, undo support, full safety model.
+**Goal:** Write tools with confirmation flow and the full safety model.
 
 - [x] Implement `SafetyChecker` with four-tier classification
 - [x] Implement `ChatBlock::Confirmation` with approve/reject buttons
@@ -1483,7 +1474,7 @@ src/ai/
 - [x] Create tools: `create_index`, `drop_index`
 - [x] Pre-execution preview (count affected, show sample docs)
 - [x] `ChatBlock::DiffView` for update previews
-- [x] `UndoSnapshot` capture and restore
+- [x] Keep AI confirmation independent from optional passive History
 - [x] Empty filter detection and blocking
 - [x] `ChatBlock::Progress` for bulk operations
 

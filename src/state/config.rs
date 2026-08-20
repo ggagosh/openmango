@@ -40,6 +40,14 @@ impl ConfigManager {
         dirs::config_dir().map(|p| p.join(APP_NAME)).context("Could not determine config directory")
     }
 
+    pub(crate) fn agent_data_dir(&self) -> PathBuf {
+        self.config_dir.join("agent")
+    }
+
+    pub(crate) fn history_path(&self) -> PathBuf {
+        self.config_dir.join("history").join("history.sqlite3")
+    }
+
     /// Get path to a specific config file
     fn file_path(&self, filename: &str) -> PathBuf {
         self.config_dir.join(filename)
@@ -301,6 +309,9 @@ mod tests {
             SavedConnection::new("json".to_string(), "mongodb://localhost:27017".into());
         connection.environment = Some(crate::models::ConnectionEnvironment::Production);
         connection.confirm_production_writes = true;
+        connection.agent_shared = true;
+        connection.agent_writable = true;
+        connection.history_enabled = true;
         fs::write(
             temp_dir.path().join(ConfigManager::CONNECTIONS_FILE),
             serde_json::to_string_pretty(&vec![connection.clone()])
@@ -313,5 +324,7 @@ mod tests {
         assert_eq!(loaded[0].name, connection.name);
         assert_eq!(loaded[0].environment, connection.environment);
         assert!(loaded[0].confirm_production_writes);
+        assert!(loaded[0].agent_writable);
+        assert!(loaded[0].history_enabled);
     }
 }

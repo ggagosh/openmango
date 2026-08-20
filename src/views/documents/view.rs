@@ -146,6 +146,15 @@ impl Render for CollectionView {
             schema,
             schema_loading,
             schema_error,
+            history,
+            history_gaps,
+            history_details,
+            history_detail_loading,
+            history_loading,
+            history_loaded,
+            history_total,
+            history_next_offset,
+            history_error,
             schema_selected_field,
             schema_expanded_fields,
             schema_filter,
@@ -179,6 +188,15 @@ impl Render for CollectionView {
                 snapshot.schema,
                 snapshot.schema_loading,
                 snapshot.schema_error,
+                snapshot.history,
+                snapshot.history_gaps,
+                snapshot.history_details,
+                snapshot.history_detail_loading,
+                snapshot.history_loading,
+                snapshot.history_loaded,
+                snapshot.history_total,
+                snapshot.history_next_offset,
+                snapshot.history_error,
                 snapshot.schema_selected_field,
                 snapshot.schema_expanded_fields,
                 snapshot.schema_filter,
@@ -213,11 +231,32 @@ impl Render for CollectionView {
                 None::<SchemaAnalysis>,
                 false,
                 None::<String>,
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                false,
+                false,
+                0,
+                None::<u32>,
+                None::<String>,
                 None::<String>,
                 std::collections::HashSet::new(),
                 String::new(),
             )
         };
+        if subview == CollectionSubview::History
+            && !history_loading
+            && !history_loaded
+            && history_error.is_none()
+            && let Some(session_key) = session_key.clone()
+        {
+            let state = self.state.clone();
+            cx.defer(move |cx| {
+                AppCommands::load_collection_history(state, session_key, cx);
+            });
+        }
+
         let filter_active = !matches!(filter_compiled_raw.trim(), "" | "{}");
         let sort_active = !matches!(sort_raw.trim(), "" | "{}");
         let projection_active = !matches!(projection_raw.trim(), "" | "{}");
@@ -760,6 +799,7 @@ impl Render for CollectionView {
             CollectionSubview::Stats => key_context.push_str(" Stats"),
             CollectionSubview::Aggregation => key_context.push_str(" Aggregation"),
             CollectionSubview::Schema => key_context.push_str(" Schema"),
+            CollectionSubview::History => key_context.push_str(" History"),
             CollectionSubview::Documents => {}
         }
 
@@ -905,6 +945,21 @@ impl Render for CollectionView {
                 schema_filter,
                 schema_filter_state,
                 session_key.clone(),
+                cx,
+            ),
+            CollectionSubview::History => super::views::history_view::render_history_view(
+                self.state.clone(),
+                session_key.clone(),
+                super::views::history_view::HistoryViewState {
+                    batches: history,
+                    gaps: history_gaps,
+                    details: history_details,
+                    detail_loading: history_detail_loading,
+                    loading: history_loading,
+                    total: history_total,
+                    next_offset: history_next_offset,
+                    error: history_error,
+                },
                 cx,
             ),
         };

@@ -1,4 +1,3 @@
-use mongodb::IndexModel;
 use mongodb::bson;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -7,7 +6,7 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, ToolError, ensure_writable, parse_json_to_doc, require_confirmation,
+    MongoContext, StreamEvent, ToolError, ensure_writable, parse_json_to_doc, require_confirmation,
     resolve_collection,
 };
 
@@ -59,7 +58,7 @@ impl Tool for CreateIndexTool {
                         "description": "Optional custom name for the index"
                     }
                 },
-                "required": ["keys"]
+                "required": ["keys", "name"]
             }),
         }
     }
@@ -68,12 +67,15 @@ impl Tool for CreateIndexTool {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let keys = parse_json_to_doc(&args.keys)?;
+        let name = args.name.clone().filter(|name| !name.trim().is_empty()).ok_or_else(|| {
+            ToolError::InvalidInput("Index creation requires an explicit name".to_string())
+        })?;
 
         // Preview: show the index definition (no docs affected)
         let index_def = serde_json::json!({
             "keys": args.keys,
             "unique": args.unique.unwrap_or(false),
-            "name": args.name.as_deref().unwrap_or("(auto)"),
+            "name": name,
         });
         let preview = OperationPreview {
             collection: col_name.clone(),
@@ -88,18 +90,24 @@ impl Tool for CreateIndexTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        // Build index model
-        let opts =
-            mongodb::options::IndexOptions::builder().unique(args.unique).name(args.name).build();
-
-        let model = IndexModel::builder().keys(keys).options(opts).build();
-
-        let collection =
-            self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
-        let result = collection.create_index(model).await?;
-
-        Ok(serde_json::json!({
-            "index_name": result.index_name,
-        }))
+        let options = mongodb::options::IndexOptions::builder()
+            .name(name.clone())
+            .unique(args.unique)
+            .build();
+        let model = mongodb::IndexModel::builder().keys(keys).options(options).build();
+        self.0
+            .client
+            .database(&self.0.database)
+            .collection::<bson::Document>(&col_name)
+            .create_index(model)
+            .await?;
+        if let Some(tx) = &self.0.event_tx {
+            let _ = tx.send(StreamEvent::IndexesChanged {
+                connection_id: self.0.write_identity.id,
+                database: self.0.database.clone(),
+                collection: col_name,
+            });
+        }
+        Ok(serde_json::json!({ "index_name": name }))
     }
 }

@@ -240,7 +240,6 @@ impl BulkUpdateDialog {
             cx.notify();
             return;
         }
-
         self.error_message = None;
         let update_raw = self.update_state.read(cx).value().to_string();
         let update_doc = match parse_update_doc(&update_raw) {
@@ -353,8 +352,9 @@ impl BulkUpdateDialog {
                     }
                     let confirm_view = view.clone();
                     let filter_text = crate::bson::document_to_shell_string(&filter);
+                    let recovery = " This cannot be undone.";
                     let message = format!(
-                        "{} every document matching this filter in {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
+                        "{} every document matching this filter in {database}.{collection}? {count} document{} currently match.{recovery}\n\nFilter: {filter_text}",
                         mode.label(),
                         if count == 1 { "" } else { "s" }
                     );

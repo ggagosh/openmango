@@ -26,6 +26,7 @@ pub enum View {
     Database,
     Transfer,
     Forge,
+    AgentActivity,
     Settings,
     Changelog,
 }
@@ -45,6 +46,7 @@ pub enum CollectionSubview {
     Stats,
     Aggregation,
     Schema,
+    History,
 }
 
 impl CollectionSubview {
@@ -54,6 +56,7 @@ impl CollectionSubview {
             2 => Self::Stats,
             3 => Self::Aggregation,
             4 => Self::Schema,
+            5 => Self::History,
             _ => Self::Documents,
         }
     }
@@ -65,6 +68,7 @@ impl CollectionSubview {
             Self::Stats => 2,
             Self::Aggregation => 3,
             Self::Schema => 4,
+            Self::History => 5,
         }
     }
 }
@@ -108,6 +112,7 @@ pub enum TabKey {
     Database(DatabaseKey),
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
+    AgentActivity,
     Settings,
     Changelog,
 }
@@ -1107,6 +1112,16 @@ pub struct SessionData {
     pub schema: Option<SchemaAnalysis>,
     pub schema_loading: bool,
     pub schema_error: Option<String>,
+    pub history: Vec<crate::history::BatchSummary>,
+    pub history_gaps: Vec<crate::history::HistoryGap>,
+    pub history_details: HashMap<Uuid, crate::history::BatchDetails>,
+    pub history_detail_loading: HashSet<Uuid>,
+    pub history_loading: bool,
+    pub history_loaded: bool,
+    pub history_total: u64,
+    pub history_next_offset: Option<u32>,
+    pub history_request_id: u64,
+    pub history_error: Option<String>,
 }
 
 impl Default for SessionData {
@@ -1140,6 +1155,16 @@ impl Default for SessionData {
             schema: None,
             schema_loading: false,
             schema_error: None,
+            history: Vec::new(),
+            history_gaps: Vec::new(),
+            history_details: HashMap::new(),
+            history_detail_loading: HashSet::new(),
+            history_loading: false,
+            history_loaded: false,
+            history_total: 0,
+            history_next_offset: None,
+            history_request_id: 0,
+            history_error: None,
         }
     }
 }
@@ -1219,6 +1244,15 @@ pub struct SessionSnapshot {
     pub schema: Option<SchemaAnalysis>,
     pub schema_loading: bool,
     pub schema_error: Option<String>,
+    pub history: Vec<crate::history::BatchSummary>,
+    pub history_gaps: Vec<crate::history::HistoryGap>,
+    pub history_details: HashMap<Uuid, crate::history::BatchDetails>,
+    pub history_detail_loading: HashSet<Uuid>,
+    pub history_loading: bool,
+    pub history_loaded: bool,
+    pub history_total: u64,
+    pub history_next_offset: Option<u32>,
+    pub history_error: Option<String>,
     pub schema_selected_field: Option<String>,
     pub schema_expanded_fields: HashSet<String>,
     pub schema_filter: String,

@@ -1,9 +1,7 @@
 use gpui::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
-use crate::state::{AppEvent, AppState, EditorSessionId, SessionKey};
-
-use crate::state::AppCommands;
+use crate::state::{AppCommands, AppEvent, AppState, EditorSessionId, SessionKey};
 
 impl AppCommands {
     /// Insert a document into a collection.
@@ -39,15 +37,11 @@ impl AppCommands {
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
+        let manager = state.read(cx).connection_manager();
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
-        let manager = state.read(cx).connection_manager();
-
-        let task = cx.background_spawn({
-            let database = database.clone();
-            let collection = collection.clone();
-            let document = document.clone();
-            async move { manager.insert_document(&client, &database, &collection, document) }
+        let task = cx.background_spawn(async move {
+            manager.insert_document(&client, &database, &collection, document)
         });
 
         cx.spawn({
@@ -64,19 +58,15 @@ impl AppCommands {
                             cx.emit(event);
                             cx.notify();
                         });
-                        AppCommands::load_documents_for_session(
-                            state.clone(),
-                            session_key.clone(),
-                            cx,
-                        );
+                        AppCommands::load_documents_for_session(state, session_key, cx);
                     }
-                    Err(e) => {
-                        log::error!("Failed to insert document: {}", e);
+                    Err(error) => {
+                        log::error!("Failed to insert document");
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentInsertFailed {
                                 session: session_key.clone(),
                                 editor,
-                                error: e.to_string(),
+                                error: error.to_string(),
                             };
                             state.update_status_from_event(&event);
                             cx.emit(event);
@@ -88,6 +78,4 @@ impl AppCommands {
         })
         .detach();
     }
-
-    // Bulk insert moved to documents/bulk.rs.
 }

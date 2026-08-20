@@ -59,6 +59,7 @@ impl AppCommands {
     }
 }
 
+mod actions;
 mod aggregation;
 mod collection_meta;
 mod collections;
@@ -67,6 +68,7 @@ mod databases;
 mod documents;
 mod explain;
 mod indexes;
+mod operations;
 mod schema;
 pub use documents::save_as::ExportProgress;
 pub(crate) use schema::{SCHEMA_SAMPLE_SIZE, build_schema_analysis};

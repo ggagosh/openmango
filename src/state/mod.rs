@@ -38,8 +38,8 @@ pub use query_library::{
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS, IslandsAppearanceSettings,
-    IslandsCornerSoftness, IslandsTabStyle, KeybindingSettings, TransferSettings,
-    expand_filename_template,
+    IslandsCornerSoftness, IslandsTabStyle, KeybindingSettings, McpClientGrant, McpClientKind,
+    McpSettings, TransferSettings, expand_filename_template,
 };
 pub use status::{StatusLevel, StatusMessage};
 pub use transfer_rules::{

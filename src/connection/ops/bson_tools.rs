@@ -309,6 +309,121 @@ impl ConnectionManager {
         Ok(())
     }
 
+    #[doc(hidden)]
+    pub fn export_collection_archive(
+        &self,
+        connection_string: &str,
+        database: &str,
+        collection: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let mongodump = mongodump_path().ok_or_else(|| {
+            Error::ToolNotFound(
+                "mongodump not found. Run 'just download-tools' or install MongoDB Database Tools."
+                    .into(),
+            )
+        })?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut secure_command = secure_tool_command(&mongodump, connection_string)?;
+        let output = secure_command
+            .command
+            .arg("--db")
+            .arg(database)
+            .arg("--collection")
+            .arg(collection)
+            .arg(format!("--archive={}", path.display()))
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Parse(format!(
+                "mongodump failed: {}",
+                sanitize_tool_error(&stderr, connection_string)
+            )));
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn verify_collection_archive(
+        &self,
+        connection_string: &str,
+        database: &str,
+        collection: &str,
+        path: &Path,
+    ) -> Result<()> {
+        if !path.is_file() || std::fs::metadata(path)?.len() == 0 {
+            return Err(Error::Parse("Collection snapshot archive is missing or empty".into()));
+        }
+        let mongorestore = mongorestore_path().ok_or_else(|| {
+            Error::ToolNotFound(
+                "mongorestore not found. Run 'just download-tools' or install MongoDB Database Tools."
+                    .into(),
+            )
+        })?;
+        let mut secure_command = secure_tool_command(&mongorestore, connection_string)?;
+        let output = secure_command
+            .command
+            .arg("-v")
+            .arg("--dryRun")
+            .arg(format!("--archive={}", path.display()))
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Parse("Collection snapshot archive validation failed".into()));
+        }
+        let output = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let namespace = format!("{database}.{collection}");
+        if !output.contains(&format!("found collection `{namespace}` bson"))
+            && !output.contains(&format!("found collection {namespace} bson"))
+        {
+            return Err(Error::Parse(
+                "Collection snapshot archive does not contain the expected namespace".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn restore_collection_archive_as(
+        &self,
+        connection_string: &str,
+        source_database: &str,
+        source_collection: &str,
+        target_database: &str,
+        target_collection: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let mongorestore = mongorestore_path().ok_or_else(|| {
+            Error::ToolNotFound(
+                "mongorestore not found. Run 'just download-tools' or install MongoDB Database Tools."
+                    .into(),
+            )
+        })?;
+        let source = format!("{source_database}.{source_collection}");
+        let target = format!("{target_database}.{target_collection}");
+        let mut secure_command = secure_tool_command(&mongorestore, connection_string)?;
+        let output = secure_command
+            .command
+            .arg(format!("--archive={}", path.display()))
+            .arg(format!("--nsInclude={source}"))
+            .arg(format!("--nsFrom={source}"))
+            .arg(format!("--nsTo={target}"))
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Parse(format!(
+                "mongorestore failed: {}",
+                sanitize_tool_error(&stderr, connection_string)
+            )));
+        }
+        Ok(())
+    }
+
     /// Import a database from BSON format using mongorestore (runs synchronously).
     /// Prefer `import_database_bson_with_progress` for progress tracking.
     #[allow(dead_code)]
@@ -454,6 +569,10 @@ impl ConnectionManager {
                 if cancellation.is_cancelled() {
                     return Ok(BsonToolRunOutcome::Cancelled { termination_succeeded: true });
                 }
+                if output_format == BsonOutputFormat::Folder && !staged_path.join(database).exists()
+                {
+                    std::fs::create_dir_all(staged_path.join(database))?;
+                }
                 crate::connection::ops::export::promote_export_path(&staged_path, &final_path)?;
                 Ok(BsonToolRunOutcome::Completed)
             }
@@ -462,9 +581,11 @@ impl ConnectionManager {
 
     /// Import a database from BSON format with progress tracking.
     /// The callback receives (collection_name, bytes_processed, bytes_total, is_complete).
+    #[allow(clippy::too_many_arguments)]
     pub fn import_database_bson_with_progress<F>(
         &self,
         connection_string: &str,
+        source_database: &str,
         database: &str,
         path: &Path,
         drop_before: bool,
@@ -483,20 +604,23 @@ impl ConnectionManager {
 
         let mut secure_command = secure_tool_command(&mongorestore, connection_string)?;
         let cmd = &mut secure_command.command;
-        cmd.arg("--db")
-            .arg(database)
-            .arg("-v") // Enable verbose output for progress
-            .stderr(Stdio::piped());
+        cmd.arg("-v").stderr(Stdio::piped());
 
         if drop_before {
             cmd.arg("--drop");
         }
 
-        // Detect if path is archive or folder
-        if path.extension().map(|e| e == "archive").unwrap_or(false) {
-            // --archive requires = format: --archive=/path/to/file
+        if path.extension().is_some_and(|extension| extension == "archive") {
+            cmd.arg("--nsInclude").arg(format!("{source_database}.*"));
+            if source_database != database {
+                cmd.arg("--nsFrom")
+                    .arg(format!("{source_database}.*"))
+                    .arg("--nsTo")
+                    .arg(format!("{database}.*"));
+            }
             cmd.arg(format!("--archive={}", path.display()));
         } else {
+            cmd.arg("--db").arg(database);
             let db_path = path.join(database);
             if db_path.exists() {
                 cmd.arg("--dir").arg(&db_path);

@@ -115,6 +115,16 @@ pub struct AppState {
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
 
+    // Passive all-client History recorder
+    history_service: Option<Arc<crate::history::HistoryService>>,
+    history_eligibility: HashMap<Uuid, crate::history::EligibilityReport>,
+    history_usage: HashMap<Uuid, crate::history::Usage>,
+    history_inspecting: HashSet<Uuid>,
+
+    // Agent action persistence
+    action_broker: Arc<crate::actions::ActionBroker>,
+    sync_executor: Arc<crate::sync::SyncExecutor>,
+
     // Config manager for persistence
     pub(crate) config: ConfigManager,
     pub(crate) connections_persistence_blocked: bool,
@@ -190,6 +200,13 @@ impl AppState {
             settings.appearance.vibrancy,
         );
         let startup_keybindings = settings.keybindings.clone();
+        let action_store = Arc::new(crate::actions::ActionStore::new(config.agent_data_dir()));
+        if let Err(error) = action_store.reconcile_interrupted() {
+            log::error!("Could not reconcile interrupted agent operations: {error}");
+        }
+        let action_broker = Arc::new(crate::actions::ActionBroker::new(action_store.clone()));
+        let sync_executor =
+            Arc::new(crate::sync::SyncExecutor::new(connection_manager.clone(), action_store));
 
         Self {
             connections,
@@ -220,6 +237,12 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
+            history_service: None,
+            history_eligibility: HashMap::new(),
+            history_usage: HashMap::new(),
+            history_inspecting: HashSet::new(),
+            action_broker,
+            sync_executor,
             config,
             connections_persistence_blocked: connection_load_error.is_some(),
             connection_secret_sync_pending: false,
@@ -237,6 +260,75 @@ impl AppState {
     /// Get the connection manager
     pub fn connection_manager(&self) -> Arc<ConnectionManager> {
         self.connection_manager.clone()
+    }
+
+    pub fn history_service(&self) -> Option<Arc<crate::history::HistoryService>> {
+        self.history_service.clone()
+    }
+
+    pub(crate) fn set_history_service(&mut self, service: Arc<crate::history::HistoryService>) {
+        self.history_service = Some(service);
+    }
+
+    pub fn history_eligibility(
+        &self,
+        connection_id: Uuid,
+    ) -> Option<&crate::history::EligibilityReport> {
+        self.history_eligibility.get(&connection_id)
+    }
+
+    pub fn history_usage(&self, connection_id: Uuid) -> Option<crate::history::Usage> {
+        self.history_usage.get(&connection_id).copied()
+    }
+
+    pub fn collection_history_available(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        self.connection_history_enabled(connection_id)
+            && self.history_service.is_some()
+            && self
+                .history_eligibility(connection_id)
+                .is_some_and(|report| report.collection_available(database, collection))
+    }
+
+    pub(crate) fn refresh_history_usage(&mut self, connection_id: Uuid) {
+        if let Some(service) = &self.history_service
+            && let Ok(usage) = service.usage(Some(connection_id))
+        {
+            self.history_usage.insert(connection_id, usage);
+        }
+    }
+
+    pub fn history_inspecting(&self, connection_id: Uuid) -> bool {
+        self.history_inspecting.contains(&connection_id)
+    }
+
+    pub(crate) fn begin_history_inspection(&mut self, connection_id: Uuid) -> bool {
+        self.history_inspecting.insert(connection_id)
+    }
+
+    pub(crate) fn finish_history_inspection(
+        &mut self,
+        connection_id: Uuid,
+        report: crate::history::EligibilityReport,
+        usage: Option<crate::history::Usage>,
+    ) {
+        self.history_inspecting.remove(&connection_id);
+        self.history_eligibility.insert(connection_id, report);
+        if let Some(usage) = usage {
+            self.history_usage.insert(connection_id, usage);
+        }
+    }
+
+    pub fn action_broker(&self) -> Arc<crate::actions::ActionBroker> {
+        self.action_broker.clone()
+    }
+
+    pub fn sync_executor(&self) -> Arc<crate::sync::SyncExecutor> {
+        self.sync_executor.clone()
     }
 
     pub fn status_message(&self) -> Option<StatusMessage> {

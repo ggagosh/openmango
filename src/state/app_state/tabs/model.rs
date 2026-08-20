@@ -137,6 +137,9 @@ impl AppState {
                 self.conn.selected_collection = None;
                 self.current_view = View::Forge;
             }
+            TabKey::AgentActivity => {
+                self.current_view = View::AgentActivity;
+            }
             TabKey::Settings => {
                 self.current_view = View::Settings;
             }
@@ -465,6 +468,29 @@ impl AppState {
         cx.notify();
     }
 
+    /// Open Agent Activity as a singleton workspace tab.
+    pub fn open_agent_activity_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) =
+            self.tabs.open.iter().position(|tab| matches!(tab, TabKey::AgentActivity))
+        {
+            if self.active_index() != Some(index) {
+                self.set_active_index(index);
+                self.current_view = View::AgentActivity;
+                self.clear_error_status();
+                cx.emit(AppEvent::ViewChanged);
+                cx.notify();
+            }
+            return;
+        }
+
+        self.tabs.open.push(TabKey::AgentActivity);
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::AgentActivity;
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
     /// Open settings tab (singleton - only one settings tab allowed)
     pub fn open_settings_tab(&mut self, cx: &mut Context<Self>) {
         // Check if settings tab already exists
@@ -753,7 +779,7 @@ impl AppState {
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
-            TabKey::Settings | TabKey::Changelog => {
+            TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => {
                 // No cleanup needed
             }
         }
@@ -895,7 +921,10 @@ impl AppState {
                 TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
-                TabKey::Transfer(_) | TabKey::Settings | TabKey::Changelog => false,
+                TabKey::Transfer(_)
+                | TabKey::AgentActivity
+                | TabKey::Settings
+                | TabKey::Changelog => false,
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -1013,6 +1042,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Database(_) => "database",
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
+        TabKey::AgentActivity => "agent_activity",
         TabKey::Settings => "settings",
         TabKey::Changelog => "changelog",
     }

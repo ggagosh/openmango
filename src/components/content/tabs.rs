@@ -6,6 +6,7 @@ use gpui_component::scroll::ScrollbarHandle as _;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
+use crate::actions::model::ActionStatus;
 use crate::components::{ConnectionIdentity, connection_identity_badge, request_unsaved_action};
 use crate::keyboard::FocusContent;
 use crate::state::{
@@ -14,7 +15,8 @@ use crate::state::{
 };
 use crate::theme::{borders, colors, islands, spacing};
 use crate::views::{
-    ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView, TransferView,
+    AgentActivityView, ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView,
+    TransferView,
 };
 
 const OPEN_TAB_MAX_WIDTH: f32 = 260.0;
@@ -86,6 +88,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
+    pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
     pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
 }
@@ -151,6 +154,7 @@ impl Render for OpenTabsBar {
             dirty_tabs,
             current_view,
             connection_identities,
+            pending_agent_actions,
         ) = {
             let state_ref = self.state.read(cx);
             (
@@ -165,6 +169,13 @@ impl Render for OpenTabsBar {
                     .into_iter()
                     .map(|connection| (connection.id, ConnectionIdentity::from(&connection)))
                     .collect::<HashMap<_, _>>(),
+                state_ref
+                    .action_broker()
+                    .list_all()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|action| action.status == ActionStatus::PendingApproval)
+                    .count(),
             )
         };
         let islands_tab_variant = appearance.islands.tab_style == IslandsTabStyle::Islands;
@@ -250,6 +261,7 @@ impl Render for OpenTabsBar {
                             TabKey::Forge(tab) => {
                                 (self.state.read(cx).forge_tab_label(tab.id), false)
                             }
+                            TabKey::AgentActivity => ("Agent Activity".to_string(), false),
                             TabKey::Settings => ("Settings".to_string(), false),
                             TabKey::Changelog => ("What's New".to_string(), false),
                         };
@@ -258,6 +270,7 @@ impl Render for OpenTabsBar {
                             TabKey::Database(_) => IconName::LayoutDashboard,
                             TabKey::Transfer(_) => IconName::Download,
                             TabKey::Forge(_) => IconName::SquareTerminal,
+                            TabKey::AgentActivity => IconName::Bot,
                             TabKey::Settings => IconName::Settings,
                             TabKey::Changelog => IconName::BookOpen,
                         };
@@ -266,7 +279,7 @@ impl Render for OpenTabsBar {
                             TabKey::Database(tab) => Some(tab.connection_id),
                             TabKey::Transfer(tab) => tab.connection_id,
                             TabKey::Forge(tab) => Some(tab.connection_id),
-                            TabKey::Settings | TabKey::Changelog => None,
+                            TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => None,
                         };
                         let connection_identity =
                             connection_id.and_then(|id| connection_identities.get(&id));
@@ -380,6 +393,31 @@ impl Render for OpenTabsBar {
                                     .gap(px(4.0))
                                     .max_w(px(OPEN_TAB_LABEL_MAX_WIDTH))
                                     .child(div().min_w(px(0.0)).truncate().child(label))
+                                    .when(
+                                        matches!(tab, TabKey::AgentActivity)
+                                            && pending_agent_actions > 0,
+                                        |content| {
+                                            content.child(
+                                                div()
+                                                    .min_w(px(14.0))
+                                                    .h(px(14.0))
+                                                    .px(px(3.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_full()
+                                                    .bg(cx.theme().danger)
+                                                    .text_size(px(9.0))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(cx.theme().danger_foreground)
+                                                    .child(if pending_agent_actions > 9 {
+                                                        "9+".to_string()
+                                                    } else {
+                                                        pending_agent_actions.to_string()
+                                                    }),
+                                            )
+                                        },
+                                    )
                                     .when_some(connection_identity, |content, identity| {
                                         content.child(connection_identity_badge(identity, true, cx))
                                     }),
@@ -658,6 +696,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::Forge => host
             .forge_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::AgentActivity => host
+            .agent_activity_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::Settings => host

@@ -1,6 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
@@ -34,6 +35,10 @@ pub struct ConnectionDialog {
     environment: Option<ConnectionEnvironment>,
     confirm_production_writes: bool,
     read_only: bool,
+    agent_shared: bool,
+    agent_writable: bool,
+    protected: bool,
+    history_enabled: bool,
     status: TestStatus,
     last_tested_uri: Option<String>,
     pending_test_uri: Option<String>,
@@ -122,6 +127,10 @@ impl ConnectionDialog {
             environment: None,
             confirm_production_writes: false,
             read_only: false,
+            agent_shared: false,
+            agent_writable: false,
+            protected: false,
+            history_enabled: false,
             status: TestStatus::Idle,
             last_tested_uri: None,
             pending_test_uri: None,
@@ -187,6 +196,10 @@ impl ConnectionDialog {
             environment: existing.environment,
             confirm_production_writes: existing.confirm_production_writes,
             read_only: existing.read_only,
+            agent_shared: existing.agent_shared,
+            agent_writable: existing.agent_writable,
+            protected: existing.protected,
+            history_enabled: existing.history_enabled,
             status: TestStatus::Success,
             last_tested_uri: Some(redacted_default),
             pending_test_uri: None,
@@ -309,6 +322,12 @@ impl Render for ConnectionDialog {
                     })
                     .on_click(move |_, _window, cx| {
                         view.update(cx, |this, cx| {
+                            if environment == ConnectionEnvironment::Production
+                                && this.environment != Some(ConnectionEnvironment::Production)
+                            {
+                                this.agent_shared = false;
+                                this.agent_writable = false;
+                            }
                             this.environment = Some(environment);
                             cx.notify();
                         });
@@ -416,6 +435,125 @@ impl Render for ConnectionDialog {
                     .items_center()
                     .gap(spacing::sm())
                     .child(
+                        Switch::new("connection-history")
+                            .checked(self.history_enabled)
+                            .small()
+                            .disabled(!self.history_enabled)
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.history_enabled = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child("History")
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Record encrypted update, replace, and delete events from all clients when the server is eligible."),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .child("Connect and use Settings to inspect eligibility, enable pre/post images, and configure retention."),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-agent-shared")
+                            .checked(self.agent_shared)
+                            .small()
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.agent_shared = *checked;
+                                        if !*checked {
+                                            this.agent_writable = false;
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child("Share with agents"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().secondary_foreground)
+                                    .child("Expose this connection to authenticated MCP clients"),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-protected")
+                            .checked(self.protected)
+                            .small()
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        if *checked {
+                                            this.agent_shared = false;
+                                            this.agent_writable = false;
+                                        }
+                                        this.protected = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child("Protected connection"),
+            )
+            .when(
+                self.agent_shared
+                    && (self.protected
+                        || self.environment == Some(ConnectionEnvironment::Production)),
+                |content| {
+                    content.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child("This protected connection will be visible to agents. Direct writes remain disabled until explicitly enabled in Settings."),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
                         Switch::new("connection-read-only")
                             .checked(self.read_only)
                             .small()
@@ -480,6 +618,10 @@ impl Render for ConnectionDialog {
                                 let environment = self.environment;
                                 let confirm_production_writes = self.confirm_production_writes;
                                 let read_only = self.read_only;
+                                let agent_shared = self.agent_shared;
+                                let agent_writable = self.agent_writable;
+                                let protected = self.protected;
+                                let history_enabled = self.history_enabled;
                                 let existing = self.existing.clone();
                                 move |_, window, cx| {
                                     let name_input = name_state.read(cx).value().to_string();
@@ -523,6 +665,12 @@ impl Render for ConnectionDialog {
                                                     uri,
                                                     last_connected: existing.last_connected,
                                                     read_only,
+                                                    agent_shared,
+                                                    agent_writable,
+                                                    protected,
+                                                    history_enabled,
+                                                    history_max_age_days: existing.history_max_age_days,
+                                                    history_max_bytes: existing.history_max_bytes,
                                                     ssh: existing.ssh,
                                                     proxy: existing.proxy,
                                                     secret_id: existing.secret_id,
@@ -535,6 +683,10 @@ impl Render for ConnectionDialog {
                                                 connection.confirm_production_writes =
                                                     confirm_production_writes;
                                                 connection.read_only = read_only;
+                                                connection.agent_shared = agent_shared;
+                                                connection.agent_writable = agent_writable;
+                                                connection.protected = protected;
+                                                connection.history_enabled = history_enabled;
                                                 connection_id = Some(connection.id);
                                                 state.add_connection(connection, cx);
                                             }

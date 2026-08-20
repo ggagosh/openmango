@@ -82,6 +82,7 @@ impl CollectionView {
         let is_stats = active_subview == CollectionSubview::Stats;
         let is_aggregation = active_subview == CollectionSubview::Aggregation;
         let is_schema = active_subview == CollectionSubview::Schema;
+        let is_history = active_subview == CollectionSubview::History;
         let breadcrumb = format!("{connection_name} / {db_name} / {collection_name}");
 
         // Build action row based on active subview
@@ -120,6 +121,8 @@ impl CollectionView {
             )
         } else if is_schema {
             render_schema_actions(self.state.clone(), session_key.clone(), schema_loading)
+        } else if is_history {
+            div().flex().items_center()
         } else {
             div().flex().items_center().gap(spacing::sm())
         };

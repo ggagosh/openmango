@@ -5,6 +5,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::collapsible::Collapsible;
 use gpui_component::input::Input;
@@ -89,6 +90,12 @@ impl ConnectionManager {
                     })
                     .on_click(move |_, _window, cx| {
                         view.update(cx, |this, cx| {
+                            if environment == ConnectionEnvironment::Production
+                                && this.draft.environment != Some(ConnectionEnvironment::Production)
+                            {
+                                this.draft.agent_shared = false;
+                                this.draft.agent_writable = false;
+                            }
                             this.draft.environment = Some(environment);
                             cx.notify();
                         });
@@ -201,6 +208,155 @@ impl ConnectionManager {
                         ),
                 )
             })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-history")
+                            .checked(self.draft.history_enabled)
+                            .small()
+                            .disabled(!self.draft.history_enabled)
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.draft.history_enabled = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child("History"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().secondary_foreground)
+                                    .child("Record encrypted update, replace, and delete events from all clients when the server is eligible."),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .child("Connect and use Settings to inspect eligibility, enable pre/post images, and configure retention."),
+                            ),
+                    ),
+            )
+            // Agent access
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::sm())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::sm())
+                            .child(
+                                Switch::new("connection-agent-shared")
+                                    .checked(self.draft.agent_shared)
+                                    .small()
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |checked, _window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.draft.agent_shared = *checked;
+                                                if !*checked {
+                                                    this.draft.agent_writable = false;
+                                                }
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().foreground)
+                                            .child("Share with agents"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().secondary_foreground)
+                                            .child("Allow authenticated MCP clients to see and use this connection. Credentials are never exposed."),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::sm())
+                            .child(
+                                Switch::new("connection-protected")
+                                    .checked(self.draft.protected)
+                                    .small()
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |checked, _window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                if *checked {
+                                                    this.draft.agent_shared = false;
+                                                    this.draft.agent_writable = false;
+                                                }
+                                                this.draft.protected = *checked;
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().foreground)
+                                            .child("Protected connection"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().secondary_foreground)
+                                            .child("Require Production-level safeguards for agent access."),
+                                    ),
+                            ),
+                    )
+                    .when(
+                        self.draft.agent_shared
+                            && (self.draft.protected
+                                || self.draft.environment
+                                    == Some(ConnectionEnvironment::Production)),
+                        |content| {
+                            content.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .child("This protected connection will be visible to agents. Direct writes remain disabled unless explicitly enabled in Settings."),
+                            )
+                        },
+                    ),
+            )
             // URI
             .child(
                 div()

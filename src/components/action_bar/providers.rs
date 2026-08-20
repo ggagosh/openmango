@@ -3,9 +3,9 @@ use gpui::{Action, SharedString, Window};
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DiscardDocumentChanges, FocusContent,
     FocusSidebar, InsertDocument, OpenForge, OpenQueryLibrary, OpenSettings, RefreshView,
-    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowIndexesSubview,
-    ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy, TransferExport,
-    TransferImport,
+    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
+    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy,
+    TransferExport, TransferImport,
 };
 use crate::state::AppState;
 use crate::state::TabKey;
@@ -94,6 +94,9 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .connection_name(key.connection_id)
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
+            }
+            TabKey::AgentActivity => {
+                ("Agent Activity".to_string(), "Approvals and operations".to_string())
             }
             TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
             TabKey::Changelog => ("What's New".to_string(), "Changelog".to_string()),
@@ -495,12 +498,21 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("view:history"),
+            label: SharedString::from("Show History"),
+            category: ActionCategory::View,
+            shortcut: registered_shortcut(window, &ShowHistorySubview),
+            available: has_collection,
+            priority: 4,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("view:schema"),
             label: SharedString::from("Show Schema"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowSchemaSubview),
             available: has_collection,
-            priority: 4,
+            priority: 5,
             ..Default::default()
         },
     ]

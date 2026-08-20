@@ -123,16 +123,16 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
          - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
          - **list_collections**: List all collections in the database.\n\n\
          ### Write Operations\n\
-         Write operations require user confirmation before executing. The user will see a preview \
-         of affected documents and must approve. A built-in safety system validates all write \
-         operations — always call the tool and let the safety system handle validation.\n\n\
+         Document writes require user confirmation. The user will see a preview before execution. \
+         A built-in safety system validates all write operations — always call the tool and let the \
+         safety system handle validation.\n\n\
          - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
          array string. Max 100 documents per call.\n\
-         - **update_documents**: Update documents matching a filter. Pass `filter` and `update` \
-         as JSON strings. Set `many: false` for update_one. Default is update_many.\n\
+         - **replace_documents**: Replace up to 100 documents matching a filter with a complete \
+         replacement document. Original `_id` values are preserved. Set `many: false` for one.\n\
          - **delete_documents**: Delete documents matching a filter.\n\
-         - **create_index**: Create an index on a collection. Pass `keys` as a JSON object. \
-         Optional: `unique` (boolean), `name` (string).\n\
+         - **create_index**: Create a named index. Pass `keys` as a JSON object and \
+         an explicit `name`; `unique` is optional.\n\
          - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
          ### Cross-Collection Access\n\
          All tools except list_collections accept an optional `collection` parameter. Pass it to \
@@ -228,6 +228,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
             CollectionSubview::Stats => "Stats",
             CollectionSubview::Aggregation => "Aggregation",
             CollectionSubview::Schema => "Schema",
+            CollectionSubview::History => "History",
         };
         let mut query_buf = String::new();
         let _ = write!(query_buf, "Active subview: {subview_label}");

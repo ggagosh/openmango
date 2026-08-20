@@ -242,10 +242,9 @@ impl CollectionView {
                                                     if drop_name == "_id_" {
                                                         return;
                                                     }
-                                                    let message = format!(
-                                                        "Drop index {}? This cannot be undone.",
-                                                        drop_name
-                                                    );
+                                                    let recovery = " This cannot be undone.";
+                                                    let message =
+                                                        format!("Drop index {drop_name}?{recovery}");
                                                     let state_for_write = state.clone();
                                                     let target = session_key.namespace();
                                                     request_connection_write(

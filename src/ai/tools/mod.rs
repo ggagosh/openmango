@@ -9,11 +9,10 @@ pub mod generate_report;
 pub mod indexes;
 pub mod insert;
 pub mod list_collections;
+pub mod replace;
 pub mod sample_values;
 pub mod schema;
-pub mod update;
 
-use mongodb::bson;
 use rig::tool::ToolDyn;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
@@ -57,6 +56,16 @@ pub enum StreamEvent {
         result_preview: String,
         result_json: Option<String>,
     },
+    DocumentsChanged {
+        connection_id: uuid::Uuid,
+        database: String,
+        collection: String,
+    },
+    IndexesChanged {
+        connection_id: uuid::Uuid,
+        database: String,
+        collection: String,
+    },
     ConfirmationRequired {
         tool_name: String,
         description: String,
@@ -85,7 +94,7 @@ pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
     if !ctx.read_only {
         tools.extend([
             Box::new(insert::InsertDocumentsTool::new(ctx.clone())) as Box<dyn ToolDyn>,
-            Box::new(update::UpdateDocumentsTool::new(ctx.clone())),
+            Box::new(replace::ReplaceDocumentsTool::new(ctx.clone())),
             Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
             Box::new(create_index::CreateIndexTool::new(ctx.clone())),
             Box::new(self::drop_index::DropIndexTool::new(ctx)),
@@ -233,14 +242,14 @@ pub fn resolve_collection(arg: &Option<String>, ctx: &MongoContext) -> Result<St
 /// Supports MongoDB extended JSON (`{"$oid": "..."}`, `{"$date": "..."}`) and
 /// shell syntax (`ObjectId("...")`, `ISODate("...")`) so that LLM-generated
 /// filters with ObjectId references are correctly converted to BSON types.
-pub fn parse_json_to_doc(json_str: &str) -> Result<bson::Document, ToolError> {
+pub fn parse_json_to_doc(json_str: &str) -> Result<mongodb::bson::Document, ToolError> {
     crate::bson::parse_document_from_json(json_str).map_err(ToolError::InvalidInput)
 }
 
 /// Convert a BSON document to a relaxed JSON value.
-pub fn doc_to_json(doc: &bson::Document) -> serde_json::Value {
+pub fn doc_to_json(doc: &mongodb::bson::Document) -> serde_json::Value {
     // Use Bson's extended JSON serialization for clean output
-    let bson_val = bson::Bson::Document(doc.clone());
+    let bson_val = mongodb::bson::Bson::Document(doc.clone());
     serde_json::to_value(bson_val).unwrap_or(serde_json::Value::Null)
 }
 

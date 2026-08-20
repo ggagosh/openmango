@@ -8,8 +8,9 @@ use common::MongoTestContainer;
 use mongodb::bson::{Document, doc};
 use openmango::ai::safety::SafetyTier;
 use openmango::ai::tools::aggregate::{AggregateArgs, AggregateTool};
+use openmango::ai::tools::create_index::{CreateIndexArgs, CreateIndexTool};
 use openmango::ai::tools::insert::{InsertArgs, InsertDocumentsTool};
-use openmango::ai::tools::update::{UpdateArgs, UpdateDocumentsTool};
+use openmango::ai::tools::replace::{ReplaceArgs, ReplaceDocumentsTool};
 use openmango::ai::tools::{MongoContext, StreamEvent};
 use openmango::models::{ConnectionWriteIdentity, SavedConnection};
 use rig::tool::Tool;
@@ -22,7 +23,7 @@ fn write_identity(read_only: bool) -> ConnectionWriteIdentity {
 }
 
 #[tokio::test]
-async fn read_only_ai_update_is_rejected_without_mutating_data() {
+async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
     let mongo = MongoTestContainer::start().await;
     let collection = mongo.collection::<Document>("test_db", "ai_read_only_update");
     collection
@@ -30,7 +31,7 @@ async fn read_only_ai_update_is_rejected_without_mutating_data() {
         .await
         .expect("Failed to seed collection");
 
-    let tool = UpdateDocumentsTool::new(MongoContext {
+    let tool = ReplaceDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_update".to_string()),
@@ -39,14 +40,14 @@ async fn read_only_ai_update_is_rejected_without_mutating_data() {
         event_tx: None,
     });
     let error = tool
-        .call(UpdateArgs {
+        .call(ReplaceArgs {
             collection: None,
             filter: r#"{"_id":"one"}"#.to_string(),
-            update: r#"{"$set":{"status":"after"}}"#.to_string(),
+            replacement: r#"{"status":"after"}"#.to_string(),
             many: Some(false),
         })
         .await
-        .expect_err("Read-only AI update must be rejected");
+        .expect_err("Read-only AI replacement must be rejected");
 
     assert!(error.to_string().contains("read-only"));
     let stored = collection.find_one(doc! { "_id": "one" }).await.unwrap().unwrap();
@@ -54,69 +55,60 @@ async fn read_only_ai_update_is_rejected_without_mutating_data() {
 }
 
 #[tokio::test]
-async fn ai_write_fails_closed_without_confirmation_channel() {
+async fn read_only_ai_index_creation_is_rejected() {
     let mongo = MongoTestContainer::start().await;
-    let collection = mongo.collection::<Document>("test_db", "ai_missing_confirmation");
-
-    let tool = InsertDocumentsTool::new(MongoContext {
+    let collection = mongo.collection::<Document>("test_db", "ai_read_only_index");
+    collection.insert_one(doc! { "email": "ada@example.com" }).await.unwrap();
+    let tool = CreateIndexTool::new(MongoContext {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
-        collection: Some("ai_missing_confirmation".to_string()),
-        write_identity: write_identity(false),
-        read_only: false,
+        collection: Some("ai_read_only_index".to_string()),
+        write_identity: write_identity(true),
+        read_only: true,
         event_tx: None,
     });
-    let error = tool
-        .call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
-        .await
-        .expect_err("AI write without a confirmation channel must fail closed");
 
-    assert!(error.to_string().contains("confirmation"));
-    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 0);
+    let error = tool
+        .call(CreateIndexArgs {
+            collection: None,
+            keys: r#"{"email":1}"#.to_string(),
+            unique: Some(true),
+            name: Some("email_unique".to_string()),
+        })
+        .await
+        .expect_err("Read-only AI index creation must be rejected");
+
+    assert!(error.to_string().contains("read-only"));
+    assert!(!collection.list_index_names().await.unwrap().contains(&"email_unique".to_string()));
 }
 
 #[tokio::test]
-async fn ai_update_one_confirmation_reports_one_affected_document() {
+async fn ai_write_requires_confirmation_but_not_history() {
     let mongo = MongoTestContainer::start().await;
-    let collection = mongo.collection::<Document>("test_db", "ai_update_one_preview");
-    collection
-        .insert_many(vec![doc! { "group": "a" }, doc! { "group": "a" }])
-        .await
-        .expect("Failed to seed collection");
-
+    let collection = mongo.collection::<Document>("test_db", "ai_confirmed_insert");
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let tool = UpdateDocumentsTool::new(MongoContext {
+    let tool = InsertDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
         database: mongo.db_name("test_db"),
-        collection: Some("ai_update_one_preview".to_string()),
+        collection: Some("ai_confirmed_insert".to_string()),
         write_identity: write_identity(false),
         read_only: false,
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {
-        tool.call(UpdateArgs {
-            collection: None,
-            filter: r#"{"group":"a"}"#.to_string(),
-            update: r#"{"$set":{"updated":true}}"#.to_string(),
-            many: Some(false),
-        })
-        .await
+        tool.call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
+            .await
     });
-
     let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
         .await
-        .expect("AI update did not request confirmation")
+        .expect("AI insert did not request confirmation")
         .expect("AI confirmation channel closed");
     match event {
-        StreamEvent::ConfirmationRequired { preview, response_tx, .. } => {
-            assert_eq!(preview.affected_count, 1);
-            response_tx.respond(false);
-        }
+        StreamEvent::ConfirmationRequired { response_tx, .. } => response_tx.respond(true),
         other => panic!("Unexpected AI event: {other:?}"),
     }
-
-    call.await.expect("AI update task panicked").expect_err("Rejected update must not run");
-    assert_eq!(collection.count_documents(doc! { "updated": true }).await.unwrap(), 0);
+    call.await.expect("AI insert task panicked").expect("Confirmed insert failed");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 1);
 }
 
 #[tokio::test]

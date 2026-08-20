@@ -5,7 +5,7 @@ mod common;
 use std::time::Duration;
 
 use common::{MongoTestContainer, fixtures, test_document};
-use mongodb::bson::{Document, doc};
+use mongodb::bson::{Document, doc, oid::ObjectId};
 use openmango::connection::{CancellationToken, ConnectionManager, FindDocumentsOptions};
 
 #[tokio::test]
@@ -198,6 +198,70 @@ async fn test_delete_document() {
     // Verify the correct one remains
     let found = collection.find_one(doc! { "name": "keep_me" }).await.expect("Failed to find");
     assert!(found.is_some());
+}
+
+#[tokio::test]
+async fn test_conditional_delete_and_restore_require_exact_document_state() {
+    let mongo = MongoTestContainer::start().await;
+    let database = mongo.db_name("test_db");
+    let collection_name = "conditional_delete";
+    let collection = mongo.client.database(&database).collection::<Document>(collection_name);
+    let mut original = test_document("recover_me");
+    original.insert("_id", ObjectId::new());
+    let id = original.get("_id").unwrap().clone();
+    collection.insert_one(original).await.expect("Failed to insert");
+    let original = collection
+        .find_one(doc! { "_id": id.clone() })
+        .await
+        .expect("Failed to read inserted document")
+        .expect("Inserted document is missing");
+
+    let client = mongo.client.clone();
+    let database_for_task = database.clone();
+    let original_for_task = original.clone();
+    let id_for_task = id.clone();
+    let (stale_delete, deleted, restored, duplicate_restore) =
+        tokio::task::spawn_blocking(move || {
+            let manager = ConnectionManager::new();
+            let mut stale = original_for_task.clone();
+            stale.insert("value", 99);
+            let stale_delete = manager.delete_document_if_current_matches(
+                &client,
+                &database_for_task,
+                collection_name,
+                &id_for_task,
+                &stale,
+            )?;
+            let deleted = manager.delete_document_if_current_matches(
+                &client,
+                &database_for_task,
+                collection_name,
+                &id_for_task,
+                &original_for_task,
+            )?;
+            let restored = manager.insert_document_if_absent_matches(
+                &client,
+                &database_for_task,
+                collection_name,
+                original_for_task.clone(),
+            )?;
+            let duplicate_restore = manager.insert_document_if_absent_matches(
+                &client,
+                &database_for_task,
+                collection_name,
+                original_for_task,
+            )?;
+            Ok::<_, openmango::error::Error>((stale_delete, deleted, restored, duplicate_restore))
+        })
+        .await
+        .expect("Conditional delete task panicked")
+        .expect("Conditional delete failed");
+
+    assert!(!stale_delete);
+    assert!(deleted);
+    assert!(restored);
+    assert!(!duplicate_restore);
+    assert_eq!(collection.find_one(doc! { "_id": id }).await.unwrap(), Some(original));
 }
 
 /// Test document with various BSON types.

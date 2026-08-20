@@ -2,22 +2,24 @@
 
 mod keybindings;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::button::ButtonVariants as _;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::scroll::{ScrollableElement as _, Scrollbar, ScrollbarAxis};
+use gpui_component::switch::Switch;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Sizable as _, Size};
+use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
 use crate::components::{Button, open_confirm_dialog, request_app_quit};
 use crate::state::{
-    AiProvider, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS,
-    InsertMode, TransferFormat,
+    AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
+    FILENAME_PLACEHOLDERS, InsertMode, McpClientKind, TransferFormat,
 };
 use crate::theme::{borders, islands, sizing, spacing};
 
@@ -30,6 +32,7 @@ enum SettingsSubtab {
     Keybindings,
     Transfer,
     Ai,
+    Agents,
 }
 
 impl SettingsSubtab {
@@ -39,6 +42,7 @@ impl SettingsSubtab {
             Self::Keybindings => 1,
             Self::Transfer => 2,
             Self::Ai => 3,
+            Self::Agents => 4,
         }
     }
 
@@ -47,6 +51,7 @@ impl SettingsSubtab {
             1 => Self::Keybindings,
             2 => Self::Transfer,
             3 => Self::Ai,
+            4 => Self::Agents,
             _ => Self::General,
         }
     }
@@ -62,6 +67,7 @@ pub struct SettingsView {
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
     active_subtab: SettingsSubtab,
+    agents_scroll_handle: ScrollHandle,
     keybindings_view: Entity<KeybindingsView>,
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
@@ -92,6 +98,7 @@ impl SettingsView {
             state,
             _subscriptions: subscriptions,
             active_subtab: SettingsSubtab::default(),
+            agents_scroll_handle: ScrollHandle::default(),
             keybindings_view,
             template_input_state: None,
             batch_size_input_state: None,
@@ -315,6 +322,7 @@ impl Render for SettingsView {
         // Header
         let header = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .justify_between()
             .h(sizing::header_height())
@@ -352,6 +360,7 @@ impl Render for SettingsView {
                 Tab::new().label("Keybindings"),
                 Tab::new().label("Transfer"),
                 Tab::new().label("AI"),
+                Tab::new().label("Agents"),
             ]);
 
         let tab_content = match self.active_subtab {
@@ -406,18 +415,84 @@ impl Render for SettingsView {
                     cx,
                 ))
                 .into_any_element(),
+            SettingsSubtab::Agents => {
+                let scroll_handle = self.agents_scroll_handle.clone();
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("agent-settings-scroll")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(760.0))
+                                    .mx_auto()
+                                    .pb(spacing::lg())
+                                    .flex()
+                                    .flex_col()
+                                    .gap(spacing::lg())
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(spacing::xs())
+                                            .child(
+                                                div()
+                                                    .text_base()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(cx.theme().foreground)
+                                                    .child("Agent access"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .max_w(px(620.0))
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(
+                                                        "Connect trusted local clients, then choose exactly which MongoDB connections they can inspect.",
+                                                    ),
+                                            ),
+                                    )
+                                    .child(render_mcp_section(state.clone(), &settings, cx))
+                                    .child(render_mcp_grants_section(state.clone(), &settings, cx))
+                                    .child(render_agent_connections_section(
+                                        state.clone(),
+                                        &settings,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div().absolute().top_0().left_0().right_0().bottom_0().child(
+                            Scrollbar::new(&scroll_handle)
+                                .id("agent-settings-scrollbar")
+                                .axis(ScrollbarAxis::Vertical),
+                        ),
+                    )
+                    .into_any_element()
+            }
         };
 
         div()
             .flex()
             .flex_col()
-            .flex_1()
+            .size_full()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
             .bg(islands::content_bg(&appearance, cx))
             .child(header)
-            .child(div().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
+            .child(div().flex_shrink_0().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
             .child(
                 div()
                     .flex()
@@ -719,6 +794,1100 @@ fn render_support_section(state: Entity<AppState>, cx: &App) -> impl IntoElement
                 export_button,
                 cx,
             )),
+        cx,
+    )
+}
+
+fn render_mcp_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
+    let enabled = settings.mcp.enabled;
+    let endpoint = if settings.mcp.port == 0 {
+        "Assigned when enabled".to_string()
+    } else {
+        format!("http://127.0.0.1:{}/mcp", settings.mcp.port)
+    };
+    let toggle =
+        Switch::new("mcp-enabled").checked(enabled).small().on_click({
+            let state = state.clone();
+            move |checked, _window, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.mcp.enabled = *checked;
+                    state.save_settings();
+                    state.set_status_message(Some(crate::state::StatusMessage::info(
+                        if *checked { "Agent access enabled" } else { "Agent access disabled" },
+                    )));
+                    cx.notify();
+                });
+            }
+        });
+    let copy_endpoint = Button::new("copy-mcp-endpoint")
+        .compact()
+        .icon(Icon::new(IconName::Copy).xsmall())
+        .label("Copy")
+        .disabled(settings.mcp.port == 0)
+        .on_click({
+            let endpoint = endpoint.clone();
+            move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(endpoint.clone()))
+        });
+    let appearance = &settings.appearance;
+
+    group(
+        "Local MCP server",
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Allow agent clients",
+                "Accept authenticated MCP connections while OpenMango is open.",
+                toggle,
+                cx,
+            ))
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(islands::panel_border(appearance, cx))
+                    .pt(spacing::md())
+                    .child(setting_row_with_description(
+                        "Listen address",
+                        &endpoint,
+                        copy_endpoint,
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::xs())
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(div().size(px(7.0)).rounded_full().bg(if enabled {
+                        cx.theme().success
+                    } else {
+                        cx.theme().muted_foreground
+                    }))
+                    .child(if enabled {
+                        "Running locally · tokens stored in macOS Keychain · MCP 2026-07-28"
+                    } else {
+                        "Off · existing grants remain in macOS Keychain"
+                    }),
+            ),
+        appearance,
+        cx,
+    )
+}
+
+fn render_mcp_grants_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
+    let port = settings.mcp.port;
+    let active_count = settings.mcp.grants.iter().filter(|grant| grant.active()).count();
+    let create_button = {
+        let state = state.clone();
+        gpui_component::button::Button::new("create-mcp-grant")
+            .compact()
+            .primary()
+            .icon(Icon::new(IconName::Plus).xsmall())
+            .label("Add client")
+            .dropdown_caret(true)
+            .rounded(borders::radius_sm())
+            .with_size(Size::Small)
+            .disabled(port == 0)
+            .dropdown_menu_with_anchor(Corner::BottomRight, move |menu: PopupMenu, _window, _cx| {
+                McpClientKind::ALL.into_iter().fold(menu, |menu, client| {
+                    let state = state.clone();
+                    menu.item(PopupMenuItem::new(client.label()).on_click(move |_, _, cx| {
+                        create_mcp_client_grant(state.clone(), client, cx);
+                    }))
+                })
+            })
+    };
+
+    let grant_ids = settings
+        .mcp
+        .grants
+        .iter()
+        .filter(|grant| grant.active())
+        .map(|grant| grant.id)
+        .collect::<Vec<_>>();
+    let reset_button = Button::new("reset-mcp-access")
+        .compact()
+        .danger()
+        .label("Revoke all clients")
+        .disabled(!settings.mcp.legacy_access && grant_ids.is_empty())
+        .on_click({
+            let state = state.clone();
+            move |_, window, cx| {
+                let state = state.clone();
+                let grant_ids = grant_ids.clone();
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Revoke all agent clients",
+                    "Disable agent access and revoke every client token? Connected clients will lose access immediately.",
+                    "Revoke all clients",
+                    true,
+                    move |_window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.settings.mcp.enabled = false;
+                            state.settings.mcp.legacy_access = false;
+                            let now = chrono::Utc::now();
+                            for grant in &mut state.settings.mcp.grants {
+                                if grant.active() {
+                                    grant.revoked_at = Some(now);
+                                }
+                            }
+                            state.save_settings();
+                            cx.notify();
+                        });
+                        crate::helpers::keystore::KeyStore::delete_mcp_token(cx).detach();
+                        for id in &grant_ids {
+                            crate::helpers::keystore::KeyStore::delete_mcp_grant(cx, *id).detach();
+                        }
+                    },
+                );
+            }
+        });
+
+    let mut grants = div().flex().flex_col();
+    if settings.mcp.legacy_access {
+        let state_for_revoke = state.clone();
+        grants = grants.child(
+            mcp_grant_row(
+                "Legacy local token",
+                "Compatibility access used by the initial OpenMango MCP setup",
+                div().flex().items_center().gap(spacing::xs()).child(
+                    Button::new("revoke-legacy-mcp-grant")
+                        .compact()
+                        .danger()
+                        .label("Revoke")
+                        .on_click(move |_, window, cx| {
+                            let state = state_for_revoke.clone();
+                            open_confirm_dialog(
+                                window,
+                                cx,
+                                "Revoke legacy MCP access",
+                                "Clients using the original OpenMango token will disconnect. Create and copy a Pi grant first.",
+                                "Revoke access",
+                                true,
+                                move |_window, cx| {
+                                    state.update(cx, |state, cx| {
+                                        state.settings.mcp.legacy_access = false;
+                                        if !state.settings.mcp.grants.iter().any(|grant| grant.active()) {
+                                            state.settings.mcp.enabled = false;
+                                        }
+                                        state.save_settings();
+                                        cx.notify();
+                                    });
+                                    crate::helpers::keystore::KeyStore::delete_mcp_token(cx)
+                                        .detach();
+                                },
+                            );
+                        }),
+                ),
+                cx,
+            ),
+        );
+    }
+    for grant in &settings.mcp.grants {
+        let id = grant.id;
+        let client = grant.client;
+        let active = grant.active();
+        let state_for_token = state.clone();
+        let state_for_revoke = state.clone();
+        let state_for_remove = state.clone();
+        let actions = if active {
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(
+                    Button::new(("copy-mcp-grant", id.as_u128() as u64))
+                        .compact()
+                        .label("Copy config")
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(mcp_client_config(
+                                client, port, id,
+                            )));
+                        }),
+                )
+                .when(
+                    matches!(
+                        client,
+                        McpClientKind::Codex | McpClientKind::Cursor | McpClientKind::VsCode
+                    ),
+                    |actions| {
+                        actions.child(
+                            Button::new(("copy-mcp-grant-token", id.as_u128() as u64))
+                                .compact()
+                                .label("Copy token")
+                                .on_click(move |_, _, cx| {
+                                    copy_mcp_grant_token(state_for_token.clone(), id, cx);
+                                }),
+                        )
+                    },
+                )
+                .child(
+                    Button::new(("revoke-mcp-grant", id.as_u128() as u64))
+                        .compact()
+                        .danger()
+                        .label("Revoke")
+                        .on_click(move |_, window, cx| {
+                            let state = state_for_revoke.clone();
+                            open_confirm_dialog(
+                                window,
+                                cx,
+                                "Revoke MCP client grant",
+                                "This client will lose access immediately.",
+                                "Revoke grant",
+                                true,
+                                move |_window, cx| {
+                                    state.update(cx, |state, cx| {
+                                        if let Some(grant) = state
+                                            .settings
+                                            .mcp
+                                            .grants
+                                            .iter_mut()
+                                            .find(|grant| grant.id == id)
+                                        {
+                                            grant.revoked_at = Some(chrono::Utc::now());
+                                        }
+                                        if !state.settings.mcp.legacy_access
+                                            && !state
+                                                .settings
+                                                .mcp
+                                                .grants
+                                                .iter()
+                                                .any(|grant| grant.active())
+                                        {
+                                            state.settings.mcp.enabled = false;
+                                        }
+                                        state.save_settings();
+                                        cx.notify();
+                                    });
+                                    crate::helpers::keystore::KeyStore::delete_mcp_grant(cx, id)
+                                        .detach();
+                                },
+                            );
+                        }),
+                )
+                .into_any_element()
+        } else {
+            Button::new(("remove-mcp-grant", id.as_u128() as u64))
+                .compact()
+                .danger()
+                .label("Remove")
+                .on_click(move |_, _, cx| {
+                    state_for_remove.update(cx, |state, cx| {
+                        state.settings.mcp.grants.retain(|grant| grant.id != id);
+                        state.save_settings();
+                        cx.notify();
+                    });
+                    crate::helpers::keystore::KeyStore::delete_mcp_grant(cx, id).detach();
+                })
+                .into_any_element()
+        };
+        grants = grants.child(mcp_grant_row(
+            &grant.label,
+            &format!(
+                "Created {} · {} · {} · {} · {}",
+                grant.created_at.format("%Y-%m-%d"),
+                if active { "Active" } else { "Revoked" },
+                mcp_client_config_target(grant.client),
+                mcp_client_setup_note(grant.client),
+                grant
+                    .last_used_at
+                    .map(|last_used| format!("Last used {}", last_used.format("%Y-%m-%d %H:%M")))
+                    .unwrap_or_else(|| "Never used".to_string()),
+            ),
+            actions,
+            cx,
+        ));
+    }
+
+    if !settings.mcp.legacy_access && settings.mcp.grants.is_empty() {
+        grants = grants.child(
+            div()
+                .border_t_1()
+                .border_color(islands::panel_border(&settings.appearance, cx))
+                .py(spacing::lg())
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(Icon::new(IconName::Bot).small())
+                .child(
+                    "No clients yet. Add an agent to copy its client-specific MCP configuration.",
+                ),
+        );
+    }
+
+    group(
+        "Agent clients",
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Authenticated clients",
+                &format!(
+                    "{active_count} active. Each client has its own revocable Keychain token."
+                ),
+                create_button,
+                cx,
+            ))
+            .child(grants)
+            .when(active_count > 0 || settings.mcp.legacy_access, |content| {
+                content.child(
+                    div()
+                        .border_t_1()
+                        .border_color(islands::panel_border(&settings.appearance, cx))
+                        .pt(spacing::md())
+                        .child(setting_row_with_description(
+                            "Revoke all access",
+                            "Disconnect every agent client and disable the local MCP server.",
+                            reset_button,
+                            cx,
+                        )),
+                )
+            }),
+        &settings.appearance,
+        cx,
+    )
+}
+
+fn mcp_grant_row(label: &str, description: &str, actions: impl IntoElement, cx: &App) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(spacing::md())
+        .py(spacing::md())
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .min_w(px(0.0))
+                .flex_1()
+                .child(
+                    div()
+                        .size(px(28.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .bg(cx.theme().secondary.opacity(0.5))
+                        .text_color(cx.theme().secondary_foreground)
+                        .child(Icon::new(IconName::Bot).xsmall()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(cx.theme().foreground)
+                                .child(label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(description.to_string()),
+                        ),
+                ),
+        )
+        .child(div().flex_shrink_0().child(actions))
+}
+
+fn create_mcp_client_grant(state: Entity<AppState>, client: McpClientKind, cx: &mut App) {
+    let id = uuid::Uuid::new_v4();
+    let bytes: [u8; 32] = rand::random();
+    let token = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let write = crate::helpers::keystore::KeyStore::write_mcp_grant(cx, id, &token);
+    cx.spawn(async move |cx: &mut AsyncApp| match write.await {
+        Ok(()) => {
+            let _ = cx.update(|cx| {
+                let (label, port) = {
+                    let settings = &state.read(cx).settings.mcp;
+                    let count =
+                        settings.grants.iter().filter(|grant| grant.client == client).count();
+                    let label = if count == 0 {
+                        client.label().to_string()
+                    } else {
+                        format!("{} {}", client.label(), count + 1)
+                    };
+                    (label, settings.port)
+                };
+                state.update(cx, |state, cx| {
+                    state.settings.mcp.grants.push(crate::state::McpClientGrant {
+                        id,
+                        label,
+                        client,
+                        created_at: chrono::Utc::now(),
+                        last_used_at: None,
+                        revoked_at: None,
+                    });
+                    state.save_settings();
+                    state.set_status_message(Some(crate::state::StatusMessage::info(format!(
+                        "{} client grant created; configuration copied",
+                        client.label()
+                    ))));
+                    cx.notify();
+                });
+                cx.write_to_clipboard(ClipboardItem::new_string(mcp_client_config(
+                    client, port, id,
+                )));
+            });
+        }
+        Err(error) => {
+            let _ = cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                        "Could not create MCP client grant: {error}"
+                    ))));
+                    cx.notify();
+                });
+            });
+        }
+    })
+    .detach();
+}
+
+fn copy_mcp_grant_token(state: Entity<AppState>, id: uuid::Uuid, cx: &mut App) {
+    let read = crate::helpers::keystore::KeyStore::read_mcp_grant(cx, id);
+    cx.spawn(async move |cx: &mut AsyncApp| match read.await {
+        Ok(Some(token)) => {
+            let _ = cx.update(|cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(token));
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(crate::state::StatusMessage::info(
+                        "Client token copied; treat it like a password",
+                    )));
+                    cx.notify();
+                });
+            });
+        }
+        Ok(None) => {
+            let _ = cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(crate::state::StatusMessage::error(
+                        "Client token is missing from macOS Keychain",
+                    )));
+                    cx.notify();
+                });
+            });
+        }
+        Err(error) => {
+            let _ = cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(crate::state::StatusMessage::error(format!(
+                        "Could not copy client token: {error}"
+                    ))));
+                    cx.notify();
+                });
+            });
+        }
+    })
+    .detach();
+}
+
+fn mcp_client_config(client: McpClientKind, port: u16, id: uuid::Uuid) -> String {
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    match client {
+        McpClientKind::Pi => pretty_json(serde_json::json!({
+            "mcpServers": {
+                "openmango": {
+                    "url": url,
+                    "auth": "bearer",
+                    "bearerToken": format!("!{}", mcp_keychain_command(id)),
+                    "protocolVersion": "2026-07-28"
+                }
+            }
+        })),
+        McpClientKind::ClaudeCode => pretty_json(serde_json::json!({
+            "mcpServers": {
+                "openmango": {
+                    "type": "http",
+                    "url": url,
+                    "headersHelper": format!(
+                        "token=$({}) && printf '{{\"Authorization\":\"Bearer %s\"}}' \"$token\"",
+                        mcp_keychain_command(id)
+                    )
+                }
+            }
+        })),
+        McpClientKind::Codex => format!(
+            "[mcp_servers.openmango]\nurl = \"{url}\"\nbearer_token_env_var = \"OPENMANGO_MCP_TOKEN\"\ntool_timeout_sec = 35\n"
+        ),
+        McpClientKind::Cursor => pretty_json(serde_json::json!({
+            "mcpServers": {
+                "openmango": {
+                    "url": url,
+                    "headers": {
+                        "Authorization": "Bearer ${env:OPENMANGO_MCP_TOKEN}"
+                    }
+                }
+            }
+        })),
+        McpClientKind::VsCode => {
+            let input_id = format!("openmango-mcp-token-{}", &id.to_string()[..8]);
+            pretty_json(serde_json::json!({
+                "inputs": [{
+                    "type": "promptString",
+                    "id": input_id,
+                    "description": "OpenMango MCP client token",
+                    "password": true
+                }],
+                "servers": {
+                    "openmango": {
+                        "type": "http",
+                        "url": url,
+                        "headers": {
+                            "Authorization": format!("Bearer ${{input:{input_id}}}")
+                        }
+                    }
+                }
+            }))
+        }
+    }
+}
+
+fn mcp_keychain_command(id: uuid::Uuid) -> String {
+    format!("security find-internet-password -s com.openmango.mcp.grant.{id} -a {id} -w")
+}
+
+fn pretty_json(value: serde_json::Value) -> String {
+    serde_json::to_string_pretty(&value).expect("JSON values are serializable")
+}
+
+fn mcp_client_config_target(client: McpClientKind) -> &'static str {
+    match client {
+        McpClientKind::Pi | McpClientKind::ClaudeCode => ".mcp.json",
+        McpClientKind::Codex => "~/.codex/config.toml",
+        McpClientKind::Cursor => "~/.cursor/mcp.json",
+        McpClientKind::VsCode => ".vscode/mcp.json",
+    }
+}
+
+fn mcp_client_setup_note(client: McpClientKind) -> &'static str {
+    match client {
+        McpClientKind::Pi | McpClientKind::ClaudeCode => "Uses macOS Keychain automatically",
+        McpClientKind::Codex | McpClientKind::Cursor => "Uses OPENMANGO_MCP_TOKEN",
+        McpClientKind::VsCode => "Prompts once for the copied token",
+    }
+}
+
+fn history_coverage_summary(report: &crate::history::EligibilityReport) -> Option<String> {
+    let needs_setup = report
+        .collections
+        .iter()
+        .filter(|coverage| {
+            coverage.regular
+                && coverage.reason.as_deref() == Some("changeStreamPreAndPostImages is not enabled")
+        })
+        .count();
+    let unavailable = report
+        .collections
+        .iter()
+        .filter(|coverage| {
+            coverage.regular
+                && coverage.reason.is_some()
+                && coverage.reason.as_deref() != Some("changeStreamPreAndPostImages is not enabled")
+        })
+        .count();
+    let excluded = report.collections.iter().filter(|coverage| !coverage.regular).count();
+    let mut summaries = Vec::new();
+    if needs_setup > 0 {
+        summaries.push(format!(
+            "Pre/post images are disabled on {needs_setup} collection{}.",
+            if needs_setup == 1 { "" } else { "s" }
+        ));
+    }
+    if unavailable > 0 {
+        summaries.push(format!(
+            "{unavailable} regular collection{} cannot be covered.",
+            if unavailable == 1 { "" } else { "s" }
+        ));
+    }
+    if excluded > 0 {
+        summaries.push(format!(
+            "{excluded} unsupported view or time-series collection{} excluded.",
+            if excluded == 1 { " is" } else { "s are" }
+        ));
+    }
+    (!summaries.is_empty()).then(|| summaries.join(" "))
+}
+
+fn render_agent_connections_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
+    let connections = state.read(cx).connections_snapshot();
+    let content = if connections.is_empty() {
+        div()
+            .border_t_1()
+            .border_color(islands::panel_border(&settings.appearance, cx))
+            .py(spacing::lg())
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(Icon::new(IconName::Info).small())
+            .child("Add a MongoDB connection before granting agent access.")
+            .into_any_element()
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .children(connections.into_iter().map(|connection| {
+                let connection_id = connection.id;
+                let shared = connection.agent_shared;
+                let agent_writable = connection.agent_writable;
+                let connected = state.read(cx).is_connected(connection.id);
+                let history_enabled = connection.history_enabled;
+                let history_max_age_days = connection.history_max_age_days;
+                let history_max_bytes = connection.history_max_bytes;
+                let history_report = state.read(cx).history_eligibility(connection_id).cloned();
+                let history_inspecting = state.read(cx).history_inspecting(connection_id);
+                let history_eligible = history_report.as_ref().is_some_and(|report| {
+                    report.status == crate::history::EligibilityStatus::Eligible
+                });
+                let history_needs_setup = history_report.as_ref().is_some_and(|report| {
+                    report.status == crate::history::EligibilityStatus::NeedsSetup
+                });
+                let history_reason = history_report
+                    .as_ref()
+                    .and_then(|report| report.exact_reason())
+                    .unwrap_or(if connected {
+                        "Inspect eligibility before enabling History."
+                    } else {
+                        "Connect before inspecting History eligibility."
+                    })
+                    .to_string();
+                let history_usage = state
+                    .read(cx)
+                    .history_service()
+                    .and_then(|service| service.cached_usage(connection_id))
+                    .or_else(|| state.read(cx).history_usage(connection_id));
+                let history_gap_count = if history_enabled {
+                    state
+                        .read(cx)
+                        .history_service()
+                        .and_then(|service| service.list_gaps(connection_id, None, None).ok())
+                        .map(|gaps| gaps.into_iter().filter(|gap| !gap.resolved).count())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let history_coverage =
+                    history_report.as_ref().and_then(history_coverage_summary);
+                let protected = connection.protected
+                    || connection.environment
+                        == Some(crate::models::ConnectionEnvironment::Production);
+                let state_for_share = state.clone();
+                let state_for_writes = state.clone();
+                let state_for_history = state.clone();
+                let state_for_inspection = state.clone();
+                let state_for_setup = state.clone();
+                let state_for_age = state.clone();
+                let state_for_bytes = state.clone();
+                let state_for_clear = state.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .items_start()
+                    .gap(spacing::md())
+                    .py(spacing::md())
+                    .border_t_1()
+                    .border_color(islands::panel_border(&settings.appearance, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(cx.theme().foreground)
+                                    .child(connection.name),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} · {} · {}{}",
+                                        connection
+                                            .environment
+                                            .map(|environment| environment.label())
+                                            .unwrap_or("Environment not set"),
+                                        if connected { "Connected" } else { "Disconnected" },
+                                        if connection.read_only { "Read-only" } else { "Writable" },
+                                        if protected { " · Protected" } else { "" },
+                                    )),
+                            )
+                            .when(shared && protected, |content| {
+                                content.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child(if agent_writable {
+                                            "Agents have direct write access to this protected connection."
+                                        } else {
+                                            "Visible to agents; direct writes are disabled."
+                                        }),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if history_eligible {
+                                        cx.theme().success
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(if history_eligible {
+                                        "History eligible: all covered regular collections have pre/post images."
+                                            .to_string()
+                                    } else {
+                                        history_reason.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .max_w(px(620.0))
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("History records supported changes from every client observed by OpenMango on this device, can contain gaps, and is not a backup or audit log."),
+                            )
+                            .when_some(history_coverage, |content, coverage| {
+                                content.child(
+                                    div()
+                                        .max_w(px(620.0))
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child(coverage),
+                                )
+                            })
+                            .when(history_gap_count > 0, |content| {
+                                content.child(
+                                    div()
+                                        .max_w(px(620.0))
+                                        .text_xs()
+                                        .text_color(cx.theme().warning)
+                                        .child(format!(
+                                            "History coverage: {history_gap_count} interruption{}. Some changes may not be restorable.",
+                                            if history_gap_count == 1 { "" } else { "s" }
+                                        )),
+                                )
+                            })
+                            .when_some(history_usage, |content, usage| {
+                                content.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "History storage: {} MiB · {} batches · {} items",
+                                            usage.encrypted_bytes / (1024 * 1024),
+                                            usage.batches,
+                                            usage.items,
+                                        )),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .items_end()
+                            .gap(spacing::sm())
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(div().text_xs().child("Share with agents"))
+                                    .child(
+                                        Switch::new(("agent-share-connection", connection_id.as_u128() as u64))
+                                            .checked(shared)
+                                            .small()
+                                            .on_click(move |checked, window, cx| {
+                                                let apply = {
+                                                    let state = state_for_share.clone();
+                                                    let checked = *checked;
+                                                    move |_window: &mut Window, cx: &mut App| {
+                                                        state.update(cx, |state, cx| {
+                                                            state.set_connection_agent_shared(
+                                                                connection_id,
+                                                                checked,
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                };
+                                                if *checked && protected {
+                                                    open_confirm_dialog(
+                                                        window,
+                                                        cx,
+                                                        "Share protected connection",
+                                                        "Agents will be able to see this connection and read database metadata. Credentials remain hidden. Direct writes remain disabled until separately enabled.",
+                                                        "Share connection",
+                                                        false,
+                                                        apply,
+                                                    );
+                                                } else {
+                                                    apply(window, cx);
+                                                }
+                                            }),
+                                    ),
+                            )
+                            .when(shared, |controls| {
+                                controls.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(spacing::sm())
+                                        .child(div().text_xs().child("Allow agent writes"))
+                                        .child(
+                                            Switch::new(("agent-write-connection", connection_id.as_u128() as u64))
+                                                .checked(agent_writable)
+                                                .small()
+                                                .disabled(connection.read_only)
+                                                .on_click(move |checked, window, cx| {
+                                                    let apply = {
+                                                        let state = state_for_writes.clone();
+                                                        let checked = *checked;
+                                                        move |_window: &mut Window, cx: &mut App| {
+                                                            state.update(cx, |state, cx| {
+                                                                state.set_connection_agent_writable(
+                                                                    connection_id,
+                                                                    checked,
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        }
+                                                    };
+                                                    if *checked && protected {
+                                                        open_confirm_dialog(
+                                                            window,
+                                                            cx,
+                                                            "Allow direct agent writes",
+                                                            "Authenticated MCP clients will be able to insert, update, replace, delete, and restore History batches directly on this protected or Production connection without per-operation approval. History is not a backup, and restores remain conflict-safe.",
+                                                            "Allow agent writes",
+                                                            true,
+                                                            apply,
+                                                        );
+                                                    } else {
+                                                        apply(window, cx);
+                                                    }
+                                                }),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(div().text_xs().child("History"))
+                                    .child(
+                                        Switch::new(("history-connection", connection_id.as_u128() as u64))
+                                            .checked(history_enabled)
+                                            .small()
+                                            .disabled(
+                                                history_inspecting
+                                                    || (!history_enabled && !history_eligible),
+                                            )
+                                            .on_click(move |checked, _window, cx| {
+                                                state_for_history.update(cx, |state, cx| {
+                                                    state.set_connection_history_enabled(
+                                                        connection_id,
+                                                        *checked,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .when(!history_eligible, |controls| {
+                                controls.child(
+                                    Button::new(("inspect-history", connection_id.as_u128() as u64))
+                                        .ghost()
+                                        .compact()
+                                        .label(if history_inspecting {
+                                            "Inspecting…"
+                                        } else if history_needs_setup {
+                                            "Enable pre/post images"
+                                        } else {
+                                            "Inspect eligibility"
+                                        })
+                                        .disabled(!connected || history_inspecting)
+                                        .on_click(move |_, _, cx| {
+                                            AppCommands::inspect_history_eligibility(
+                                                if history_needs_setup {
+                                                    state_for_setup.clone()
+                                                } else {
+                                                    state_for_inspection.clone()
+                                                },
+                                                connection_id,
+                                                history_needs_setup,
+                                                history_needs_setup,
+                                                cx,
+                                            );
+                                        }),
+                                )
+                            })
+                            .when(history_enabled, |controls| {
+                                let next_age = if history_max_age_days <= 7 {
+                                    30
+                                } else if history_max_age_days <= 30 {
+                                    90
+                                } else {
+                                    7
+                                };
+                                let mib = 1024 * 1024;
+                                let next_bytes = if history_max_bytes <= 256 * mib {
+                                    1024 * mib
+                                } else if history_max_bytes <= 1024 * mib {
+                                    5 * 1024 * mib
+                                } else {
+                                    256 * mib
+                                };
+                                controls.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(spacing::xs())
+                                        .child(
+                                            Button::new(("history-age", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label(format!("{} days", history_max_age_days))
+                                                .on_click(move |_, _, cx| {
+                                                    state_for_age.update(cx, |state, cx| {
+                                                        state.set_connection_history_retention(
+                                                            connection_id,
+                                                            next_age,
+                                                            history_max_bytes,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(("history-size", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label(format!(
+                                                    "{} MiB",
+                                                    history_max_bytes / mib
+                                                ))
+                                                .on_click(move |_, _, cx| {
+                                                    state_for_bytes.update(cx, |state, cx| {
+                                                        state.set_connection_history_retention(
+                                                            connection_id,
+                                                            history_max_age_days,
+                                                            next_bytes,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(("clear-connection-history", connection_id.as_u128() as u64))
+                                                .ghost()
+                                                .compact()
+                                                .label("Clear connection")
+                                                .on_click(move |_, window, cx| {
+                                                    let state = state_for_clear.clone();
+                                                    open_confirm_dialog(
+                                                        window,
+                                                        cx,
+                                                        "Clear connection History",
+                                                        "Delete all non-active encrypted History batches, gaps, and resume state for this connection. Recording restarts from the current point and this cannot be undone.",
+                                                        "Clear History",
+                                                        true,
+                                                        move |_, cx| {
+                                                            AppCommands::clear_connection_history(
+                                                                state.clone(),
+                                                                connection_id,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    );
+                                                }),
+                                        ),
+                                )
+                            }),
+                    )
+            }))
+            .into_any_element()
+    };
+
+    group(
+        "Connection access",
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(
+                div()
+                    .max_w(px(620.0))
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        "Agents see only enabled connections. Credentials and connection strings are never exposed.",
+                    ),
+            )
+            .child(content)
+            .child(
+                Button::new("clear-all-history")
+                    .ghost()
+                    .compact()
+                    .label("Clear all History")
+                    .on_click({
+                        let state = state.clone();
+                        move |_, window, cx| {
+                            let state_for_clear = state.clone();
+                            open_confirm_dialog(
+                                window,
+                                cx,
+                                "Clear all History",
+                                "Delete every non-active local encrypted History batch, gap, and resume cursor. Recording restarts from the current point. This cannot be undone.",
+                                "Clear all History",
+                                true,
+                                move |_, cx| {
+                                    AppCommands::clear_all_history(state_for_clear.clone(), cx);
+                                },
+                            );
+                        }
+                    }),
+            ),
+        &settings.appearance,
         cx,
     )
 }
@@ -1403,6 +2572,7 @@ fn section(title: &str, content: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(spacing::md())
         .child(
             div()
@@ -1423,6 +2593,7 @@ fn group(
     div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(spacing::sm())
         .p(spacing::md())
         .bg(islands::card_bg(appearance, cx))
@@ -1479,4 +2650,64 @@ fn setting_row_with_description(
                 ),
         )
         .child(control)
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn history_coverage_is_summarized_instead_of_listing_every_namespace() {
+        let report = crate::history::EligibilityReport {
+            status: crate::history::EligibilityStatus::NeedsSetup,
+            version: Some("7.0.0".into()),
+            topology: Some("replica_set".into()),
+            storage_engine: Some("wiredTiger".into()),
+            failures: Vec::new(),
+            collections: vec![
+                crate::history::CollectionCoverage {
+                    database: "app".into(),
+                    collection: "users".into(),
+                    regular: true,
+                    pre_post_images: false,
+                    reason: Some("changeStreamPreAndPostImages is not enabled".into()),
+                },
+                crate::history::CollectionCoverage {
+                    database: "app".into(),
+                    collection: "orders".into(),
+                    regular: true,
+                    pre_post_images: false,
+                    reason: Some("changeStreamPreAndPostImages is not enabled".into()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            history_coverage_summary(&report).as_deref(),
+            Some("Pre/post images are disabled on 2 collections.")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn client_configs_use_native_secret_mechanisms() {
+        let id = uuid::Uuid::new_v4();
+        let pi = mcp_client_config(McpClientKind::Pi, 39123, id);
+        let claude = mcp_client_config(McpClientKind::ClaudeCode, 39123, id);
+        let codex = mcp_client_config(McpClientKind::Codex, 39123, id);
+        let cursor = mcp_client_config(McpClientKind::Cursor, 39123, id);
+        let vscode = mcp_client_config(McpClientKind::VsCode, 39123, id);
+
+        for config in [&pi, &claude, &codex, &cursor, &vscode] {
+            assert!(config.contains("http://127.0.0.1:39123/mcp"));
+            assert!(!config.contains("mcp-server-token"));
+        }
+        assert!(pi.contains(&format!("com.openmango.mcp.grant.{id}")));
+        assert!(pi.contains("2026-07-28"));
+        assert!(claude.contains("headersHelper"));
+        assert!(claude.contains(&format!("com.openmango.mcp.grant.{id}")));
+        assert!(codex.contains("bearer_token_env_var = \"OPENMANGO_MCP_TOKEN\""));
+        assert!(cursor.contains("${env:OPENMANGO_MCP_TOKEN}"));
+        assert!(vscode.contains("${input:openmango-mcp-token-"));
+        assert!(vscode.contains("\"password\": true"));
+    }
 }

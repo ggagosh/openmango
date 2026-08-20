@@ -72,6 +72,9 @@ jobs:
       - name: Verify Docker availability
         run: docker version
 
+      - name: Download MongoDB Database Tools
+        run: ./scripts/download_tools.sh
+
       - name: Run integration tests
         run: |
           for test_file in tests/*_tests.rs; do

@@ -172,6 +172,9 @@ pub enum AppEvent {
         error: String,
     },
 
+    // Agent proposals and operations
+    AgentActivityChanged,
+
     // View navigation
     ViewChanged,
 

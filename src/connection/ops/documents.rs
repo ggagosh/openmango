@@ -1,5 +1,6 @@
 //! Document CRUD operations for MongoDB collections.
 
+use futures::TryStreamExt;
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
 use mongodb::results::UpdateResult;
@@ -7,6 +8,124 @@ use mongodb::results::UpdateResult;
 use crate::connection::ConnectionManager;
 use crate::connection::types::FindDocumentsOptions;
 use crate::error::Result;
+
+pub struct AsyncFindOptions {
+    pub filter: Document,
+    pub sort: Option<Document>,
+    pub projection: Option<Document>,
+    pub skip: u64,
+    pub limit: i64,
+    pub max_time: std::time::Duration,
+}
+
+pub async fn find_documents_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    options: AsyncFindOptions,
+) -> Result<Vec<Document>> {
+    let coll = client.database(database).collection::<Document>(collection);
+    let find_options = mongodb::options::FindOptions::builder()
+        .skip(options.skip)
+        .limit(options.limit)
+        .sort(options.sort)
+        .projection(options.projection)
+        .max_time(options.max_time)
+        .build();
+    Ok(coll.find(options.filter).with_options(find_options).await?.try_collect().await?)
+}
+
+pub async fn count_documents_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    filter: Document,
+    max_time: std::time::Duration,
+) -> Result<u64> {
+    let coll = client.database(database).collection::<Document>(collection);
+    Ok(coll.count_documents(filter).max_time(max_time).await?)
+}
+
+pub async fn find_documents_page_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    opts: FindDocumentsOptions,
+) -> Result<(Vec<Document>, u64)> {
+    let FindDocumentsOptions { filter, sort, projection, skip, limit, max_time, cancellation } =
+        opts;
+    let filter = filter.unwrap_or_default();
+    let coll = client.database(database).collection::<Document>(collection);
+    let cancelled = || async {
+        while !cancellation.is_cancelled() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+
+    let total = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
+    };
+    let options = mongodb::options::FindOptions::builder()
+        .skip(skip)
+        .limit(limit)
+        .sort(sort)
+        .projection(projection)
+        .max_time(max_time)
+        .build();
+    let cursor = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = coll.find(filter).with_options(options) => result?,
+    };
+    let documents = tokio::select! {
+        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        result = cursor.try_collect() => result?,
+    };
+    Ok((documents, total))
+}
+
+pub async fn replace_document_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+    replacement: Document,
+) -> Result<()> {
+    client
+        .database(database)
+        .collection::<Document>(collection)
+        .replace_one(doc! { "_id": id }, replacement)
+        .await?;
+    Ok(())
+}
+
+pub async fn replace_document_if_current_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+    expected: Document,
+    replacement: Document,
+) -> Result<()> {
+    let result = client
+        .database(database)
+        .collection::<Document>(collection)
+        .replace_one(
+            doc! {
+                "_id": id,
+                "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
+            },
+            replacement,
+        )
+        .await?;
+    if result.matched_count == 1 {
+        Ok(())
+    } else {
+        Err(crate::error::Error::Parse(
+            "Document changed on the server; reload before saving.".to_string(),
+        ))
+    }
+}
 
 impl ConnectionManager {
     /// Find documents in a collection with pagination (runs in Tokio runtime)
@@ -17,54 +136,7 @@ impl ConnectionManager {
         collection: &str,
         opts: FindDocumentsOptions,
     ) -> Result<(Vec<Document>, u64)> {
-        use futures::TryStreamExt;
-
-        let client = client.clone();
-        let database = database.to_string();
-        let collection = collection.to_string();
-        let crate::connection::types::FindDocumentsOptions {
-            filter,
-            sort,
-            projection,
-            skip,
-            limit,
-            max_time,
-            cancellation,
-        } = opts;
-        let filter = filter.unwrap_or_default();
-
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            let cancelled = || async {
-                while !cancellation.is_cancelled() {
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                }
-            };
-
-            // Apply maxTimeMS to both server commands and drop in-flight driver futures on cancel.
-            let total = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
-            };
-
-            let mut options = mongodb::options::FindOptions::default();
-            options.skip = Some(skip);
-            options.limit = Some(limit);
-            options.sort = sort;
-            options.projection = projection;
-            options.max_time = Some(max_time);
-
-            let cursor = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = coll.find(filter).with_options(options) => result?,
-            };
-            let documents: Vec<Document> = tokio::select! {
-                _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
-                result = cursor.try_collect() => result?,
-            };
-
-            Ok((documents, total))
-        })
+        self.runtime.block_on(find_documents_page_async(client, database, collection, opts))
     }
 
     /// Count documents matching an exact filter (runs in Tokio runtime).
@@ -243,11 +315,13 @@ impl ConnectionManager {
         let collection = collection.to_string();
         let id = id.clone();
 
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            coll.replace_one(doc! { "_id": id }, replacement).await?;
-            Ok(())
-        })
+        self.runtime.block_on(replace_document_async(
+            &client,
+            &database,
+            &collection,
+            id,
+            replacement,
+        ))
     }
 
     /// Replace every document matching a frozen filter while preserving each `_id`.
@@ -335,6 +409,32 @@ impl ConnectionManager {
         let collection = collection.to_string();
         let id = id.clone();
         let expected = expected.clone();
+
+        self.runtime.block_on(replace_document_if_current_async(
+            &client,
+            &database,
+            &collection,
+            id,
+            expected,
+            replacement,
+        ))
+    }
+
+    /// Return whether an exact-current-state replacement matched its document.
+    pub fn replace_document_if_current_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+        expected: &Document,
+        replacement: Document,
+    ) -> Result<bool> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+        let expected = expected.clone();
         let filter = doc! {
             "_id": id,
             "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
@@ -343,12 +443,7 @@ impl ConnectionManager {
         self.runtime.block_on(async {
             let coll = client.database(&database).collection::<Document>(&collection);
             let result = coll.replace_one(filter, replacement).await?;
-            if result.matched_count == 0 {
-                return Err(crate::error::Error::Parse(
-                    "Document changed on the server; reload before saving.".to_string(),
-                ));
-            }
-            Ok(())
+            Ok(result.matched_count == 1)
         })
     }
 
@@ -372,6 +467,54 @@ impl ConnectionManager {
         })
     }
 
+    /// Delete only when the server document still matches the expected image.
+    pub fn delete_document_if_current_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        id: &mongodb::bson::Bson,
+        expected: &Document,
+    ) -> Result<bool> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+        let id = id.clone();
+        let expected = expected.clone();
+        let filter = doc! {
+            "_id": id,
+            "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
+        };
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            let result = coll.delete_one(filter).await?;
+            Ok(result.deleted_count == 1)
+        })
+    }
+
+    /// Insert a recovery image only while its `_id` remains absent.
+    pub fn insert_document_if_absent_matches(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+        document: Document,
+    ) -> Result<bool> {
+        let client = client.clone();
+        let database = database.to_string();
+        let collection = collection.to_string();
+
+        self.runtime.block_on(async {
+            let coll = client.database(&database).collection::<Document>(&collection);
+            match coll.insert_one(document).await {
+                Ok(_) => Ok(true),
+                Err(error) if is_duplicate_key(&error) => Ok(false),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+
     /// Delete a document by _id in a collection (runs in Tokio runtime)
     pub fn delete_document(
         &self,
@@ -391,4 +534,12 @@ impl ConnectionManager {
             Ok(())
         })
     }
+}
+
+fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
+    matches!(
+        error.kind.as_ref(),
+        mongodb::error::ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error))
+            if write_error.code == 11000
+    )
 }

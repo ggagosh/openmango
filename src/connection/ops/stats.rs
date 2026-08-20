@@ -1,10 +1,29 @@
 //! Database and collection statistics operations.
 
+use std::time::Duration;
+
+use futures::TryStreamExt;
 use mongodb::Client;
 use mongodb::bson::{Document, doc};
 
 use crate::connection::ConnectionManager;
 use crate::error::Result;
+
+pub async fn collection_stats_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    max_time: Duration,
+) -> Result<Document> {
+    let coll = client.database(database).collection::<Document>(collection);
+    let pipeline = vec![doc! { "$collStats": { "storageStats": { "scale": 1 } } }];
+    coll.aggregate(pipeline)
+        .max_time(max_time)
+        .await?
+        .try_next()
+        .await?
+        .ok_or_else(|| crate::error::Error::Parse("No collection stats returned".to_string()))
+}
 
 impl ConnectionManager {
     /// Fetch collection stats (runs in Tokio runtime)

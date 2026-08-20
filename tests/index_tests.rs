@@ -13,6 +13,155 @@ use openmango::connection::ConnectionManager;
 // =============================================================================
 
 #[tokio::test]
+async fn conditional_index_create_and_drop_require_exact_metadata() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "conditional_index");
+    collection.insert_one(doc! { "email": "ada@example.com" }).await.unwrap();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let (created, duplicate, current, stale_drop, dropped) =
+        tokio::task::spawn_blocking(move || {
+            let manager = ConnectionManager::new();
+            let definition = doc! { "key": { "email": 1 }, "name": "email_idx", "unique": true };
+            let created = manager.create_index_if_absent_matches(
+                &client,
+                &database,
+                "conditional_index",
+                definition.clone(),
+            )?;
+            let duplicate = manager.create_index_if_absent_matches(
+                &client,
+                &database,
+                "conditional_index",
+                definition.clone(),
+            )?;
+            let current = manager
+                .find_index_document(&client, &database, "conditional_index", "email_idx")?
+                .expect("created index missing");
+            let stale_drop = manager.drop_index_if_current_matches(
+                &client,
+                &database,
+                "conditional_index",
+                "email_idx",
+                &doc! { "key": { "other": 1 }, "name": "email_idx" },
+            )?;
+            let dropped = manager.drop_index_if_current_matches(
+                &client,
+                &database,
+                "conditional_index",
+                "email_idx",
+                &current,
+            )?;
+            Ok::<_, openmango::error::Error>((created, duplicate, current, stale_drop, dropped))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(created);
+    assert!(!duplicate);
+    assert_eq!(current.get_str("name").unwrap(), "email_idx");
+    assert!(!stale_drop);
+    assert!(dropped);
+    assert!(!collection.list_index_names().await.unwrap().contains(&"email_idx".to_string()));
+}
+
+#[tokio::test]
+async fn server_returned_text_and_collation_metadata_can_be_recreated() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "recreate_complex_index");
+    collection.insert_one(doc! { "title": "Mango" }).await.unwrap();
+    let client = mongo.client.clone();
+    let database = mongo.db_name("test_db");
+    let (collation_before, collation_after, text_before, text_after) =
+        tokio::task::spawn_blocking(move || {
+            let manager = ConnectionManager::new();
+            manager.create_index(
+                &client,
+                &database,
+                "recreate_complex_index",
+                doc! {
+                    "key": { "title": 1 },
+                    "name": "title_collation",
+                    "collation": { "locale": "en", "strength": 2 },
+                },
+            )?;
+            let collation_before = manager
+                .find_index_document(
+                    &client,
+                    &database,
+                    "recreate_complex_index",
+                    "title_collation",
+                )?
+                .expect("created collation index missing");
+            assert!(manager.drop_index_if_current_matches(
+                &client,
+                &database,
+                "recreate_complex_index",
+                "title_collation",
+                &collation_before,
+            )?);
+            assert!(manager.create_index_if_absent_matches(
+                &client,
+                &database,
+                "recreate_complex_index",
+                collation_before.clone(),
+            )?);
+            let collation_after = manager
+                .find_index_document(
+                    &client,
+                    &database,
+                    "recreate_complex_index",
+                    "title_collation",
+                )?
+                .expect("recreated collation index missing");
+
+            manager.create_index(
+                &client,
+                &database,
+                "recreate_complex_index",
+                doc! {
+                    "key": { "title": "text" },
+                    "name": "title_text",
+                    "weights": { "title": 5 },
+                    "default_language": "english",
+                },
+            )?;
+            let text_before = manager
+                .find_index_document(&client, &database, "recreate_complex_index", "title_text")?
+                .expect("created text index missing");
+            assert!(manager.drop_index_if_current_matches(
+                &client,
+                &database,
+                "recreate_complex_index",
+                "title_text",
+                &text_before,
+            )?);
+            assert!(manager.create_index_if_absent_matches(
+                &client,
+                &database,
+                "recreate_complex_index",
+                text_before.clone(),
+            )?);
+            let text_after = manager
+                .find_index_document(&client, &database, "recreate_complex_index", "title_text")?
+                .expect("recreated text index missing");
+            Ok::<_, openmango::error::Error>((
+                collation_before,
+                collation_after,
+                text_before,
+                text_after,
+            ))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(collation_before, collation_after);
+    assert_eq!(text_before, text_after);
+}
+
+#[tokio::test]
 async fn test_same_name_index_replacement_keeps_final_name() {
     let mongo = MongoTestContainer::start().await;
     let collection = mongo.collection::<Document>("test_db", "replace_same_name");

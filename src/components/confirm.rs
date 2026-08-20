@@ -6,6 +6,7 @@ use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
 use gpui_component::dialog::Dialog;
+use gpui_component::scroll::ScrollableElement as _;
 use uuid::Uuid;
 
 use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
@@ -116,12 +117,7 @@ pub fn request_connection_write(
                 destructive: true,
             });
             let confirmation = WriteConfirmation {
-                message: format!(
-                    "{}\n\nConnection: {}\nEnvironment: {}\nTarget: {target}",
-                    confirmation.message,
-                    identity.name,
-                    identity.environment_label().unwrap_or("Not set")
-                ),
+                message: format!("{}\n\nTarget: {target}", confirmation.message),
                 ..confirmation
             };
             let state_for_confirm = state.clone();
@@ -315,6 +311,7 @@ fn open_confirm_dialog_boxed(
             div()
                 .flex()
                 .flex_col()
+                .max_w(px(560.0))
                 .gap(spacing::md())
                 .p(spacing::md())
                 .on_key_down(key_handler)
@@ -323,6 +320,8 @@ fn open_confirm_dialog_boxed(
                 })
                 .child(
                     div()
+                        .max_h(px(280.0))
+                        .overflow_y_scrollbar()
                         .text_sm()
                         .text_color(cx.theme().secondary_foreground)
                         .child(message.clone()),

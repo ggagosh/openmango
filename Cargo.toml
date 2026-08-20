@@ -56,12 +56,19 @@ sha2 = "0.10"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 tempfile = "3.26"
 rust_xlsxwriter = { version = "0.93", features = ["constant_memory"] }
+rmcp = { version = "=3.1.2", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+axum = "0.8.9"
+tokio-util = "0.7.19"
+tower-http = { version = "0.6.8", features = ["limit"] }
+schemars = "1.2.1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = [
     "user-hooks",
 ] }
 fast-socks5 = "1.0.0"
+rmcp = { version = "=3.1.2", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15.0", features = ["mongo"] }
 

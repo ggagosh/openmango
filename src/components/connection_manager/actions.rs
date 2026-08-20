@@ -95,6 +95,10 @@ impl ConnectionManager {
             self.draft.environment = connection.environment;
             self.draft.confirm_production_writes = connection.confirm_production_writes;
             self.draft.read_only = connection.read_only;
+            self.draft.agent_shared = connection.agent_shared;
+            self.draft.agent_writable = connection.agent_writable;
+            self.draft.protected = connection.protected;
+            self.draft.history_enabled = connection.history_enabled;
             self.load_transport_settings(&connection, window, cx);
             self.import_uri(connection.uri.clone(), window, cx);
         } else {
@@ -637,6 +641,10 @@ impl ConnectionManager {
         let environment = self.draft.environment;
         let confirm_production_writes = self.draft.confirm_production_writes;
         let read_only = self.draft.read_only;
+        let agent_shared = self.draft.agent_shared;
+        let agent_writable = self.draft.agent_writable;
+        let protected = self.draft.protected;
+        let history_enabled = self.draft.history_enabled;
         let (ssh, proxy) = match self.build_transport_settings(cx) {
             Ok(settings) => settings,
             Err(err) => {
@@ -660,6 +668,12 @@ impl ConnectionManager {
                         uri: uri.clone(),
                         last_connected: existing.last_connected,
                         read_only,
+                        agent_shared,
+                        agent_writable,
+                        protected,
+                        history_enabled,
+                        history_max_age_days: existing.history_max_age_days,
+                        history_max_bytes: existing.history_max_bytes,
                         ssh: ssh.clone(),
                         proxy: proxy.clone(),
                         secret_id: existing.secret_id,
@@ -673,6 +687,10 @@ impl ConnectionManager {
                 connection.environment = environment;
                 connection.confirm_production_writes = confirm_production_writes;
                 connection.read_only = read_only;
+                connection.agent_shared = agent_shared;
+                connection.agent_writable = agent_writable;
+                connection.protected = protected;
+                connection.history_enabled = history_enabled;
                 connection.ssh = ssh.clone();
                 connection.proxy = proxy.clone();
                 state.add_connection(connection.clone(), cx);
