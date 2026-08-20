@@ -141,9 +141,20 @@ async fn replica_set_history_captures_all_clients_groups_and_restores_without_ov
         connected: true,
         databases: vec![database.clone()],
     };
+    let other_connection_id = uuid::Uuid::new_v4();
+    let other_mcp_connection = McpConnection {
+        id: other_connection_id,
+        name: "Other shared connection".into(),
+        environment: Some("Development".into()),
+        protected: false,
+        read_only: false,
+        writable: false,
+        connected: true,
+        databases: vec![database.clone()],
+    };
     let mcp_server = McpServer::new(McpBridge::fixed_with_clients_and_history(
-        vec![mcp_connection],
-        HashMap::from([(connection_id, client.clone())]),
+        vec![mcp_connection, other_mcp_connection],
+        HashMap::from([(connection_id, client.clone()), (other_connection_id, client.clone())]),
         Some(service.clone()),
     ));
     let handle = McpServerHandle::start(mcp_server, "history-token".into()).await.unwrap();
@@ -219,20 +230,129 @@ async fn replica_set_history_captures_all_clients_groups_and_restores_without_ov
         .iter()
         .find(|batch| batch.family == OperationFamily::Update && batch.item_count >= 100)
         .unwrap();
+
+    let history_list = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_list_history_batches").with_arguments(
+                serde_json::json!({
+                    "connection_id": connection_id.to_string(),
+                    "database": database,
+                    "collection": "items",
+                    "limit": 100
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(history_list.is_error, Some(true), "{history_list:?}");
+    let history_list = history_list.structured_content.unwrap();
+    assert!(
+        history_list["batches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|batch| batch["batch_id"] == update_batch.id.to_string())
+    );
+    assert!(!history_list.to_string().contains("document_key"));
+    assert!(!history_list.to_string().contains("encrypted_payload"));
+
+    let batch_arguments = serde_json::json!({
+        "connection_id": connection_id.to_string(),
+        "batch_id": update_batch.id.to_string()
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let history_batch = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_get_history_batch")
+                .with_arguments(batch_arguments.clone()),
+        )
+        .await
+        .unwrap();
+    assert_ne!(history_batch.is_error, Some(true), "{history_batch:?}");
+    let history_batch = history_batch.structured_content.unwrap();
+    assert_eq!(history_batch["batch"]["batch_id"], update_batch.id.to_string());
+    assert!(history_batch.get("items").is_none());
+
+    let cross_connection = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_get_history_batch").with_arguments(
+                serde_json::json!({
+                    "connection_id": other_connection_id.to_string(),
+                    "batch_id": update_batch.id.to_string()
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cross_connection.is_error, Some(true));
+    assert!(format!("{cross_connection:?}").contains("does not belong to this connection"));
+
+    let unauthorized_restore = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_restore_history_batch").with_arguments(
+                serde_json::json!({
+                    "connection_id": other_connection_id.to_string(),
+                    "batch_id": update_batch.id.to_string()
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_restore.is_error, Some(true));
+    assert!(format!("{unauthorized_restore:?}").contains("Agent writes are not enabled"));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
     collection.update_one(doc! { "_id": 0 }, doc! { "$set": { "value": 99 } }).await.unwrap();
-    service.revert_batch(update_batch.id).unwrap();
+    let restore = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_restore_history_batch")
+                .with_arguments(batch_arguments.clone()),
+        )
+        .await
+        .unwrap();
+    assert_ne!(restore.is_error, Some(true), "{restore:?}");
+    assert_eq!(restore.structured_content.unwrap()["started"], true);
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let progress = service.restore_progress(update_batch.id).unwrap();
-            if progress.done {
-                assert!(progress.conflicted >= 1);
+            let result = mcp
+                .call_tool(
+                    CallToolRequestParams::new("openmango_get_history_batch")
+                        .with_arguments(batch_arguments.clone()),
+                )
+                .await
+                .unwrap();
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+            let content = result.structured_content.unwrap();
+            if content["progress"]["done"] == true {
+                assert!(content["progress"]["conflicted"].as_i64().unwrap() >= 1);
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     })
     .await
     .unwrap();
+
+    let cancel = mcp
+        .call_tool(
+            CallToolRequestParams::new("openmango_cancel_history_restore")
+                .with_arguments(batch_arguments),
+        )
+        .await
+        .unwrap();
+    assert_ne!(cancel.is_error, Some(true), "{cancel:?}");
+    assert_eq!(cancel.structured_content.unwrap()["cancellation_requested"], false);
     assert_eq!(
         collection.find_one(doc! { "_id": 0 }).await.unwrap().unwrap().get_i32("value"),
         Ok(99),

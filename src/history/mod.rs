@@ -287,6 +287,10 @@ impl HistoryService {
         self.store.get_batch(batch_id, offset, limit)
     }
 
+    pub fn get_batch_summary(&self, batch_id: Uuid) -> anyhow::Result<BatchSummary> {
+        self.store.get_batch_summary(batch_id)
+    }
+
     pub fn usage(&self, connection_id: Option<Uuid>) -> anyhow::Result<Usage> {
         self.store.usage(connection_id)
     }
@@ -376,14 +380,35 @@ impl HistoryService {
     }
 
     pub fn revert_batch(&self, batch_id: Uuid) -> Result<(), String> {
-        let details = self.store.get_batch(batch_id, 0, 1).map_err(|error| error.to_string())?;
-        let connection_id = details.summary.connection_id;
+        let summary = self.store.get_batch_summary(batch_id).map_err(|error| error.to_string())?;
         let client = self
             .clients
             .lock()
             .ok()
-            .and_then(|clients| clients.get(&connection_id).cloned())
+            .and_then(|clients| clients.get(&summary.connection_id).cloned())
             .ok_or_else(|| "Connect the History batch target before restoring".to_string())?;
+        self.start_restore(summary, client)
+    }
+
+    pub fn revert_batch_with_client(
+        &self,
+        batch_id: Uuid,
+        connection_id: Uuid,
+        client: mongodb::Client,
+    ) -> Result<(), String> {
+        let summary = self.store.get_batch_summary(batch_id).map_err(|error| error.to_string())?;
+        if summary.connection_id != connection_id {
+            return Err("History batch does not belong to this connection".to_string());
+        }
+        self.start_restore(summary, client)
+    }
+
+    fn start_restore(&self, summary: BatchSummary, client: mongodb::Client) -> Result<(), String> {
+        if !summary.can_restore() {
+            return Err("History batch has no pending restore items".to_string());
+        }
+        let batch_id = summary.id;
+        let connection_id = summary.connection_id;
         self.store.begin_restore(batch_id).map_err(|error| error.to_string())?;
         let cancellation = CancellationToken::new();
         if let Ok(mut cancellations) = self.restore_cancellations.lock() {
@@ -398,8 +423,8 @@ impl HistoryService {
                     .store
                     .record_gap(
                         connection_id,
-                        Some(details.summary.database),
-                        Some(details.summary.collection),
+                        Some(summary.database),
+                        Some(summary.collection),
                         "restore_failed",
                         &error,
                     )
@@ -421,11 +446,17 @@ impl HistoryService {
         Ok(())
     }
 
-    pub fn cancel_restore(&self, batch_id: Uuid) {
-        if let Ok(cancellations) = self.restore_cancellations.lock()
-            && let Some(cancellation) = cancellations.get(&batch_id)
-        {
+    pub fn cancel_restore(&self, batch_id: Uuid) -> bool {
+        let cancellation = self
+            .restore_cancellations
+            .lock()
+            .ok()
+            .and_then(|cancellations| cancellations.get(&batch_id).cloned());
+        if let Some(cancellation) = cancellation {
             cancellation.cancel();
+            true
+        } else {
+            false
         }
     }
 
@@ -1351,6 +1382,24 @@ pub async fn setup_pre_post_images(connection: &HistoryConnection) -> Result<Set
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn restore_cancellation_reports_whether_work_was_active() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = HistoryService::open(
+            directory.path().join("history.sqlite3"),
+            [43; 32],
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let batch_id = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        service.restore_cancellations.lock().unwrap().insert(batch_id, cancellation.clone());
+
+        assert!(service.cancel_restore(batch_id));
+        assert!(cancellation.is_cancelled());
+        assert!(!service.cancel_restore(Uuid::new_v4()));
+    }
 
     #[test]
     fn internal_databases_are_not_history_targets() {

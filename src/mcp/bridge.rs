@@ -36,6 +36,11 @@ enum BridgeRequest {
         connection_id: Uuid,
         response: oneshot::Sender<Result<AuthorizedDirectWrite, String>>,
     },
+    ResolveHistory {
+        connection_id: Uuid,
+        writable: bool,
+        response: oneshot::Sender<Result<std::sync::Arc<crate::history::HistoryService>, String>>,
+    },
     ResolveAction {
         source_connection_id: Option<Uuid>,
         target_connection_id: Uuid,
@@ -102,6 +107,21 @@ impl McpBridge {
                                 client,
                                 history: state.history_service(),
                             });
+                        let _ = response.send(result);
+                    }
+                    BridgeRequest::ResolveHistory { connection_id, writable, response } => {
+                        let state = state.read(cx);
+                        let policy = PolicyEvaluator::new(state);
+                        let result = if writable {
+                            policy.authorize_history_write(connection_id)
+                        } else {
+                            policy.authorize_history_read(connection_id)
+                        }
+                        .and_then(|()| {
+                            state
+                                .history_service()
+                                .ok_or_else(|| "History is unavailable".to_string())
+                        });
                         let _ = response.send(result);
                     }
                     BridgeRequest::ResolveAction {
@@ -254,6 +274,19 @@ impl McpBridge {
         let (response, receiver) = oneshot::channel();
         self.requests
             .send(BridgeRequest::ResolveDirectWrite { connection_id, response })
+            .await
+            .map_err(|_| "OpenMango is shutting down".to_string())?;
+        receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
+    }
+
+    pub(crate) async fn resolve_history(
+        &self,
+        connection_id: Uuid,
+        writable: bool,
+    ) -> Result<std::sync::Arc<crate::history::HistoryService>, String> {
+        let (response, receiver) = oneshot::channel();
+        self.requests
+            .send(BridgeRequest::ResolveHistory { connection_id, writable, response })
             .await
             .map_err(|_| "OpenMango is shutting down".to_string())?;
         receiver.await.map_err(|_| "OpenMango is shutting down".to_string())?
@@ -440,6 +473,23 @@ impl McpBridge {
                                             "Direct write client is unavailable in this test"
                                                 .to_string()
                                         })
+                                }
+                            });
+                        let _ = response.send(result);
+                    }
+                    BridgeRequest::ResolveHistory { connection_id, writable, response } => {
+                        let result = connections
+                            .iter()
+                            .find(|connection| connection.id == connection_id)
+                            .ok_or_else(|| "Connection is not shared with agents".to_string())
+                            .and_then(|connection| {
+                                if writable && connection.read_only {
+                                    Err("Target connection is read-only".to_string())
+                                } else if writable && !connection.writable {
+                                    Err("Agent writes are not enabled for this connection"
+                                        .to_string())
+                                } else {
+                                    history.clone().ok_or_else(|| "History is unavailable".into())
                                 }
                             });
                         let _ = response.send(result);

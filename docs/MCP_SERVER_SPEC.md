@@ -9,7 +9,7 @@ OpenMango embeds a disabled-by-default, loopback-only MCP server. It exposes bou
 Connection authority has independent persisted switches:
 
 - `agent_shared` (**Share with agents**, default `false`) grants visibility and read access.
-- `agent_writable` (**Allow agent writes**, default `false`) grants direct typed document writes and is meaningful only while shared.
+- `agent_writable` (**Allow agent writes**, default `false`) grants direct typed document writes and conflict-safe History restores and is meaningful only while shared.
 - `read_only` is the global hard prohibition and always overrides `agent_writable`.
 
 Removing sharing also removes write authority. Sensitive endpoint/transport/identity changes and becoming protected/Production clear both grants. Enabling direct write authority on a protected or Production connection requires a clear native warning that authenticated MCP clients can write without per-operation approval. Protected/Production is not itself a prohibition after that explicit grant.
@@ -41,7 +41,23 @@ Every direct command carries a generated MongoDB `comment` document:
 
 The same trace is registered with passive History for best-effort attributed grouping when History happens to be enabled. Comments do not appear in change-stream events, so attribution is never described as exact. No trace field is written to user documents and the profiler is not enabled.
 
-The direct-write authorization seam is intentionally category-neutral so future typed mutations can reuse the same `shared ∩ agent_writable ∩ !read_only ∩ connected` policy. This refactor adds no other mutation categories.
+The direct-write authorization seam is category-neutral: document mutations and History restores reuse the same `shared ∩ agent_writable ∩ !read_only` policy. Operations that need MongoDB also require a connected client.
+
+## History tools
+
+Agents can inspect bounded History metadata without receiving decrypted document keys or before/after payloads:
+
+- `openmango_list_history_batches`
+- `openmango_get_history_batch`
+
+An explicitly write-authorized agent can start, resume, and cancel the same conflict-safe restore engine used by the native History UI:
+
+- `openmango_restore_history_batch`
+- `openmango_cancel_history_restore`
+
+Restore requests identify an immutable batch and verify that it belongs to the authorized connection. Restores never force-overwrite a document: exact-after comparisons classify changed documents as conflicts, independent documents restore concurrently, same-document changes remain ordered, and durable progress remains resumable. `openmango_get_history_batch` exposes status and aggregate restored/skipped/conflict/failed counts for polling. Cancellation is cooperative.
+
+History restoration is direct rather than Action Broker-gated because it is bounded, document-level, conflict-safe, and covered by the same explicit agent write grant as larger update/delete operations. Arcula database reverts remain native-approved because they replace database state from verified backup artifacts and enforce recovery interlocks.
 
 ## Arcula workflows remain approval-gated
 
@@ -97,7 +113,7 @@ Connection list responses expose `writable` separately from `read_only`, allowin
 
 ## History distinction
 
-Passive History observes eligible MongoDB change streams from all clients. It is optional, local, encrypted, retained, and can contain explicit gaps. It does not authorize, gate, pre-read, approve, or guarantee recovery for an MCP write.
+Passive History observes eligible MongoDB change streams from all clients. It is optional, local, encrypted, retained, and can contain explicit gaps. It does not authorize, gate, pre-read, approve, or guarantee recovery for an MCP write. MCP exposes only bounded batch metadata and aggregate restore progress; encrypted document payloads stay local.
 
 Arcula backup/sync/revert is different: it is a native-approved database workflow with verified backup artifacts and recovery interlocks. Neither subsystem is a substitute for the other.
 
@@ -107,6 +123,9 @@ Arcula backup/sync/revert is different: it is a native-approved database workflo
 - Shared without agent_writable cannot mutate.
 - read_only cannot mutate even with agent_writable=true.
 - Direct document writes succeed without History when explicitly authorized.
+- Shared agents can inspect bounded History metadata but never decrypted document payloads.
+- History restore and cancellation require agent_writable and remain blocked by read_only.
+- History restore verifies batch ownership and uses the existing conflict-safe, resumable engine.
 - update-many is not limited by the removed 100-document History checkpoint ceiling.
 - Empty-filter many mutations require `allow_all`.
 - Arcula proposals remain pending until native approval; MCP cannot approve them.

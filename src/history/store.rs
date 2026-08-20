@@ -407,6 +407,12 @@ impl HistoryStore {
         self.call(move |connection| list_batches(connection, query))
     }
 
+    pub(crate) fn get_batch_summary(&self, batch_id: Uuid) -> Result<BatchSummary> {
+        self.call(move |connection| {
+            query_batch(connection, batch_id)?.context("History batch not found")
+        })
+    }
+
     pub(crate) fn list_gaps(
         &self,
         connection_id: Uuid,

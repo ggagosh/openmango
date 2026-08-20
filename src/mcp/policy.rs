@@ -49,14 +49,16 @@ impl<'a> PolicyEvaluator<'a> {
             .ok_or_else(|| "Connection is not connected".to_string())
     }
 
+    pub fn authorize_history_read(&self, connection_id: Uuid) -> Result<(), String> {
+        self.shared_connection(connection_id).map(|_| ())
+    }
+
+    pub fn authorize_history_write(&self, connection_id: Uuid) -> Result<(), String> {
+        self.writable_connection(connection_id).map(|_| ())
+    }
+
     pub fn authorize_direct_write(&self, connection_id: Uuid) -> Result<Client, String> {
-        let connection = self.shared_connection(connection_id)?;
-        if !connection.agent_writable {
-            return Err("Agent writes are not enabled for this connection".to_string());
-        }
-        if connection.read_only {
-            return Err("Target connection is read-only".to_string());
-        }
+        self.writable_connection(connection_id)?;
         self.state
             .active_connection_client(connection_id)
             .ok_or_else(|| "Connection is not connected".to_string())
@@ -118,6 +120,20 @@ impl<'a> PolicyEvaluator<'a> {
         })
     }
 
+    fn writable_connection(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<&crate::models::SavedConnection, String> {
+        let connection = self.shared_connection(connection_id)?;
+        if !connection.agent_writable {
+            return Err("Agent writes are not enabled for this connection".to_string());
+        }
+        if connection.read_only {
+            return Err("Target connection is read-only".to_string());
+        }
+        Ok(connection)
+    }
+
     fn shared_connection(
         &self,
         connection_id: Uuid,
@@ -146,6 +162,10 @@ mod tests {
 
         assert!(policy.visible_connections().is_empty());
         assert_eq!(policy.authorize_read(id).unwrap_err(), "Connection is not shared with agents");
+        assert_eq!(
+            policy.authorize_history_read(id).unwrap_err(),
+            "Connection is not shared with agents"
+        );
     }
 
     #[test]
@@ -160,11 +180,19 @@ mod tests {
             PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
             "Agent writes are not enabled for this connection"
         );
+        assert_eq!(
+            PolicyEvaluator::new(&state).authorize_history_write(id).unwrap_err(),
+            "Agent writes are not enabled for this connection"
+        );
 
         state.connections[0].agent_writable = true;
         state.connections[0].read_only = true;
         assert_eq!(
             PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
+            "Target connection is read-only"
+        );
+        assert_eq!(
+            PolicyEvaluator::new(&state).authorize_history_write(id).unwrap_err(),
             "Target connection is read-only"
         );
 

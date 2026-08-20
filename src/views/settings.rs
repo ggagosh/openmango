@@ -1696,7 +1696,7 @@ fn render_agent_connections_section(
                                                             window,
                                                             cx,
                                                             "Allow direct agent writes",
-                                                            "Authenticated MCP clients will be able to insert, update, replace, and delete documents directly on this protected or Production connection without per-operation approval. History is not a backup and is not required for these writes.",
+                                                            "Authenticated MCP clients will be able to insert, update, replace, delete, and restore History batches directly on this protected or Production connection without per-operation approval. History is not a backup, and restores remain conflict-safe.",
                                                             "Allow agent writes",
                                                             true,
                                                             apply,

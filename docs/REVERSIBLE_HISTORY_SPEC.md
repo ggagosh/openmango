@@ -71,7 +71,7 @@ The Collection History UI shows family, grouping quality, time range, restore st
 
 ## Conflict-safe restore
 
-Restore requires native write/Production confirmation and runs with bounded concurrency. Changes for the same document remain newest-first and sequential; independent documents run concurrently. Outcome state is committed in progress chunks so polling stays responsive without one SQLite transaction per item.
+Native UI restore requires its existing write/Production confirmation. MCP restore executes directly only for an explicitly shared, agent-writable, non-read-only connection; it exposes batch metadata and aggregate progress but never decrypted document keys or before/after payloads. Both paths use the same bounded restore engine. Changes for the same document remain newest-first and sequential; independent documents run concurrently. Outcome state is committed in progress chunks so polling stays responsive without one SQLite transaction per item.
 
 - Update/replace: restore `before` only if the current document exactly equals recorded `after`.
 - Delete: insert `before` only if that `_id` remains absent.
