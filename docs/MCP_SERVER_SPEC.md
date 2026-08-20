@@ -31,7 +31,7 @@ The document tools execute immediately after authentication and authorization:
 
 They do not create Action Broker proposals, native per-operation approvals, pre-read checkpoints, or pending History transitions. Structured responses include MongoDB-faithful inserted IDs and matched/modified/deleted counts.
 
-An empty-filter update-many or delete-many requires explicit `allow_all: true`. One-document variants keep normal MongoDB empty-filter semantics. Recursive input validation rejects server-side JavaScript operators including `$where`, `$function`, and `$accumulator`. Namespace validation, typed Extended JSON, request/depth/stage/document limits, timeouts, output bounds, authentication, concurrency/rate limits, and audit logging apply to writes as they do to reads.
+An empty-filter update-many or delete-many requires explicit `allow_all: true`. One-document variants keep normal MongoDB empty-filter semantics. Typed request objects reject unknown fields. Recursive input validation rejects server-side JavaScript operators including `$where`, `$function`, and `$accumulator`. Namespace validation, typed Extended JSON, request/depth/stage/document limits, timeouts, output bounds, authentication, concurrency/rate limits, and audit logging apply to writes as they do to reads.
 
 Every direct command carries a generated MongoDB `comment` document:
 

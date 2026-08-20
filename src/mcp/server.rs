@@ -175,6 +175,7 @@ impl McpServer {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ListDatabasesRequest {
     connection_id: String,
 }
@@ -244,7 +245,7 @@ struct ExplainRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ExplainQuery {
     Find {
         #[serde(default = "default_document_value")]
@@ -2484,6 +2485,14 @@ mod tests {
             assert!(tools.iter().any(|tool| tool.name == name), "missing {name}");
         }
         assert_eq!(tools.len(), 19);
+        for removed in [
+            "openmango_propose_insert_documents",
+            "openmango_propose_replace_documents",
+            "openmango_propose_delete_documents",
+            "openmango_approve_action",
+        ] {
+            assert!(!tools.iter().any(|tool| tool.name == removed), "unexpected {removed}");
+        }
         assert!(!contains_format(&serde_json::to_value(&tools).unwrap(), "uint64"));
 
         let arguments = serde_json::json!({ "connection_id": connection_id.to_string() })
@@ -2689,6 +2698,26 @@ mod tests {
             value = serde_json::json!({ "nested": value });
         }
         assert!(parse_read_document(value, "filter").is_err());
+    }
+
+    #[test]
+    fn request_types_reject_unknown_fields() {
+        assert!(
+            serde_json::from_value::<ListDatabasesRequest>(serde_json::json!({
+                "connection_id": Uuid::new_v4().to_string(),
+                "unexpected": true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ExplainRequest>(serde_json::json!({
+                "connection_id": Uuid::new_v4().to_string(),
+                "database": "db",
+                "collection": "items",
+                "query": { "kind": "find", "filter": {}, "unexpected": true }
+            }))
+            .is_err()
+        );
     }
 
     #[test]

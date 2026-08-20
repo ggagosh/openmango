@@ -167,5 +167,15 @@ mod tests {
             PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
             "Target connection is read-only"
         );
+
+        state.connections[0].read_only = false;
+        state.connections[0].environment = Some(ConnectionEnvironment::Production);
+        assert_eq!(
+            PolicyEvaluator::new(&state).authorize_direct_write(id).unwrap_err(),
+            "Connection is not connected"
+        );
+        let visible = PolicyEvaluator::new(&state).visible_connections();
+        assert!(visible[0].protected);
+        assert!(visible[0].writable);
     }
 }

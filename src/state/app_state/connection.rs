@@ -1000,16 +1000,24 @@ mod tests {
         updated.protected = true;
         apply_agent_sharing_safety(&existing, &mut updated);
         assert!(!updated.agent_shared);
+        assert!(!updated.agent_writable);
 
         let mut updated = existing.clone();
         updated.environment = Some(crate::models::ConnectionEnvironment::Production);
         apply_agent_sharing_safety(&existing, &mut updated);
         assert!(!updated.agent_shared);
+        assert!(!updated.agent_writable);
 
         let mut updated = existing.clone();
         updated.uri = "mongodb://remote".into();
         apply_agent_sharing_safety(&existing, &mut updated);
         assert!(!updated.agent_shared);
+        assert!(!updated.agent_writable);
+
+        let mut updated = existing.clone();
+        updated.agent_shared = false;
+        apply_agent_sharing_safety(&existing, &mut updated);
+        assert!(!updated.agent_writable);
     }
 
     #[test]
