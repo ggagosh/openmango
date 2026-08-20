@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Authenticated local MCP agent access with per-connection sharing and write controls, bounded read tools, direct document insert/update/replace/delete, and metadata-only History restore tools
+- Native approval and Agent Activity workflows for Arcula database backups, syncs, and verified-backup reverts, including progress, cancellation, target fingerprints, and recovery interlocks
+- Encrypted passive document History with change-stream capture, visible coverage gaps, retention controls, concise batch details, and conflict-safe resumable restores
 - Saved-query descriptions, tags, global scope, and bounded versioned JSON import/export with atomic persistence and credential screening
 - Explicit Development, Staging, and Production connection identity across the workspace, with optional fail-closed confirmation for Production writes and Forge execution
 - Complete keyboard and command-palette coverage for Schema, Transfer and its query editor, Forge, document/index/aggregation workflows, tabs, and focus navigation, with a visible palette button
@@ -71,6 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
+- History now observes MongoDB changes passively and never pre-reads, authorizes, approves, or blocks originating writes
 - Transfer now uses one compact Export, Import, and Copy workflow with progressive options and consistent aggregate progress across collection, database, JSON/CSV, and BSON operations
 - Updates now require published SHA-256 assets, verify the downloaded archive and macOS code signature, respect the automatic-update preference, and install only after Restart to Update
 - Update-check failures remain visible with Retry instead of silently returning to idle
@@ -83,12 +87,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tab bar styling updated with padding and theme-aware background
 
 ### Security
+- Agent sharing and direct write authority default off independently; application read-only mode always wins, protected or Production access requires an explicit warning, MCP cannot approve Arcula operations, and decrypted History payloads never leave the app
 - Existing files, collections, and databases remain unchanged until destructive imports, copies, and exports complete successfully
 - Write confirmations include the exact connection, namespace, filter or pipeline, current count, and frozen options being approved
 - Plaintext credential export is disabled; connection export is redacted or passphrase-encrypted
 - Update archives and final app bundles are verified before replacing the installed application
 
 ### Performance
+- History uses one deployment-wide change stream per connection to avoid exhausting MongoDB connection pools, while large restores process independent documents concurrently and preserve same-document ordering
 - Document tree (JSON view) expands and scrolls much faster on large or deeply nested documents — removed a quadratic dirty-check and the redundant full-tree clones that ran on every interaction
 - Documents table is much smoother — it now re-renders only when the data or selection actually changes instead of rebuilding every visible cell every frame
 - Aggregation results, schema view, and in-document search no longer redo expensive work (deep document clones, regex compilation, full schema re-walks) on every frame
