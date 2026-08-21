@@ -127,6 +127,7 @@ impl HistoryStore {
         let bytes = encrypted_payload.len() as u64;
         self.call(move |connection| {
             let transaction = connection.transaction()?;
+            let recorded_at_ms = Utc::now().timestamp_millis();
             let duplicate: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM history_items WHERE resume_token_hash = ?1)",
                 [token_hash.as_slice()],
@@ -171,7 +172,7 @@ impl HistoryStore {
                         conflict_count, encrypted_bytes, status, restored_count, skipped_count,
                         failed_count, created_at_ms, updated_at_ms
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?10,
-                               0, 0, 0, 0, 'open', 0, 0, 0, ?10, ?10)",
+                               0, 0, 0, 0, 'open', 0, 0, 0, ?11, ?11)",
                     params![
                         batch_id.to_string(),
                         event.connection_id.to_string(),
@@ -183,6 +184,7 @@ impl HistoryStore {
                         transaction_hash.as_ref().map(|hash| hash.as_slice()),
                         event.cluster_time,
                         event.wall_time.timestamp_millis(),
+                        recorded_at_ms,
                     ],
                 )?;
             }
@@ -218,7 +220,7 @@ impl HistoryStore {
                     item_count = item_count + 1,
                     revertible_count = revertible_count + ?4,
                     encrypted_bytes = encrypted_bytes + ?5,
-                    updated_at_ms = ?3
+                    updated_at_ms = ?6
                  WHERE id = ?1",
                 params![
                     batch_id.to_string(),
@@ -226,6 +228,7 @@ impl HistoryStore {
                     event.wall_time.timestamp_millis(),
                     revertible,
                     bytes,
+                    recorded_at_ms,
                 ],
             )?;
             upsert_cursor(
@@ -933,12 +936,17 @@ fn upsert_cursor(
     Ok(())
 }
 
-fn list_batches(connection: &Connection, query: BatchQuery) -> Result<Page<BatchSummary>> {
+fn close_idle_batches(connection: &Connection, now_ms: i64) -> Result<()> {
     connection.execute(
         "UPDATE history_batches SET status = 'closed', updated_at_ms = ?1
-         WHERE status = 'open' AND last_wall_time_ms <= ?2",
-        params![Utc::now().timestamp_millis(), Utc::now().timestamp_millis() - OBSERVED_IDLE_MS],
+         WHERE status = 'open' AND updated_at_ms <= ?2",
+        params![now_ms, now_ms - OBSERVED_IDLE_MS],
     )?;
+    Ok(())
+}
+
+fn list_batches(connection: &Connection, query: BatchQuery) -> Result<Page<BatchSummary>> {
+    close_idle_batches(connection, Utc::now().timestamp_millis())?;
     let limit = query.limit.clamp(1, PAGE_LIMIT);
     let database = query.database;
     let collection = query.collection;
@@ -1258,17 +1266,44 @@ mod tests {
         let connection_id = Uuid::new_v4();
         let now = Utc::now() - Duration::seconds(2);
         let first = store.record_event(event(connection_id, 1, now)).unwrap().unwrap();
-        let _ = store
+        store
+            .call(|connection| {
+                close_idle_batches(connection, Utc::now().timestamp_millis() + OBSERVED_IDLE_MS + 1)
+            })
+            .unwrap();
+        let second = store.record_event(event(connection_id, 2, now)).unwrap().unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn listing_during_backlog_does_not_fragment_observed_batch() {
+        let (_directory, store) = store();
+        let connection_id = Uuid::new_v4();
+        let source_time = Utc::now() - Duration::seconds(2);
+        for index in 0..10 {
+            store.record_event(event(connection_id, index, source_time)).unwrap();
+            store
+                .list_batches(BatchQuery {
+                    connection_id,
+                    database: None,
+                    collection: None,
+                    offset: 0,
+                    limit: 100,
+                })
+                .unwrap();
+        }
+
+        let page = store
             .list_batches(BatchQuery {
                 connection_id,
                 database: None,
                 collection: None,
                 offset: 0,
-                limit: 10,
+                limit: 100,
             })
             .unwrap();
-        let second = store.record_event(event(connection_id, 2, now)).unwrap().unwrap();
-        assert_ne!(first, second);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].item_count, 10);
     }
 
     #[test]
