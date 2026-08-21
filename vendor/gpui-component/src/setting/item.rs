@@ -22,11 +22,13 @@ pub enum SettingItem {
     Item {
         title: SharedString,
         description: Option<Text>,
+        keywords: Vec<SharedString>,
         layout: Axis,
         field: Rc<dyn AnySettingField>,
     },
     /// A full custom element to render.
     Element {
+        keywords: Vec<SharedString>,
         render: Rc<dyn Fn(&RenderOptions, &mut Window, &mut App) -> AnyElement + 'static>,
     },
 }
@@ -40,6 +42,7 @@ impl SettingItem {
         SettingItem::Item {
             title: title.into(),
             description: None,
+            keywords: Vec::new(),
             layout: Axis::Horizontal,
             field: Rc::new(field),
         }
@@ -52,10 +55,25 @@ impl SettingItem {
         R: Fn(&RenderOptions, &mut Window, &mut App) -> E + 'static,
     {
         SettingItem::Element {
+            keywords: Vec::new(),
             render: Rc::new(move |options, window, cx| {
                 render(options, window, cx).into_any_element()
             }),
         }
+    }
+
+    /// Set additional keywords used only for search matching.
+    pub fn keywords<I, S>(mut self, keywords: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<SharedString>,
+    {
+        let keywords = keywords.into_iter().map(Into::into).collect();
+        match &mut self {
+            SettingItem::Item { keywords: value, .. }
+            | SettingItem::Element { keywords: value, .. } => *value = keywords,
+        }
+        self
     }
 
     /// Set the description of the setting item.
@@ -87,15 +105,23 @@ impl SettingItem {
     pub(crate) fn is_match(&self, query: &str) -> bool {
         match self {
             SettingItem::Item {
-                title, description, ..
+                title,
+                description,
+                keywords,
+                ..
             } => {
-                title.to_lowercase().contains(&query.to_lowercase())
-                    || description.as_ref().map_or(false, |d| {
-                        d.as_str().to_lowercase().contains(&query.to_lowercase())
-                    })
+                let query = query.to_lowercase();
+                title.to_lowercase().contains(&query)
+                    || description
+                        .as_ref()
+                        .is_some_and(|description| description.as_str().to_lowercase().contains(&query))
+                    || keywords.iter().any(|keyword| keyword.to_lowercase().contains(&query))
             }
-            // We need to show all custom elements when not searching.
-            SettingItem::Element { .. } => query.is_empty(),
+            SettingItem::Element { keywords, .. } => {
+                let query = query.to_lowercase();
+                query.is_empty()
+                    || keywords.iter().any(|keyword| keyword.to_lowercase().contains(&query))
+            }
         }
     }
 
@@ -163,6 +189,7 @@ impl SettingItem {
                     description,
                     layout,
                     field,
+                    ..
                 } => div()
                     .w_full()
                     .overflow_hidden()
@@ -202,7 +229,7 @@ impl SettingItem {
                         cx,
                     )))
                     .into_any_element(),
-                SettingItem::Element { render } => {
+                SettingItem::Element { render, .. } => {
                     (render)(&options, window, cx).into_any_element()
                 }
             })

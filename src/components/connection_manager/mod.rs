@@ -91,6 +91,8 @@ pub struct ConnectionManager {
     testing_step: Option<String>,
     active_tab: ManagerTab,
     creating_new: bool,
+    new_connection_origin_id: Option<Uuid>,
+    baseline_fingerprint: String,
     status: TestStatus,
     last_tested_uri: Option<String>,
     pending_test_uri: Option<String>,

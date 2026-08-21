@@ -28,15 +28,15 @@ pub use keybindings::KeybindingCapture;
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,
-    CollectionStats, CollectionSubview, CollectionTransferStatus, CompressionMode, CopiedTreeItem,
-    DatabaseKey, DatabaseSessionData, DatabaseSessionState, DatabaseStats,
-    DatabaseTransferProgress, DocumentViewMode, Encoding, ExplainBottleneck, ExplainCostBand,
-    ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab, ExplainRejectedPlan, ExplainRun,
-    ExplainScope, ExplainSeverity, ExplainStageDelta, ExplainState, ExplainSummary,
-    ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, SchemaAnalysis,
-    SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument, SessionKey,
-    SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    CollectionStats, CollectionSubview, CollectionTransferStatus, CompressionMode,
+    ConnectionManagerRequest, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
+    DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, DocumentViewMode, Encoding,
+    ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
+    ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
+    ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
+    InsertMode, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
+    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
+    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
@@ -106,6 +106,7 @@ pub struct AppState {
 
     // View state
     pub current_view: View,
+    connection_manager_request: ConnectionManagerRequest,
     status_message: Option<StatusMessage>,
     keybinding_capture: Option<KeybindingCapture>,
     unsaved_guard_active: bool,
@@ -228,6 +229,7 @@ impl AppState {
             collection_meta_inflight: HashSet::new(),
             ai_chat: AiChatState::default(),
             current_view: View::Welcome,
+            connection_manager_request: ConnectionManagerRequest::default(),
             status_message: connection_load_error
                 .clone()
                 .or(query_library_load_error)

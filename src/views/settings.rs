@@ -6,11 +6,11 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::button::ButtonVariants as _;
+use gpui_component::group_box::GroupBoxVariant;
 use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::{ScrollableElement as _, Scrollbar, ScrollbarAxis};
+use gpui_component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::switch::Switch;
-use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 
 use crate::ai::bridge::AiBridge;
@@ -21,41 +21,9 @@ use crate::state::{
     AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
     FILENAME_PLACEHOLDERS, InsertMode, McpClientKind, TransferFormat,
 };
-use crate::theme::{borders, islands, sizing, spacing};
+use crate::theme::{borders, islands, spacing};
 
 use self::keybindings::KeybindingsView;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum SettingsSubtab {
-    #[default]
-    General,
-    Keybindings,
-    Transfer,
-    Ai,
-    Agents,
-}
-
-impl SettingsSubtab {
-    fn to_index(self) -> usize {
-        match self {
-            Self::General => 0,
-            Self::Keybindings => 1,
-            Self::Transfer => 2,
-            Self::Ai => 3,
-            Self::Agents => 4,
-        }
-    }
-
-    fn from_index(index: usize) -> Self {
-        match index {
-            1 => Self::Keybindings,
-            2 => Self::Transfer,
-            3 => Self::Ai,
-            4 => Self::Agents,
-            _ => Self::General,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 enum AiTestResult {
@@ -66,8 +34,6 @@ enum AiTestResult {
 pub struct SettingsView {
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
-    active_subtab: SettingsSubtab,
-    agents_scroll_handle: ScrollHandle,
     keybindings_view: Entity<KeybindingsView>,
     // Input states (lazily initialized)
     template_input_state: Option<Entity<InputState>>,
@@ -97,8 +63,6 @@ impl SettingsView {
         Self {
             state,
             _subscriptions: subscriptions,
-            active_subtab: SettingsSubtab::default(),
-            agents_scroll_handle: ScrollHandle::default(),
             keybindings_view,
             template_input_state: None,
             batch_size_input_state: None,
@@ -316,192 +280,190 @@ impl Render for SettingsView {
 
         let view = cx.entity();
         let state = self.state.clone();
-        let settings = self.state.read(cx).settings.clone();
-        let appearance = settings.appearance.clone();
+        let appearance = self.state.read(cx).settings.appearance.clone();
 
-        // Header
-        let header = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_between()
-            .h(sizing::header_height())
-            .px(spacing::lg())
-            .bg(islands::tool_bg(&appearance, cx))
-            .border_b_1()
-            .border_color(islands::panel_border(&appearance, cx))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().foreground)
-                    .child("Settings"),
-            );
-
-        let subtab_bar = islands::tab_bar(TabBar::new("settings-subtabs"), &appearance)
-            .xsmall()
-            .selected_index(self.active_subtab.to_index())
-            .on_click({
-                let view = view.clone();
-                let state = state.clone();
-                move |index, _window, cx| {
-                    state.update(cx, |state, cx| {
-                        state.cancel_keybinding_capture();
-                        cx.notify();
-                    });
-                    view.update(cx, |this, cx| {
-                        this.active_subtab = SettingsSubtab::from_index(*index);
-                        cx.notify();
-                    });
-                }
-            })
-            .children(vec![
-                Tab::new().label("General"),
-                Tab::new().label("Keybindings"),
-                Tab::new().label("Transfer"),
-                Tab::new().label("AI"),
-                Tab::new().label("Agents"),
-            ]);
-
-        let tab_content = match self.active_subtab {
-            SettingsSubtab::General => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .gap(spacing::lg())
-                .overflow_y_scrollbar()
-                .child(render_appearance_section(state.clone(), &settings, cx))
-                .child(render_query_section(self.query_timeout_input_state.clone().unwrap(), cx))
-                .child(render_updates_section(state.clone(), &settings, cx))
-                .child(render_support_section(state.clone(), cx))
-                .into_any_element(),
-            SettingsSubtab::Keybindings => self.keybindings_view.clone().into_any_element(),
-            SettingsSubtab::Transfer => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .gap(spacing::lg())
-                .overflow_y_scrollbar()
-                .child(render_transfer_section(
-                    state.clone(),
-                    &settings,
-                    self.template_input_state.clone().unwrap(),
-                    self.batch_size_input_state.clone().unwrap(),
-                    cx,
-                ))
-                .into_any_element(),
-            SettingsSubtab::Ai => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .gap(spacing::lg())
-                .overflow_y_scrollbar()
-                .child(render_ai_section(
-                    view.clone(),
-                    state.clone(),
-                    &settings,
-                    AiSectionUiState {
-                        api_key_input_state: self.ai_api_key_input_state.clone().unwrap(),
-                        ollama_base_url_input_state: self
-                            .ai_ollama_base_url_input_state
-                            .clone()
-                            .unwrap(),
-                        ai_test_in_flight: self.ai_test_in_flight,
-                        ai_test_result: self.ai_test_result.clone(),
-                    },
-                    cx,
-                ))
-                .into_any_element(),
-            SettingsSubtab::Agents => {
-                let scroll_handle = self.agents_scroll_handle.clone();
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(
+        let general_state = state.clone();
+        let query_timeout_input = self.query_timeout_input_state.clone().unwrap();
+        let general = SettingPage::new("General")
+            .icon(Icon::new(IconName::Settings2))
+            .description("Appearance, query behavior, updates, and support.")
+            .resettable(false)
+            .group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_, _, cx| {
+                        let settings = general_state.read(cx).settings.clone();
                         div()
-                            .id("agent-settings-scroll")
+                            .w_full()
                             .flex()
                             .flex_col()
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll_handle)
-                            .child(
-                                div()
-                                    .w_full()
-                                    .max_w(px(760.0))
-                                    .mx_auto()
-                                    .pb(spacing::lg())
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::lg())
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(spacing::xs())
-                                            .child(
-                                                div()
-                                                    .text_base()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(cx.theme().foreground)
-                                                    .child("Agent access"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .max_w(px(620.0))
-                                                    .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        "Connect trusted local clients, then choose exactly which MongoDB connections they can inspect.",
-                                                    ),
-                                            ),
-                                    )
-                                    .child(render_mcp_section(state.clone(), &settings, cx))
-                                    .child(render_mcp_grants_section(state.clone(), &settings, cx))
-                                    .child(render_agent_connections_section(
-                                        state.clone(),
-                                        &settings,
-                                        cx,
-                                    )),
-                            ),
-                    )
-                    .child(
-                        div().absolute().top_0().left_0().right_0().bottom_0().child(
-                            Scrollbar::new(&scroll_handle)
-                                .id("agent-settings-scrollbar")
-                                .axis(ScrollbarAxis::Vertical),
-                        ),
-                    )
-                    .into_any_element()
-            }
-        };
+                            .gap(spacing::lg())
+                            .child(render_appearance_section(general_state.clone(), &settings, cx))
+                            .child(render_query_section(query_timeout_input.clone(), cx))
+                            .child(render_updates_section(general_state.clone(), &settings, cx))
+                            .child(render_support_section(general_state.clone(), cx))
+                    })
+                    .keywords([
+                        "theme",
+                        "appearance",
+                        "vibrancy",
+                        "status bar",
+                        "query timeout",
+                        "updates",
+                        "support",
+                        "diagnostics",
+                        "logs",
+                    ]),
+                ),
+            );
 
+        let transfer_state = state.clone();
+        let template_input = self.template_input_state.clone().unwrap();
+        let batch_size_input = self.batch_size_input_state.clone().unwrap();
+        let transfer = SettingPage::new("Transfer")
+            .icon(Icon::new(IconName::Download))
+            .description("Defaults used when importing and exporting data.")
+            .resettable(false)
+            .group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_, _, cx| {
+                        let settings = transfer_state.read(cx).settings.clone();
+                        div().w_full().child(render_transfer_section(
+                            transfer_state.clone(),
+                            &settings,
+                            template_input.clone(),
+                            batch_size_input.clone(),
+                            cx,
+                        ))
+                    })
+                    .keywords([
+                        "export",
+                        "import",
+                        "format",
+                        "folder",
+                        "filename",
+                        "template",
+                        "batch size",
+                        "json",
+                        "csv",
+                        "bson",
+                    ]),
+                ),
+            );
+
+        let ai_state = state.clone();
+        let ai_view = view.clone();
+        let ai_ui = AiSectionUiState {
+            api_key_input_state: self.ai_api_key_input_state.clone().unwrap(),
+            ollama_base_url_input_state: self.ai_ollama_base_url_input_state.clone().unwrap(),
+            ai_test_in_flight: self.ai_test_in_flight,
+            ai_test_result: self.ai_test_result.clone(),
+        };
+        let ai = SettingPage::new("AI Assistant")
+            .icon(Icon::new(IconName::Bot))
+            .description("Provider, privacy, credentials, and diagnostics.")
+            .resettable(false)
+            .group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_, _, cx| {
+                        let settings = ai_state.read(cx).settings.clone();
+                        div().w_full().child(render_ai_section(
+                            ai_view.clone(),
+                            ai_state.clone(),
+                            &settings,
+                            ai_ui.clone(),
+                            cx,
+                        ))
+                    })
+                    .keywords([
+                        "ai",
+                        "assistant",
+                        "provider",
+                        "model",
+                        "privacy",
+                        "documents",
+                        "api key",
+                        "ollama",
+                        "openai",
+                        "anthropic",
+                        "gemini",
+                        "test provider",
+                    ]),
+                ),
+            );
+
+        let agents_state = state.clone();
+        let agents = SettingPage::new("Agents & MCP")
+            .icon(Icon::new(IconName::Eye))
+            .description("Trusted local clients and connection-level permissions.")
+            .resettable(false)
+            .group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_, _, cx| {
+                        let settings = agents_state.read(cx).settings.clone();
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(spacing::lg())
+                            .child(render_mcp_section(agents_state.clone(), &settings, cx))
+                            .child(render_mcp_grants_section(agents_state.clone(), &settings, cx))
+                            .child(render_agent_connections_section(
+                                agents_state.clone(),
+                                &settings,
+                                cx,
+                            ))
+                    })
+                    .keywords([
+                        "agents",
+                        "mcp",
+                        "clients",
+                        "tokens",
+                        "connections",
+                        "permissions",
+                        "writes",
+                        "history",
+                        "keychain",
+                        "codex",
+                        "claude",
+                        "cursor",
+                        "vscode",
+                    ]),
+                ),
+            );
+
+        let keybindings = self.keybindings_view.clone();
+        let keybindings_page = SettingPage::new("Keybindings")
+            .icon(Icon::new(IconName::SquareTerminal))
+            .description("Search commands and customize keyboard shortcuts.")
+            .resettable(false)
+            .group(SettingGroup::new().item(
+                SettingItem::render(move |_, _, _| keybindings.clone()).keywords([
+                    "keyboard",
+                    "keybindings",
+                    "shortcuts",
+                    "commands",
+                    "hotkeys",
+                ]),
+            ));
+
+        let state_for_page_change = state.clone();
         div()
-            .flex()
-            .flex_col()
             .size_full()
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
             .bg(islands::content_bg(&appearance, cx))
-            .child(header)
-            .child(div().flex_shrink_0().px(spacing::lg()).pt(spacing::md()).child(subtab_bar))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .p(spacing::lg())
-                    .overflow_hidden()
-                    .child(tab_content),
+                Settings::new("openmango-settings")
+                    .sidebar_width(px(220.0))
+                    .with_group_variant(GroupBoxVariant::Normal)
+                    .pages([general, transfer, ai, agents, keybindings_page])
+                    .on_page_change(move |_, _, cx| {
+                        state_for_page_change.update(cx, |state, cx| {
+                            state.cancel_keybinding_capture();
+                            cx.notify();
+                        });
+                    }),
             )
     }
 }
@@ -2107,49 +2069,46 @@ fn render_transfer_section(
             .child(placeholder_button)
     };
 
-    section(
-        "Transfer Defaults",
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::md())
-            .child(group(
-                "Export",
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::md())
-                    .child(setting_row("Default format", format_dropdown, cx))
-                    .child(setting_row_with_description(
-                        "Target folder",
-                        "Default folder for exported files",
-                        folder_control,
-                        cx,
-                    ))
-                    .child(setting_row_with_description(
-                        "Filename template",
-                        "Template for generated filenames",
-                        template_control,
-                        cx,
-                    )),
-                &settings.appearance,
-                cx,
-            ))
-            .child(group(
-                "Import",
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::md())
-                    .child(setting_row("Default import mode", import_mode_dropdown, cx))
-                    .child(setting_row("Batch size", batch_size_input, cx)),
-                &settings.appearance,
-                cx,
-            )),
-        cx,
-    )
+    div()
+        .flex()
+        .flex_col()
+        .gap(spacing::md())
+        .child(group(
+            "Export",
+            div()
+                .flex()
+                .flex_col()
+                .gap(spacing::md())
+                .child(setting_row("Default format", format_dropdown, cx))
+                .child(setting_row_with_description(
+                    "Target folder",
+                    "Default folder for exported files",
+                    folder_control,
+                    cx,
+                ))
+                .child(setting_row_with_description(
+                    "Filename template",
+                    "Template for generated filenames",
+                    template_control,
+                    cx,
+                )),
+            &settings.appearance,
+            cx,
+        ))
+        .child(group(
+            "Import",
+            div()
+                .flex()
+                .flex_col()
+                .gap(spacing::md())
+                .child(setting_row("Default import mode", import_mode_dropdown, cx))
+                .child(setting_row("Batch size", batch_size_input, cx)),
+            &settings.appearance,
+            cx,
+        ))
 }
 
+#[derive(Clone)]
 struct AiSectionUiState {
     api_key_input_state: Entity<InputState>,
     ollama_base_url_input_state: Entity<InputState>,
@@ -2429,9 +2388,7 @@ fn render_ai_section(
         }
     });
 
-    section(
-        "AI Assistant",
-        div()
+    div()
             .flex()
             .flex_col()
             .gap(spacing::md())
@@ -2565,9 +2522,7 @@ fn render_ai_section(
                     .text_xs()
                     .text_color(cx.theme().warning)
                     .child("AI is currently disabled in this workspace.")
-            })),
-        cx,
-    )
+            }))
 }
 
 // Helper functions for building UI

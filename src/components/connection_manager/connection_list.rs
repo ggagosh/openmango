@@ -14,9 +14,9 @@ use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
 use crate::theme::{borders, sizing, spacing};
 
+use super::ConnectionManager;
 use super::export_dialog::open_export_dialog;
 use super::import::open_import_flow;
-use super::{ConnectionManager, ManagerTab};
 
 impl ConnectionManager {
     /// Renders the connection list panel (left side of the manager).
@@ -29,6 +29,7 @@ impl ConnectionManager {
     ) -> AnyElement {
         let view = cx.entity();
         let header = self.render_list_header(cx);
+        let creating_new = self.creating_new;
 
         div()
             .flex()
@@ -40,11 +41,9 @@ impl ConnectionManager {
             .border_color(cx.theme().border)
             .child(div().flex_shrink_0().child(header))
             .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scrollbar()
-                    .child(Self::render_list_content(view, connections, selected_id, cx)),
+                div().flex_1().min_h(px(0.0)).overflow_y_scrollbar().child(
+                    Self::render_list_content(view, connections, selected_id, creating_new, cx),
+                ),
             )
             .into_any_element()
     }
@@ -96,15 +95,17 @@ impl ConnectionManager {
                     .child(
                         Button::new("new-connection")
                             .compact()
+                            .tooltip("New Connection")
                             .icon(Icon::new(IconName::Plus).xsmall())
                             .on_click({
                                 let view = view.clone();
                                 move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.load_connection(None, window, cx);
-                                        this.active_tab = ManagerTab::General;
-                                        cx.notify();
-                                    });
+                                    ConnectionManager::request_load_connection(
+                                        view.clone(),
+                                        None,
+                                        window,
+                                        cx,
+                                    );
                                 }
                             }),
                     )
@@ -131,26 +132,60 @@ impl ConnectionManager {
         view: Entity<Self>,
         connections: Vec<SavedConnection>,
         selected_id: Option<Uuid>,
+        creating_new: bool,
         cx: &App,
     ) -> AnyElement {
-        if connections.is_empty() {
-            div()
-                .p(spacing::md())
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("No connections")
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .gap(spacing::xs())
-                .p(spacing::xs())
-                .child(div().flex().flex_col().gap(px(2.0)).children(connections.into_iter().map(
-                    move |conn| Self::render_connection_item(view.clone(), conn, selected_id, cx),
-                )))
-                .into_any_element()
-        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::xs())
+            .p(spacing::xs())
+            .when(creating_new, |list| list.child(Self::render_new_connection_item(cx)))
+            .when(connections.is_empty() && !creating_new, |list| {
+                list.child(
+                    div()
+                        .p(spacing::sm())
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("No connections"),
+                )
+            })
+            .children(
+                connections.into_iter().map(move |conn| {
+                    Self::render_connection_item(view.clone(), conn, selected_id, cx)
+                }),
+            )
+            .into_any_element()
+    }
+
+    fn render_new_connection_item(cx: &App) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .px(spacing::sm())
+            .py(spacing::sm())
+            .rounded(borders::radius_sm())
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().list_hover)
+            .child(Icon::new(IconName::Plus).small().text_color(cx.theme().primary))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child("New Connection"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Unsaved draft"),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Renders a single connection item in the list.
@@ -196,10 +231,12 @@ impl ConnectionManager {
             )
             .on_mouse_down(MouseButton::Left, {
                 move |_, window, cx| {
-                    view.update(cx, |this, cx| {
-                        this.load_connection(Some(conn.clone()), window, cx);
-                        cx.notify();
-                    });
+                    ConnectionManager::request_load_connection(
+                        view.clone(),
+                        Some(conn.clone()),
+                        window,
+                        cx,
+                    );
                 }
             })
             .into_any_element()

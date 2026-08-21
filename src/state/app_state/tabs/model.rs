@@ -11,8 +11,8 @@ use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
 use crate::state::app_state::types::{
-    ActiveTab, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey, TabKey, TransferMode,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    ActiveTab, ConnectionManagerRequest, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey,
+    TabKey, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -139,6 +139,9 @@ impl AppState {
             }
             TabKey::AgentActivity => {
                 self.current_view = View::AgentActivity;
+            }
+            TabKey::Connections => {
+                self.current_view = View::Connections;
             }
             TabKey::Settings => {
                 self.current_view = View::Settings;
@@ -491,6 +494,38 @@ impl AppState {
         cx.notify();
     }
 
+    /// Open the connection manager as a singleton workspace tab.
+    pub fn open_connections_tab(
+        &mut self,
+        selected_id: Option<Uuid>,
+        creating_new: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_manager_request = ConnectionManagerRequest {
+            generation: self.connection_manager_request.generation.wrapping_add(1),
+            selected_id,
+            creating_new,
+        };
+
+        if let Some(index) =
+            self.tabs.open.iter().position(|tab| matches!(tab, TabKey::Connections))
+        {
+            self.set_active_index(index);
+        } else {
+            self.tabs.open.push(TabKey::Connections);
+            self.set_active_index(self.tabs.open.len() - 1);
+        }
+
+        self.current_view = View::Connections;
+        self.clear_error_status();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    pub fn connection_manager_request(&self) -> ConnectionManagerRequest {
+        self.connection_manager_request
+    }
+
     /// Open settings tab (singleton - only one settings tab allowed)
     pub fn open_settings_tab(&mut self, cx: &mut Context<Self>) {
         // Check if settings tab already exists
@@ -779,7 +814,7 @@ impl AppState {
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
-            TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => {
+            TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
                 // No cleanup needed
             }
         }
@@ -923,6 +958,7 @@ impl AppState {
                 }
                 TabKey::Transfer(_)
                 | TabKey::AgentActivity
+                | TabKey::Connections
                 | TabKey::Settings
                 | TabKey::Changelog => false,
             })
@@ -1043,6 +1079,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
         TabKey::AgentActivity => "agent_activity",
+        TabKey::Connections => "connections",
         TabKey::Settings => "settings",
         TabKey::Changelog => "changelog",
     }

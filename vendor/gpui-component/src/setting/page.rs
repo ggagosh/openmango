@@ -5,7 +5,7 @@ use gpui::{
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     label::Label,
@@ -17,6 +17,7 @@ use crate::{
 /// A setting page that can contain multiple setting groups.
 #[derive(Clone)]
 pub struct SettingPage {
+    pub(super) icon: Option<Icon>,
     resettable: bool,
     pub(super) default_open: bool,
     pub(super) title: SharedString,
@@ -27,6 +28,7 @@ pub struct SettingPage {
 impl SettingPage {
     pub fn new(title: impl Into<SharedString>) -> Self {
         Self {
+            icon: None,
             resettable: true,
             default_open: false,
             title: title.into(),
@@ -38,6 +40,12 @@ impl SettingPage {
     /// Set the title of the setting page.
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
         self.title = title.into();
+        self
+    }
+
+    /// Set the icon shown beside this page in the settings sidebar.
+    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+        self.icon = Some(icon.into());
         self
     }
 

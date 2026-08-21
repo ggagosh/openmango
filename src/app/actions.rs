@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::components::action_bar::ActionExecution;
 use crate::components::{
-    ConnectionDialog, ContentArea, QueryLibraryDialog, request_disconnect_connection,
+    ConnectionManager, ContentArea, QueryLibraryDialog, request_disconnect_connection,
     request_unsaved_action,
 };
 use crate::keyboard::{
@@ -59,7 +59,7 @@ impl AppRoot {
     }
 
     pub(super) fn handle_new_connection(&mut self, window: &mut Window, cx: &mut App) {
-        ConnectionDialog::open(self.state.clone(), window, cx);
+        ConnectionManager::open_new(self.state.clone(), window, cx);
     }
 
     pub(super) fn handle_create_database(&mut self, window: &mut Window, cx: &mut App) {
@@ -263,7 +263,7 @@ impl AppRoot {
         // Commands and views
         match id {
             "cmd:new-connection" => {
-                ConnectionDialog::open(state.clone(), window, cx);
+                ConnectionManager::open_new(state.clone(), window, cx);
             }
             "cmd:create-database" => {
                 let state_ref = state.read(cx);
@@ -554,6 +554,7 @@ impl AppRoot {
             View::Transfer
             | View::Forge
             | View::AgentActivity
+            | View::Connections
             | View::Settings
             | View::Changelog => {}
             View::Databases | View::Collections | View::Welcome => {

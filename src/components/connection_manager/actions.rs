@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement as _, ParentElement as _, Styled as _,
-    Window, div, px,
+    App, AppContext as _, Context, Entity, Focusable as _, IntoElement as _, ParentElement as _,
+    Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::WindowExt as _;
@@ -15,7 +15,7 @@ use crate::helpers::{
     validate_mongodb_uri,
 };
 use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
-use crate::state::AppState;
+use crate::state::{AppState, TabKey};
 use crate::theme::spacing;
 
 use super::uri::{bool_to_query, parse_bool, parse_uri, value_or_none};
@@ -50,27 +50,136 @@ impl ConnectionManager {
         state: Entity<AppState>,
         selected_id: Option<Uuid>,
         creating_new: bool,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        state.update(cx, |state, cx| {
+            state.open_connections_tab(selected_id, creating_new, cx);
+        });
+    }
+
+    pub(crate) fn apply_open_request(
+        &mut self,
+        selected_id: Option<Uuid>,
+        creating_new: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if creating_new {
+            Self::request_load_connection(cx.entity(), None, window, cx);
+            return;
+        }
+
+        if let Some(connection) = selected_id.and_then(|connection_id| {
+            self.state
+                .read(cx)
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)
+                .cloned()
+        }) {
+            Self::request_load_connection(cx.entity(), Some(connection), window, cx);
+        }
+    }
+
+    pub(crate) fn has_unsaved_changes(&self, cx: &App) -> bool {
+        self.draft.fingerprint(cx) != self.baseline_fingerprint
+    }
+
+    pub(super) fn request_load_connection(
+        view: Entity<Self>,
+        connection: Option<SavedConnection>,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let dialog_view = cx.new(|cx| {
-            let mut manager = ConnectionManager::new(state.clone(), selected_id, window, cx);
-            if creating_new {
-                manager.load_connection(None, window, cx);
+        let is_same_connection = connection.as_ref().is_some_and(|connection| {
+            !view.read(cx).creating_new && view.read(cx).selected_id == Some(connection.id)
+        });
+        if is_same_connection {
+            return;
+        }
+
+        if view.read(cx).has_unsaved_changes(cx) {
+            open_confirm_dialog(
+                window,
+                cx,
+                "Discard connection changes?",
+                "Your unsaved connection changes will be lost.",
+                "Discard",
+                true,
+                move |window, cx| {
+                    Self::replace_draft(view, connection, window, cx);
+                },
+            );
+        } else {
+            Self::replace_draft(view, connection, window, cx);
+        }
+    }
+
+    fn replace_draft(
+        view: Entity<Self>,
+        connection: Option<SavedConnection>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let creating_new = connection.is_none();
+        view.update(cx, |this, cx| {
+            if creating_new && !this.creating_new {
+                this.new_connection_origin_id = this.selected_id;
             }
+            this.load_connection(connection, window, cx);
+            this.active_tab = super::ManagerTab::General;
+            if creating_new {
+                let focus = this.draft.name_state.read(cx).focus_handle(cx);
+                window.focus(&focus);
+            }
+            cx.notify();
+        });
+    }
+
+    pub(super) fn request_cancel_new(view: Entity<Self>, window: &mut Window, cx: &mut App) {
+        let target = {
+            let manager = view.read(cx);
+            let state = manager.state.read(cx);
             manager
-        });
-        window.open_dialog(cx, move |dialog: Dialog, window: &mut Window, _cx: &mut App| {
-            let vp = window.viewport_size();
-            let w = (vp.width - px(200.0)).max(px(800.0)).min(px(1200.0));
-            dialog
-                .title("Connection Manager")
-                .overlay_closable(false)
-                .w(w)
-                .margin_top(px(40.0))
-                .h(vp.height - px(200.0))
-                .child(dialog_view.clone())
-        });
+                .new_connection_origin_id
+                .and_then(|id| state.connections.iter().find(|connection| connection.id == id))
+                .or_else(|| state.connections.first())
+                .cloned()
+        };
+        if let Some(connection) = target {
+            Self::request_load_connection(view, Some(connection), window, cx);
+            return;
+        }
+
+        let state = view.read(cx).state.clone();
+        let close_view = view.clone();
+        let close = move |window: &mut Window, cx: &mut App| {
+            close_view.update(cx, |manager, cx| {
+                manager.new_connection_origin_id = None;
+                manager.load_connection(None, window, cx);
+            });
+            state.update(cx, |state, cx| {
+                if let Some(index) =
+                    state.open_tabs().iter().position(|tab| matches!(tab, TabKey::Connections))
+                {
+                    state.close_tab(index, cx);
+                }
+            });
+        };
+        if view.read(cx).has_unsaved_changes(cx) {
+            open_confirm_dialog(
+                window,
+                cx,
+                "Discard new connection?",
+                "Your unsaved connection changes will be lost.",
+                "Discard",
+                true,
+                close,
+            );
+        } else {
+            close(window, cx);
+        }
     }
 
     pub(super) fn load_connection(
@@ -88,6 +197,7 @@ impl ConnectionManager {
 
         if let Some(connection) = connection {
             self.selected_id = Some(connection.id);
+            self.new_connection_origin_id = None;
             self.draft
                 .name_state
                 .update(cx, |state, cx| state.set_value(connection.name.clone(), window, cx));
@@ -105,6 +215,7 @@ impl ConnectionManager {
             self.selected_id = None;
             self.draft.reset(window, cx);
         }
+        self.baseline_fingerprint = self.draft.fingerprint(cx);
     }
 
     fn load_transport_settings(

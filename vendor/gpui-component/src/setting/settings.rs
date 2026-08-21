@@ -1,5 +1,7 @@
+use std::rc::Rc;
+
 use crate::{
-    IconName, Sizable, Size, StyledExt,
+    ActiveTheme, IconName, Sizable, Size, StyledExt,
     group_box::GroupBoxVariant,
     input::{Input, InputState},
     resizable::{h_resizable, resizable_panel},
@@ -8,7 +10,8 @@ use crate::{
 };
 use gpui::{
     App, AppContext as _, Axis, ElementId, Entity, IntoElement, ParentElement as _, Pixels,
-    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px, relative,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder as _, px, relative,
 };
 use rust_i18n::t;
 
@@ -32,6 +35,7 @@ pub struct Settings {
     size: Size,
     sidebar_width: Pixels,
     sidebar_style: StyleRefinement,
+    on_page_change: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
 }
 
 impl Settings {
@@ -44,6 +48,7 @@ impl Settings {
             size: Size::default(),
             sidebar_width: px(250.0),
             sidebar_style: StyleRefinement::default(),
+            on_page_change: None,
         }
     }
 
@@ -76,6 +81,15 @@ impl Settings {
     /// Set the style refinement for the sidebar.
     pub fn sidebar_style(mut self, style: &StyleRefinement) -> Self {
         self.sidebar_style = style.clone();
+        self
+    }
+
+    /// Handle selection of a settings page.
+    pub fn on_page_change(
+        mut self,
+        handler: impl Fn(usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_page_change = Some(Rc::new(handler));
         self
     }
 
@@ -130,7 +144,15 @@ impl Settings {
             }
         }
 
-        return div().into_any_element();
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child("No settings match your search.")
+            .into_any_element()
     }
 
     fn render_sidebar(
@@ -142,6 +164,7 @@ impl Settings {
     ) -> impl IntoElement {
         let selected_index = state.read(cx).selected_index;
         let search_input = state.read(cx).search_input.clone();
+        let on_page_change = self.on_page_change.clone();
 
         Sidebar::left()
             .w(relative(1.))
@@ -158,18 +181,23 @@ impl Settings {
                     let is_page_active =
                         selected_index.page_ix == page_ix && selected_index.group_ix.is_none();
                     SidebarMenuItem::new(page.title.clone())
+                        .when_some(page.icon.clone(), |item, icon| item.icon(icon))
                         .default_open(page.default_open)
                         .active(is_page_active)
                         .on_click({
                             let state = state.clone();
-                            move |_, _, cx| {
+                            let on_page_change = on_page_change.clone();
+                            move |_, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.selected_index = SelectIndex {
                                         page_ix,
                                         ..Default::default()
                                     };
                                     cx.notify();
-                                })
+                                });
+                                if let Some(handler) = &on_page_change {
+                                    handler(page_ix, window, cx);
+                                }
                             }
                         })
                         .when(page.groups.len() > 1, |this| {
@@ -213,6 +241,7 @@ impl Sizable for Settings {
 
 pub(super) struct SettingsState {
     pub(super) selected_index: SelectIndex,
+    pub(super) last_query: SharedString,
     /// If set, defer scrolling to this group index after rendering.
     pub(super) deferred_scroll_group_ix: Option<usize>,
     pub(super) search_input: Entity<InputState>,
@@ -247,11 +276,23 @@ impl RenderOnce for Settings {
             SettingsState {
                 search_input,
                 selected_index: SelectIndex::default(),
+                last_query: SharedString::default(),
                 deferred_scroll_group_ix: None,
             }
         });
 
         let query = state.read(cx).search_input.read(cx).value();
+        if state.read(cx).last_query != query {
+            state.update(cx, |state, cx| {
+                state.last_query = query.clone();
+                state.selected_index = SelectIndex::default();
+                state.deferred_scroll_group_ix = None;
+                cx.notify();
+            });
+            if let Some(handler) = &self.on_page_change {
+                handler(0, window, cx);
+            }
+        }
         let filtered_pages = self.filtered_pages(&query);
         let options = RenderOptions {
             page_ix: 0,
@@ -275,5 +316,23 @@ impl RenderOnce for Settings {
                 window,
                 cx,
             )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setting::SettingItem;
+
+    #[test]
+    fn custom_items_are_searchable_by_keyword() {
+        let settings = Settings::new("test").page(SettingPage::new("AI").group(
+            SettingGroup::new().item(
+                SettingItem::render(|_, _, _| div()).keywords(["provider", "api key"]),
+            ),
+        ));
+
+        assert_eq!(settings.filtered_pages("api").len(), 1);
+        assert!(settings.filtered_pages("transfer").is_empty());
     }
 }

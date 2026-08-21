@@ -36,11 +36,15 @@ impl Render for ConnectionManager {
         let list = self.render_connection_list(connections, selected_id, window, cx);
         let editor = self.render_editor_panel(is_active_selection, window, cx);
 
-        // Dialog chrome (padding, title, gap, border) eats ~86px from the
-        // dialog height (vp.height - 200).  Pin to an explicit pixel height
-        // so the Dialog's own overflow_y_scrollbar never activates.
-        let content_h = window.viewport_size().height - px(290.0);
-        div().flex().flex_row().w_full().h(content_h).overflow_hidden().child(list).child(editor)
+        div()
+            .flex()
+            .flex_row()
+            .size_full()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .child(list)
+            .child(editor)
     }
 }
 
@@ -54,6 +58,13 @@ impl ConnectionManager {
     ) -> AnyElement {
         let appearance = self.state.read(cx).settings.appearance.clone();
         let active_tab = self.active_tab;
+        let creating_new = self.creating_new;
+        let editor_title = if creating_new {
+            "New Connection".to_string()
+        } else {
+            let name = self.draft.name_state.read(cx).value().trim().to_string();
+            if name.is_empty() { "Connection".to_string() } else { name }
+        };
         let parse_error = self.parse_error.clone();
         let global_parse_error =
             if active_tab == ManagerTab::General { None } else { parse_error.clone() };
@@ -62,7 +73,7 @@ impl ConnectionManager {
         let parse_error_fg = cx.theme().danger_foreground;
 
         let tab_bar = self.render_tab_bar(cx);
-        let status_bar = self.render_status_bar(is_active_selection, cx);
+        let status_bar = self.render_status_bar(is_active_selection, creating_new, cx);
 
         div()
             .flex()
@@ -79,7 +90,17 @@ impl ConnectionManager {
                     .items_center()
                     .px(spacing::md())
                     .h(sizing::header_height())
+                    .gap(spacing::md())
                     .bg(islands::tool_bg(&appearance, cx))
+                    .child(
+                        div()
+                            .w(px(180.0))
+                            .min_w(px(120.0))
+                            .truncate()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(editor_title),
+                    )
                     .child(div().flex_1().min_w(px(0.0)).child(tab_bar)),
             )
             // Tab content — scrollable
@@ -139,7 +160,12 @@ impl ConnectionManager {
     }
 
     /// Renders the status bar with test status and action buttons.
-    fn render_status_bar(&self, is_active_selection: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_status_bar(
+        &self,
+        is_active_selection: bool,
+        creating_new: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let view = cx.entity();
         let state = self.state.clone();
         let appearance = self.state.read(cx).settings.appearance.clone();
@@ -157,6 +183,7 @@ impl ConnectionManager {
             state,
             is_testing,
             is_active_selection,
+            creating_new,
             error_details,
         );
 
@@ -201,12 +228,13 @@ impl ConnectionManager {
         (text, color)
     }
 
-    /// Renders the action buttons (Test, Save, Close).
+    /// Renders the action buttons (Test and Save).
     fn render_action_buttons(
         view: Entity<Self>,
         state: Entity<crate::state::AppState>,
         is_testing: bool,
         is_active_selection: bool,
+        creating_new: bool,
         error_details: Option<String>,
     ) -> AnyElement {
         let row = div()
@@ -214,6 +242,16 @@ impl ConnectionManager {
             .items_center()
             .gap(spacing::sm())
             .flex_shrink_0()
+            .when(creating_new, |row| {
+                row.child(Button::new("cancel-new-connection").compact().label("Cancel").on_click(
+                    {
+                        let view = view.clone();
+                        move |_, window, cx| {
+                            ConnectionManager::request_cancel_new(view.clone(), window, cx);
+                        }
+                    },
+                ))
+            })
             .child(
                 Button::new("test-connection")
                     .compact()
@@ -262,12 +300,7 @@ impl ConnectionManager {
                             }
                         }
                     }),
-            )
-            .child(Button::new("close-manager").compact().label("Close").on_click(
-                |_, window, cx| {
-                    window.close_dialog(cx);
-                },
-            ));
+            );
 
         let row = if let Some(error_details) = error_details {
             row.child(Button::new("test-details").compact().label("Details").on_click(

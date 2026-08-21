@@ -19,7 +19,10 @@ impl AppState {
             (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
             (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
             (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
-            (_, TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog) => false,
+            (
+                _,
+                TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog,
+            ) => false,
             _ => false,
         };
 
@@ -383,7 +386,7 @@ impl AppState {
                     table_hidden_columns: HashSet::new(),
                 }
             }
-            TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => {
+            TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
                 // Utility tabs are not persisted in workspace
                 WorkspaceTab {
                     database: String::new(),
@@ -440,7 +443,10 @@ impl AppState {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
                 }
-                TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => {
+                TabKey::AgentActivity
+                | TabKey::Connections
+                | TabKey::Settings
+                | TabKey::Changelog => {
                     // Utility tabs don't affect selection
                 }
             }

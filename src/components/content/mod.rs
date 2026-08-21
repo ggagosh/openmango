@@ -1,5 +1,6 @@
 use gpui::*;
 
+use crate::components::ConnectionManager as ConnectionManagerView;
 use crate::state::{AppEvent, AppState, StatusLevel, View};
 use crate::views::{
     AgentActivityView, AiView, ChangelogView, CollectionView, DatabaseView, ForgeView,
@@ -24,6 +25,8 @@ pub struct ContentArea {
     transfer_view: Option<Entity<TransferView>>,
     forge_view: Option<Entity<ForgeView>>,
     agent_activity_view: Option<Entity<AgentActivityView>>,
+    connection_manager_view: Option<Entity<ConnectionManagerView>>,
+    connection_manager_request_generation: u64,
     settings_view: Option<Entity<SettingsView>>,
     changelog_view: Option<Entity<ChangelogView>>,
     last_inputs: ContentAreaInputs,
@@ -37,6 +40,7 @@ struct ContentAreaInputs {
     selected_db: Option<String>,
     has_tabs: bool,
     current_view: View,
+    connection_manager_request_generation: u64,
     error_text: Option<String>,
 }
 
@@ -48,6 +52,7 @@ impl ContentAreaInputs {
             selected_db: state.selected_database_name(),
             has_tabs: !state.open_tabs().is_empty() || state.preview_tab().is_some(),
             current_view: state.current_view,
+            connection_manager_request_generation: state.connection_manager_request().generation,
             error_text: state.status_message().and_then(|message| {
                 if matches!(message.level, StatusLevel::Error) { Some(message.text) } else { None }
             }),
@@ -178,6 +183,8 @@ impl ContentArea {
             transfer_view,
             forge_view,
             agent_activity_view,
+            connection_manager_view: None,
+            connection_manager_request_generation: 0,
             settings_view,
             changelog_view,
             last_inputs,
@@ -227,6 +234,30 @@ impl ContentArea {
         }
     }
 
+    fn sync_connection_manager_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let request = self.state.read(cx).connection_manager_request();
+        if self.connection_manager_request_generation == request.generation
+            && self.connection_manager_view.is_some()
+        {
+            return;
+        }
+
+        if let Some(view) = self.connection_manager_view.clone() {
+            view.update(cx, |view, cx| {
+                view.apply_open_request(request.selected_id, request.creating_new, window, cx);
+            });
+        } else {
+            let state = self.state.clone();
+            self.connection_manager_view = Some(cx.new(|cx| {
+                let mut view = ConnectionManagerView::new(state, None, window, cx);
+                view.apply_open_request(request.selected_id, request.creating_new, window, cx);
+                view
+            }));
+        }
+
+        self.connection_manager_request_generation = request.generation;
+    }
+
     pub(crate) fn focus_current_view(
         &mut self,
         window: &mut Window,
@@ -274,7 +305,7 @@ impl ContentArea {
 }
 
 impl Render for ContentArea {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inputs = {
             let state_ref = self.state.read(cx);
             ContentAreaInputs::from_state(state_ref)
@@ -286,6 +317,7 @@ impl Render for ContentArea {
             selected_db,
             has_tabs,
             current_view,
+            connection_manager_request_generation: _,
             error_text,
         } = inputs;
 
@@ -295,8 +327,13 @@ impl Render for ContentArea {
         let should_transfer_view = matches!(current_view, View::Transfer);
         let should_forge_view = matches!(current_view, View::Forge);
         let should_agent_activity_view = matches!(current_view, View::AgentActivity);
+        let should_connection_manager_view = matches!(current_view, View::Connections);
         let should_settings_view = matches!(current_view, View::Settings);
         let should_changelog_view = matches!(current_view, View::Changelog);
+
+        if should_connection_manager_view {
+            self.sync_connection_manager_view(window, cx);
+        }
 
         if has_tabs {
             self.ensure_views(
@@ -320,6 +357,7 @@ impl Render for ContentArea {
                 transfer_view: self.transfer_view.as_ref(),
                 forge_view: self.forge_view.as_ref(),
                 agent_activity_view: self.agent_activity_view.as_ref(),
+                connection_manager_view: self.connection_manager_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
                 changelog_view: self.changelog_view.as_ref(),
             };

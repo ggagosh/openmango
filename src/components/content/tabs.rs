@@ -7,7 +7,10 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::actions::model::ActionStatus;
-use crate::components::{ConnectionIdentity, connection_identity_badge, request_unsaved_action};
+use crate::components::{
+    ConnectionIdentity, ConnectionManager as ConnectionManagerView, connection_identity_badge,
+    request_unsaved_action,
+};
 use crate::keyboard::FocusContent;
 use crate::state::{
     ActiveTab, AppState, AppearanceSettings, IslandsTabStyle, SessionKey, TabKey, UnsavedScope,
@@ -89,6 +92,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
     pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
+    pub(crate) connection_manager_view: Option<&'a Entity<ConnectionManagerView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
     pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
 }
@@ -262,6 +266,7 @@ impl Render for OpenTabsBar {
                                 (self.state.read(cx).forge_tab_label(tab.id), false)
                             }
                             TabKey::AgentActivity => ("Agent Activity".to_string(), false),
+                            TabKey::Connections => ("Connections".to_string(), false),
                             TabKey::Settings => ("Settings".to_string(), false),
                             TabKey::Changelog => ("What's New".to_string(), false),
                         };
@@ -271,6 +276,7 @@ impl Render for OpenTabsBar {
                             TabKey::Transfer(_) => IconName::Download,
                             TabKey::Forge(_) => IconName::SquareTerminal,
                             TabKey::AgentActivity => IconName::Bot,
+                            TabKey::Connections => IconName::Settings2,
                             TabKey::Settings => IconName::Settings,
                             TabKey::Changelog => IconName::BookOpen,
                         };
@@ -279,7 +285,10 @@ impl Render for OpenTabsBar {
                             TabKey::Database(tab) => Some(tab.connection_id),
                             TabKey::Transfer(tab) => tab.connection_id,
                             TabKey::Forge(tab) => Some(tab.connection_id),
-                            TabKey::AgentActivity | TabKey::Settings | TabKey::Changelog => None,
+                            TabKey::AgentActivity
+                            | TabKey::Connections
+                            | TabKey::Settings
+                            | TabKey::Changelog => None,
                         };
                         let connection_identity =
                             connection_id.and_then(|id| connection_identities.get(&id));
@@ -700,6 +709,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::AgentActivity => host
             .agent_activity_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Connections => host
+            .connection_manager_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::Settings => host

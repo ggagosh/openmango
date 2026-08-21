@@ -1,4 +1,4 @@
-use gpui::{AppContext as _, Context, Entity, Window};
+use gpui::{App, AppContext as _, Context, Entity, Window};
 use gpui_component::input::{InputEvent, InputState};
 use uuid::Uuid;
 
@@ -99,6 +99,73 @@ impl ConnectionDraft {
             pool_expanded: false,
             compression_expanded: false,
         }
+    }
+
+    pub(super) fn fingerprint(&self, cx: &App) -> String {
+        let mut values = [
+            &self.name_state,
+            &self.uri_state,
+            &self.username_state,
+            &self.password_state,
+            &self.app_name_state,
+            &self.auth_source_state,
+            &self.auth_mechanism_state,
+            &self.auth_mechanism_props_state,
+            &self.read_preference_state,
+            &self.read_concern_state,
+            &self.write_concern_state,
+            &self.w_timeout_state,
+            &self.connect_timeout_state,
+            &self.server_selection_timeout_state,
+            &self.max_pool_state,
+            &self.min_pool_state,
+            &self.heartbeat_frequency_state,
+            &self.compressors_state,
+            &self.zlib_level_state,
+            &self.tls_ca_file_state,
+            &self.tls_cert_key_file_state,
+            &self.tls_cert_key_password_state,
+            &self.ssh_host_state,
+            &self.ssh_port_state,
+            &self.ssh_username_state,
+            &self.ssh_password_state,
+            &self.ssh_identity_file_state,
+            &self.ssh_identity_passphrase_state,
+            &self.ssh_local_bind_host_state,
+            &self.proxy_host_state,
+            &self.proxy_port_state,
+            &self.proxy_username_state,
+            &self.proxy_password_state,
+        ]
+        .into_iter()
+        .map(|state| state.read(cx).value().to_string())
+        .collect::<Vec<_>>();
+        values.push(format!(
+            "{:?}",
+            (
+                self.color,
+                self.environment,
+                self.confirm_production_writes,
+                self.read_only,
+                self.agent_shared,
+                self.agent_writable,
+                self.protected,
+                self.history_enabled,
+                self.direct_connection,
+                self.tls,
+                self.tls_insecure,
+            )
+        ));
+        values.push(format!(
+            "{:?}",
+            (
+                self.ssh_enabled,
+                self.ssh_use_identity_file,
+                self.ssh_strict_host_key_checking,
+                self.proxy_enabled,
+            )
+        ));
+        values.join("\u{1f}")
     }
 
     pub(super) fn reset(&mut self, window: &mut Window, cx: &mut Context<ConnectionManager>) {
@@ -206,6 +273,8 @@ impl ConnectionManager {
             testing_step: None,
             active_tab: ManagerTab::General,
             creating_new: false,
+            new_connection_origin_id: None,
+            baseline_fingerprint: String::new(),
             status: TestStatus::Idle,
             last_tested_uri: None,
             pending_test_uri: None,
@@ -223,6 +292,9 @@ impl ConnectionManager {
                 .cloned()
         {
             view.load_connection(Some(connection), window, cx);
+        } else {
+            view.creating_new = view.state.read(cx).connections.is_empty();
+            view.baseline_fingerprint = view.draft.fingerprint(cx);
         }
 
         view

@@ -27,6 +27,7 @@ pub enum View {
     Transfer,
     Forge,
     AgentActivity,
+    Connections,
     Settings,
     Changelog,
 }
@@ -113,8 +114,16 @@ pub enum TabKey {
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
     AgentActivity,
+    Connections,
     Settings,
     Changelog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConnectionManagerRequest {
+    pub generation: u64,
+    pub selected_id: Option<Uuid>,
+    pub creating_new: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
