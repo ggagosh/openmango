@@ -6,6 +6,27 @@ use uuid::Uuid;
 use crate::history::{BatchQuery, EligibilityReport, HistoryConnection, HistoryService, Usage};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 
+fn history_inspection_message(
+    report: &EligibilityReport,
+    setup_error: Option<&str>,
+) -> StatusMessage {
+    if let Some(error) = setup_error {
+        StatusMessage::error(format!("History setup failed: {error}"))
+    } else {
+        match report.status {
+            crate::history::EligibilityStatus::Eligible => {
+                StatusMessage::info("History is eligible on this connection.")
+            }
+            crate::history::EligibilityStatus::NeedsSetup => StatusMessage::info(
+                "History needs setup: enable pre/post images for covered collections.",
+            ),
+            crate::history::EligibilityStatus::Unavailable => StatusMessage::error(
+                report.exact_reason().unwrap_or("History is unavailable on this connection."),
+            ),
+        }
+    }
+}
+
 fn spawn_history_inspection(
     runtime: tokio::runtime::Handle,
     service: Arc<HistoryService>,
@@ -272,17 +293,7 @@ impl AppCommands {
             let eligible = report.status == crate::history::EligibilityStatus::Eligible;
             let _ = cx.update(|cx| {
                 state.update(cx, |state, cx| {
-                    let message = if let Some(error) = setup_error {
-                        StatusMessage::error(format!("History setup failed: {error}"))
-                    } else if eligible {
-                        StatusMessage::info("History is eligible on this connection.")
-                    } else {
-                        StatusMessage::error(
-                            report
-                                .exact_reason()
-                                .unwrap_or("Enable pre/post images for covered collections."),
-                        )
-                    };
+                    let message = history_inspection_message(&report, setup_error.as_deref());
                     state.finish_history_inspection(connection_id, report, usage);
                     state.set_status_message(Some(message));
                     if eligible && enable_after_setup {
@@ -488,6 +499,23 @@ impl AppCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_setup_requirement_is_not_reported_as_an_error() {
+        let report = EligibilityReport {
+            status: crate::history::EligibilityStatus::NeedsSetup,
+            version: Some("7.0.0".into()),
+            topology: Some("replica_set".into()),
+            storage_engine: Some("wiredTiger".into()),
+            failures: Vec::new(),
+            collections: Vec::new(),
+        };
+
+        let message = history_inspection_message(&report, None);
+
+        assert!(matches!(message.level, crate::state::StatusLevel::Info));
+        assert!(message.text.contains("needs setup"));
+    }
 
     #[test]
     fn history_inspection_runs_on_the_mongodb_runtime() {

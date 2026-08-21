@@ -1,5 +1,29 @@
 // Reusable UI components
 
+fn should_capture_uri_change(internal_value: &mut Option<String>, value: &str) -> bool {
+    if internal_value.as_deref() == Some(value) {
+        false
+    } else {
+        *internal_value = None;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_capture_uri_change;
+
+    #[test]
+    fn repeated_internal_uri_events_stay_ignored() {
+        let mut internal = Some("mongodb://user@localhost".to_string());
+
+        assert!(!should_capture_uri_change(&mut internal, "mongodb://user@localhost"));
+        assert!(!should_capture_uri_change(&mut internal, "mongodb://user@localhost"));
+        assert!(should_capture_uri_change(&mut internal, "mongodb://other@localhost"));
+        assert!(internal.is_none());
+    }
+}
+
 pub mod action_bar;
 pub mod ai_blocks;
 pub mod button;

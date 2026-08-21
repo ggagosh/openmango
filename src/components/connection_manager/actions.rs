@@ -289,8 +289,7 @@ impl ConnectionManager {
 
     pub(super) fn capture_uri_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let uri = self.draft.uri_state.read(cx).value().to_string();
-        if self.draft.internal_uri_value.as_deref() == Some(uri.as_str()) {
-            self.draft.internal_uri_value = None;
+        if !crate::components::should_capture_uri_change(&mut self.draft.internal_uri_value, &uri) {
             return;
         }
         let secrets = extract_uri_secrets(&uri);

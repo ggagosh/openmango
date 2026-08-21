@@ -1474,15 +1474,19 @@ fn render_agent_connections_section(
                 let history_needs_setup = history_report.as_ref().is_some_and(|report| {
                     report.status == crate::history::EligibilityStatus::NeedsSetup
                 });
-                let history_reason = history_report
-                    .as_ref()
-                    .and_then(|report| report.exact_reason())
-                    .unwrap_or(if connected {
-                        "Inspect eligibility before enabling History."
-                    } else {
-                        "Connect before inspecting History eligibility."
-                    })
-                    .to_string();
+                let history_reason = if history_needs_setup {
+                    "History needs setup before it can be enabled.".to_string()
+                } else {
+                    history_report
+                        .as_ref()
+                        .and_then(|report| report.exact_reason())
+                        .unwrap_or(if connected {
+                            "Inspect eligibility before enabling History."
+                        } else {
+                            "Connect before inspecting History eligibility."
+                        })
+                        .to_string()
+                };
                 let history_usage = state
                     .read(cx)
                     .history_service()

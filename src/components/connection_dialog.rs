@@ -31,7 +31,7 @@ pub struct ConnectionDialog {
     uri_state: Entity<InputState>,
     password_state: Entity<InputState>,
     uri_secrets: UriSecrets,
-    sanitizing_uri: bool,
+    internal_uri_value: Option<String>,
     environment: Option<ConnectionEnvironment>,
     confirm_production_writes: bool,
     read_only: bool,
@@ -69,11 +69,10 @@ impl ConnectionDialog {
     }
 
     fn capture_uri_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sanitizing_uri {
-            self.sanitizing_uri = false;
+        let uri = self.uri_state.read(cx).value().to_string();
+        if !super::should_capture_uri_change(&mut self.internal_uri_value, &uri) {
             return;
         }
-        let uri = self.uri_state.read(cx).value().to_string();
         let secrets = extract_uri_secrets(&uri);
         self.password_state.update(cx, |state, cx| {
             state.set_value(secrets.password.clone().unwrap_or_default(), window, cx);
@@ -81,7 +80,7 @@ impl ConnectionDialog {
         self.uri_secrets = UriSecrets { password: None, ..secrets };
         let sanitized = strip_uri_secrets(&uri);
         if sanitized != uri {
-            self.sanitizing_uri = true;
+            self.internal_uri_value = Some(sanitized.clone());
             self.uri_state.update(cx, |state, cx| {
                 state.set_value(sanitized, window, cx);
             });
@@ -123,7 +122,7 @@ impl ConnectionDialog {
             uri_state,
             password_state,
             uri_secrets: UriSecrets::default(),
-            sanitizing_uri: false,
+            internal_uri_value: None,
             environment: None,
             confirm_production_writes: false,
             read_only: false,
@@ -192,7 +191,7 @@ impl ConnectionDialog {
             uri_state,
             password_state,
             uri_secrets,
-            sanitizing_uri: false,
+            internal_uri_value: None,
             environment: existing.environment,
             confirm_production_writes: existing.confirm_production_writes,
             read_only: existing.read_only,
