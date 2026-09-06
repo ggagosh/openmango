@@ -16,7 +16,7 @@ use crate::actions::model::ActionStatus;
 use crate::components::{ConnectionIdentity, ConnectionManager, connection_identity_badge};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
-    DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenSelection,
+    DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenForge, OpenSelection,
     OpenSelectionPreview, PasteTreeItem, RenameCollection, TransferCopy, TransferExport,
     TransferImport,
 };
@@ -153,6 +153,9 @@ impl Render for Sidebar {
             })
             .on_action(cx.listener(|this, _: &OpenSelection, window, cx| {
                 this.handle_open_selection(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenForge, window, cx| {
+                this.handle_open_forge(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSelectionPreview, window, cx| {
                 this.handle_open_preview(window, cx);
@@ -643,7 +646,14 @@ impl Render for Sidebar {
                                                         let is_double = sidebar.register_tree_click(&node_id);
                                                         sidebar.select_sidebar_node(node_id.clone(), false, cx);
                                                         if is_double {
-                                                            sidebar.handle_open_selection(window, cx);
+                                                            if node_id.is_collection()
+                                                                && sidebar.state.read(cx).settings.collection_double_click_action
+                                                                    == crate::state::settings::CollectionDoubleClickAction::Forge
+                                                            {
+                                                                sidebar.handle_open_forge(window, cx);
+                                                            } else {
+                                                                sidebar.handle_open_selection(window, cx);
+                                                            }
                                                         }
                                                     });
                                                 }

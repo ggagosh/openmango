@@ -17,6 +17,7 @@ use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
 use crate::components::{Button, open_confirm_dialog, request_app_quit};
+use crate::state::settings::CollectionDoubleClickAction;
 use crate::state::{
     AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
     FILENAME_PLACEHOLDERS, InsertMode, McpClientKind, TransferFormat,
@@ -298,7 +299,12 @@ impl Render for SettingsView {
                             .flex_col()
                             .gap(spacing::lg())
                             .child(render_appearance_section(general_state.clone(), &settings, cx))
-                            .child(render_query_section(query_timeout_input.clone(), cx))
+                            .child(render_query_section(
+                                general_state.clone(),
+                                &settings,
+                                query_timeout_input.clone(),
+                                cx,
+                            ))
                             .child(render_updates_section(general_state.clone(), &settings, cx))
                             .child(render_support_section(general_state.clone(), cx))
                     })
@@ -308,6 +314,9 @@ impl Render for SettingsView {
                         "vibrancy",
                         "status bar",
                         "query timeout",
+                        "collection",
+                        "double click",
+                        "forge",
                         "updates",
                         "support",
                         "diagnostics",
@@ -641,18 +650,48 @@ fn render_appearance_section(
 }
 
 fn render_query_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
     query_timeout_input_state: Entity<InputState>,
     cx: &App,
 ) -> impl IntoElement {
     let timeout_input = NumberInput::new(&query_timeout_input_state).small().w(px(120.0));
+    let double_click_action = gpui_component::button::Button::new("collection-double-click-action")
+        .compact()
+        .label(settings.collection_double_click_action.label())
+        .dropdown_caret(true)
+        .with_size(Size::Small)
+        .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu: PopupMenu, _, _| {
+            for action in [CollectionDoubleClickAction::Data, CollectionDoubleClickAction::Forge] {
+                let state = state.clone();
+                menu = menu.item(PopupMenuItem::new(action.label()).on_click(move |_, _, cx| {
+                    state.update(cx, |state, cx| {
+                        state.settings.collection_double_click_action = action;
+                        state.save_settings();
+                        cx.notify();
+                    });
+                }));
+            }
+            menu
+        });
     section(
         "Queries",
-        div().flex().flex_col().gap(spacing::md()).child(setting_row_with_description(
-            "Interactive query timeout (ms)",
-            "Server maxTimeMS for document count and find commands (100–3,600,000)",
-            timeout_input,
-            cx,
-        )),
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Interactive query timeout (ms)",
+                "Server maxTimeMS for document count and find commands (100–3,600,000)",
+                timeout_input,
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Collection double-click action",
+                "Forge opens a find-all query for the collection, ready to run.",
+                double_click_action,
+                cx,
+            )),
         cx,
     )
 }

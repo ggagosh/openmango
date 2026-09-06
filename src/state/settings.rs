@@ -28,6 +28,8 @@ pub struct AppSettings {
     pub last_seen_version: String,
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    #[serde(default)]
+    pub collection_double_click_action: CollectionDoubleClickAction,
 }
 
 impl Default for AppSettings {
@@ -41,6 +43,24 @@ impl Default for AppSettings {
             interactive_query_timeout_ms: default_interactive_query_timeout_ms(),
             last_seen_version: default_current_version(),
             auto_update: true,
+            collection_double_click_action: CollectionDoubleClickAction::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionDoubleClickAction {
+    #[default]
+    Data,
+    Forge,
+}
+
+impl CollectionDoubleClickAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Data => "Open Data",
+            Self::Forge => "Open Forge",
         }
     }
 }

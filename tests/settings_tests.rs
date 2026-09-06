@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use openmango::state::CollectionSubview;
 use openmango::state::settings::{
-    AppSettings, AppTheme, DEFAULT_FILENAME_TEMPLATE, IslandsCornerSoftness, IslandsTabStyle,
-    expand_filename_template, migrate_islands_tab_style_to_islands,
+    AppSettings, AppTheme, CollectionDoubleClickAction, DEFAULT_FILENAME_TEMPLATE,
+    IslandsCornerSoftness, IslandsTabStyle, expand_filename_template,
+    migrate_islands_tab_style_to_islands,
 };
 use openmango::state::workspace::{WorkspaceTab, WorkspaceTabKind};
 
@@ -37,6 +38,22 @@ fn test_default_settings() {
 // =============================================================================
 // expand_filename_template
 // =============================================================================
+
+#[test]
+fn collection_double_click_setting_defaults_and_roundtrips() {
+    let old_settings: AppSettings = serde_json::from_str("{}").unwrap();
+    assert_eq!(old_settings.collection_double_click_action, CollectionDoubleClickAction::Data);
+    assert_eq!(
+        AppSettings::default().collection_double_click_action,
+        CollectionDoubleClickAction::Data
+    );
+    for action in [CollectionDoubleClickAction::Data, CollectionDoubleClickAction::Forge] {
+        let settings = AppSettings { collection_double_click_action: action, ..Default::default() };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.collection_double_click_action, action);
+    }
+}
 
 #[test]
 fn test_expand_filename_template() {

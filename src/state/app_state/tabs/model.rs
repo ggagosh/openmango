@@ -594,26 +594,12 @@ impl AppState {
         collection: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        // Check if a Forge tab for this database already exists
-        let existing_index = self.tabs.open.iter().position(|tab| {
-            matches!(
-                tab,
-                TabKey::Forge(key)
-                    if key.connection_id == connection_id && key.database == database
-            )
-        });
+        let content = collection.as_deref().map(collection_forge_query);
+        let existing_index = self.existing_forge_tab(connection_id, &database, content.as_deref());
 
         if let Some(index) = existing_index {
-            // Forge tab for this database already exists, select it
-            if self.active_index() != Some(index) {
-                self.set_active_index(index);
-                self.set_selected_connection_internal(connection_id);
-                self.conn.selected_database = Some(database);
-                self.current_view = View::Forge;
-                self.clear_error_status();
-                cx.emit(AppEvent::ViewChanged);
-                cx.notify();
-            }
+            self.select_tab(index, cx);
+            self.conn.selected_collection = collection;
             return;
         }
 
@@ -622,9 +608,7 @@ impl AppState {
         let key = ForgeTabKey { id, connection_id, database: database.clone() };
         let mut state = ForgeTabState::default();
         let selected_collection = collection.clone();
-        if let Some(collection) = collection {
-            let escaped = collection.replace('"', "\\\"");
-            let content = format!("db.getCollection(\"{}\").find({{}})", escaped);
+        if let Some(content) = content {
             state.pending_cursor = content.rfind('{').map(|idx| idx + 1);
             state.content = content;
         }
@@ -640,6 +624,20 @@ impl AppState {
         self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
+    }
+
+    // Reuse an untouched find-all query; never replace an existing Forge draft.
+    fn existing_forge_tab(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+        content: Option<&str>,
+    ) -> Option<usize> {
+        self.tabs.open.iter().position(|tab| {
+            matches!(tab, TabKey::Forge(key)
+                if key.connection_id == connection_id && key.database == database
+                    && content.is_none_or(|content| self.forge_tab_content(key.id) == Some(content)))
+        })
     }
 
     /// Open a Forge tab with specific content (e.g. an aggregate command from AI chat).
@@ -1098,10 +1096,48 @@ fn remap_active_index_after_tab_move(active: usize, from: usize, to: usize) -> u
     }
 }
 
+fn collection_forge_query(collection: &str) -> String {
+    let name =
+        serde_json::to_string(collection).expect("serializing a collection name cannot fail");
+    format!("db.getCollection({name}).find({{}})")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::remap_active_index_after_tab_move;
+    use super::{collection_forge_query, remap_active_index_after_tab_move};
+    use crate::state::app_state::types::{ForgeTabKey, ForgeTabState, TabKey};
     use crate::state::{AppState, SessionKey};
+
+    #[test]
+    fn collection_forge_queries_escape_names_and_preserve_drafts() {
+        let collection = "orders\\archive\"\n";
+        let query = collection_forge_query(collection);
+        let encoded =
+            query.strip_prefix("db.getCollection(").unwrap().strip_suffix(").find({})").unwrap();
+        assert_eq!(serde_json::from_str::<String>(encoded).unwrap(), collection);
+        assert_eq!(collection_forge_query("users"), "db.getCollection(\"users\").find({})");
+
+        let mut state = AppState::new();
+        let connection_id = uuid::Uuid::new_v4();
+        let id = uuid::Uuid::new_v4();
+        state.tabs.open.push(TabKey::Forge(ForgeTabKey {
+            id,
+            connection_id,
+            database: "db".into(),
+        }));
+        state.forge_tabs.insert(id, ForgeTabState { content: query.clone(), ..Default::default() });
+        assert_eq!(state.existing_forge_tab(connection_id, "db", Some(&query)), Some(0));
+        assert_eq!(state.existing_forge_tab(connection_id, "other", Some(&query)), None);
+        assert_eq!(state.existing_forge_tab(uuid::Uuid::new_v4(), "db", Some(&query)), None);
+        assert_eq!(
+            state.existing_forge_tab(connection_id, "db", Some(&collection_forge_query("users"))),
+            None
+        );
+        state.forge_tabs.get_mut(&id).unwrap().content.push_str(".limit(10)");
+        assert_eq!(state.existing_forge_tab(connection_id, "db", Some(&query)), None);
+        assert_eq!(state.existing_forge_tab(connection_id, "db", None), Some(0));
+        assert!(state.forge_tab_content(id).unwrap().ends_with(".limit(10)"));
+    }
 
     #[test]
     fn cleanup_session_removes_or_retains() {

@@ -617,6 +617,40 @@ impl Sidebar {
         }
     }
 
+    fn handle_open_forge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_keyboard_preview();
+        self.clear_typeahead(cx);
+        let node_id = if self.model.search_open {
+            let query = self.search_state.read(cx).value().to_string();
+            let results = self.search_results(&query, cx);
+            self.model
+                .search_selected
+                .and_then(|ix| results.get(ix))
+                .or_else(|| results.first())
+                .map(|result| result.node_id.clone())
+        } else {
+            self.model.selected_tree_id.clone()
+        };
+        let Some(node_id) = node_id else {
+            return;
+        };
+        let Some(database) = node_id.database_name() else {
+            return;
+        };
+        self.state.update(cx, |state, cx| {
+            state.open_forge_tab(
+                node_id.connection_id(),
+                database.to_string(),
+                node_id.collection_name().map(str::to_string),
+                cx,
+            );
+        });
+        if self.model.search_open {
+            self.close_search(window, cx);
+        }
+        window.dispatch_action(Box::new(FocusContent), cx);
+    }
+
     fn handle_open_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_keyboard_preview();
         let Some(node_id) = self.model.selected_tree_id.clone() else {

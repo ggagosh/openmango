@@ -130,6 +130,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("return", OpenSelection, Some("Sidebar")),
         KeyBinding::new("cmd-enter", OpenSelectionPreview, Some("Sidebar")),
         KeyBinding::new("ctrl-enter", OpenSelectionPreview, Some("Sidebar")),
+        KeyBinding::new("cmd-shift-f", OpenForge, Some("Sidebar")),
+        KeyBinding::new("ctrl-shift-f", OpenForge, Some("Sidebar")),
         KeyBinding::new("cmd-e", EditConnection, Some("Sidebar")),
         KeyBinding::new("ctrl-e", EditConnection, Some("Sidebar")),
         KeyBinding::new("cmd-shift-d", DisconnectConnection, Some("Sidebar")),
@@ -821,6 +823,32 @@ mod tests {
     use gpui::{KeyBindingContextPredicate, KeyContext};
 
     use super::*;
+
+    #[test]
+    fn open_forge_shortcut_matches_sidebar_without_conflicting_with_aggregation() {
+        let bindings = default_keybindings();
+        for shortcut in ["cmd-shift-f", "ctrl-shift-f"] {
+            assert!(bindings.iter().any(|binding| {
+                binding.action().as_any().is::<OpenForge>()
+                    && binding.keystrokes()
+                        == KeyBinding::new(shortcut, OpenForge, Some("Sidebar")).keystrokes()
+                    && binding.predicate().is_some_and(|context| {
+                        context
+                            .depth_of(&[
+                                KeyContext::parse("Workspace").unwrap(),
+                                KeyContext::parse("Sidebar").unwrap(),
+                            ])
+                            .is_some()
+                            && context
+                                .depth_of(&[
+                                    KeyContext::parse("Workspace").unwrap(),
+                                    KeyContext::parse("Documents Aggregation").unwrap(),
+                                ])
+                                .is_none()
+                    })
+            }));
+        }
+    }
 
     #[test]
     fn document_duplicate_and_delete_do_not_match_aggregation() {

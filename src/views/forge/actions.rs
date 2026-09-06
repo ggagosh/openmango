@@ -1,6 +1,7 @@
-use gpui::{Context, Div, InteractiveElement, Window};
+use gpui::{Context, Div, Entity, InteractiveElement};
 
 use crate::components::request_connection_write;
+use crate::state::AppState;
 
 use crate::keyboard::{
     CancelForgeRun, ClearForgeOutput, FindInForgeOutput, FocusForgeEditor, FocusForgeOutput,
@@ -9,15 +10,23 @@ use crate::keyboard::{
 
 use super::ForgeView;
 
-pub fn bind_root_actions(root: Div, _window: &mut Window, cx: &mut Context<ForgeView>) -> Div {
-    root.on_action(cx.listener(|this, _: &RunForgeAll, window, cx| {
-        let Some(key) = this.app_state.read(cx).active_forge_tab_key().cloned() else {
+pub fn bind_root_actions(
+    root: Div,
+    app_state: Entity<AppState>,
+    cx: &mut Context<ForgeView>,
+) -> Div {
+    let view = cx.entity();
+    let selection_app_state = app_state.clone();
+    let selection_view = view.clone();
+    // These callbacks can run immediately after the write check, so the action
+    // handler must not hold the ForgeView update lease that cx.listener takes.
+    root.on_action(move |_: &RunForgeAll, window, cx| {
+        let Some(key) = app_state.read(cx).active_forge_tab_key().cloned() else {
             return;
         };
-        let app_state = this.app_state.clone();
-        let view = cx.entity();
+        let view = view.clone();
         request_connection_write(
-            app_state,
+            app_state.clone(),
             crate::components::WriteRequest::new(
                 key.connection_id,
                 key.database,
@@ -33,15 +42,14 @@ pub fn bind_root_actions(root: Div, _window: &mut Window, cx: &mut Context<Forge
             },
         );
         cx.stop_propagation();
-    }))
-    .on_action(cx.listener(|this, _: &RunForgeSelectionOrStatement, window, cx| {
-        let Some(key) = this.app_state.read(cx).active_forge_tab_key().cloned() else {
+    })
+    .on_action(move |_: &RunForgeSelectionOrStatement, window, cx| {
+        let Some(key) = selection_app_state.read(cx).active_forge_tab_key().cloned() else {
             return;
         };
-        let app_state = this.app_state.clone();
-        let view = cx.entity();
+        let view = selection_view.clone();
         request_connection_write(
-            app_state,
+            selection_app_state.clone(),
             crate::components::WriteRequest::new(
                 key.connection_id,
                 key.database,
@@ -59,7 +67,7 @@ pub fn bind_root_actions(root: Div, _window: &mut Window, cx: &mut Context<Forge
             },
         );
         cx.stop_propagation();
-    }))
+    })
     .on_action(cx.listener(|this, _: &CancelForgeRun, _window, cx| {
         super::controller::ForgeController::cancel_run(this, cx);
         cx.stop_propagation();
