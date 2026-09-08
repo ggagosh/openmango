@@ -354,7 +354,7 @@ pub mod fonts {
         "JetBrainsMono Nerd Font Mono"
     }
     pub fn tabs() -> &'static str {
-        ".SystemUIFont"
+        ui()
     }
     pub fn ui_line_height() -> gpui_kit::DefiniteLength {
         relative(1.45)
