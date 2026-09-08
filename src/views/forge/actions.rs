@@ -1,4 +1,4 @@
-use gpui::{Context, Div, Entity, InteractiveElement};
+use gpui_kit::{Context, Div, Entity, InteractiveElement};
 
 use crate::components::request_connection_write;
 use crate::state::AppState;

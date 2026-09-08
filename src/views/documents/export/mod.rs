@@ -8,7 +8,7 @@ pub use file_export::FileExportFormat;
 pub use formats::render_to_clipboard;
 pub use snapshot::{ExportScope, ViewExportSnapshot};
 
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::{Icon, IconName};
 use serde::{Deserialize, Serialize};
 
 /// Clipboard copy format — persisted as global preference.
@@ -35,7 +35,7 @@ impl CopyFormat {
 
     pub fn icon(&self) -> Icon {
         match self {
-            Self::Json | Self::JsonLines => Icon::new(IconName::Braces),
+            Self::Json | Self::JsonLines => Icon::new(crate::assets::AppIcon::Braces),
             Self::Csv => Icon::new(IconName::File).path("icons/file-spreadsheet.svg"),
             Self::Markdown => Icon::new(IconName::File).path("icons/file-text.svg"),
             Self::Tsv => Icon::new(IconName::File).path("icons/table-2.svg"),

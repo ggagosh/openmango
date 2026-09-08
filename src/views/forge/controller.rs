@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{Context, Window};
+use gpui_kit::{Context, Window};
 
 use super::ForgeView;
 use super::runtime::ForgeRuntime;
@@ -37,11 +37,9 @@ impl ForgeController {
     pub fn clear_output(view: &mut ForgeView, window: &mut Window, cx: &mut Context<ForgeView>) {
         view.clear_output_runs();
         if let Some(raw_state) = &view.state.output.raw_output_state {
-            view.state.output.raw_output_programmatic = true;
             raw_state.update(cx, |state, cx| {
                 state.set_value(String::new(), window, cx);
             });
-            view.state.output.raw_output_programmatic = false;
         }
         cx.notify();
     }
@@ -78,7 +76,7 @@ impl ForgeController {
                 state.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
-                cx.dispatch_action(&gpui_component::input::Search);
+                cx.dispatch_action(&gpui_kit::component::input::Search);
             }
             ForgeOutputTab::Results => {
                 let state = view.ensure_results_search_state(window, cx);

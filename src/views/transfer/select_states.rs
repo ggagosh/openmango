@@ -1,8 +1,8 @@
 //! Select state initialization and management for transfer view.
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
-use gpui_component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::select::{SearchableVec, SelectEvent, SelectItem, SelectState};
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{ConnectionIdentity, connection_identity_badge};

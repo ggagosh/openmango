@@ -1,8 +1,10 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::*;
 
 use crate::components::{Button, request_preview_collection};
 use crate::helpers::{format_bytes, format_number};
@@ -96,7 +98,7 @@ impl Render for DatabaseView {
         let state = self.state.clone();
         let refresh_button = Button::new("refresh-db")
             .ghost()
-            .compact()
+            .xsmall()
             .label("Refresh")
             .disabled(database_key.is_none())
             .on_click({
@@ -110,7 +112,7 @@ impl Render for DatabaseView {
                 }
             });
         let transfer_button = Button::new("open-transfer-db")
-            .compact()
+            .xsmall()
             .label("Transfer")
             .disabled(database_key.is_none())
             .on_click({
@@ -233,7 +235,7 @@ impl DatabaseView {
                 .child(
                     Button::new("retry-db-stats")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .label("Retry")
                         .disabled(database_key.is_none())
                         .on_click({
@@ -327,7 +329,7 @@ impl DatabaseView {
                         .child(
                             Button::new("retry-db-collections")
                                 .ghost()
-                                .compact()
+                                .xsmall()
                                 .label("Retry")
                                 .on_click({
                                     let state = state.clone();

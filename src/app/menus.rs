@@ -1,8 +1,8 @@
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{
@@ -152,14 +152,14 @@ fn menu_item_with_shortcut(
     let shortcut = window.highest_precedence_binding_for_action(action).map(|binding| {
         binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
     });
-    let icon = match label {
-        "Open Forge" => IconName::SquareTerminal,
-        "Reload Database" => IconName::Redo,
-        "Export Data..." => IconName::Download,
-        "Import Data..." => IconName::Upload,
-        "Copy Data To..." | "Copy" => IconName::Copy,
-        "Paste" => IconName::Inbox,
-        _ => IconName::Menu,
+    let icon: Icon = match label {
+        "Open Forge" => IconName::SquareTerminal.into(),
+        "Reload Database" => IconName::Redo.into(),
+        "Export Data..." => crate::assets::AppIcon::Download.into(),
+        "Import Data..." => crate::assets::AppIcon::Upload.into(),
+        "Copy Data To..." | "Copy" => IconName::Copy.into(),
+        "Paste" => IconName::Inbox.into(),
+        _ => IconName::Menu.into(),
     };
     PopupMenuItem::element(move |_window, cx| {
         div()
@@ -475,7 +475,7 @@ pub(crate) fn build_collection_menu(
     menu = menu
         .item(
             PopupMenuItem::new("Open Collection")
-                .icon(Icon::new(IconName::Braces))
+                .icon(Icon::new(crate::assets::AppIcon::Braces))
                 .action(Box::new(OpenSelection))
                 .on_click({
                     let state = state.clone();

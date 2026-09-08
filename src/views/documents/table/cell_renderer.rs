@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::bson_value_preview;
@@ -44,7 +44,7 @@ pub fn render_cell(value: &Bson, row_ix: usize, col_ix: usize, cx: &App) -> AnyE
             .cursor_pointer()
             .tooltip(move |_window, cx| {
                 let preview = format_nested_preview(&value);
-                cx.new(|_cx| gpui_component::tooltip::Tooltip::new(preview)).into()
+                cx.new(|_cx| gpui_kit::component::tooltip::Tooltip::new(preview)).into()
             })
             .child(text)
             .into_any_element()

@@ -1,12 +1,13 @@
+use gpui_kit::component::button::ButtonVariants as _;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
@@ -194,7 +195,7 @@ fn close_dialog_and_restore_focus(
 ) {
     window.close_dialog(cx);
     if let Some(previous_focus) = previous_focus {
-        window.defer(cx, move |window, _cx| window.focus(&previous_focus));
+        window.defer(cx, move |window, cx| window.focus(&previous_focus, cx));
     }
 }
 
@@ -302,8 +303,8 @@ fn open_confirm_dialog_boxed(
         if should_focus_cancel {
             dialog_state.update(cx, |state, _cx| state.focused_once = true);
             let cancel_focus = key_cancel_focus.clone();
-            window.defer(cx, move |window, _cx| {
-                window.focus(&cancel_focus);
+            window.defer(cx, move |window, cx| {
+                window.focus(&cancel_focus, cx);
             });
         }
 

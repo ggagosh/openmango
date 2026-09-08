@@ -2,9 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::tree::TreeItem;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::tree::TreeItem;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
@@ -60,7 +60,6 @@ pub fn build_documents_tree(
 
         let is_expanded = expanded_nodes.contains(&root_id);
         let mut root = TreeItem::new(root_id.clone(), key_label)
-            .folder(!doc.is_empty())
             .expanded(expanded_nodes.contains(&root_id))
             .disabled(true);
         if is_expanded {
@@ -107,8 +106,7 @@ pub fn build_bson_tree_item(
     cx: &App,
 ) -> TreeItem {
     let node_id = path_to_id(doc_key, &path);
-    let is_folder = matches!(value, Bson::Document(_) | Bson::Array(_));
-    let has_children = match value {
+    let is_folder = match value {
         Bson::Document(doc) => !doc.is_empty(),
         Bson::Array(arr) => !arr.is_empty(),
         _ => false,
@@ -145,10 +143,7 @@ pub fn build_bson_tree_item(
         },
     );
 
-    let mut item = TreeItem::new(node_id.clone(), key_label)
-        .folder(has_children)
-        .expanded(is_expanded)
-        .disabled(true);
+    let mut item = TreeItem::new(node_id.clone(), key_label).expanded(is_expanded).disabled(true);
 
     if is_expanded {
         match value {

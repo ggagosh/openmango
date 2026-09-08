@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use gpui::{
+use gpui_kit::{
     Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, KeyContext,
     Keystroke, actions,
 };
@@ -560,7 +560,7 @@ pub fn effective_shortcuts_for_action(
     shortcuts
 }
 
-pub fn format_keystroke(event: &gpui::KeystrokeEvent) -> String {
+pub fn format_keystroke(event: &gpui_kit::KeystrokeEvent) -> String {
     let modifiers = event.keystroke.modifiers;
     let mut parts = Vec::new();
     if modifiers.platform {
@@ -820,7 +820,7 @@ fn context_samples() -> Vec<Vec<KeyContext>> {
 mod tests {
     use std::collections::HashSet;
 
-    use gpui::{KeyBindingContextPredicate, KeyContext};
+    use gpui_kit::{KeyBindingContextPredicate, KeyContext};
 
     use super::*;
 

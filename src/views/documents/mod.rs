@@ -26,7 +26,7 @@ pub mod views;
 
 pub use state::CollectionView;
 
-use gpui::{App, AppContext as _, Entity, Window};
+use gpui_kit::{App, AppContext as _, Entity, Window};
 use mongodb::bson::Bson;
 
 use crate::state::app_state::PipelineStage;
@@ -135,7 +135,7 @@ pub(crate) fn request_delete_confirmation(
     });
     let window_handle = window.window_handle();
 
-    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+    cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
         let result: Result<u64, crate::error::Error> = task.await;
         let _ = cx.update_window(window_handle, |_root, window, cx| match result {
             Ok(0) => {

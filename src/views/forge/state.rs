@@ -1,5 +1,5 @@
-use gpui::{FocusHandle, UniformListScrollHandle};
-use gpui_component::input::InputState;
+use gpui_kit::component::input::{EditorState, InputState, TextareaState};
+use gpui_kit::{FocusHandle, UniformListScrollHandle};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -7,8 +7,8 @@ use super::types::{ForgeOutputTab, ForgeRunOutput, ResultPage};
 use crate::helpers::auto_pair::AutoPairState;
 
 pub struct ForgeEditorState {
-    pub editor_state: Option<gpui::Entity<InputState>>,
-    pub editor_subscription: Option<gpui::Subscription>,
+    pub editor_state: Option<gpui_kit::Entity<EditorState>>,
+    pub editor_subscription: Option<gpui_kit::Subscription>,
     pub completion_provider: Option<std::rc::Rc<super::completion::ForgeCompletionProvider>>,
     pub completion_request_id: Arc<AtomicU64>,
     pub current_text: String,
@@ -24,12 +24,10 @@ pub struct ForgeRuntimeState {
 }
 
 pub struct ForgeOutputState {
-    pub raw_output_state: Option<gpui::Entity<InputState>>,
-    pub raw_output_subscription: Option<gpui::Subscription>,
+    pub raw_output_state: Option<gpui_kit::Entity<TextareaState>>,
     pub raw_output_text: String,
-    pub raw_output_programmatic: bool,
-    pub results_search_state: Option<gpui::Entity<InputState>>,
-    pub results_search_subscription: Option<gpui::Subscription>,
+    pub results_search_state: Option<gpui_kit::Entity<InputState>>,
+    pub results_search_subscription: Option<gpui_kit::Subscription>,
     pub results_search_query: String,
     pub output_runs: Vec<ForgeRunOutput>,
     pub output_tab: ForgeOutputTab,
@@ -67,9 +65,7 @@ impl ForgeState {
             },
             output: ForgeOutputState {
                 raw_output_state: None,
-                raw_output_subscription: None,
                 raw_output_text: String::new(),
-                raw_output_programmatic: false,
                 results_search_state: None,
                 results_search_subscription: None,
                 results_search_query: String::new(),

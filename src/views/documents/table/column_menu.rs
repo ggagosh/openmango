@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use gpui::Entity;
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::{Icon, IconName};
+use gpui_kit::Entity;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Icon, IconName};
 
 use crate::state::{AppCommands, AppState, SessionKey};
 
@@ -22,7 +22,7 @@ pub fn build_table_column_menu(
     kind: ColumnMenuKind,
     state: &Entity<AppState>,
     session_key: &SessionKey,
-    _cx: &gpui::App,
+    _cx: &gpui_kit::App,
 ) -> PopupMenu {
     let col_key = selected_col.and_then(|c| columns.get(c).map(|col| col.key.clone()));
 
@@ -32,7 +32,8 @@ pub fn build_table_column_menu(
 
     let is_pinned = pinned_columns.contains(&col_key);
     let pin_label = if is_pinned { "Unpin Column" } else { "Pin Column" };
-    let pin_icon = if is_pinned { IconName::PinOff } else { IconName::Pin };
+    let pin_icon =
+        if is_pinned { crate::assets::AppIcon::PinOff } else { crate::assets::AppIcon::Pin };
 
     menu = menu.separator();
 

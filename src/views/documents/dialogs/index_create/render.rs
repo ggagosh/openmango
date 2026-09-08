@@ -1,11 +1,12 @@
 //! Render implementation for the index create dialog.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, NumberInput};
-use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::switch::Switch;
-use gpui_component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Editor, Input, NumberInput};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 
 use crate::components::{Button, cancel_button};
 use crate::state::AppCommands;
@@ -43,7 +44,7 @@ impl Render for IndexCreateDialog {
                         .w(px(280.0))
                         .disabled(row.kind == IndexKeyKind::Wildcard),
                 )
-                .child(kind_button.dropdown_menu_with_anchor(Corner::BottomLeft, {
+                .child(kind_button.dropdown_menu_with_anchor(Anchor::BottomLeft, {
                     let view = view.clone();
                     move |menu, _window, _cx| {
                         menu.item(PopupMenuItem::new("1").on_click({
@@ -108,7 +109,7 @@ impl Render for IndexCreateDialog {
                 .child(
                     Button::new(("remove-index-row", row_id))
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::Close).xsmall())
                         .disabled(!show_remove)
                         .on_click({
@@ -151,7 +152,7 @@ impl Render for IndexCreateDialog {
                     .child(
                         Button::new("add-index-row")
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .label("Add field")
                             .disabled(!can_add_row)
                             .on_click({
@@ -296,13 +297,13 @@ impl Render for IndexCreateDialog {
                     .flex()
                     .gap(spacing::sm())
                     .child(
-                        Input::new(&self.partial_state)
+                        Editor::new(&self.partial_state)
                             .font_family(crate::theme::fonts::mono())
                             .h(px(120.0))
                             .w_full(),
                     )
                     .child(
-                        Input::new(&self.collation_state)
+                        Editor::new(&self.collation_state)
                             .font_family(crate::theme::fonts::mono())
                             .h(px(120.0))
                             .w_full(),
@@ -310,14 +311,14 @@ impl Render for IndexCreateDialog {
             );
 
         let json_view = div().flex().flex_col().gap(spacing::sm()).child(
-            Input::new(&self.json_state)
+            Editor::new(&self.json_state)
                 .font_family(crate::theme::fonts::mono())
                 .h(px(360.0))
                 .w_full(),
         );
 
         let form_button = {
-            let base = Button::new("index-mode-form").compact().label("Form").on_click({
+            let base = Button::new("index-mode-form").xsmall().label("Form").on_click({
                 let view = view.clone();
                 move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                     view.update(cx, |this, cx| {
@@ -330,7 +331,7 @@ impl Render for IndexCreateDialog {
         };
 
         let json_button = {
-            let base = Button::new("index-mode-json").compact().label("JSON").on_click({
+            let base = Button::new("index-mode-json").xsmall().label("JSON").on_click({
                 let view = view.clone();
                 move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                     view.update(cx, |this, cx| {

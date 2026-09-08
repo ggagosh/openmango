@@ -1,11 +1,12 @@
 //! Property-level edit dialogs for document fields.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
-use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::{Disableable as _, WindowExt as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable as _, WindowExt as _};
+use gpui_kit::*;
 use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
@@ -34,7 +35,7 @@ pub struct PropertyActionDialog {
     parent_state: Entity<InputState>,
     field_display_state: Entity<InputState>,
     field_state: Entity<InputState>,
-    value_state: Entity<InputState>,
+    value_state: Entity<EditorState>,
     error_message: Option<String>,
     updating: bool,
     _subscriptions: Vec<Subscription>,
@@ -240,9 +241,9 @@ impl PropertyActionDialog {
         });
         let field_state = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
         let value_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .placeholder(ValueType::String.placeholder())
-                .code_editor("javascript")
+                .language("javascript")
                 .soft_wrap(true)
         });
 
@@ -604,7 +605,7 @@ impl PropertyActionDialog {
     fn scope_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
         styled_dropdown_button("property-scope", self.effective_scope().label(), cx)
             .disabled(!self.allow_bulk)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, {
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                 let view = view.clone();
                 move |menu, _window, _cx| {
                     menu.item(PopupMenuItem::new(UpdateScope::CurrentDocument.label()).on_click({
@@ -639,7 +640,7 @@ impl PropertyActionDialog {
 
     fn type_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
         styled_dropdown_button("property-type", self.value_type.label(), cx)
-            .dropdown_menu_with_anchor(Corner::BottomLeft, {
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                 let view = view.clone();
                 move |menu, _window, _cx| {
                     let mut menu = menu;
@@ -797,7 +798,7 @@ impl Render for PropertyActionDialog {
                 .gap(spacing::xs())
                 .child(div().text_xs().text_color(cx.theme().secondary_foreground).child("Value"))
                 .child(
-                    Input::new(&self.value_state)
+                    Editor::new(&self.value_state)
                         .font_family(crate::theme::fonts::mono())
                         .h(px(160.0))
                         .w_full(),

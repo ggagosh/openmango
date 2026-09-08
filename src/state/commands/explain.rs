@@ -4,7 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::parse_bson_from_relaxed_json;
@@ -93,10 +93,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<PreparedExplain, crate::error::Error> = task.await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(prepared) => {
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
@@ -242,10 +242,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<PreparedExplain, crate::error::Error> = task.await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(prepared) => {
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {

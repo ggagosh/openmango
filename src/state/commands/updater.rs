@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 
 use crate::components::request_unsaved_action;
 use crate::state::app_state::updater::UpdateStatus;
@@ -160,9 +160,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<Option<(String, String, String)>, anyhow::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(Some((version, download_url, checksum_url))) => {
                         state.update(cx, |state, cx| {
                             state.update_status = UpdateStatus::Available {
@@ -310,10 +310,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let version = version.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 while let Some(pct) = progress_rx.next().await {
                     let version = version.clone();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             state.update_status =
                                 UpdateStatus::Downloading { version, progress_pct: pct };
@@ -329,9 +329,9 @@ impl AppCommands {
             let state = state.clone();
             let version_for_err = version.clone();
 
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(PathBuf, String), anyhow::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok((zip_path, version)) => {
                         state.update(cx, |state, cx| {
                             state.update_status =
@@ -408,11 +408,11 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let app_bundle = app_bundle.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), anyhow::Error> = task.await;
                 match result {
                     Ok(()) => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             let Some(handle) = cx.windows().into_iter().next() else {
                                 return;
                             };
@@ -446,7 +446,7 @@ impl AppCommands {
                     }
                     Err(e) => {
                         log::error!("Install failed: {e}");
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             state.update(cx, |state, cx| {
                                 state.set_status_message(Some(crate::state::StatusMessage::error(
                                     format!("Install failed: {e}"),

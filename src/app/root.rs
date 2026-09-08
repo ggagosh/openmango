@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use gpui::prelude::{FluentBuilder as _, InteractiveElement as _};
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::tooltip::Tooltip;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::TitleBar;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement as _};
+use gpui_kit::*;
 use uuid::Uuid;
 
 use super::sidebar::Sidebar;
 use crate::components::action_bar::ActionBar;
 use crate::components::{
-    ConnectionManager, ContentArea, QueryLibraryDialog, StatusBar, WriteConfirmation,
+    ConnectionManager, ContentArea, OpenTabsBar, QueryLibraryDialog, StatusBar, WriteConfirmation,
     open_confirm_dialog, request_app_quit, request_connection_write, request_disconnect_connection,
     request_remove_connection,
 };
@@ -44,6 +45,7 @@ pub struct AppRoot {
     pub(super) focus_handle: FocusHandle,
     pub(super) sidebar: Entity<Sidebar>,
     pub(super) content_area: Entity<ContentArea>,
+    workspace_tabs: Entity<OpenTabsBar>,
     ai_view: Entity<AiView>,
     pub(super) action_bar: Entity<ActionBar>,
     pub(super) key_debug: bool,
@@ -196,7 +198,7 @@ impl AppRoot {
                         writes.push(KeyStore::write(cx, legacy_provider, api_key));
                     }
                     writes
-                })?;
+                });
                 let mut write_failure = None;
                 for write in writes {
                     if let Err(error) = write.await
@@ -211,7 +213,7 @@ impl AppRoot {
                             .iter()
                             .map(|(id, key, _)| KeyStore::delete_conn(cx, *id, key))
                             .collect::<Vec<_>>()
-                    })?;
+                    });
                     for cleanup in cleanups {
                         let _ = cleanup.await;
                     }
@@ -225,7 +227,7 @@ impl AppRoot {
             }
             .await;
 
-            let _ = cx.update(|cx| match result {
+            cx.update(|cx| match result {
                 Ok((hydrated, migrated_ids, candidate_bundles, api_key, had_legacy_dev)) => {
                     let completed = state.update(cx, |state, cx| {
                         state.complete_connection_secret_startup(hydrated, cx)
@@ -246,7 +248,7 @@ impl AppRoot {
                                 }
                             }
                             if let Some(error) = first_error {
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     state_for_cleanup.update(cx, |state, cx| {
                                         state.report_connection_secret_error(error, cx);
                                     });
@@ -291,7 +293,7 @@ impl AppRoot {
                             cleanup_error = Some(error);
                         }
                         if let Some(error) = cleanup_error {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 state_for_cleanup.update(cx, |state, cx| {
                                     state.report_connection_secret_error(error, cx);
                                 });
@@ -326,10 +328,7 @@ impl AppRoot {
                 },
                 Ok(None) => {
                     let key: [u8; 32] = rand::random();
-                    let Ok(write) = cx.update(|cx| KeyStore::write_history_key(cx, &key)) else {
-                        log::error!("History key could not be stored");
-                        return;
-                    };
+                    let write = cx.update(|cx| KeyStore::write_history_key(cx, &key));
                     if write.await.is_err() {
                         log::error!("History key could not be stored");
                         return;
@@ -351,10 +350,8 @@ impl AppRoot {
                 return;
             };
             let _ = service.reconcile();
-            let active =
-                cx.update(|cx| state.read(cx).active_connections_snapshot()).unwrap_or_default();
-            let configurations =
-                cx.update(|cx| state.read(cx).connections.clone()).unwrap_or_default();
+            let active = cx.update(|cx| state.read(cx).active_connections_snapshot());
+            let configurations = cx.update(|cx| state.read(cx).connections.clone());
             let enabled_connections = active
                 .into_keys()
                 .filter(|connection_id| {
@@ -363,7 +360,7 @@ impl AppRoot {
                     })
                 })
                 .collect::<Vec<_>>();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     state.set_history_service(service);
                     cx.notify();
@@ -397,6 +394,7 @@ impl AppRoot {
 
         // Create content area with state reference
         let content_area = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        let workspace_tabs = cx.new(|cx| OpenTabsBar::new(state.clone(), cx));
         let ai_view = cx.new(|cx| AiView::new(state.clone(), cx));
 
         // Create action bar with execution callback
@@ -425,26 +423,25 @@ impl AppRoot {
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(4 * 60 * 60);
-            async move |_this: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                gpui::Timer::after(std::time::Duration::from_secs(startup_delay)).await;
-                let should_check =
-                    cx.update(|cx| state.read(cx).settings.auto_update).unwrap_or(false);
+            async move |_this: WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
+                cx.background_executor().timer(std::time::Duration::from_secs(startup_delay)).await;
+                let should_check = cx.update(|cx| state.read(cx).settings.auto_update);
                 if should_check {
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         AppCommands::check_for_updates(state.clone(), cx);
                     });
                 }
                 // Periodic re-check
                 loop {
-                    gpui::Timer::after(std::time::Duration::from_secs(recheck_secs)).await;
-                    let should_check = cx
-                        .update(|cx| {
-                            let s = state.read(cx);
-                            s.settings.auto_update && matches!(s.update_status, UpdateStatus::Idle)
-                        })
-                        .unwrap_or(false);
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(recheck_secs))
+                        .await;
+                    let should_check = cx.update(|cx| {
+                        let s = state.read(cx);
+                        s.settings.auto_update && matches!(s.update_status, UpdateStatus::Idle)
+                    });
                     if should_check {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             AppCommands::check_for_updates(state.clone(), cx);
                         });
                     }
@@ -512,18 +509,21 @@ impl AppRoot {
             });
             if is_close && event.action.is_none() {
                 this.handle_close_tab(window, cx);
-                window.focus(&this.focus_handle);
+                window.focus(&this.focus_handle, cx);
             }
         });
         subscriptions.push(keystroke_sub);
 
         let focus_handle = cx.focus_handle();
+        // Activate the Workspace key context before the first mouse interaction.
+        window.focus(&focus_handle, cx);
 
         Self {
             state,
             focus_handle,
             sidebar,
             content_area,
+            workspace_tabs,
             ai_view,
             action_bar,
             key_debug,
@@ -580,7 +580,7 @@ impl AppRoot {
             let state = state.clone();
             async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
                 while let Some(grant_id) = grant_usage_receiver.recv().await {
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             let now = chrono::Utc::now();
                             let Some(grant) = state
@@ -615,13 +615,7 @@ impl AppRoot {
                         let bytes: [u8; 32] = rand::random();
                         let token =
                             bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
-                        let Ok(write) = cx.update(|cx| KeyStore::write_mcp_token(cx, &token))
-                        else {
-                            log::error!(
-                                "MCP server disabled: legacy access token could not be stored"
-                            );
-                            return;
-                        };
+                        let write = cx.update(|cx| KeyStore::write_mcp_token(cx, &token));
                         if write.await.is_err() {
                             log::error!(
                                 "MCP server disabled: legacy access token could not be stored"
@@ -661,7 +655,7 @@ impl AppRoot {
             match start.await {
                 Ok(Ok(handle)) => {
                     let actual_port = handle.addr().port();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             if state.settings.mcp.port != actual_port {
                                 state.settings.mcp.port = actual_port;
@@ -730,7 +724,6 @@ impl Render for AppRoot {
             .ai_drag_current_width
             .unwrap_or(persisted_ai_panel_width)
             .clamp(AI_ISLAND_MIN_WIDTH, AI_ISLAND_MAX_WIDTH);
-        let vibrancy = state.startup_vibrancy;
         let update_status = state.update_status.clone();
 
         let documents_subview = if matches!(state.current_view, View::Documents) {
@@ -764,7 +757,7 @@ impl Render for AppRoot {
         }
 
         // Render dialog layer (Context derefs to App)
-        use gpui_component::Root;
+        use gpui_kit::component::Root;
         let dialog_layer = Root::render_dialog_layer(window, cx);
 
         let mut root = div()
@@ -774,17 +767,13 @@ impl Render for AppRoot {
             .flex_col()
             .size_full()
             .relative()
-            .when(vibrancy, |s| s.pt(px(28.0)))
             .bg(islands::canvas_bg(&appearance, cx))
-            .border_1()
-            .border_color(islands::panel_border(&appearance, cx))
-            .rounded(islands::radius_md(&appearance))
             .text_color(cx.theme().foreground)
             .font_family(crate::theme::fonts::ui())
             .line_height(crate::theme::fonts::ui_line_height())
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.handle_close_tab(window, cx);
-                window.focus(&this.focus_handle);
+                window.focus(&this.focus_handle, cx);
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.state.update(cx, |state, cx| state.select_next_tab(cx));
@@ -973,7 +962,7 @@ impl Render for AppRoot {
                         sidebar.toggle_collapsed();
                         cx.notify();
                     }
-                    window.focus(&sidebar.focus_handle);
+                    window.focus(&sidebar.focus_handle, cx);
                 });
             }))
             .on_action(cx.listener(|this, _: &FocusContent, window, cx| {
@@ -985,6 +974,36 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &InstallUpdate, _window, cx| {
                 AppCommands::install_update(this.state.clone(), cx);
             }))
+            .child(
+                TitleBar::new()
+                    .w_full()
+                    .bg(islands::canvas_bg(&appearance, cx))
+                    .border_0()
+                    .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| bar.pl_0())
+                    .on_close_window(cx.listener(|this, _, window, cx| {
+                        this.request_quit(window, cx);
+                    }))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .overflow_hidden()
+                            // Tab contents must not determine the titlebar's
+                            // intrinsic width: the scroll viewport is the space
+                            // left by the platform controls, even with many tabs.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full()
+                                    .child(self.workspace_tabs.clone()),
+                            ),
+                    )
+                    .child(div().w(px(12.0)).h_full().flex_shrink_0()),
+            )
             .child({
                 let is_dragging = self.sidebar_dragging;
                 let is_ai_dragging = self.ai_dragging;
@@ -1097,7 +1116,7 @@ impl Render for AppRoot {
                     .flex_1()
                     .min_h(px(0.0))
                     .px(spacing::xs())
-                    .py(spacing::xs())
+                    .pb(spacing::xs())
                     .child(sidebar_panel)
                     .child(resize_handle)
                     .child(content_panel)

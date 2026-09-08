@@ -1,11 +1,12 @@
+use gpui_kit::component::button::ButtonVariants as _;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::bson::parse_document_from_json;
@@ -85,7 +86,7 @@ pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut A
                 }
                 let state = state.clone();
                 cx.spawn(async move |cx: &mut AsyncApp| loop {
-                    Timer::after(std::time::Duration::from_millis(200)).await;
+                    cx.background_executor().timer(std::time::Duration::from_millis(200)).await;
                     let finished = cx
                         .update(|cx| {
                             state
@@ -104,10 +105,9 @@ pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut A
                                             | crate::actions::model::OperationStatus::CancelRequested
                                     )
                                 })
-                        })
-                        .unwrap_or(true);
+                        });
                     if finished {
-                        let _ = cx.update(|cx| finish_app_quit(state.clone(), cx));
+                        cx.update(|cx| finish_app_quit(state.clone(), cx));
                         break;
                     }
                 })
@@ -298,7 +298,7 @@ fn open_unsaved_dialog(
         if !dialog_state.read(cx).focused_once {
             dialog_state.update(cx, |state, _| state.focused_once = true);
             let focus = cancel_focus.clone();
-            window.defer(cx, move |window, _| window.focus(&focus));
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }
 
         let cancel_state = state.clone();

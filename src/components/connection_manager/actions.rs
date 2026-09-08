@@ -1,11 +1,13 @@
-use gpui::{
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Input, InputState, Position};
+use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, IntoElement as _, ParentElement as _,
     Styled as _, Window, div, px,
 };
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState, Position};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -131,7 +133,7 @@ impl ConnectionManager {
             this.active_tab = super::ManagerTab::General;
             if creating_new {
                 let focus = this.draft.name_state.read(cx).focus_handle(cx);
-                window.focus(&focus);
+                window.focus(&focus, cx);
             }
             cx.notify();
         });
@@ -663,7 +665,7 @@ impl ConnectionManager {
 
         cx.spawn({
             let view = view.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let mut task = std::pin::pin!(task);
                 let mut progress_closed = false;
                 loop {
@@ -673,7 +675,7 @@ impl ConnectionManager {
                                 progress_closed = true;
                                 continue;
                             };
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 view.update(cx, |this, cx| {
                                     if matches!(this.status, TestStatus::Testing) {
                                         this.testing_step = Some(step.clone());
@@ -684,7 +686,7 @@ impl ConnectionManager {
                         }
                         result = &mut task => {
                             let result: Result<(), crate::error::Error> = result;
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 view.update(cx, |this, cx| {
                                     let current_uri = this.draft.uri_state.read(cx).value().to_string();
                                     let pending = this.pending_test_uri.clone();
@@ -887,7 +889,7 @@ impl ConnectionManager {
                                 .gap(spacing::sm())
                                 .child(
                                     Button::new("paste-uri")
-                                        .compact()
+                                        .xsmall()
                                         .label("Paste from Clipboard")
                                         .on_click({
                                             let input_state = input_state.clone();
@@ -919,7 +921,7 @@ impl ConnectionManager {
                                 )
                                 .child(
                                     Button::new("clear-uri")
-                                        .compact()
+                                        .xsmall()
                                         .ghost()
                                         .label("Clear")
                                         .on_click({
@@ -941,42 +943,40 @@ impl ConnectionManager {
                 .footer({
                     let view = view.clone();
                     let input_state = input_state.clone();
-                    move |_ok, _cancel, _window, _cx| {
-                        let view = view.clone();
-                        let input_state = input_state.clone();
-                        vec![
-                            cancel_button("cancel-import-uri"),
-                            Button::new("confirm-import-uri")
-                                .primary()
-                                .label("Import")
-                                .on_click({
-                                    let view = view.clone();
-                                    let input_state = input_state.clone();
-                                    move |_, window, cx| {
-                                        let raw = input_state.read(cx).value().to_string();
-                                        let value =
-                                            raw.lines().next().unwrap_or("").trim().to_string();
-                                        if value.is_empty() {
-                                            window.close_dialog(cx);
-                                            return;
-                                        }
-                                        view.update(cx, |this, cx| {
-                                            this.draft.uri_state.update(cx, |state, cx| {
-                                                state.set_value(value.clone(), window, cx);
-                                                state.set_cursor_position(
-                                                    Position::new(0, 0),
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                            this.import_from_uri(window, cx);
-                                        });
+
+                    let view = view.clone();
+                    let input_state = input_state.clone();
+                    gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                        cancel_button("cancel-import-uri"),
+                        Button::new("confirm-import-uri")
+                            .primary()
+                            .label("Import")
+                            .on_click({
+                                let view = view.clone();
+                                let input_state = input_state.clone();
+                                move |_, window, cx| {
+                                    let raw = input_state.read(cx).value().to_string();
+                                    let value = raw.lines().next().unwrap_or("").trim().to_string();
+                                    if value.is_empty() {
                                         window.close_dialog(cx);
+                                        return;
                                     }
-                                })
-                                .into_any_element(),
-                        ]
-                    }
+                                    view.update(cx, |this, cx| {
+                                        this.draft.uri_state.update(cx, |state, cx| {
+                                            state.set_value(value.clone(), window, cx);
+                                            state.set_cursor_position(
+                                                Position::new(0, 0),
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                        this.import_from_uri(window, cx);
+                                    });
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    ])
                 })
         });
     }

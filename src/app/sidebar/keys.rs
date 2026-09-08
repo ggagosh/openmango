@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use crate::models::TreeNodeId;
 use crate::state::AppCommands;

@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::input::InputState;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::parse_document_from_json;
@@ -12,7 +12,7 @@ impl CollectionView {
     pub(super) fn apply_filter(
         state: Entity<AppState>,
         session_key: SessionKey,
-        filter_state: Entity<InputState>,
+        filter_state: Entity<EditorState>,
         _window: &mut Window,
         cx: &mut App,
     ) {
@@ -51,8 +51,8 @@ impl CollectionView {
     pub(super) fn apply_query_options(
         state: Entity<AppState>,
         session_key: SessionKey,
-        sort_state: Entity<InputState>,
-        projection_state: Entity<InputState>,
+        sort_state: Entity<EditorState>,
+        projection_state: Entity<EditorState>,
         _window: &mut Window,
         cx: &mut App,
     ) {

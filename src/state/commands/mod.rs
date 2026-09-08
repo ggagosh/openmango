@@ -1,6 +1,6 @@
 //! Command helpers for async operations + event emission.
 
-use gpui::{App, Entity};
+use gpui_kit::{App, Entity};
 use mongodb::Client;
 use uuid::Uuid;
 

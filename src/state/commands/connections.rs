@@ -1,5 +1,5 @@
 use chrono::Utc;
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::models::ActiveConnection;
@@ -58,13 +58,13 @@ impl AppCommands {
         // Handle result on main thread
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<
                     (mongodb::Client, Vec<String>, crate::models::ConnectionRuntimeMeta),
                     crate::error::Error,
                 > = task.await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok((client, databases, runtime_meta)) => {
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
@@ -153,9 +153,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<Vec<String>, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(databases) => {
                         state.update(cx, |state, cx| {
                             let removed = {

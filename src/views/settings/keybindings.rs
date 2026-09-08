@@ -1,8 +1,11 @@
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, open_confirm_dialog, request_app_quit};
 use crate::keyboard::{
@@ -14,6 +17,7 @@ use crate::theme::{borders, spacing};
 
 pub struct KeybindingsView {
     state: Entity<AppState>,
+    focus_handle: FocusHandle,
     search_state: Option<Entity<InputState>>,
     search_focused: bool,
     error: Option<String>,
@@ -25,6 +29,7 @@ impl KeybindingsView {
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         Self {
             state,
+            focus_handle: cx.focus_handle(),
             search_state: None,
             search_focused: false,
             error: None,
@@ -36,6 +41,9 @@ impl KeybindingsView {
         if self.search_state.is_some() {
             return;
         }
+        self._subscriptions.push(
+            cx.on_focus_out(&self.focus_handle, window, |view, _, _, cx| view.cancel_capture(cx)),
+        );
         let search = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Search commands, shortcuts, or contexts")
@@ -225,7 +233,7 @@ impl KeybindingsView {
                     )))
                     .child(
                         Button::new(("keybinding-record", index))
-                            .compact()
+                            .xsmall()
                             .ghost()
                             .label(if is_recording { "Recording…" } else { "Edit" })
                             .disabled(is_recording)
@@ -283,7 +291,7 @@ impl KeybindingsView {
                             .gap(spacing::xs())
                             .child(
                                 Button::new("keybinding-capture-save")
-                                    .compact()
+                                    .xsmall()
                                     .primary()
                                     .label("Save")
                                     .disabled(candidate.is_none() || has_error)
@@ -307,7 +315,7 @@ impl KeybindingsView {
                             )
                             .child(
                                 Button::new("keybinding-capture-disable")
-                                    .compact()
+                                    .xsmall()
                                     .ghost()
                                     .label("Disable")
                                     .disabled(command.disabled)
@@ -324,7 +332,7 @@ impl KeybindingsView {
                             .when(command.modified, |actions| {
                                 actions.child(
                                     Button::new("keybinding-capture-reset")
-                                        .compact()
+                                        .xsmall()
                                         .ghost()
                                         .label("Reset")
                                         .on_click({
@@ -340,7 +348,7 @@ impl KeybindingsView {
                             })
                             .child(
                                 Button::new("keybinding-capture-cancel")
-                                    .compact()
+                                    .xsmall()
                                     .label("Cancel")
                                     .on_click({
                                         let view = view.clone();
@@ -420,6 +428,7 @@ impl Render for KeybindingsView {
         }
 
         div()
+            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .flex_1()
@@ -448,7 +457,7 @@ impl Render for KeybindingsView {
                         )
                         .child(
                             Button::new("restart-for-keybindings")
-                                .compact()
+                                .xsmall()
                                 .primary()
                                 .label("Restart now")
                                 .on_click(move |_, window, cx| {
@@ -484,7 +493,7 @@ impl Render for KeybindingsView {
                     )
                     .child(
                         Button::new("reset-all-keybindings")
-                            .compact()
+                            .xsmall()
                             .ghost()
                             .label("Reset All…")
                             .disabled(override_count == 0)

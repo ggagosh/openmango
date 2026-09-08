@@ -1,4 +1,4 @@
-use gpui::{Action, SharedString, Window};
+use gpui_kit::{Action, SharedString, Window};
 
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DiscardDocumentChanges, FocusContent,

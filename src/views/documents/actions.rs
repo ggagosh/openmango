@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{
@@ -304,9 +304,9 @@ impl CollectionView {
                     let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
                     format!("[{}]", parts.join(",\n"))
                 });
-                cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
+                cx.spawn(async move |_this, cx: &mut gpui_kit::AsyncApp| {
                     let json = task.await;
-                    let _ = cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
+                    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
                 })
                 .detach();
             }
@@ -521,9 +521,9 @@ impl CollectionView {
                     let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
                     format!("[{}]", parts.join(",\n"))
                 });
-                cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
+                cx.spawn(async move |_this, cx: &mut gpui_kit::AsyncApp| {
                     let json = task.await;
-                    let _ = cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
+                    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(json)));
                 })
                 .detach();
             }

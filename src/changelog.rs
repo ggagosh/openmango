@@ -1,10 +1,10 @@
 //! "What's New" changelog view (shown as a tab).
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::tag::Tag;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::*;
 
 use crate::state::AppState;
 use crate::theme::spacing;

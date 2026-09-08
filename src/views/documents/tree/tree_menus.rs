@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
@@ -49,7 +49,7 @@ pub(in crate::views::documents) fn build_document_menu(
     menu = menu
         .item(
             PopupMenuItem::new("Edit JSON")
-                .icon(Icon::new(IconName::Braces))
+                .icon(Icon::new(crate::assets::AppIcon::Braces))
                 .disabled(multi)
                 .action(Box::new(EditDocumentJson))
                 .on_click({
@@ -394,32 +394,35 @@ pub(super) fn build_property_menu(
             }
         }),
     );
-    menu =
-        menu.item(PopupMenuItem::new("Copy as JSON").icon(Icon::new(IconName::Braces)).on_click({
-            let state = state.clone();
-            let session_key = session_key.clone();
-            let doc_key = doc_key.clone();
-            let path = path.clone();
-            let key_label = key_label.clone();
-            move |_, _window, cx| {
-                if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
-                    && let Some(value) = get_bson_at_path(&doc, &path)
-                {
-                    let json_value = format_bson_for_clipboard(value);
-                    let needs_quotes = matches!(value, Bson::String(_));
-                    let text = if needs_quotes {
-                        format!(
-                            "\"{}\": {}",
-                            key_label,
-                            serde_json::to_string(&json_value).unwrap_or(json_value)
-                        )
-                    } else {
-                        format!("\"{}\": {}", key_label, json_value)
-                    };
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    menu = menu.item(
+        PopupMenuItem::new("Copy as JSON")
+            .icon(Icon::new(crate::assets::AppIcon::Braces))
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                let doc_key = doc_key.clone();
+                let path = path.clone();
+                let key_label = key_label.clone();
+                move |_, _window, cx| {
+                    if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
+                        && let Some(value) = get_bson_at_path(&doc, &path)
+                    {
+                        let json_value = format_bson_for_clipboard(value);
+                        let needs_quotes = matches!(value, Bson::String(_));
+                        let text = if needs_quotes {
+                            format!(
+                                "\"{}\": {}",
+                                key_label,
+                                serde_json::to_string(&json_value).unwrap_or(json_value)
+                            )
+                        } else {
+                            format!("\"{}\": {}", key_label, json_value)
+                        };
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
                 }
-            }
-        }));
+            }),
+    );
 
     // ── Filter group ──────────────────────────────────────────────
     let has_value = meta.value.is_some();
@@ -427,7 +430,7 @@ pub(super) fn build_property_menu(
     menu = menu.separator();
     menu = menu.item(
         PopupMenuItem::new("Filter by This Value")
-            .icon(Icon::new(IconName::Filter))
+            .icon(Icon::new(crate::assets::AppIcon::Filter))
             .disabled(!is_filterable)
             .on_click({
                 let state = state.clone();
@@ -441,7 +444,7 @@ pub(super) fn build_property_menu(
     );
     menu = menu.item(
         PopupMenuItem::new("Exclude This Value")
-            .icon(Icon::new(IconName::FilterX))
+            .icon(Icon::new(crate::assets::AppIcon::FilterX))
             .disabled(!is_filterable)
             .on_click({
                 let state = state.clone();

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Bson, Document};
 
 use crate::state::events::AppEvent;
@@ -52,9 +52,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<SchemaAnalysis, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(analysis) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertReplaceEdit, InsertTextFormat, Range,
@@ -152,12 +152,7 @@ impl QueryCompletionProvider {
         self.state.read(cx).current_session_key()
     }
 
-    fn context(
-        &self,
-        rope: &Rope,
-        offset: usize,
-        cx: &mut Context<InputState>,
-    ) -> QueryEditorContext {
+    fn context(&self, rope: &Rope, offset: usize, cx: &mut App) -> QueryEditorContext {
         let text = rope.to_string();
         let fast_filter = self.kind == QueryInputKind::Filter && is_fast_filter_text(&text);
         let (token_start, token) =
@@ -191,11 +186,7 @@ impl QueryCompletionProvider {
         }
     }
 
-    fn field_candidates(
-        &self,
-        session_key: &SessionKey,
-        cx: &mut Context<InputState>,
-    ) -> Vec<FieldCandidate> {
+    fn field_candidates(&self, session_key: &SessionKey, cx: &mut App) -> Vec<FieldCandidate> {
         let mut fields: HashMap<String, FieldCandidate> = HashMap::new();
         let should_fetch = {
             let state_ref = self.state.read(cx);
@@ -229,11 +220,7 @@ impl QueryCompletionProvider {
         ordered
     }
 
-    fn filter_items(
-        &self,
-        ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
-    ) -> Vec<CompletionItem> {
+    fn filter_items(&self, ctx: &QueryEditorContext, cx: &mut App) -> Vec<CompletionItem> {
         if ctx.in_string_or_comment {
             return Vec::new();
         }
@@ -327,11 +314,7 @@ impl QueryCompletionProvider {
         rank_and_dedupe(items)
     }
 
-    fn fast_filter_items(
-        &self,
-        ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
-    ) -> Vec<CompletionItem> {
+    fn fast_filter_items(&self, ctx: &QueryEditorContext, cx: &mut App) -> Vec<CompletionItem> {
         let Some(session_key) = ctx.session_key.as_ref() else {
             return Vec::new();
         };
@@ -374,7 +357,7 @@ impl QueryCompletionProvider {
     fn sort_or_projection_items(
         &self,
         ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Vec<CompletionItem> {
         let Some(session_key) = ctx.session_key.as_ref() else {
             return Vec::new();
@@ -445,7 +428,7 @@ impl CompletionProvider for QueryCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let ctx = self.context(rope, offset, cx);
         let items = match self.kind {
@@ -457,12 +440,7 @@ impl CompletionProvider for QueryCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         if new_text.is_empty() || new_text.chars().all(char::is_whitespace) {
             return false;
         }
@@ -480,17 +458,12 @@ impl CompletionProvider for FilterCompletionProvider {
         offset: usize,
         trigger: CompletionContext,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         self.inner.completions(rope, offset, trigger, window, cx)
     }
 
-    fn is_completion_trigger(
-        &self,
-        offset: usize,
-        new_text: &str,
-        cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, offset: usize, new_text: &str, cx: &mut App) -> bool {
         self.inner.is_completion_trigger(offset, new_text, cx)
     }
 }

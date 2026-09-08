@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
 use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
@@ -125,7 +125,7 @@ impl AppCommands {
             let session_key = session_key.clone();
             let doc_key = doc_key.clone();
             let updated = updated.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = match task.await {
                     Ok(result) => result,
                     Err(error) => Err(crate::error::Error::Parse(format!(
@@ -134,7 +134,7 @@ impl AppCommands {
                 };
                 let saved = result.is_ok();
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
@@ -187,8 +187,8 @@ impl AppCommands {
                     }
                 });
                 if saved {
-                    gpui::Timer::after(std::time::Duration::from_millis(750)).await;
-                    let _ = cx.update(|cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(750)).await;
+                    cx.update(|cx| {
                         AppCommands::collection_history_changed(
                             state.clone(),
                             session_key.clone(),
@@ -252,10 +252,10 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             let doc_key = doc_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<mongodb::results::UpdateResult, crate::error::Error> =
                     task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(result) => {
                         state.update(cx, |state, cx| {
                             state.clear_draft(&session_key, &doc_key);

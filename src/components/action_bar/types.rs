@@ -1,4 +1,4 @@
-use gpui::SharedString;
+use gpui_kit::SharedString;
 
 /// A single action in the palette.
 #[derive(Clone, Default)]

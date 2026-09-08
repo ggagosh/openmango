@@ -164,7 +164,7 @@ fn infer_position_kind(text: &str, cursor: usize, call: &Node) -> PositionKind {
 /// Handles the edge case where cursor is at pair.end_byte() (just past the pair).
 fn find_pair_containing_cursor<'a>(object: &Node<'a>, cursor: usize) -> Option<Node<'a>> {
     for i in 0..object.named_child_count() {
-        if let Some(child) = object.named_child(i)
+        if let Some(child) = object.named_child(i as u32)
             && child.kind() == "pair"
             && cursor >= child.start_byte()
             && cursor <= child.end_byte()
@@ -175,7 +175,7 @@ fn find_pair_containing_cursor<'a>(object: &Node<'a>, cursor: usize) -> Option<N
     // Also check cursor-1 for boundary case
     if cursor > 0 {
         for i in 0..object.named_child_count() {
-            if let Some(child) = object.named_child(i)
+            if let Some(child) = object.named_child(i as u32)
                 && child.kind() == "pair"
                 && (cursor - 1) >= child.start_byte()
                 && (cursor - 1) < child.end_byte()
@@ -395,7 +395,7 @@ fn infer_arg_index(call: &Node, cursor: usize) -> Option<usize> {
 
     let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(named_count);
     for i in 0..named_count {
-        let arg = args.named_child(i)?;
+        let arg = args.named_child(i as u32)?;
         ranges.push((arg.start_byte(), arg.end_byte()));
     }
 
@@ -580,7 +580,7 @@ fn detect_member_access(text: &str, cursor: usize, root: &Node) -> Option<Parsed
 
         // Also check ERROR nodes at the root level for `db.` patterns
         for i in 0..root.named_child_count() {
-            if let Some(child) = root.named_child(i)
+            if let Some(child) = root.named_child(i as u32)
                 && child.kind() == "ERROR"
                 && cursor >= child.start_byte()
                 && cursor <= child.end_byte()
@@ -707,9 +707,9 @@ fn analyze_call_chain(text: &str, call: &Node, member_token: String) -> Option<P
 fn analyze_error_node(text: &str, cursor: usize, error_node: &Node) -> Option<ParsedContext> {
     let child_count = error_node.child_count();
     for i in 0..child_count {
-        let child = error_node.child(i)?;
+        let child = error_node.child(i as u32)?;
         if child.kind() == "." && child.end_byte() <= cursor && i > 0 {
-            let before = error_node.child(i - 1)?;
+            let before = error_node.child((i - 1) as u32)?;
             let member_token = if child.end_byte() < cursor {
                 text.get(child.end_byte()..cursor).unwrap_or("").to_string()
             } else {
@@ -737,7 +737,7 @@ fn analyze_error_node(text: &str, cursor: usize, error_node: &Node) -> Option<Pa
     // Check named children for member/call expressions inside the ERROR
     let named_count = error_node.named_child_count();
     for i in 0..named_count {
-        if let Some(child) = error_node.named_child(i) {
+        if let Some(child) = error_node.named_child(i as u32) {
             if child.kind() == "member_expression" && cursor > child.end_byte() {
                 let between = text.get(child.end_byte()..cursor).unwrap_or("");
                 if let Some(dot_pos) = between.find('.') {

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertReplaceEdit, InsertTextFormat, Range,
@@ -73,7 +73,7 @@ impl ForgeCompletionProvider {
         Self { state, runtime, request_id }
     }
 
-    pub fn schedule_schema_sample(&self, collection: &str, cx: &mut Context<InputState>) {
+    pub fn schedule_schema_sample(&self, collection: &str, cx: &mut App) {
         let Some(tab_key) = self.state.read(cx).active_forge_tab_key() else {
             return;
         };
@@ -116,14 +116,14 @@ impl ForgeCompletionProvider {
         let state = self.state.clone();
         cx.spawn({
             let session_key = session_key.clone();
-            async move |_editor: WeakEntity<InputState>, cx: &mut AsyncApp| {
+            async move |cx: &mut AsyncApp| {
                 let result = task.await;
                 let fields = match result {
                     Ok(Ok(printable)) => extract_fields_from_printable(&printable),
                     _ => Vec::new(),
                 };
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, _| {
                         if !fields.is_empty() {
                             state.set_forge_schema_fields(session_key.clone(), fields);
@@ -402,7 +402,7 @@ impl CompletionProvider for ForgeCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let request_id = self.request_id.fetch_add(1, Ordering::AcqRel) + 1;
 
@@ -493,12 +493,7 @@ impl CompletionProvider for ForgeCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         if new_text.is_empty() {
             return false;
         }

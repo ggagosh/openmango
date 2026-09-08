@@ -1,10 +1,12 @@
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, WriteConfirmation, WriteRequest, request_connection_write};
 use crate::history::{BatchStatus, BatchSummary, HistoryGap};
@@ -105,7 +107,7 @@ pub(crate) fn render_history_view(
                     div().flex().justify_center().p(spacing::lg()).child(
                         Button::new("load-more-collection-history")
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .label(if loading { "Loading…" } else { "Load more" })
                             .disabled(loading)
                             .on_click(move |_, _, cx| {
@@ -160,7 +162,7 @@ fn history_header(
         .child(
             Button::new("refresh-collection-history")
                 .ghost()
-                .compact()
+                .xsmall()
                 .label("Refresh")
                 .on_click(move |_, _, cx| {
                     AppCommands::load_collection_history(
@@ -173,7 +175,7 @@ fn history_header(
         .child(
             Button::new("clear-collection-history")
                 .ghost()
-                .compact()
+                .xsmall()
                 .label("Clear collection")
                 .on_click(move |_, window, cx| {
                     let state_for_clear = state.clone();
@@ -381,7 +383,7 @@ fn batch_row(
                 .child(
                     Button::new(("history-batch-details", batch_id.as_u128() as u64))
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .label(if detail_loading {
                             "Loading…"
                         } else if details_loaded {
@@ -409,7 +411,7 @@ fn batch_row(
                     actions.child(
                         Button::new(("delete-history-batch", batch_id.as_u128() as u64))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .label("Delete")
                             .on_click(move |_, window, cx| {
                                 let state_for_delete = state.clone();
@@ -446,7 +448,7 @@ fn batch_row(
                     actions.child(
                         Button::new(("cancel-history-restore", batch_id.as_u128() as u64))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .label("Cancel")
                             .on_click(move |_, _, cx| {
                                 AppCommands::cancel_history_restore(state.clone(), batch_id, cx);
@@ -457,7 +459,7 @@ fn batch_row(
                     actions.child(
                         Button::new(("restore-history-batch", batch_id.as_u128() as u64))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .label(if resuming { "Resume" } else { "Restore" })
                             .on_click(move |_, window, cx| {
                                 let state_for_write = state.clone();

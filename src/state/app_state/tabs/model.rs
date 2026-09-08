@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use gpui::Context;
+use gpui_kit::Context;
 use uuid::Uuid;
 
 use crate::perf::log_tabs_duration;

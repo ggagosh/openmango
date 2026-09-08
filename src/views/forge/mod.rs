@@ -16,14 +16,16 @@ mod runtime;
 mod state;
 mod types;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::Input;
-use gpui_component::resizable::{resizable_panel, v_resizable};
-use gpui_component::spinner::Spinner;
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{Icon, IconName, Sizable};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::Editor;
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{Icon, IconName, Sizable};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{
     Button, ConnectionIdentity, QueryLibraryDialog, QueryLibraryTarget, connection_identity_badge,
@@ -115,7 +117,7 @@ impl ForgeView {
             .child(
                 Button::new("forge-query-library")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .icon(Icon::new(IconName::BookOpen).xsmall())
                     .label("Query Library")
                     .disabled(target.is_none())
@@ -141,19 +143,17 @@ impl ForgeView {
         let appearance = self.app_state.read(cx).settings.appearance.clone();
 
         let clear_button =
-            Button::new("forge-output-clear").compact().ghost().label("Clear").on_click({
+            Button::new("forge-output-clear").xsmall().ghost().label("Clear").on_click({
                 let forge_view = forge_view.clone();
                 move |_, _window, cx| {
-                    forge_view.update(cx, |this, _cx| {
+                    forge_view.update(cx, |this, cx| {
                         this.clear_output_runs();
                         if let Some(raw_state) = &this.state.output.raw_output_state {
-                            this.state.output.raw_output_programmatic = true;
-                            raw_state.update(_cx, |state, cx| {
+                            raw_state.update(cx, |state, cx| {
                                 state.set_value(String::new(), _window, cx);
                             });
-                            this.state.output.raw_output_programmatic = false;
                         }
-                        _cx.notify();
+                        cx.notify();
                     });
                 }
             });
@@ -332,10 +332,10 @@ impl Render for ForgeView {
         if self.state.editor.editor_focus_requested {
             self.state.editor.editor_focus_requested = false;
             let focus = editor_state.read(cx).focus_handle(cx);
-            window.focus(&focus);
+            window.focus(&focus, cx);
         };
         let forge_view = cx.entity();
-        let editor_child: AnyElement = Input::new(editor_state)
+        let editor_child: AnyElement = Editor::new(editor_state)
             .appearance(false)
             .font_family(fonts::mono())
             .text_sm()
@@ -370,10 +370,10 @@ impl Render for ForgeView {
                         .min_h(px(0.0))
                         .overflow_hidden()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            window.focus(&forge_focus_handle);
+                            window.focus(&forge_focus_handle, cx);
                             if let Some(editor) = editor_for_focus.upgrade() {
                                 let focus = editor.read(cx).focus_handle(cx);
-                                window.focus(&focus);
+                                window.focus(&focus, cx);
                             }
                         })
                         .child(editor_child),
@@ -399,7 +399,7 @@ impl Render for ForgeView {
             Some(
                 Button::new("forge-output-show")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .icon(Icon::new(IconName::ChevronDown).xsmall())
                     .label("Show output")
                     .on_click({
@@ -416,7 +416,6 @@ impl Render for ForgeView {
 
         let split_panel = if self.state.output.output_visible {
             v_resizable("forge-main-split")
-                .handle_line_visible(true)
                 .child(
                     resizable_panel()
                         .size(px(320.0))
@@ -483,7 +482,7 @@ impl Render for ForgeView {
                             .child(
                                 Button::new("forge-restart")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::Redo).xsmall())
                                     .label("Restart")
                                     .on_click({

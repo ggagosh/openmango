@@ -110,6 +110,17 @@ just download-tools
 
 No `.env` file is required. Use `just debug` to start with `RUST_LOG=debug`.
 
+On macOS, the Cargo runner signs development builds with an Apple Development
+identity and a stable app-and-team requirement. Unchanged, valid builds are not
+signed again. Set `OPENMANGO_DEV_SIGNING_IDENTITY` to a full identity name or SHA-1
+to select a different Apple signing identity; the runner stops if no matching
+identity is available instead of launching an unsigned app.
+
+Keychain items approved for older unsigned builds or an older certificate may
+need one approval for the corrected development signature. Approve the signing
+key and each requested OpenMango item with **Always Allow** in the macOS dialogs.
+Credentials remain in Keychain; development does not fall back to a plaintext file.
+
 ### Common commands
 
 | Command | Purpose |

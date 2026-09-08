@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::actions::model::{
     ActionRequest, ActionStatus, OperationRecord, OperationStatus, ProposedAction,
@@ -24,7 +26,7 @@ impl AgentActivityView {
         let subscription = cx.observe(&state, |_view, _state, cx| cx.notify());
         let refresh = cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
-                Timer::after(std::time::Duration::from_millis(500)).await;
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
                 if view.update(cx, |_view, cx| cx.notify()).is_err() {
                     break;
                 }
@@ -421,7 +423,7 @@ fn action_card(
                         .gap(spacing::sm())
                         .child(
                             Button::new(("reject-agent-action", action_id.as_u128() as u64))
-                                .compact()
+                                .xsmall()
                                 .label("Reject")
                                 .on_click(move |_, window, cx| {
                                     let state = reject_state.clone();
@@ -444,7 +446,7 @@ fn action_card(
                         )
                         .child(
                             Button::new(("approve-agent-action", action_id.as_u128() as u64))
-                                .compact()
+                                .xsmall()
                                 .primary()
                                 .label("Approve & Run")
                                 .on_click(move |_, window, cx| {
@@ -540,7 +542,7 @@ fn operation_row(state: Entity<AppState>, operation: OperationRecord, cx: &App) 
                 .when(can_cancel, |actions| {
                     actions.child(
                         Button::new(("cancel-agent-operation", operation_id.as_u128() as u64))
-                            .compact()
+                            .xsmall()
                             .danger()
                             .label("Cancel")
                             .on_click(move |_, _, cx| {
@@ -635,27 +637,26 @@ fn open_typed_approval_dialog(
                 let state = state.clone();
                 let input = input.clone();
                 let target_database = target_database.clone();
-                move |_ok, _cancel, _window, cx| {
-                    let matches = input.read(cx).value().as_ref() == target_database;
-                    let state = state.clone();
-                    let input_for_click = input.clone();
-                    let target_for_click = target_database.clone();
-                    vec![
-                        cancel_button("cancel-protected-approval"),
-                        Button::new("approve-protected-action")
-                            .danger()
-                            .label("Approve & Run")
-                            .disabled(!matches)
-                            .on_click(move |_, window, cx| {
-                                if input_for_click.read(cx).value().as_ref() != target_for_click {
-                                    return;
-                                }
-                                window.close_dialog(cx);
-                                AppCommands::approve_agent_action(state.clone(), action_id, cx);
-                            })
-                            .into_any_element(),
-                    ]
-                }
+
+                let matches = input.read(cx).value().as_ref() == target_database;
+                let state = state.clone();
+                let input_for_click = input.clone();
+                let target_for_click = target_database.clone();
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-protected-approval"),
+                    Button::new("approve-protected-action")
+                        .danger()
+                        .label("Approve & Run")
+                        .disabled(!matches)
+                        .on_click(move |_, window, cx| {
+                            if input_for_click.read(cx).value().as_ref() != target_for_click {
+                                return;
+                            }
+                            window.close_dialog(cx);
+                            AppCommands::approve_agent_action(state.clone(), action_id, cx);
+                        })
+                        .into_any_element(),
+                ])
             })
     });
 }
@@ -785,11 +786,11 @@ fn status_badge(label: &str, color: Hsla, _cx: &App) -> Div {
         .child(label.to_string())
 }
 
-fn action_icon(request: &ActionRequest) -> IconName {
+fn action_icon(request: &ActionRequest) -> Icon {
     match request {
-        ActionRequest::DatabaseBackup { .. } => IconName::Download,
-        ActionRequest::DatabaseSync { .. } => IconName::Replace,
-        ActionRequest::OperationRevert { .. } => IconName::Undo2,
+        ActionRequest::DatabaseBackup { .. } => crate::assets::AppIcon::Download.into(),
+        ActionRequest::DatabaseSync { .. } => IconName::Replace.into(),
+        ActionRequest::OperationRevert { .. } => IconName::Undo2.into(),
     }
 }
 

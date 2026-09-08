@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use futures::StreamExt;
 use futures::channel::mpsc;
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::{
@@ -446,7 +446,7 @@ impl AppCommands {
         // Spawn UI task to receive progress updates
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let mut rx = rx;
                 let mut progress_count = 0u32;
                 const BATCH_SIZE: u32 = 50;
@@ -463,7 +463,7 @@ impl AppCommands {
                         }
                     };
 
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             match msg {
                                 TransferProgressMessage::Started { collections } => {
@@ -690,7 +690,7 @@ impl AppCommands {
         // Spawn UI task to receive progress updates
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let mut rx = rx;
                 let mut progress_count = 0u32;
                 const BATCH_SIZE: u32 = 50;
@@ -707,7 +707,7 @@ impl AppCommands {
                         }
                     };
 
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             let Some(tab) = state.transfer_tab(transfer_id) else {
                                 return;
@@ -963,7 +963,7 @@ impl AppCommands {
         // Spawn UI task to receive progress updates
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let mut rx = rx;
                 let mut progress_count = 0u32;
                 const BATCH_SIZE: u32 = 100;
@@ -978,7 +978,7 @@ impl AppCommands {
                         }
                     };
 
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             match msg {
                                 CollectionProgressMessage::Progress(count) => {

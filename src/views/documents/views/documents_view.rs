@@ -1,9 +1,11 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::Input;
-use gpui_component::spinner::Spinner;
-use gpui_component::tree::tree;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tree::tree;
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
@@ -157,7 +159,7 @@ impl CollectionView {
                                             .child(
                                                 Button::new("expand-all")
                                                     .ghost()
-                                                    .compact()
+                                                    .xsmall()
                                                     .icon(Icon::new(IconName::ChevronDown).xsmall())
                                                     .tooltip("Expand all")
                                                     .on_click({
@@ -210,7 +212,7 @@ impl CollectionView {
                                             .child(
                                                 Button::new("collapse-all")
                                                     .ghost()
-                                                    .compact()
+                                                    .xsmall()
                                                     .icon(Icon::new(IconName::ChevronUp).xsmall())
                                                     .tooltip("Collapse all")
                                                     .on_click({
@@ -295,7 +297,7 @@ impl CollectionView {
                             ))
                             .child(search_toggle_button(
                                 "search-word",
-                                Icon::new(IconName::WholeWord).xsmall(),
+                                Icon::new(crate::assets::AppIcon::WholeWord).xsmall(),
                                 word_active,
                                 "Whole Word",
                                 active_bg,
@@ -313,7 +315,7 @@ impl CollectionView {
                             ))
                             .child(search_toggle_button(
                                 "search-regex",
-                                Icon::new(IconName::Regex).xsmall(),
+                                Icon::new(crate::assets::AppIcon::Regex).xsmall(),
                                 regex_active,
                                 "Regex",
                                 active_bg,
@@ -331,7 +333,7 @@ impl CollectionView {
                             ))
                             .child(search_toggle_button(
                                 "search-values",
-                                Icon::new(IconName::Braces).xsmall(),
+                                Icon::new(crate::assets::AppIcon::Braces).xsmall(),
                                 values_active,
                                 "Values Only",
                                 active_bg,
@@ -350,7 +352,7 @@ impl CollectionView {
                             .child(
                                 Button::new("search-prev")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::ChevronLeft).xsmall())
                                     .tooltip("Previous match")
                                     .disabled(match_total == 0)
@@ -367,7 +369,7 @@ impl CollectionView {
                             .child(
                                 Button::new("search-next")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::ChevronRight).xsmall())
                                     .tooltip("Next match")
                                     .disabled(match_total == 0)
@@ -390,7 +392,7 @@ impl CollectionView {
                             .child(
                                 Button::new("search-close")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::Close).xsmall())
                                     .tooltip("Close search")
                                     .on_click({
@@ -527,9 +529,9 @@ fn search_toggle_button(
 ) -> Button {
     let icon = if active { icon.text_color(active_fg) } else { icon.text_color(inactive_fg) };
     let mut btn =
-        Button::new(id).compact().icon(icon).tooltip(tooltip_text).on_click(on_click).ghost();
+        Button::new(id).xsmall().icon(icon).tooltip(tooltip_text).on_click(on_click).ghost();
     if active {
-        btn = btn.active_style(active_bg);
+        btn = btn.bg(active_bg);
     }
     btn
 }

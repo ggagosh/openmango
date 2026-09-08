@@ -1,12 +1,13 @@
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Disableable as _;
-use gpui_component::Sizable as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::switch::Switch;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, cancel_button, request_unsaved_action};
 use crate::helpers::{
@@ -247,9 +248,9 @@ impl ConnectionDialog {
 
         cx.spawn({
             let view = view.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     view.update(cx, |this, cx| {
                         let current_uri = this.uri_state.read(cx).value().to_string();
                         let pending = this.pending_test_uri.clone();
@@ -294,7 +295,7 @@ impl Render for ConnectionDialog {
         let selected_environment = self.environment;
         let view = cx.entity();
         let mut no_environment = Button::new("simple-environment-none")
-            .compact()
+            .xsmall()
             .label(if selected_environment.is_none() { "✓ Not set" } else { "Not set" })
             .on_click({
                 let view = view.clone();
@@ -313,7 +314,7 @@ impl Render for ConnectionDialog {
             .map(|environment| {
                 let view = view.clone();
                 let mut button = Button::new(("simple-environment", environment as usize))
-                    .compact()
+                    .xsmall()
                     .label(if selected_environment == Some(environment) {
                         format!("✓ {}", environment.label())
                     } else {

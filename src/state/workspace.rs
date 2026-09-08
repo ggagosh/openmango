@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::{Bounds, WindowBounds, point, px, size};
+use gpui_kit::{Bounds, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

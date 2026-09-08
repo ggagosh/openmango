@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::*;
+use gpui_kit::*;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 

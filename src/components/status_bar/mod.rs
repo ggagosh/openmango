@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::{AppState, StatusMessage};

@@ -2,16 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Disableable as _;
-use gpui_component::Sizable as _;
-use gpui_component::button::ButtonVariants as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
-use gpui_component::spinner::Spinner;
-use gpui_component::text::TextViewStyle;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{
+    Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection,
+};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::TextViewStyle;
+use gpui_kit::*;
 
 use uuid::Uuid;
 
@@ -30,11 +32,12 @@ use crate::ai::{
 use crate::components::Button;
 use crate::state::{AiProvider, AppCommands, AppState};
 use crate::theme::{islands, spacing};
-use gpui_component::{Icon, IconName, Size};
+use gpui_kit::component::{Icon, IconName, Size};
 
 pub struct AiView {
     state: Entity<AppState>,
-    input_state: Option<Entity<InputState>>,
+    input_state: Option<Entity<EditorState>>,
+    mention_decorations: Option<TextDecorationCollection>,
     input_subscription: Option<Subscription>,
     scroll_handle: ScrollHandle,
     last_entry_count: usize,
@@ -75,6 +78,7 @@ impl AiView {
         Self {
             state,
             input_state: None,
+            mention_decorations: None,
             input_subscription: None,
             scroll_handle: ScrollHandle::new(),
             last_entry_count: 0,
@@ -100,7 +104,7 @@ impl AiView {
     }
 
     fn is_near_latest(&self) -> bool {
-        let max_offset_y = f32::from(self.scroll_handle.max_offset().height);
+        let max_offset_y = f32::from(self.scroll_handle.max_offset().y);
         if max_offset_y <= 0.5 {
             return true;
         }
@@ -209,15 +213,13 @@ impl AiView {
     }
 
     /// Recompute inline highlight ranges for all `@collection` tokens in the text.
-    fn update_mention_highlights(
-        &self,
-        input: &Entity<InputState>,
-        text: &str,
-        cx: &mut Context<Self>,
-    ) {
+    fn update_mention_highlights(&self, text: &str, cx: &mut Context<Self>) {
+        let Some(decorations) = &self.mention_decorations else {
+            return;
+        };
         let mentioned = self.state.read(cx).ai_chat.mentioned_collections.clone();
         if mentioned.is_empty() {
-            input.update(cx, |s, _| s.set_custom_highlights(Vec::new()));
+            decorations.clear(cx);
             return;
         }
         let theme = cx.theme();
@@ -240,13 +242,13 @@ impl AiView {
                 let at_boundary =
                     text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_');
                 if at_boundary {
-                    highlights.push((abs..end, style));
+                    highlights.push(TextDecoration::new(abs..end, style));
                 }
                 start = abs + 1;
             }
         }
-        highlights.sort_by_key(|(r, _)| r.start);
-        input.update(cx, |s, _| s.set_custom_highlights(highlights));
+        highlights.sort_by_key(|decoration| decoration.range.start);
+        decorations.set(highlights, cx);
     }
 
     fn confirm_mention(&mut self, cx: &mut Context<Self>) {
@@ -293,19 +295,22 @@ impl AiView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
+    ) -> Entity<EditorState> {
         if self.input_state.is_none() {
             let input_state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("text")
+                EditorState::new(window, cx)
+                    .language("text")
                     .soft_wrap(true)
                     .line_number(false)
-                    .auto_indent(false)
                     .submit_on_enter(true)
                     .clean_on_escape()
                     .placeholder("Ask AI Assistant...")
             });
 
+            self.mention_decorations = Some(
+                input_state
+                    .update(cx, |input, cx| input.create_decorations_collection(Vec::new(), cx)),
+            );
             let state = self.state.clone();
             let sub =
                 cx.subscribe_in(&input_state, window, move |view, entity, event, window, cx| {
@@ -347,20 +352,22 @@ impl AiView {
                                         let character =
                                             before_cursor[last_nl..].chars().count() as u32;
                                         input.set_cursor_position(
-                                            gpui_component::input::Position::new(line, character),
+                                            gpui_kit::component::input::Position::new(
+                                                line, character,
+                                            ),
                                             window,
                                             cx,
                                         );
                                     });
                                     view.confirm_mention(cx);
-                                    view.update_mention_highlights(entity, &new_text, cx);
+                                    view.update_mention_highlights(&new_text, cx);
                                     return;
                                 }
                             }
 
                             view.detect_mention_trigger(&text, cursor, cx);
                             view.sync_mentions_with_text(&text, cx);
-                            view.update_mention_highlights(entity, &text, cx);
+                            view.update_mention_highlights(&text, cx);
                         }
                         InputEvent::Blur => {
                             let raw = entity.read(cx).value().to_string();
@@ -368,7 +375,7 @@ impl AiView {
                                 s.ai_chat.draft_input = raw;
                             });
                         }
-                        InputEvent::PressEnter { secondary: false } => {
+                        InputEvent::PressEnter { secondary: false, shift: false } => {
                             let can_submit = {
                                 let s = state.read(cx);
                                 s.settings.ai.enabled
@@ -382,7 +389,6 @@ impl AiView {
                                 // which would strip them via sync_mentions_with_text).
                                 let mentioned = state.update(cx, |s, _| s.ai_chat.take_mentions());
                                 entity.update(cx, |input, cx| {
-                                    input.set_custom_highlights(Vec::new());
                                     input.set_value(String::new(), window, cx);
                                 });
                                 state.update(cx, |s, _| {
@@ -520,7 +526,7 @@ impl AiView {
                     return;
                 }
                 let merged = coalesce_stream_events(std::mem::take(pending));
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let changed = state.update(cx, |s, cx| {
                         let changed = merged
                             .into_iter()
@@ -582,7 +588,7 @@ impl AiView {
                             break;
                         }
                         flush_pending(&mut pending_events, cx);
-                        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                        cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                         flush_pending(&mut pending_events, cx);
@@ -596,7 +602,7 @@ impl AiView {
                 // confirmation oneshot that will never be answered.
                 drop(task);
                 span.finish_err(crate::ai::AiErrorKind::Cancelled);
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |s, cx| {
                         s.ai_chat.is_loading = false;
                         s.ai_chat.cancel_flag = None;
@@ -618,7 +624,7 @@ impl AiView {
 
             let result = task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |s, cx| {
                     match result {
                         Ok(final_text) => {
@@ -693,7 +699,7 @@ impl Render for AiView {
                 header_buttons.child(
                     Button::new("stop-gen")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::CircleX).xsmall())
                         .tooltip("Stop generation")
                         .on_click(move |_, _, cx| {
@@ -711,7 +717,7 @@ impl Render for AiView {
                 header_buttons.child(
                     Button::new("clear-chat")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::Delete).xsmall())
                         .tooltip("Clear chat")
                         .on_click(move |_, _, cx| {
@@ -767,7 +773,7 @@ impl Render for AiView {
         let content_changed = timeline_revision != self.last_timeline_revision;
         if self.user_interacted
             && self.unseen_updates > 0
-            && self.scroll_handle.max_offset().height > px(0.5)
+            && self.scroll_handle.max_offset().y > px(0.5)
             && self.is_near_latest()
         {
             self.user_interacted = false;
@@ -1041,7 +1047,7 @@ impl Render for AiView {
                 div().absolute().right(px(12.0)).bottom(px(12.0)).child(
                     Button::new("ai-jump-latest")
                         .primary()
-                        .compact()
+                        .xsmall()
                         .label(format!("Jump to latest ({})", self.unseen_updates))
                         .on_click(move |_, _, cx| {
                             jump_view.update(cx, |this, cx| {
@@ -1059,18 +1065,18 @@ impl Render for AiView {
             let selector_label =
                 compact_label(&current_provider.model_display_name(&current_model), 24);
             let state_for_menu = state.clone();
-            gpui_component::button::Button::new("ai-model-selector")
+            gpui_kit::component::button::Button::new("ai-model-selector")
                 .ghost()
-                .compact()
+                .xsmall()
                 .label(selector_label)
                 .dropdown_caret(true)
                 .rounded(islands::radius_sm(&appearance))
                 .with_size(Size::Small)
                 .disabled(is_loading)
                 .dropdown_menu_with_anchor(
-                    Corner::TopLeft,
-                    move |mut menu: PopupMenu, _window, _cx| {
-                        let state_read = state_for_menu.read(_cx);
+                    Anchor::TopLeft,
+                    move |mut menu: PopupMenu, _window, cx| {
+                        let state_read = state_for_menu.read(cx);
                         let provider = state_read.settings.ai.provider;
                         let active_model = state_read.settings.ai.model.clone();
                         let cached = &state_read.ai_chat.cached_models;
@@ -1180,7 +1186,7 @@ impl Render for AiView {
             let stop_view = cx.entity();
             Button::new("send-stop")
                 .danger()
-                .compact()
+                .xsmall()
                 .icon(Icon::new(IconName::CircleX).xsmall())
                 .tooltip("Stop generation")
                 .on_click(move |_, _, cx| {
@@ -1194,7 +1200,7 @@ impl Render for AiView {
             let can_submit = ai_enabled && !is_loading && session_key.is_some();
             Button::new("send-message")
                 .primary()
-                .compact()
+                .xsmall()
                 .icon(Icon::new(IconName::ArrowUp).xsmall())
                 .tooltip("Send (Enter)")
                 .disabled(!can_submit)
@@ -1209,7 +1215,6 @@ impl Render for AiView {
                         this.state.update(cx, |s, _| s.ai_chat.take_mentions())
                     });
                     input_state_for_submit.update(cx, |input, cx| {
-                        input.set_custom_highlights(Vec::new());
                         input.set_value(String::new(), window, cx);
                     });
                     view.update(cx, |this, cx| {
@@ -1326,7 +1331,7 @@ impl Render for AiView {
                     let bg = if is_selected {
                         cx.theme().primary.opacity(0.12)
                     } else {
-                        gpui::transparent_black()
+                        gpui_kit::transparent_black()
                     };
                     div()
                         .id(ElementId::Name(format!("mention-item-{i}").into()))
@@ -1338,9 +1343,11 @@ impl Render for AiView {
                         .cursor_pointer()
                         .rounded(px(4.0))
                         .bg(bg)
-                        .hover(|s: gpui::StyleRefinement| s.bg(cx.theme().secondary.opacity(0.2)))
+                        .hover(|s: gpui_kit::StyleRefinement| {
+                            s.bg(cx.theme().secondary.opacity(0.2))
+                        })
                         .child(
-                            Icon::new(IconName::Braces)
+                            Icon::new(crate::assets::AppIcon::Braces)
                                 .xsmall()
                                 .text_color(cx.theme().muted_foreground),
                         )
@@ -1382,7 +1389,7 @@ impl Render for AiView {
             None
         };
 
-        // Input area panel
+        // Editor area panel
         let mut input_area = div()
             .flex()
             .flex_col()
@@ -1398,42 +1405,36 @@ impl Render for AiView {
 
         input_area = input_area.children(mention_pills);
 
-        input_area = input_area
-            .child(
-                div().px(px(2.0)).py(px(2.0)).child(
-                    Input::new(&input_state)
-                        .xsmall()
-                        .appearance(false)
-                        .focus_bordered(false)
-                        .w_full()
-                        .h(px(64.0)),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(spacing::sm())
-                    .pt(px(2.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .min_w(px(0.0))
-                            .gap(spacing::xs())
-                            .child(model_selector)
-                            .child(info_chip(
-                                &context_chip_label,
-                                if session_ready {
-                                    cx.theme().muted_foreground
-                                } else {
-                                    cx.theme().warning
-                                },
-                            )),
-                    )
-                    .child(send_or_stop_button),
-            );
+        input_area =
+            input_area
+                .child(div().px(px(2.0)).py(px(2.0)).child(
+                    Editor::new(&input_state).text_xs().appearance(false).w_full().h(px(64.0)),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(spacing::sm())
+                        .pt(px(2.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .min_w(px(0.0))
+                                .gap(spacing::xs())
+                                .child(model_selector)
+                                .child(info_chip(
+                                    &context_chip_label,
+                                    if session_ready {
+                                        cx.theme().muted_foreground
+                                    } else {
+                                        cx.theme().warning
+                                    },
+                                )),
+                        )
+                        .child(send_or_stop_button),
+                );
 
         div()
             .flex()
@@ -1638,7 +1639,7 @@ fn ai_section_gap() -> Pixels {
 }
 
 fn ai_markdown_style(cx: &App) -> TextViewStyle {
-    let code_block_style = gpui::StyleRefinement::default()
+    let code_block_style = gpui_kit::StyleRefinement::default()
         .mt(spacing::xs())
         .mb(spacing::xs())
         .border_1()
@@ -2100,7 +2101,7 @@ fn render_tool_group(
                                 format!("open-col-{group_key}-{i}").into(),
                             ))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
                             .label("Open Collection")
                             .on_click(move |_, _, cx| {
@@ -2141,7 +2142,7 @@ fn render_tool_group(
                     row = row.child(
                         Button::new(ElementId::Name(format!("open-agg-{group_key}-{i}").into()))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
                             .label("Open in Aggregation")
                             .on_click(move |_, _, cx| {
@@ -2171,7 +2172,7 @@ fn render_tool_group(
                                 format!("open-forge-{group_key}-{i}").into(),
                             ))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
                             .label("Open in Forge")
                             .on_click(move |_, _, cx| {
@@ -2465,7 +2466,7 @@ fn render_confirmation_card(
     let cancel_id: SharedString = format!("cancel-{activity_id}").into();
 
     let confirm_button = if danger {
-        Button::new(confirm_id).danger().compact().label(confirm_label).on_click(move |_, _, cx| {
+        Button::new(confirm_id).danger().xsmall().label(confirm_label).on_click(move |_, _, cx| {
             approve_ai_tool_confirmation(
                 &approve_state,
                 &approve_identity,
@@ -2475,7 +2476,7 @@ fn render_confirmation_card(
             );
         })
     } else {
-        Button::new(confirm_id).primary().compact().label(confirm_label).on_click({
+        Button::new(confirm_id).primary().xsmall().label(confirm_label).on_click({
             let approve_identity = approve_identity.clone();
             move |_, _, cx| {
                 approve_ai_tool_confirmation(
@@ -2490,7 +2491,7 @@ fn render_confirmation_card(
     };
 
     let cancel_button =
-        Button::new(cancel_id).ghost().compact().label("Cancel").on_click(move |_, _, cx| {
+        Button::new(cancel_id).ghost().xsmall().label("Cancel").on_click(move |_, _, cx| {
             reject_tx.respond(false);
             reject_state.update(cx, |s, cx| {
                 s.ai_chat.reject_tool_confirmation(activity_id);
@@ -2671,8 +2672,8 @@ fn render_report_download_buttons(
         row = row.child(
             Button::new(ElementId::Name(format!("chat-dl-rpt-{turn_id}-{i}").into()))
                 .primary()
-                .compact()
-                .icon(Icon::new(IconName::Download).xsmall())
+                .xsmall()
+                .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
                 .label(label)
                 .on_click(move |_, _, cx| {
                     download_report_as_excel(st.clone(), title_dl.clone(), sheets_dl.clone(), cx);
@@ -2729,7 +2730,7 @@ fn download_report_as_excel(
 
     cx.spawn({
         let state = state.clone();
-        async move |cx: &mut gpui::AsyncApp| {
+        async move |cx: &mut gpui_kit::AsyncApp| {
             let path = crate::components::file_picker::open_file_dialog_async(
                 crate::components::file_picker::FilePickerMode::Save,
                 filters,
@@ -2741,7 +2742,7 @@ fn download_report_as_excel(
                 return;
             };
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |s, cx| {
                     s.set_status_message(Some(crate::state::StatusMessage::info(
                         "Exporting report...",
@@ -2762,9 +2763,9 @@ fn download_report_as_excel(
 
                 cx.spawn({
                     let state = state.clone();
-                    async move |cx: &mut gpui::AsyncApp| {
+                    async move |cx: &mut gpui_kit::AsyncApp| {
                         let result = task.await;
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             state.update(cx, |s, cx| {
                                 match result {
                                     Ok(r) => {

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Task};
+use gpui_kit::{App, Task};
 use uuid::Uuid;
 
 fn credentials_url(provider: &str) -> String {

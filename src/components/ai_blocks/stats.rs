@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::*;
 use serde::Deserialize;
 
 use crate::theme::spacing;

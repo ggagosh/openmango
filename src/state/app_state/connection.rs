@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Context, Task};
+use gpui_kit::{App, AppContext as _, Context, Task};
 use uuid::Uuid;
 
 use super::AppState;
@@ -683,7 +683,7 @@ impl AppState {
                     result = Err(error);
                 }
             }
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let connection_ids = state.update(cx, |state, cx| match result {
                     Ok(()) => match state.config.save_connections(&state.connections) {
                         Ok(()) => {
@@ -772,7 +772,7 @@ impl AppState {
                 }
             }
             if let Some(error) = first_error {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         state.report_secret_store_error(error, cx);
                     });
@@ -829,7 +829,7 @@ impl AppState {
                 }
             }
             if let Some(error) = first_error {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         state.report_secret_store_error(error, cx);
                     });

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::history::{BatchQuery, EligibilityReport, HistoryConnection, HistoryService, Usage};
@@ -134,12 +134,12 @@ impl AppCommands {
             );
             page.and_then(|page| gaps.map(|gaps| (page, gaps)))
         });
-        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             let result = match task.await {
                 Ok(result) => result,
                 Err(error) => Err(anyhow::anyhow!("History query task failed: {error}")),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let Some(session) = state.session_mut(&session_key) else {
                         return;
@@ -210,12 +210,12 @@ impl AppCommands {
             return;
         }
         let task = runtime.spawn_blocking(move || service.get_batch(batch_id, 0, 3));
-        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             let result = match task.await {
                 Ok(result) => result,
                 Err(error) => Err(anyhow::anyhow!("History details task failed: {error}")),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let Some(session) = state.session_mut(&session_key) else {
                         return;
@@ -274,7 +274,7 @@ impl AppCommands {
             return;
         };
         let task = spawn_history_inspection(runtime, service.clone(), connection, setup);
-        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             let (report, usage, setup_error) = match task.await {
                 Ok(result) => result,
                 Err(error) => (
@@ -291,7 +291,7 @@ impl AppCommands {
                 ),
             };
             let eligible = report.status == crate::history::EligibilityStatus::Eligible;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let message = history_inspection_message(&report, setup_error.as_deref());
                     state.finish_history_inspection(connection_id, report, usage);
@@ -451,12 +451,12 @@ impl AppCommands {
         });
         let state_for_poll = state.clone();
         let session_key = SessionKey::new(connection_id, database, collection);
-        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             loop {
-                gpui::Timer::after(std::time::Duration::from_millis(250)).await;
+                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
                 let progress = service.restore_progress(batch_id);
                 let done = progress.as_ref().is_ok_and(|progress| progress.done);
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state_for_poll.update(cx, |state, cx| {
                         if let Ok(progress) = &progress {
                             state.set_status_message(Some(StatusMessage::info(format!(

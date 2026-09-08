@@ -2,8 +2,8 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 use crate::state::AppState;
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertReplaceEdit, InsertTextFormat, Range,
@@ -55,7 +55,7 @@ impl CompletionProvider for AiPromptCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let text = rope.to_string();
         let mut token_start = offset;
@@ -111,12 +111,7 @@ impl CompletionProvider for AiPromptCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // Trigger immediately when '@' is typed.
         if new_text.contains('@') {
             self.in_at_token.set(true);

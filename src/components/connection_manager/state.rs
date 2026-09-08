@@ -1,5 +1,5 @@
-use gpui::{App, AppContext as _, Context, Entity, Window};
-use gpui_component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::{App, AppContext as _, Context, Entity, Window};
 use uuid::Uuid;
 
 use crate::state::AppState;

@@ -5,10 +5,10 @@
 
 use std::rc::Rc;
 
-use gpui::{App, Hsla, Pixels, px};
-use gpui_component::ActiveTheme as _;
-use gpui_component::tab::TabBar;
-use gpui_component::theme::{ThemeConfig, ThemeSet};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::tab::TabBar;
+use gpui_kit::component::theme::{ThemeConfig, ThemeSet};
+use gpui_kit::{App, Hsla, Pixels, Styled as _, px};
 
 use crate::state::{AppTheme, AppearanceSettings, IslandsTabStyle};
 
@@ -41,14 +41,14 @@ pub fn load_theme_config(theme_id: &str) -> Option<Rc<ThemeConfig>> {
 pub fn apply_theme(
     app_theme: AppTheme,
     vibrancy: bool,
-    window: &mut gpui::Window,
-    cx: &mut gpui::App,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
 ) {
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
-        gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
+        gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
 
         // Re-apply font family overrides
-        let theme = gpui_component::theme::Theme::global_mut(cx);
+        let theme = gpui_kit::component::theme::Theme::global_mut(cx);
         theme.font_family = fonts::ui().into();
         theme.mono_font_family = fonts::mono().into();
 
@@ -73,8 +73,8 @@ pub fn requires_vibrancy_restart(
 }
 
 /// Reduce alpha on background/sidebar so the macOS blur effect shows through.
-pub fn apply_vibrancy(cx: &mut gpui::App) {
-    let theme = gpui_component::theme::Theme::global_mut(cx);
+pub fn apply_vibrancy(cx: &mut gpui_kit::App) {
+    let theme = gpui_kit::component::theme::Theme::global_mut(cx);
     theme.background.a = 0.82;
     theme.sidebar.a = 0.82;
 }
@@ -84,8 +84,8 @@ pub fn apply_vibrancy(cx: &mut gpui::App) {
 // =============================================================================
 
 pub mod colors {
-    use gpui::{App, Hsla};
-    use gpui_component::ActiveTheme as _;
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{App, Hsla};
 
     use crate::models::ConnectionColor;
 
@@ -142,7 +142,7 @@ pub mod colors {
 
     // Fully transparent (for invisible default borders/backgrounds)
     pub fn transparent() -> Hsla {
-        gpui::hsla(0.0, 0.0, 0.0, 0.0)
+        gpui_kit::hsla(0.0, 0.0, 0.0, 0.0)
     }
 
     // Modal backdrop — theme background darkened with alpha
@@ -182,8 +182,11 @@ pub mod islands {
     use super::*;
 
     pub fn tab_bar(bar: TabBar, appearance: &AppearanceSettings) -> TabBar {
+        let bar = bar.min_w(px(0.0)).max_width(px(260.0));
         match appearance.islands.tab_style {
-            IslandsTabStyle::Islands => bar.data_grip(),
+            // Keep the native selected surface neutral so connection colors and
+            // status badges remain legible in the surrounding application theme.
+            IslandsTabStyle::Islands => bar.segmented().bg(colors::transparent()),
             IslandsTabStyle::Segmented => bar.segmented(),
             IslandsTabStyle::Underline => bar.underline(),
         }
@@ -265,7 +268,7 @@ mod tests {
 // =============================================================================
 
 pub mod spacing {
-    use gpui::{Pixels, px};
+    use gpui_kit::{Pixels, px};
 
     pub fn xs() -> Pixels {
         px(4.0)
@@ -286,7 +289,7 @@ pub mod spacing {
 // =============================================================================
 
 pub mod sizing {
-    use gpui::{Pixels, px};
+    use gpui_kit::{Pixels, px};
 
     // Layout
     pub fn status_bar_height() -> Pixels {
@@ -321,7 +324,7 @@ pub mod sizing {
 // =============================================================================
 
 pub mod typography {
-    use gpui::{Pixels, px};
+    use gpui_kit::{Pixels, px};
 
     pub fn text_2xs() -> Pixels {
         px(9.0)
@@ -339,7 +342,7 @@ pub mod typography {
 // =============================================================================
 
 pub mod fonts {
-    use gpui::relative;
+    use gpui_kit::relative;
 
     pub fn ui() -> &'static str {
         "JetBrainsMono Nerd Font"
@@ -351,9 +354,9 @@ pub mod fonts {
         "JetBrainsMono Nerd Font Mono"
     }
     pub fn tabs() -> &'static str {
-        "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        ".SystemUIFont"
     }
-    pub fn ui_line_height() -> gpui::DefiniteLength {
+    pub fn ui_line_height() -> gpui_kit::DefiniteLength {
         relative(1.45)
     }
 }
@@ -363,7 +366,7 @@ pub mod fonts {
 // =============================================================================
 
 pub mod borders {
-    use gpui::{Pixels, px};
+    use gpui_kit::{Pixels, px};
 
     pub fn radius_sm() -> Pixels {
         px(3.0)

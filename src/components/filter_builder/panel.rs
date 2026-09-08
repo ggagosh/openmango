@@ -1,18 +1,19 @@
+use gpui_kit::component::Disableable as _;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
-use gpui_component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputEvent, InputState, NumberInput};
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::switch::Switch;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, NumberInput};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::components::{Button, open_confirm_dialog};
@@ -87,7 +88,7 @@ type BulkValueSave = Rc<dyn Fn(Vec<String>, &mut Window, &mut App)>;
 
 struct BulkValueEditor {
     field_type: FieldType,
-    input_state: Entity<InputState>,
+    input_state: Entity<EditorState>,
     initial_count: usize,
     on_save: BulkValueSave,
 }
@@ -95,7 +96,7 @@ struct BulkValueEditor {
 pub struct FilterBuilderPanel {
     state: Entity<AppState>,
     session_key: SessionKey,
-    filter_input: Entity<InputState>,
+    filter_input: Entity<EditorState>,
     tree: FilterTree,
     applied_tree: FilterTree,
     unsupported_reason: Option<String>,
@@ -114,7 +115,7 @@ impl FilterBuilderPanel {
     pub fn new(
         state: Entity<AppState>,
         session_key: SessionKey,
-        filter_input: Entity<InputState>,
+        filter_input: Entity<EditorState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -190,9 +191,9 @@ impl FilterBuilderPanel {
             async move { manager.sample_documents(&client, &database, &collection, SAMPLE_SIZE) }
         });
 
-        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
             let result: Result<Vec<Document>, crate::error::Error> = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = view.update(cx, |this, cx| {
                     if let Ok(documents) = result {
                         this.suggestions = build_typed_suggestions(&documents);
@@ -541,8 +542,8 @@ impl FilterBuilderPanel {
         let values = condition.value.list().unwrap_or(&[]).to_vec();
         let dialog_view = cx.new(|cx| {
             let input_state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("text")
+                EditorState::new(window, cx)
+                    .language("text")
                     .line_number(true)
                     .searchable(true)
                     .soft_wrap(false)
@@ -716,7 +717,7 @@ impl FilterBuilderPanel {
         }
 
         let focus = self.filter_input.read(cx).focus_handle(cx);
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.state.update(cx, |state, cx| {
             state.set_filter_builder_open(&self.session_key, false);
             cx.notify();
@@ -842,7 +843,7 @@ impl FilterBuilderPanel {
 
         let btn = Button::new(button_id)
             .ghost()
-            .compact()
+            .xsmall()
             .icon(Icon::new(IconName::Calendar).xsmall())
             .tooltip(tooltip)
             .on_click({
@@ -880,7 +881,7 @@ impl FilterBuilderPanel {
                 deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.0))
-                        .anchor(Corner::TopLeft)
+                        .anchor(Anchor::TopLeft)
                         .when_some(trigger_bounds, |el, bounds| {
                             el.position(Point::new(
                                 bounds.origin.x,
@@ -1053,7 +1054,7 @@ impl FilterBuilderPanel {
                     .gap(spacing::xs())
                     .child(
                         Button::new("builder-unsupported-json")
-                            .compact()
+                            .xsmall()
                             .primary()
                             .label("Open JSON")
                             .on_click({
@@ -1065,7 +1066,7 @@ impl FilterBuilderPanel {
                     )
                     .child(
                         Button::new("builder-unsupported-fresh")
-                            .compact()
+                            .xsmall()
                             .ghost()
                             .label("Start fresh")
                             .on_click({
@@ -1199,7 +1200,7 @@ impl FilterBuilderPanel {
                             .child(
                                 Button::new(("group-add-rule", group_id))
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::Plus).xsmall())
                                     .label("Rule")
                                     .on_click({
@@ -1217,7 +1218,7 @@ impl FilterBuilderPanel {
                             .child(
                                 Button::new(("group-add-group", group_id))
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .label("Group")
                                     .on_click({
                                         let view = view.clone();
@@ -1232,7 +1233,7 @@ impl FilterBuilderPanel {
                             .child(
                                 Button::new(("group-duplicate", group_id))
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(Icon::new(IconName::Copy).xsmall())
                                     .tooltip("Duplicate group")
                                     .on_click({
@@ -1246,7 +1247,7 @@ impl FilterBuilderPanel {
                                 this.child(
                                     Button::new(("group-remove", group_id))
                                         .ghost()
-                                        .compact()
+                                        .xsmall()
                                         .icon(Icon::new(IconName::Close).xsmall())
                                         .tooltip("Remove group")
                                         .on_click({
@@ -1396,7 +1397,7 @@ impl FilterBuilderPanel {
                 .child(
                     Button::new(("condition-duplicate", cid))
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::Copy).xsmall())
                         .tooltip("Duplicate rule")
                         .on_click({
@@ -1410,7 +1411,7 @@ impl FilterBuilderPanel {
                     this.child(
                         Button::new(("condition-remove", cid))
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::Close).xsmall())
                             .tooltip("Remove rule")
                             .on_click({
@@ -1636,7 +1637,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-remove-last", cid))
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Remove last")
                                             .on_click({
                                                 let view = view.clone();
@@ -1650,7 +1651,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-edit", cid))
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Edit values")
                                             .on_click({
                                                 let view = view.clone();
@@ -1668,7 +1669,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-clear-all", cid))
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Clear")
                                             .on_click({
                                                 let view = view.clone();
@@ -1721,7 +1722,7 @@ impl FilterBuilderPanel {
                             .child(
                                 Button::new(("list-edit-inline", cid))
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .label("Edit values")
                                     .on_click({
                                         let view = view.clone();
@@ -1789,14 +1790,12 @@ impl FilterBuilderPanel {
                         .font_family(fonts::ui())
                         .w_full(),
                 )
-                .child(Button::new(("list-commit", cid)).ghost().compact().label("Add").on_click(
-                    {
-                        let view = view.clone();
-                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                            view.update(cx, |this, cx| this.commit_list_input(cid, window, cx));
-                        }
-                    },
-                )),
+                .child(Button::new(("list-commit", cid)).ghost().xsmall().label("Add").on_click({
+                    let view = view.clone();
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        view.update(cx, |this, cx| this.commit_list_input(cid, window, cx));
+                    }
+                })),
         )
     }
 
@@ -1881,7 +1880,7 @@ impl FilterBuilderPanel {
         let field_type = condition.field_type;
         let operators = field_type.available_operators().to_vec();
         styled_dropdown_button(("op-select", condition.id), label, cx).dropdown_menu_with_anchor(
-            Corner::TopLeft,
+            Anchor::TopLeft,
             {
                 let view = view.clone();
                 let cid = condition.id;
@@ -2229,7 +2228,7 @@ impl FilterBuilderPanel {
                     .child(
                         Button::new("close-filter-builder")
                             .ghost()
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::Close).xsmall())
                             .tooltip("Close filter builder")
                             .on_click({
@@ -2275,7 +2274,7 @@ impl FilterBuilderPanel {
                 .child(
                     Button::new("root-add-rule")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::Plus).xsmall())
                         .label("Rule")
                         .on_click({
@@ -2285,7 +2284,7 @@ impl FilterBuilderPanel {
                             }
                         }),
                 )
-                .child(Button::new("root-add-group").ghost().compact().label("Group").on_click({
+                .child(Button::new("root-add-group").ghost().xsmall().label("Group").on_click({
                     let view = view.clone();
                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                         view.update(cx, |this, cx| this.add_group(cx));
@@ -2368,8 +2367,8 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new("builder-open-json")
                                             .ghost()
-                                            .compact()
-                                            .icon(Icon::new(IconName::Braces).xsmall())
+                                            .xsmall()
+                                            .icon(Icon::new(crate::assets::AppIcon::Braces).xsmall())
                                             .label("Open JSON")
                                             .on_click({
                                                 let view = view.clone();
@@ -2383,7 +2382,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new("builder-clear")
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Clear")
                                             .on_click({
                                                 let view = view.clone();
@@ -2400,7 +2399,7 @@ impl FilterBuilderPanel {
                                     .gap(spacing::xs())
                                     .child(
                                         Button::new("builder-reset")
-                                            .compact()
+                                            .xsmall()
                                             .label("Reset")
                                             .disabled(!dirty)
                                             .on_click({
@@ -2415,7 +2414,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new("builder-run")
                                             .primary()
-                                            .compact()
+                                            .xsmall()
                                             .label("Run")
                                             .icon(Icon::new(IconName::Search).xsmall())
                                             .disabled(!can_run)
@@ -2525,7 +2524,7 @@ impl Render for BulkValueEditor {
                         window.close_dialog(cx);
                     } else if key == "enter" && event.keystroke.modifiers.secondary() {
                         cx.stop_propagation();
-                        window.focus(&save_focus);
+                        window.focus(&save_focus, cx);
                     }
                 }
             })
@@ -2572,7 +2571,7 @@ impl Render for BulkValueEditor {
                     ),
             )
             .child(
-                Input::new(&self.input_state)
+                Editor::new(&self.input_state)
                     .font_family(fonts::mono())
                     .h(px(BULK_EDITOR_HEIGHT))
                     .w_full(),
@@ -2748,7 +2747,7 @@ fn render_token_chip(
         .child(
             Button::new("remove-token")
                 .ghost()
-                .compact()
+                .xsmall()
                 .icon(Icon::new(IconName::Close).xsmall())
                 .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     on_remove(window, cx);
@@ -2837,9 +2836,9 @@ fn list_count_label(count: usize, field_type: FieldType) -> String {
 
 fn toggle_chip(label: &'static str, active: bool, cx: &App) -> Button {
     let mut button =
-        Button::new(SharedString::from(format!("toggle-chip-{label}"))).compact().label(label);
+        Button::new(SharedString::from(format!("toggle-chip-{label}"))).xsmall().label(label);
     if active {
-        button = button.active_style(cx.theme().primary.opacity(0.25));
+        button = button.bg(cx.theme().primary.opacity(0.25));
     } else {
         button = button.ghost();
     }
@@ -2944,7 +2943,6 @@ fn dropdown_variant(cx: &mut App) -> ButtonCustomVariant {
     ButtonCustomVariant::new(cx)
         .color(cx.theme().secondary)
         .foreground(cx.theme().foreground)
-        .border(cx.theme().sidebar_border)
         .hover(cx.theme().secondary_hover)
         .active(cx.theme().secondary_hover)
         .shadow(false)
@@ -2956,7 +2954,7 @@ fn styled_dropdown_button(
     cx: &mut App,
 ) -> MenuButton {
     MenuButton::new(id)
-        .compact()
+        .xsmall()
         .label(label)
         .dropdown_caret(true)
         .custom(dropdown_variant(cx))

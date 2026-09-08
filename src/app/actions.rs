@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::action_bar::ActionExecution;
@@ -488,7 +488,7 @@ impl AppRoot {
 
     pub(super) fn focus_current_content(&mut self, window: &mut Window, cx: &mut App) {
         if !self.content_area.update(cx, |content, cx| content.focus_current_view(window, cx)) {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         }
     }
 

@@ -7,7 +7,7 @@ mod import;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::connection::csv_utils::detect_problematic_fields;
@@ -196,9 +196,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result = task.await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                             tab.preview.loading = false;
@@ -429,9 +429,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<u64, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(count) => {
                         state.update(cx, |state, cx| {
                             let message = format!(
@@ -495,9 +495,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<u64, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(count) => {
                         state.update(cx, |state, cx| {
                             let message = format!(

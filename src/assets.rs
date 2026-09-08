@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
-use gpui::{AssetSource, Result, SharedString};
-use gpui_component_assets::Assets as ComponentAssets;
+use gpui_kit::assets::Assets as ComponentAssets;
+use gpui_kit::component::{Icon, IconNamed, icon_named};
+use gpui_kit::{App, AssetSource, IntoElement, RenderOnce, Result, SharedString, Window};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -14,6 +15,14 @@ use rust_embed::RustEmbed;
 pub struct EmbeddedAssets;
 
 pub struct Assets;
+
+icon_named!(AppIcon, "assets/icons");
+
+impl RenderOnce for AppIcon {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        Icon::new(self)
+    }
+}
 
 pub fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     EmbeddedAssets::iter()

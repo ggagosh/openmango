@@ -1,7 +1,10 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::helpers::format_number;
@@ -35,9 +38,9 @@ impl CollectionView {
             .gap(spacing::xs())
             .child(
                 if explain.view_mode == ExplainViewMode::Tree {
-                    Button::new("explain-mode-tree").compact().primary().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().primary().label("Visual Tree")
                 } else {
-                    Button::new("explain-mode-tree").compact().ghost().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().ghost().label("Visual Tree")
                 }
                 .on_click({
                     let state = self.state.clone();
@@ -55,9 +58,9 @@ impl CollectionView {
             )
             .child(
                 if explain.view_mode == ExplainViewMode::Json {
-                    Button::new("explain-mode-json").compact().primary().label("Raw JSON")
+                    Button::new("explain-mode-json").xsmall().primary().label("Raw JSON")
                 } else {
-                    Button::new("explain-mode-json").compact().ghost().label("Raw JSON")
+                    Button::new("explain-mode-json").xsmall().ghost().label("Raw JSON")
                 }
                 .on_click({
                     let state = self.state.clone();
@@ -87,7 +90,7 @@ impl CollectionView {
             .gap(spacing::xs())
             .child(
                 Button::new("explain-rerun")
-                    .compact()
+                    .xsmall()
                     .label("Explain")
                     .disabled(session_key.is_none() || explain.loading)
                     .on_click({
@@ -118,7 +121,7 @@ impl CollectionView {
             )
             .child(
                 Button::new("explain-copy-json")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Copy JSON")
                     .disabled(explain.raw_json.is_none())
@@ -132,7 +135,7 @@ impl CollectionView {
                         }
                     }),
             )
-            .child(Button::new("explain-close").compact().ghost().label("Close").on_click({
+            .child(Button::new("explain-close").xsmall().ghost().label("Close").on_click({
                 let state = self.state.clone();
                 let session_key = session_key.clone();
                 move |_, _, cx| {
@@ -428,7 +431,7 @@ impl CollectionView {
             .gap(spacing::xs())
             .child(
                 Button::new("explain-run-prev")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Prev")
                     .disabled(session_key.is_none() || !can_prev_run)
@@ -455,7 +458,7 @@ impl CollectionView {
             )
             .child(
                 Button::new("explain-run-next")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Next")
                     .disabled(session_key.is_none() || !can_next_run)
@@ -475,7 +478,7 @@ impl CollectionView {
             )
             .child(if diff_active {
                 Button::new("explain-clear-diff")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Clear Diff")
                     .disabled(session_key.is_none())
@@ -494,7 +497,7 @@ impl CollectionView {
                     })
             } else {
                 Button::new("explain-compare-prev")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Compare Prev")
                     .disabled(session_key.is_none() || !can_compare_prev)
@@ -514,7 +517,7 @@ impl CollectionView {
             })
             .child(
                 Button::new("explain-clear-history")
-                    .compact()
+                    .xsmall()
                     .ghost()
                     .label("Clear History")
                     .disabled(session_key.is_none() || !can_clear_history)
@@ -1212,9 +1215,9 @@ fn explain_panel_tab_button(
     session_key: Option<SessionKey>,
 ) -> Button {
     let mut button = if active_tab == tab {
-        Button::new(id).compact().primary().label(tab.label())
+        Button::new(id).xsmall().primary().label(tab.label())
     } else {
-        Button::new(id).compact().ghost().label(tab.label())
+        Button::new(id).xsmall().ghost().label(tab.label())
     };
     button = button.disabled(disabled || session_key.is_none());
     button.on_click(move |_, _, cx| {

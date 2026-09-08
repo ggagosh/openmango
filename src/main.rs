@@ -2,8 +2,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use gpui::*;
-use gpui_component::Root;
+use gpui_kit::component::{Root, TitleBar};
+use gpui_kit::*;
 use openmango::app::AppRoot;
 use openmango::assets::{Assets, embedded_fonts};
 use openmango::keyboard;
@@ -13,9 +13,9 @@ use openmango::theme;
 fn main() {
     openmango::helpers::support::init_logging();
 
-    Application::new().with_assets(Assets).run(|cx: &mut gpui::App| {
-        // Initialize gpui-component library, then add the effective app keymap.
-        gpui_component::init(cx);
+    gpui_kit::application().with_assets(Assets).run(|cx: &mut gpui_kit::App| {
+        // Initialize the toolkit before applying the app keymap and theme.
+        gpui_kit::init(cx);
         let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
         keyboard::bind_keymap(cx, &saved_settings.keybindings);
         if let Err(err) = cx.text_system().add_fonts(embedded_fonts()) {
@@ -30,13 +30,13 @@ fn main() {
         // Load the saved theme (or default)
         {
             if let Some(config) = theme::load_theme_config(saved_theme.theme_id()) {
-                gpui_component::theme::Theme::global_mut(cx).apply_config(&config);
+                gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
             }
         }
 
         // Override font families (after apply_config so they take precedence)
         {
-            let theme = gpui_component::theme::Theme::global_mut(cx);
+            let theme = gpui_kit::component::theme::Theme::global_mut(cx);
             theme.font_family = theme::fonts::ui().into();
             theme.mono_font_family = theme::fonts::mono().into();
         }
@@ -64,10 +64,9 @@ fn main() {
                 },
                 titlebar: Some(TitlebarOptions {
                     title: Some("OpenMango".into()),
-                    appears_transparent: vibrancy,
-                    ..Default::default()
+                    ..TitleBar::title_bar_options()
                 }),
-                ..Default::default()
+                ..TitleBar::window_options()
             },
             |window, cx| {
                 let app_view = cx.new(|cx| AppRoot::new(window, cx));

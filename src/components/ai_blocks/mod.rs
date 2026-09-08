@@ -3,11 +3,11 @@ mod datatable;
 pub mod report;
 mod stats;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::spinner::Spinner;
-use gpui_component::text::{TextView, TextViewStyle};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::{TextView, TextViewStyle};
+use gpui_kit::*;
 
 use crate::ai::blocks::{ChartType, ChatMessage, ContentBlock, parse_content_to_blocks};
 use crate::theme::spacing;
@@ -36,7 +36,7 @@ pub fn render_single_block(
     match block {
         ContentBlock::Markdown { text } => {
             let id = ElementId::Name(format!("{id_prefix}-{index}").into());
-            TextView::markdown(id, text.clone(), window, cx)
+            TextView::markdown(id, text.clone())
                 .selectable(true)
                 .style(style.clone())
                 .into_any_element()
@@ -94,15 +94,12 @@ fn render_code_fallback(
     lang: &str,
     code: &str,
     style: &TextViewStyle,
-    window: &mut Window,
-    cx: &mut App,
+    _window: &mut Window,
+    _cx: &mut App,
 ) -> AnyElement {
     let fallback = format!("```{lang}\n{code}\n```");
     let id = ElementId::Name(format!("{id_prefix}-{index}").into());
-    TextView::markdown(id, fallback, window, cx)
-        .selectable(true)
-        .style(style.clone())
-        .into_any_element()
+    TextView::markdown(id, fallback).selectable(true).style(style.clone()).into_any_element()
 }
 
 /// Render structured content blocks to elements.

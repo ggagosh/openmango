@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::prelude::{FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _};
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
-use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::{
+    FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _,
+};
+use gpui_kit::*;
 
 use crate::actions::model::ActionStatus;
 use crate::components::{ConnectionIdentity, ConnectionManager, connection_identity_badge};
@@ -137,8 +139,8 @@ impl Render for Sidebar {
             .track_focus(&self.focus_handle)
             .on_mouse_down(MouseButton::Left, {
                 let focus_handle = self.focus_handle.clone();
-                move |_, window, _cx| {
-                    window.focus(&focus_handle);
+                move |_, window, cx| {
+                    window.focus(&focus_handle, cx);
                 }
             })
             .on_key_down({
@@ -638,7 +640,7 @@ impl Render for Sidebar {
                                                 move |_event: &ClickEvent,
                                                       window: &mut Window,
                                                       cx: &mut App| {
-                                                    window.focus(&row_focus);
+                                                    window.focus(&row_focus, cx);
                                                     cx.stop_propagation();
 
                                                     sidebar_entity.update(cx, |sidebar, cx| {
@@ -659,7 +661,7 @@ impl Render for Sidebar {
                                                 }
                                             })
                                             .border_l_2()
-                                            .border_color(gpui::transparent_black())
+                                            .border_color(gpui_kit::transparent_black())
                                             .when(!selected, |s| {
                                                 s.hover(|s| s.bg(theme_list_hover))
                                             })
@@ -790,7 +792,7 @@ impl Render for Sidebar {
                                             // Collection: braces icon (amber)
                                             .when(is_collection, |this| {
                                                 this.child(
-                                                    Icon::new(IconName::Braces)
+                                                    Icon::new(crate::assets::AppIcon::Braces)
                                                         .size(sizing::icon_md())
                                                         .text_color(theme_warning),
                                                 )
@@ -899,9 +901,9 @@ impl Render for Sidebar {
                                 },
                             )
                         })
-                        .flex_grow()
+                        .flex_grow(1.0)
                         .size_full()
-                        .track_scroll(scroll_handle)
+                        .track_scroll(&scroll_handle)
                         .with_sizing_behavior(ListSizingBehavior::Auto)
                         .into_any_element()
                     }),
@@ -937,7 +939,7 @@ impl Render for Sidebar {
                                     }
                                 })
                                 .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                    scroll_handle.scroll_to_item(idx, gpui::ScrollStrategy::Top);
+                                    scroll_handle.scroll_to_item(idx, gpui_kit::ScrollStrategy::Top);
                                     sidebar_entity.update(cx, |_sidebar, cx| {
                                         cx.notify();
                                     });

@@ -1,10 +1,10 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
-use gpui_component::input::Input;
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Disableable as _, Sizable as _, Size};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::input::Editor;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Disableable as _, Sizable as _, Size};
+use gpui_kit::*;
 
 use crate::bson::{format_relaxed_json_value, parse_value_from_relaxed_json};
 use crate::components::Button;
@@ -54,19 +54,18 @@ impl CollectionView {
                     let operator_variant = ButtonCustomVariant::new(cx)
                         .color(cx.theme().secondary)
                         .foreground(cx.theme().foreground)
-                        .border(cx.theme().sidebar_border)
                         .hover(cx.theme().secondary_hover)
                         .active(cx.theme().secondary_hover)
                         .shadow(false);
                     MenuButton::new("agg-operator")
-                        .compact()
+                        .xsmall()
                         .label(operator_label)
                         .dropdown_caret(true)
                         .custom(operator_variant)
                         .rounded(borders::radius_sm())
                         .with_size(Size::XSmall)
                         .disabled(session_key.is_none())
-                        .dropdown_menu_with_anchor(Corner::BottomLeft, {
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                             let selected_operator = selected_operator.clone();
                             move |menu: PopupMenu, _window, _cx| {
                                 let mut menu = menu;
@@ -137,7 +136,7 @@ impl CollectionView {
                     .gap(spacing::xs())
                     .child(
                         Button::new("agg-format-stage")
-                            .compact()
+                            .xsmall()
                             .label("Format")
                             .tooltip_with_action(
                                 "Format JSON",
@@ -176,12 +175,12 @@ impl CollectionView {
                     )
                     .child(
                         Button::new("agg-clear-stage")
-                            .compact()
+                            .xsmall()
                             .label("Clear")
                             .tooltip_with_action(
                                 "Clear stage",
                                 &ClearAggregationStage,
-                                Some("Documents Aggregation Input"),
+                                Some("Documents Aggregation Editor"),
                             )
                             .disabled(session_key.is_none() || stage.is_none())
                             .on_click({
@@ -216,7 +215,7 @@ impl CollectionView {
 
         let body = if stage.is_some() {
             if let Some(body_state) = self.aggregation_stage_body_state.clone() {
-                Input::new(&body_state)
+                Editor::new(&body_state)
                     .font_family(crate::theme::fonts::mono())
                     .w_full()
                     .h_full()

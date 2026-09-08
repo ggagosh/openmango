@@ -1,16 +1,18 @@
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
 use std::rc::Rc;
 
 use crate::state::{AppCommands, CollectionStats, CollectionSubview, SchemaAnalysis, SessionKey};
 use crate::theme::spacing;
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::RopeExt as _;
-use gpui_component::Sizable as _;
-use gpui_component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
-use gpui_component::h_flex;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::RopeExt as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
+use gpui_kit::component::h_flex;
+use gpui_kit::component::input::{EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::components::filter_builder::FilterBuilderPanel;
@@ -74,9 +76,9 @@ fn subscribe_time_input(
 }
 
 fn move_cursor_inside_query_object(
-    input: &mut InputState,
+    input: &mut EditorState,
     window: &mut Window,
-    cx: &mut Context<InputState>,
+    cx: &mut Context<EditorState>,
 ) {
     if input.value().trim() == "{}" {
         let position = input.text().offset_to_position(1);
@@ -284,11 +286,14 @@ impl Render for CollectionView {
 
         if self.filter_state.is_none() {
             let filter_state = cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .multi_line(false)
+                let mut state = EditorState::new(window, cx)
+                    .language("javascript")
+                    .line_number(false)
+                    .soft_wrap(false)
+                    .submit_on_enter(true)
                     .placeholder("status:active age>30 or { ... }")
                     .clean_on_escape();
-                state.lsp.completion_provider =
+                state.lsp_mut().completion_provider =
                     Some(Rc::new(FilterCompletionProvider::new(self.state.clone())));
                 state
             });
@@ -484,11 +489,14 @@ impl Render for CollectionView {
 
         if self.sort_state.is_none() {
             let sort_state = cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .multi_line(false)
+                let mut state = EditorState::new(window, cx)
+                    .language("javascript")
+                    .line_number(false)
+                    .soft_wrap(false)
+                    .submit_on_enter(true)
                     .placeholder("sort")
                     .clean_on_escape();
-                state.lsp.completion_provider = Some(Rc::new(QueryCompletionProvider::new(
+                state.lsp_mut().completion_provider = Some(Rc::new(QueryCompletionProvider::new(
                     self.state.clone(),
                     QueryInputKind::Sort,
                 )));
@@ -567,11 +575,14 @@ impl Render for CollectionView {
 
         if self.projection_state.is_none() {
             let projection_state = cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .multi_line(false)
+                let mut state = EditorState::new(window, cx)
+                    .language("javascript")
+                    .line_number(false)
+                    .soft_wrap(false)
+                    .submit_on_enter(true)
                     .placeholder("project {}")
                     .clean_on_escape();
-                state.lsp.completion_provider = Some(Rc::new(QueryCompletionProvider::new(
+                state.lsp_mut().completion_provider = Some(Rc::new(QueryCompletionProvider::new(
                     self.state.clone(),
                     QueryInputKind::Projection,
                 )));
@@ -651,18 +662,21 @@ impl Render for CollectionView {
 
         if self.schema_filter_state.is_none() {
             let schema_filter_state = cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .multi_line(false)
+                let mut state = EditorState::new(window, cx)
+                    .language("text")
+                    .line_number(false)
+                    .soft_wrap(false)
+                    .submit_on_enter(true)
                     .placeholder("Filter fields...")
                     .clean_on_escape();
-                state.lsp.completion_provider =
+                state.lsp_mut().completion_provider =
                     Some(Rc::new(SchemaFilterCompletionProvider::new(self.state.clone())));
                 state
             });
             let subscription = cx.subscribe_in(
                 &schema_filter_state,
                 window,
-                move |view, state, event, _window, cx| {
+                move |view, state, event, window, cx| {
                     if !matches!(event, InputEvent::Change) {
                         return;
                     }
@@ -677,6 +691,12 @@ impl Render for CollectionView {
                     }
 
                     let raw = state.read(cx).value().to_string();
+                    if raw.contains('\n') {
+                        state.update(cx, |state, cx| {
+                            state.set_value(collapse_to_single_line(&raw), window, cx);
+                        });
+                        return;
+                    }
                     view.state.update(cx, |state, cx| {
                         state.set_schema_filter(&session_key, raw.clone());
                         cx.notify();
@@ -1001,7 +1021,7 @@ impl Render for CollectionView {
                                     .gap(spacing::xs())
                                     .child(
                                         Button::new("retry-document-query")
-                                            .compact()
+                                            .xsmall()
                                             .label("Retry")
                                             .disabled(retry_session.is_none())
                                             .on_click(move |_, _, cx| {
@@ -1017,7 +1037,7 @@ impl Render for CollectionView {
                                     .child(
                                         Button::new("copy-document-query-error")
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Copy Details")
                                             .on_click(move |_, _, cx| {
                                                 cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1103,7 +1123,7 @@ impl CollectionView {
         selected_field: Option<String>,
         expanded_fields: std::collections::HashSet<String>,
         schema_filter: String,
-        schema_filter_state: Option<Entity<InputState>>,
+        schema_filter_state: Option<Entity<EditorState>>,
         session_key: Option<SessionKey>,
         cx: &mut Context<Self>,
     ) -> AnyElement {

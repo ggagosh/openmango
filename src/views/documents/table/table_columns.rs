@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui_component::table::{Column, ColumnSort};
+use gpui_kit::component::table::{Column, ColumnSort};
 
 use super::column_schema::{MIN_COL_WIDTH, TableColumnDef, build_column_defs_with_overrides};
 

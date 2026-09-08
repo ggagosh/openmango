@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::chart::{BarChart, LineChart, PieChart};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::chart::{BarChart, LineChart, PieChart};
+use gpui_kit::*;
 use serde::Deserialize;
 
 use crate::theme::spacing;
@@ -112,9 +112,9 @@ pub fn render_bar(json: &str, cx: &App) -> Option<AnyElement> {
     // Bar charts: x-axis already shows labels, so use a single color and no legend.
     let primary = cx.theme().primary;
     let chart = BarChart::new(chart_data.data.clone())
-        .x(|d: &DataPoint| d.label.clone())
-        .y(|d: &DataPoint| d.value)
-        .fill(move |_: &DataPoint| primary);
+        .band(|d: &DataPoint| d.label.clone())
+        .value(|d: &DataPoint| d.value)
+        .fill(move |_: &DataPoint, _, _, _| primary);
 
     Some(chart_wrapper(chart_data.title.as_deref(), chart.into_any_element(), &[], cx))
 }

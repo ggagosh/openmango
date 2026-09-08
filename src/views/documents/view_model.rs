@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState, NumberInputEvent, StepAction};
-use gpui_component::table::TableState;
-use gpui_component::tree::{TreeItem, TreeState};
+use gpui_kit::component::input::{InputEvent, InputState, NumberInputEvent, StepAction};
+use gpui_kit::component::table::TableState;
+use gpui_kit::component::tree::{TreeItem, TreeState};
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{DocumentKey, PathSegment, bson_value_for_edit, parse_edited_value};
@@ -289,7 +289,7 @@ impl DocumentViewModel {
             self.tree_order = cached.order;
 
             self.tree_state.update(cx, |tree, cx| {
-                tree.set_items_shared(cached.items, cx);
+                tree.set_items(cached.items.to_vec(), cx);
                 tree.set_selected_index(cached.selected_index, cx);
             });
             let items = self.tree_order.len();
@@ -312,15 +312,14 @@ impl DocumentViewModel {
             .as_ref()
             .and_then(|id| order.iter().position(|entry| entry == id));
 
-        // Share a single allocation between the view-model copy (used for
-        // caching) and the tree widget instead of deep-cloning the whole tree.
+        // Cache only the materialized nodes; descendants are built when expanded.
         let items: Arc<[TreeItem]> = Arc::from(items);
         self.node_meta = Arc::new(meta);
         self.tree_items = items.clone();
         self.tree_order = Arc::from(order);
 
         self.tree_state.update(cx, |tree, cx| {
-            tree.set_items_shared(items, cx);
+            tree.set_items(items.to_vec(), cx);
             tree.set_selected_index(selected_index, cx);
         });
         let items = self.tree_order.len();
@@ -487,8 +486,8 @@ impl DocumentViewModel {
         }
         if let Some(input) = focus_state {
             let focus = input.read(cx).focus_handle(cx);
-            window.defer(cx, move |window, _cx| {
-                window.focus(&focus);
+            window.defer(cx, move |window, cx| {
+                window.focus(&focus, cx);
             });
         }
     }
@@ -660,7 +659,7 @@ impl DocumentViewModel {
         let state_clone = state.clone();
         let view_clone = view.clone();
         cx.subscribe_in(&table_state, window, move |cv, ts, event, window, cx| {
-            use gpui_component::table::TableEvent;
+            use gpui_kit::component::table::TableEvent;
             match event {
                 TableEvent::SelectRow(row_ix) => {
                     let row_ix = *row_ix;
@@ -830,7 +829,7 @@ impl DocumentViewModel {
 
         let state_clone = state.clone();
         cx.subscribe_in(&agg_table, window, move |cv, ts, event, _window, cx| {
-            use gpui_component::table::TableEvent;
+            use gpui_kit::component::table::TableEvent;
             match event {
                 TableEvent::ColumnWidthsChanged(widths) => {
                     let col_widths: HashMap<String, f32> = {

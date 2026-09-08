@@ -1,9 +1,11 @@
 //! Stats row rendering for collection header.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::spinner::Spinner;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::helpers::{format_bytes, format_number};
@@ -41,7 +43,7 @@ pub fn render_stats_row(
             row.child(div().text_sm().text_color(cx.theme().danger_foreground).child(error)).child(
                 Button::new("retry-stats")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .label("Retry")
                     .disabled(session_key.is_none())
                     .on_click({

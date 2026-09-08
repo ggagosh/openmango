@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::{Icon, IconName, Sizable};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{Icon, IconName, Sizable};
+use gpui_kit::*;
 
 use crate::theme::{colors, spacing};
 use crate::views::documents::tree::lazy_tree::VisibleRow;

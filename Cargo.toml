@@ -14,11 +14,9 @@ default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-gpui = "0.2.2"
-gpui-component = { version = "0.5", features = ["tree-sitter-languages"] }
-tree-sitter = "0.25"
+gpui-kit = { version = "0.6.0", features = ["tree-sitter-languages"] }
+tree-sitter = "0.26"
 tree-sitter-javascript = "0.25"
-gpui-component-assets = "0.5"
 lsp-types = "0.97"
 mongodb = { version = "3.5", features = ["socks5-proxy", "cert-key-password"] }
 tokio = { version = "1", features = ["full"] }
@@ -81,6 +79,3 @@ debug = "line-tables-only"
 [profile.release]
 opt-level = 3
 lto = "thin"
-
-[patch.crates-io]
-gpui-component = { path = "vendor/gpui-component" }

@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 
 use crate::bson::parse_bson_from_relaxed_json;
 use crate::connection::{AggregatePipelineError, ConnectionManager};
@@ -233,10 +233,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<AggregationRunResult, AggregationRunError> = task.await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(run) => {
                         let count = run.documents.len();
                         let (applied, history_failed) = state.update(cx, |state, cx| {

@@ -4,8 +4,8 @@ mod types;
 
 use std::sync::Arc;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 
 use crate::theme::spacing;
 use crate::views::documents::tree::lazy_row::compute_row_meta;
@@ -85,7 +85,7 @@ pub fn render_results_view<T: 'static>(
                 }),
             )
             .flex_1()
-            .track_scroll(props.scroll_handle),
+            .track_scroll(&props.scroll_handle),
         );
 
     div()

@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use gpui::Context;
+use gpui_kit::Context;
 
 use crate::state::{AppEvent, WindowState};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ impl AppState {
         }
     }
 
-    pub fn set_workspace_window_bounds(&mut self, bounds: gpui::WindowBounds) {
+    pub fn set_workspace_window_bounds(&mut self, bounds: gpui_kit::WindowBounds) {
         let window_state = WindowState::from_bounds(bounds);
         if self.workspace.window_state.as_ref() != Some(&window_state) {
             self.workspace.window_state = Some(window_state);

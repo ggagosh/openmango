@@ -4,14 +4,16 @@
 //! and editor panels. Tab-specific rendering is in `tabs.rs` and
 //! connection list rendering is in `connection_list.rs`.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::tab::{Tab, TabBar};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, request_unsaved_action};
 use crate::state::UnsavedScope;
@@ -243,18 +245,16 @@ impl ConnectionManager {
             .gap(spacing::sm())
             .flex_shrink_0()
             .when(creating_new, |row| {
-                row.child(Button::new("cancel-new-connection").compact().label("Cancel").on_click(
-                    {
-                        let view = view.clone();
-                        move |_, window, cx| {
-                            ConnectionManager::request_cancel_new(view.clone(), window, cx);
-                        }
-                    },
-                ))
+                row.child(Button::new("cancel-new-connection").xsmall().label("Cancel").on_click({
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        ConnectionManager::request_cancel_new(view.clone(), window, cx);
+                    }
+                }))
             })
             .child(
                 Button::new("test-connection")
-                    .compact()
+                    .xsmall()
                     .label(if is_testing { "Testing..." } else { "Test" })
                     .disabled(is_testing)
                     .on_click({
@@ -266,7 +266,7 @@ impl ConnectionManager {
             )
             .child(
                 Button::new("save-connection")
-                    .compact()
+                    .xsmall()
                     .primary()
                     .label(if is_active_selection { "Save & Reconnect" } else { "Save & Connect" })
                     .on_click({
@@ -303,7 +303,7 @@ impl ConnectionManager {
             );
 
         let row = if let Some(error_details) = error_details {
-            row.child(Button::new("test-details").compact().label("Details").on_click(
+            row.child(Button::new("test-details").xsmall().label("Details").on_click(
                 move |_, window, cx| {
                     let details = error_details.clone();
                     window.open_dialog(cx, move |dialog: Dialog, _window, _cx| {

@@ -1,16 +1,18 @@
 //! Schema explorer view — field tree + inspector panel.
 
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::chart::{BarChart, PieChart};
-use gpui_component::input::{Input, InputState};
-use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::chart::{BarChart, PieChart};
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::helpers::format_number;
@@ -41,7 +43,7 @@ pub fn render_schema_panel(
     selected_field: Option<String>,
     expanded_fields: HashSet<String>,
     schema_filter: String,
-    schema_filter_state: Option<Entity<InputState>>,
+    schema_filter_state: Option<Entity<EditorState>>,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
     cx: &mut Context<CollectionView>,
@@ -78,7 +80,7 @@ pub fn render_schema_panel(
             .child(
                 Button::new("retry-schema")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .label("Retry")
                     .disabled(session_key.is_none())
                     .on_click({
@@ -113,7 +115,7 @@ pub fn render_schema_panel(
             .child(
                 Button::new("analyze-schema")
                     .primary()
-                    .compact()
+                    .xsmall()
                     .label("Analyze Schema")
                     .disabled(session_key.is_none())
                     .on_click({
@@ -488,9 +490,9 @@ fn render_tree_row_owned(
     // Chevron
     let chevron: AnyElement = if row.has_children {
         let icon_name = if row.is_expanded {
-            gpui_component::IconName::ChevronDown
+            gpui_kit::component::IconName::ChevronDown
         } else {
-            gpui_component::IconName::ChevronRight
+            gpui_kit::component::IconName::ChevronRight
         };
         let path = row.path.clone();
         let session_key = session_key.clone();
@@ -502,7 +504,7 @@ fn render_tree_row_owned(
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .child(gpui_component::Icon::new(icon_name).xsmall())
+            .child(gpui_kit::component::Icon::new(icon_name).xsmall())
             .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                 if let Some(session_key) = session_key.clone() {
                     state.update(cx, |state, cx| {
@@ -538,7 +540,7 @@ fn render_tree_row_owned(
         .bg(palette.border)
         .child(div().w(px(bar_width)).h_full().rounded(px(2.0)).bg(freq_color));
 
-    let bg = if is_selected { palette.list_active } else { gpui::transparent_black() };
+    let bg = if is_selected { palette.list_active } else { gpui_kit::transparent_black() };
 
     let path = row.path.clone();
     let session_key_click = session_key.clone();
@@ -686,7 +688,7 @@ fn freq_pct_color_static(pct: f64, palette: SchemaTreePalette) -> Hsla {
 
 fn render_tree_toolbar(
     filter_plan: &SchemaFilterPlan,
-    schema_filter_state: Option<Entity<InputState>>,
+    schema_filter_state: Option<Entity<EditorState>>,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
     cx: &App,
@@ -698,11 +700,11 @@ fn render_tree_toolbar(
             .flex_1()
             .min_w(px(220.0))
             .child(
-                Input::new(&filter_state)
+                Editor::new(&filter_state)
                     .appearance(true)
                     .bordered(true)
-                    .focus_bordered(true)
-                    .small()
+                    .text_sm()
+                    .h(px(28.0))
                     .w_full(),
             )
             .into_any_element(),
@@ -718,7 +720,7 @@ fn render_tree_toolbar(
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .child(
-                gpui_component::Icon::new(gpui_component::IconName::Search)
+                gpui_kit::component::Icon::new(gpui_kit::component::IconName::Search)
                     .xsmall()
                     .text_color(cx.theme().muted_foreground),
             )
@@ -748,8 +750,11 @@ fn render_tree_toolbar(
                 .child(
                     Button::new("clear-schema-filter")
                         .ghost()
-                        .compact()
-                        .icon(gpui_component::Icon::new(gpui_component::IconName::Close).xsmall())
+                        .xsmall()
+                        .icon(
+                            gpui_kit::component::Icon::new(gpui_kit::component::IconName::Close)
+                                .xsmall(),
+                        )
                         .tooltip("Clear filter")
                         .disabled(session_key.is_none() || !has_filter)
                         .on_click({
@@ -768,10 +773,12 @@ fn render_tree_toolbar(
                 .child(
                     Button::new("expand-all-schema")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(
-                            gpui_component::Icon::new(gpui_component::IconName::ChevronDown)
-                                .xsmall(),
+                            gpui_kit::component::Icon::new(
+                                gpui_kit::component::IconName::ChevronDown,
+                            )
+                            .xsmall(),
                         )
                         .tooltip("Expand all")
                         .disabled(session_key.is_none())
@@ -791,9 +798,12 @@ fn render_tree_toolbar(
                 .child(
                     Button::new("collapse-all-schema")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(
-                            gpui_component::Icon::new(gpui_component::IconName::ChevronUp).xsmall(),
+                            gpui_kit::component::Icon::new(
+                                gpui_kit::component::IconName::ChevronUp,
+                            )
+                            .xsmall(),
                         )
                         .tooltip("Collapse all")
                         .disabled(session_key.is_none())
@@ -879,8 +889,8 @@ fn render_filter_token_chip(
         .child(
             Button::new(("schema-filter-token-clear", index))
                 .ghost()
-                .compact()
-                .icon(gpui_component::Icon::new(gpui_component::IconName::Close).xsmall())
+                .xsmall()
+                .icon(gpui_kit::component::Icon::new(gpui_kit::component::IconName::Close).xsmall())
                 .tooltip("Remove token")
                 .disabled(session_key.is_none())
                 .on_click({
@@ -1080,9 +1090,14 @@ fn render_inspector(
                 color: type_color(&t.bson_type, cx),
             })
             .collect();
-        type_body = type_body.child(div().h(px(140.0)).child(
-            BarChart::new(bar_data).x(|d| d.bson_type.clone()).y(|d| d.count).fill(|d| d.color),
-        ));
+        type_body = type_body.child(
+            div().h(px(140.0)).child(
+                BarChart::new(bar_data)
+                    .band(|d| d.bson_type.clone())
+                    .value(|d| d.count)
+                    .fill(|d, _, _, _| d.color),
+            ),
+        );
     }
     panel = panel.child(section_card("Type Distribution", None, type_body.into_any_element(), cx));
 

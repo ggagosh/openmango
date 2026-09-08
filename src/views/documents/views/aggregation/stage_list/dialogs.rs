@@ -1,12 +1,15 @@
 //! Stage dialogs for operator picker and pipeline import.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, cancel_button};
 use crate::state::StatusMessage;
@@ -58,8 +61,8 @@ pub(super) fn open_stage_operator_picker_dialog(
                 state.set_value(String::new(), window, cx);
             });
             let focus = search_state.read(cx).focus_handle(cx);
-            window.defer(cx, move |window, _cx| {
-                window.focus(&focus);
+            window.defer(cx, move |window, cx| {
+                window.focus(&focus, cx);
             });
         }
 
@@ -116,7 +119,7 @@ pub(super) fn open_stage_operator_picker_dialog(
 
                     buttons.push(
                         Button::new(("agg-stage-operator", id_index))
-                            .compact()
+                            .xsmall()
                             .label(operator.clone())
                             .track_focus(&focus_handle)
                             .tab_index(tab_index)
@@ -293,8 +296,8 @@ pub(super) fn open_import_pipeline_dialog(
     window.open_dialog(cx, move |dialog: Dialog, window: &mut Window, cx: &mut App| {
         let pipeline_state =
             window.use_keyed_state(("agg-import-pipeline-input", session_id), cx, |window, cx| {
-                InputState::new(window, cx)
-                    .code_editor("javascript")
+                EditorState::new(window, cx)
+                    .language("javascript")
                     .line_number(true)
                     .soft_wrap(true)
                     .placeholder("Paste pipeline JSON array")
@@ -314,8 +317,8 @@ pub(super) fn open_import_pipeline_dialog(
                 state.set_value(String::new(), window, cx);
             });
             let focus = pipeline_state.read(cx).focus_handle(cx);
-            window.defer(cx, move |window, _cx| {
-                window.focus(&focus);
+            window.defer(cx, move |window, cx| {
+                window.focus(&focus, cx);
             });
         }
 
@@ -340,7 +343,7 @@ pub(super) fn open_import_pipeline_dialog(
                         .justify_between()
                         .child(
                             Button::new("agg-import-paste")
-                                .compact()
+                                .xsmall()
                                 .label("Paste from Clipboard")
                                 .tooltip("Paste pipeline JSON from clipboard")
                                 .on_click({
@@ -379,7 +382,7 @@ pub(super) fn open_import_pipeline_dialog(
                         ),
                 )
                 .child(
-                    Input::new(&pipeline_state)
+                    gpui_kit::component::input::Editor::new(&pipeline_state)
                         .font_family(crate::theme::fonts::mono())
                         .w_full()
                         .h(px(320.0)),

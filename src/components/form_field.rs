@@ -1,8 +1,8 @@
 //! Reusable form field component for label + input patterns.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::*;
 
 use crate::theme::spacing;
 

@@ -1,6 +1,6 @@
 //! Selection management for AppState.
 
-use gpui::Context;
+use gpui_kit::Context;
 
 use super::AppState;
 use super::tabs::TabOpenMode;

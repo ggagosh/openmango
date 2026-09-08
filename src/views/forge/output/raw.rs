@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::*;
 
 use super::super::ForgeView;
 use crate::theme::fonts;
@@ -10,37 +10,15 @@ impl ForgeView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
+    ) -> Entity<TextareaState> {
         if let Some(state) = self.state.output.raw_output_state.as_ref() {
             return state.clone();
         }
 
         let raw_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("text")
-                .line_number(false)
-                .searchable(true)
-                .placeholder("No output yet.")
+            TextareaState::new(window, cx).searchable(true).placeholder("No output yet.")
         });
 
-        let subscription =
-            cx.subscribe_in(&raw_state, window, move |this, state, event, window, cx| {
-                if let InputEvent::Change = event {
-                    if this.state.output.raw_output_programmatic {
-                        return;
-                    }
-                    let current = state.read(cx).value().to_string();
-                    if current != this.state.output.raw_output_text {
-                        this.state.output.raw_output_programmatic = true;
-                        state.update(cx, |state, cx| {
-                            state.set_value(this.state.output.raw_output_text.clone(), window, cx);
-                        });
-                        this.state.output.raw_output_programmatic = false;
-                    }
-                }
-            });
-
-        self.state.output.raw_output_subscription = Some(subscription);
         self.state.output.raw_output_state = Some(raw_state.clone());
         raw_state
     }
@@ -83,18 +61,16 @@ impl ForgeView {
         }
         let current = state.read(cx).value().to_string();
         if current != text {
-            self.state.output.raw_output_programmatic = true;
             state.update(cx, |state, cx| {
                 state.set_value(text, window, cx);
             });
-            self.state.output.raw_output_programmatic = false;
         }
 
-        Input::new(&state)
+        Textarea::new(&state)
+            .readonly(true)
             .h_full()
             .appearance(false)
             .bordered(false)
-            .focus_bordered(false)
             .font_family(fonts::mono())
             .text_xs()
             .text_color(cx.theme().secondary_foreground)

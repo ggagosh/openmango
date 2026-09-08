@@ -1,14 +1,15 @@
 //! Stage row rendering including drag/drop support, insert chips, and context menus.
 
-use gpui::Styled as _;
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Disableable as _;
-use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::switch::Switch;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::Styled as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::format_number;
@@ -134,7 +135,7 @@ pub(super) fn render_stage_list(
             .px(spacing::sm())
             .pt(spacing::sm())
             .pb(px(24.0))
-            .track_scroll(scroll_handle),
+            .track_scroll(&scroll_handle),
         )
         .into_any_element()
 }
@@ -226,7 +227,7 @@ fn render_stage_row(
         div().flex().items_center().justify_between().w_full().child(header_left).child(
             Button::new(("agg-stage-remove", idx))
                 .ghost()
-                .compact()
+                .xsmall()
                 .icon(Icon::new(IconName::Delete).xsmall())
                 .tooltip_with_action(
                     "Delete stage",

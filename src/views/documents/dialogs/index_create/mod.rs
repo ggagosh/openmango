@@ -5,10 +5,10 @@ mod key_rows;
 mod render;
 pub(super) mod support;
 
-use gpui::*;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{EditorState, InputState};
+use gpui_kit::*;
 use mongodb::IndexModel;
 use mongodb::bson::{Bson, Document, doc, to_bson};
 
@@ -32,9 +32,9 @@ pub struct IndexCreateDialog {
     pub(super) suggestions: Vec<FieldSuggestion>,
     pub(super) name_state: Entity<InputState>,
     pub(super) ttl_state: Entity<InputState>,
-    pub(super) partial_state: Entity<InputState>,
-    pub(super) collation_state: Entity<InputState>,
-    pub(super) json_state: Entity<InputState>,
+    pub(super) partial_state: Entity<EditorState>,
+    pub(super) collation_state: Entity<EditorState>,
+    pub(super) json_state: Entity<EditorState>,
     pub(super) unique: bool,
     pub(super) sparse: bool,
     pub(super) hidden: bool,
@@ -83,21 +83,21 @@ impl IndexCreateDialog {
         let name_state = cx.new(|cx| InputState::new(window, cx).placeholder("Index name"));
         let ttl_state = cx.new(|cx| InputState::new(window, cx).placeholder("TTL seconds"));
         let partial_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .placeholder("Partial filter (JSON)")
-                .code_editor("javascript")
+                .language("javascript")
                 .soft_wrap(true)
         });
         let collation_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .placeholder("Collation (JSON)")
-                .code_editor("javascript")
+                .language("javascript")
                 .soft_wrap(true)
         });
         let json_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 .placeholder("{ \"key\": { \"field\": 1 } }")
-                .code_editor("javascript")
+                .language("javascript")
                 .line_number(true)
                 .soft_wrap(true)
         });
@@ -287,9 +287,9 @@ impl IndexCreateDialog {
             async move { manager.sample_documents(&client, &database, &collection, SAMPLE_SIZE) }
         });
 
-        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
             let result: Result<Vec<Document>, crate::error::Error> = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = view.update(cx, |this, cx: &mut Context<Self>| match result {
                     Ok(docs) => {
                         this.suggestions = build_field_suggestions(&docs);

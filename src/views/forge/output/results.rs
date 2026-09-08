@@ -1,12 +1,13 @@
+use gpui_kit::component::button::ButtonVariants as _;
 use std::sync::Arc;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::components::Button;
@@ -133,7 +134,7 @@ impl ForgeView {
                 .child(
                     Button::new("forge-expand-all")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::ChevronDown).xsmall())
                         .tooltip("Expand all")
                         .on_click({
@@ -151,7 +152,7 @@ impl ForgeView {
                 .child(
                     Button::new("forge-collapse-all")
                         .ghost()
-                        .compact()
+                        .xsmall()
                         .icon(Icon::new(IconName::ChevronUp).xsmall())
                         .tooltip("Collapse all")
                         .on_click({

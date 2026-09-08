@@ -1,11 +1,13 @@
-use gpui::*;
-use gpui_component::Sizable as _;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::*;
 use mongodb::IndexModel;
 use mongodb::bson::Document;
 
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
 
 use crate::bson::bson_value_preview;
 use crate::components::{Button, WriteConfirmation, request_connection_write};
@@ -201,7 +203,7 @@ impl CollectionView {
                                     .child(
                                         Button::new(("edit-index", index))
                                             .ghost()
-                                            .compact()
+                                            .xsmall()
                                             .label("Edit")
                                             .disabled(!can_edit || session_key.is_none())
                                             .on_click({
@@ -225,7 +227,7 @@ impl CollectionView {
                                     .child(
                                         Button::new(("drop-index", index))
                                             .danger()
-                                            .compact()
+                                            .xsmall()
                                             .label("Drop")
                                             .disabled(!can_drop || session_key.is_none())
                                             .on_click({

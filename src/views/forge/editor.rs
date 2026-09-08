@@ -1,14 +1,13 @@
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::RopeExt;
-use gpui_component::input::{InputEvent, InputState, TabSize};
+use gpui_kit::component::RopeExt;
+use gpui_kit::component::input::{EditorState, InputEvent, TabSize};
+use gpui_kit::*;
 
 use super::logic::statement_bounds;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
-use super::editor_behavior::{IndentConfig, IndentResult, indent_after_enter};
 use super::parser::parse_context;
 
 impl ForgeView {
@@ -24,40 +23,26 @@ impl ForgeView {
         ));
 
         let editor_state = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor("javascript")
-                .auto_indent(false)
+            let mut editor = EditorState::new(window, cx)
+                .language("javascript")
                 .line_number(true)
                 .tab_size(TabSize { tab_size: 2, hard_tabs: false })
                 .placeholder("// MongoDB Shell (db.)");
 
-            editor.lsp.completion_provider = Some(provider.clone());
+            editor.lsp_mut().completion_provider = Some(provider.clone());
             editor
         });
 
-        let subscription = cx.subscribe_in(
-            &editor_state,
-            window,
-            move |this, state, event, window, cx| match event {
-                InputEvent::Change => {
+        let subscription =
+            cx.subscribe_in(&editor_state, window, move |this, state, event, window, cx| {
+                if let InputEvent::Change = event {
                     if this.try_auto_pair(state, window, cx) {
                         return;
                     }
                     let text = state.read(cx).value().to_string();
                     this.handle_editor_change(&text, cx);
                 }
-                InputEvent::PressEnter { secondary: false } => {
-                    let mut adjusted = false;
-                    state.update(cx, |state, cx| {
-                        adjusted = apply_custom_indent(state, window, cx);
-                    });
-                    if adjusted {
-                        cx.notify();
-                    }
-                }
-                _ => {}
-            },
-        );
+            });
 
         self.state.editor.editor_state = Some(editor_state);
         self.state.editor.editor_subscription = Some(subscription);
@@ -214,7 +199,7 @@ impl ForgeView {
 
     fn try_auto_pair(
         &mut self,
-        state: &gpui::Entity<InputState>,
+        state: &gpui_kit::Entity<EditorState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -226,118 +211,5 @@ impl ForgeView {
             false
         };
         self.state.editor.auto_pair.try_auto_pair(state, in_comment, window, cx)
-    }
-}
-
-fn apply_custom_indent(
-    state: &mut InputState,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) -> bool {
-    let text = state.value().to_string();
-    let cursor = state.cursor();
-    if cursor == 0 || cursor > text.len() {
-        return false;
-    }
-
-    let bytes = text.as_bytes();
-    if bytes[cursor - 1] != b'\n' {
-        return false;
-    }
-
-    // Read indent config from editor state
-    let config = IndentConfig {
-        width: state.current_tab_size().tab_size,
-        use_tabs: state.current_tab_size().hard_tabs,
-    };
-
-    let mut prev_non_ws = None;
-    let mut idx = cursor - 1;
-    while idx > 0 {
-        idx -= 1;
-        let ch = bytes[idx];
-        if !ch.is_ascii_whitespace() {
-            prev_non_ws = Some((idx, ch));
-            break;
-        }
-    }
-
-    let mut next_non_ws = None;
-    let mut j = cursor;
-    while j < bytes.len() {
-        let ch = bytes[j];
-        if !ch.is_ascii_whitespace() {
-            next_non_ws = Some((j, ch));
-            break;
-        }
-        j += 1;
-    }
-
-    let mut base_line_end = cursor - 1;
-    while base_line_end > 0 && bytes[base_line_end - 1] == b'\n' {
-        base_line_end -= 1;
-    }
-
-    let mut base_line_start = base_line_end;
-    while base_line_start > 0 && bytes[base_line_start - 1] != b'\n' {
-        base_line_start -= 1;
-    }
-
-    // If the previous line is empty, walk back to find a non-empty line.
-    while base_line_start < base_line_end
-        && text[base_line_start..base_line_end].trim().is_empty()
-        && base_line_start > 0
-    {
-        let mut scan = base_line_start - 1;
-        while scan > 0 && bytes[scan - 1] != b'\n' {
-            scan -= 1;
-        }
-        base_line_end = base_line_start - 1;
-        base_line_start = scan;
-    }
-
-    let mut indent_end = base_line_start;
-    while indent_end < bytes.len() {
-        let ch = bytes[indent_end];
-        if ch == b'\n' || !ch.is_ascii_whitespace() {
-            break;
-        }
-        indent_end += 1;
-    }
-    let base_indent = text.get(base_line_start..indent_end).unwrap_or("");
-
-    let prev_char = prev_non_ws.map(|(_, ch)| ch as char);
-    let next_char = next_non_ws.map(|(_, ch)| ch as char);
-
-    let result = indent_after_enter(prev_char, next_char, base_indent, &config);
-
-    match result {
-        IndentResult::None => false,
-        IndentResult::Simple(indent) => {
-            // Replace any auto-inserted horizontal whitespace after the newline.
-            let mut ws_end = cursor;
-            while ws_end < bytes.len() && matches!(bytes[ws_end], b' ' | b'\t') {
-                ws_end += 1;
-            }
-            let range = state.text().offset_to_offset_utf16(cursor)
-                ..state.text().offset_to_offset_utf16(ws_end);
-            state.replace_text_in_range(Some(range), &indent, window, cx);
-            let position = state.text().offset_to_position(cursor + indent.len());
-            state.set_cursor_position(position, window, cx);
-            true
-        }
-        IndentResult::BetweenBraces { inner, outer } => {
-            let next_idx = next_non_ws.map(|(idx, _)| idx).unwrap_or(cursor);
-            // Normalize the between-braces region to exactly one inner line.
-            debug_assert!(cursor >= 1, "between-braces indent requires newline at cursor - 1");
-            let start = cursor - 1; // include the newline inserted by Enter
-            let insertion = format!("\n{inner}\n{outer}");
-            let range = state.text().offset_to_offset_utf16(start)
-                ..state.text().offset_to_offset_utf16(next_idx);
-            state.replace_text_in_range(Some(range), &insertion, window, cx);
-            let position = state.text().offset_to_position(start + 1 + inner.len());
-            state.set_cursor_position(position, window, cx);
-            true
-        }
     }
 }

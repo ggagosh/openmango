@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::table::{Column, ColumnSort, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::DocumentKey;
@@ -22,6 +22,7 @@ pub struct DocumentTableDelegate {
     drafts: HashMap<DocumentKey, Document>,
     selected_doc_keys: HashSet<DocumentKey>,
     anchor_row: Option<usize>,
+    context_column: Option<usize>,
     state: Entity<AppState>,
     view: Entity<CollectionView>,
     pub session_key: Option<SessionKey>,
@@ -40,6 +41,7 @@ impl DocumentTableDelegate {
             drafts: HashMap::new(),
             selected_doc_keys: HashSet::new(),
             anchor_row: None,
+            context_column: None,
             state,
             view,
             session_key,
@@ -151,8 +153,8 @@ impl TableDelegate for DocumentTableDelegate {
         self.documents.len()
     }
 
-    fn column(&self, col_ix: usize, _cx: &App) -> &Column {
-        self.table_cols.column_def(col_ix)
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        self.table_cols.column_def(col_ix).clone()
     }
 
     fn render_th(
@@ -167,7 +169,8 @@ impl TableDelegate for DocumentTableDelegate {
         let state = self.state.clone();
         let session_key = self.session_key.clone();
 
-        let pin_icon = if is_pinned { IconName::Pin } else { IconName::PinOff };
+        let pin_icon =
+            if is_pinned { crate::assets::AppIcon::Pin } else { crate::assets::AppIcon::PinOff };
         let pin_opacity: f32 = if is_pinned { 1.0 } else { 0.0 };
         let muted_bg = cx.theme().muted;
         let icon_color = if is_pinned { cx.theme().primary } else { cx.theme().muted_foreground };
@@ -188,9 +191,9 @@ impl TableDelegate for DocumentTableDelegate {
                     .rounded_sm()
                     .p(px(1.0))
                     .opacity(pin_opacity)
-                    .hover(|s: gpui::StyleRefinement| s.opacity(1.0).bg(muted_bg))
+                    .hover(|s: gpui_kit::StyleRefinement| s.opacity(1.0).bg(muted_bg))
                     .when(!is_pinned, |this: Stateful<Div>| {
-                        this.group_hover("col-header-group", |s: gpui::StyleRefinement| {
+                        this.group_hover("col-header-group", |s: gpui_kit::StyleRefinement| {
                             s.opacity(0.5)
                         })
                     })
@@ -230,7 +233,13 @@ impl TableDelegate for DocumentTableDelegate {
 
         let selected_bg = cx.theme().list_active;
 
-        let mut row = div().id(("row", row_ix));
+        let mut row = div().id(("row", row_ix)).capture_any_mouse_down(cx.listener(
+            |table, event: &MouseDownEvent, _, _| {
+                if event.button == MouseButton::Right {
+                    table.delegate_mut().context_column = None;
+                }
+            },
+        ));
 
         if is_dirty {
             row = row.bg(colors::bg_dirty(cx));
@@ -303,11 +312,19 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(value) = self.cell_value(row_ix, col_ix) else {
-            return div().text_xs().text_color(cx.theme().muted_foreground).into_any_element();
-        };
-
-        cell_renderer::render_cell(value, row_ix, col_ix, cx)
+        let content = self
+            .cell_value(row_ix, col_ix)
+            .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
+        div()
+            .size_full()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |table, _, _, _| {
+                    table.delegate_mut().context_column = Some(col_ix);
+                }),
+            )
+            .children(content)
+            .into_any_element()
     }
 
     fn render_empty(
@@ -329,11 +346,10 @@ impl TableDelegate for DocumentTableDelegate {
     fn context_menu(
         &mut self,
         row_ix: usize,
-        selected_col: Option<usize>,
-        menu: gpui_component::menu::PopupMenu,
+        menu: gpui_kit::component::menu::PopupMenu,
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
-    ) -> gpui_component::menu::PopupMenu {
+    ) -> gpui_kit::component::menu::PopupMenu {
         let Some(item) = self.documents.get(row_ix) else {
             return menu;
         };
@@ -362,7 +378,7 @@ impl TableDelegate for DocumentTableDelegate {
 
         column_menu::build_table_column_menu(
             menu,
-            selected_col,
+            self.context_column,
             &self.table_cols.columns,
             self.table_cols.pinned_columns(),
             column_menu::ColumnMenuKind::Document,

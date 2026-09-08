@@ -1,6 +1,6 @@
 //! Node metadata for the document tree view.
 
-use gpui::Hsla;
+use gpui_kit::Hsla;
 use mongodb::bson::Bson;
 
 use crate::bson::{DocumentKey, PathSegment};

@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
 use crate::state::{AppState, CollectionStats, SessionKey, StatusMessage};
@@ -30,9 +30,9 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<Document, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(stats_doc) => {
                         let stats = CollectionStats::from_document(&stats_doc);
                         state.update(cx, |state, cx| {

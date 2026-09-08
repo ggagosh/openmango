@@ -4,8 +4,8 @@
 //! only for visible rows, avoiding the overhead of pre-computing
 //! metadata for all 20,000+ nodes.
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};

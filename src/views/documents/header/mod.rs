@@ -19,11 +19,11 @@ pub use filter_bar::{render_filter_row, render_query_options};
 pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::InputState;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::{EditorState, InputState};
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::helpers::format_number;
@@ -45,11 +45,11 @@ impl CollectionView {
         selected_count: usize,
         any_selected_dirty: bool,
         is_loading: bool,
-        filter_state: Option<Entity<InputState>>,
+        filter_state: Option<Entity<EditorState>>,
         filter_valid: bool,
         filter_active: bool,
-        sort_state: Option<Entity<InputState>>,
-        projection_state: Option<Entity<InputState>>,
+        sort_state: Option<Entity<EditorState>>,
+        projection_state: Option<Entity<EditorState>>,
         sort_valid: bool,
         projection_valid: bool,
         sort_active: bool,
@@ -139,8 +139,8 @@ impl CollectionView {
             .py(spacing::sm())
             .gap(px(2.0))
             .bg(islands::tool_bg(&appearance, cx))
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                window.blur();
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.blur(cx);
             })
             .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
             .child(div().pl(px(0.0)).child(subview_tabs))

@@ -1,11 +1,13 @@
 //! Filter bar and query options rendering for collection header.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::RopeExt as _;
-use gpui_component::input::{Input, InputState};
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::RopeExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::state::{AppCommands, AppState, SessionKey};
@@ -15,9 +17,9 @@ use crate::views::documents::CollectionView;
 use super::super::fast_filter::filter_chips_for_input;
 
 fn set_query_object_default(
-    input: &mut InputState,
+    input: &mut EditorState,
     window: &mut Window,
-    cx: &mut Context<InputState>,
+    cx: &mut Context<EditorState>,
 ) {
     input.set_value("{}".to_string(), window, cx);
     let position = input.text().offset_to_position(1);
@@ -29,7 +31,7 @@ fn set_query_object_default(
 pub fn render_filter_row(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    filter_state: Option<Entity<InputState>>,
+    filter_state: Option<Entity<EditorState>>,
     filter_valid: bool,
     filter_active: bool,
     sort_active: bool,
@@ -86,14 +88,14 @@ pub fn render_filter_row(
             })
             .child({
                 let mut run_btn = filter_action_button(
-                    Button::new("apply-filter").compact(),
+                    Button::new("apply-filter").xsmall(),
                     IconName::Search,
                     "Run",
                 )
                 .disabled(session_key.is_none() || !filter_valid);
 
                 if filter_dirty && filter_valid {
-                    run_btn = run_btn.active_style(cx.theme().primary.opacity(0.55));
+                    run_btn = run_btn.bg(cx.theme().primary.opacity(0.55));
                 }
 
                 run_btn.on_click({
@@ -119,7 +121,7 @@ pub fn render_filter_row(
             })
             .child(
                 filter_action_button(
-                    Button::new("run-explain").compact(),
+                    Button::new("run-explain").xsmall(),
                     IconName::Info,
                     "Explain",
                 )
@@ -137,7 +139,7 @@ pub fn render_filter_row(
             )
             .child(
                 filter_action_button(
-                    Button::new("clear-filter").compact(),
+                    Button::new("clear-filter").xsmall(),
                     IconName::Close,
                     "Clear Find",
                 )
@@ -169,7 +171,7 @@ pub fn render_filter_row(
             .child({
                 let mut options_button = Button::new("toggle-options")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .icon(Icon::new(IconName::Settings).xsmall())
                     .tooltip("Projection options")
                     .disabled(session_key.is_none())
@@ -187,15 +189,15 @@ pub fn render_filter_row(
                         }
                     });
                 if query_options_open || sort_active || projection_active {
-                    options_button = options_button.active_style(cx.theme().secondary);
+                    options_button = options_button.bg(cx.theme().secondary);
                 }
                 options_button
             })
             .child({
                 let mut builder_button = Button::new("toggle-filter-builder")
                     .ghost()
-                    .compact()
-                    .icon(Icon::new(IconName::Braces).xsmall())
+                    .xsmall()
+                    .icon(Icon::new(crate::assets::AppIcon::Braces).xsmall())
                     .tooltip("Filter Builder")
                     .disabled(session_key.is_none())
                     .on_click({
@@ -212,14 +214,14 @@ pub fn render_filter_row(
                         }
                     });
                 if filter_builder_open {
-                    builder_button = builder_button.active_style(cx.theme().primary.opacity(0.55));
+                    builder_button = builder_button.bg(cx.theme().primary.opacity(0.55));
                 }
                 builder_button
             })
             .child(
                 Button::new("document-query-library")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .icon(Icon::new(IconName::BookOpen).xsmall())
                     .label("Library")
                     .tooltip("Query Library (Cmd/Ctrl+Shift+H)")
@@ -306,8 +308,8 @@ fn render_filter_chips(chips: &[String], cx: &App) -> Div {
 #[allow(clippy::too_many_arguments)]
 fn render_query_segment(
     id: impl Into<ElementId>,
-    icon: IconName,
-    state: Option<Entity<InputState>>,
+    icon: impl Into<Icon>,
+    state: Option<Entity<EditorState>>,
     placeholder: &'static str,
     valid: bool,
     active: bool,
@@ -340,8 +342,9 @@ fn render_query_segment(
 
     if let Some(state) = state {
         row = row.child(
-            Input::new(&state)
-                .small()
+            Editor::new(&state)
+                .text_sm()
+                .h(px(26.0))
                 .font_family(crate::theme::fonts::mono())
                 .appearance(false)
                 .w_full()
@@ -359,8 +362,8 @@ fn render_query_segment(
 pub fn render_query_options(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    sort_state: Option<Entity<InputState>>,
-    projection_state: Option<Entity<InputState>>,
+    sort_state: Option<Entity<EditorState>>,
+    projection_state: Option<Entity<EditorState>>,
     sort_valid: bool,
     projection_valid: bool,
     sort_active: bool,
@@ -401,7 +404,7 @@ pub fn render_query_options(
                 .child(div().w(px(1.0)).h(px(16.0)).bg(cx.theme().sidebar_border.opacity(0.32)))
                 .child(render_query_segment(
                     "query-segment-project",
-                    IconName::Braces,
+                    crate::assets::AppIcon::Braces,
                     projection_state.clone(),
                     "project {}",
                     projection_valid,
@@ -412,7 +415,7 @@ pub fn render_query_options(
         )
         .child(
             filter_action_button(
-                Button::new("apply-query").compact(),
+                Button::new("apply-query").xsmall(),
                 IconName::Check,
                 "Apply options",
             )
@@ -445,7 +448,7 @@ pub fn render_query_options(
         )
         .child(
             filter_action_button(
-                Button::new("clear-query").compact(),
+                Button::new("clear-query").xsmall(),
                 IconName::Close,
                 "Clear options",
             )

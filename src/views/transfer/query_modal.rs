@@ -1,8 +1,11 @@
 //! Query edit modal for filter, projection, and sort fields.
 
-use gpui::*;
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme as _, IconName};
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::{ActiveTheme as _, IconName};
+use gpui_kit::*;
 
 use crate::bson::{format_relaxed_json_compact, parse_value_from_relaxed_json};
 use crate::components::Button;
@@ -44,9 +47,9 @@ impl TransferView {
             return;
         };
 
-        // Create input state for modal textarea
+        // Use the native code editor for the MongoDB query document.
         let input_state = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
+            let mut state = EditorState::new(window, cx).language("javascript").soft_wrap(true);
             state.set_value(current_value, window, cx);
             state
         });
@@ -99,11 +102,11 @@ impl TransferView {
         let previous_focus = self.query_edit_previous_focus.take();
         cx.notify();
         if let Some(previous_focus) = previous_focus {
-            window.defer(cx, move |window, _cx| window.focus(&previous_focus));
+            window.defer(cx, move |window, cx| window.focus(&previous_focus, cx));
         }
     }
 
-    /// Format the JSON in the modal textarea (compact, single-line since Input doesn't support newlines).
+    /// Format the JSON in the modal textarea (compact, single-line since Editor doesn't support newlines).
     pub(super) fn format_query_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ref input_state) = self.query_edit_input else {
             return;
@@ -115,7 +118,7 @@ impl TransferView {
         }
 
         // Try to parse using relaxed JSON parser, then output as compact relaxed JSON
-        // (Input component doesn't support newlines, so we use single-line format)
+        // (Editor component doesn't support newlines, so we use single-line format)
         if let Ok(value) = parse_value_from_relaxed_json(&current_text) {
             let formatted = format_relaxed_json_compact(&value);
             input_state.update(cx, |state, cx| {
@@ -203,7 +206,7 @@ impl TransferView {
                             .child(
                                 Button::new("modal-close")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .icon(IconName::Close)
                                     .on_click(move |_, window, cx| {
                                         view_cancel.update(cx, |view, cx| {
@@ -218,7 +221,7 @@ impl TransferView {
                             .flex_1()
                             .p(spacing::md())
                             .min_h(px(200.0))
-                            .child(Input::new(input_state).h_full().w_full()),
+                            .child(Editor::new(input_state).h_full().w_full()),
                     )
                     // Validation status
                     .child(
@@ -251,7 +254,7 @@ impl TransferView {
                             .child(
                                 Button::new("modal-format")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .label("Format")
                                     .on_click(move |_, window, cx| {
                                         view_format.update(cx, |view, cx| {
@@ -262,7 +265,7 @@ impl TransferView {
                             .child(
                                 Button::new("modal-clear")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .label("Clear")
                                     .on_click(move |_, window, cx| {
                                         view_clear.update(cx, |view, cx| {
@@ -273,7 +276,7 @@ impl TransferView {
                             .child(
                                 Button::new("modal-cancel")
                                     .ghost()
-                                    .compact()
+                                    .xsmall()
                                     .label("Cancel")
                                     .on_click(move |_, window, cx| {
                                         view.update(cx, |view, cx| {
@@ -284,7 +287,7 @@ impl TransferView {
                             .child(
                                 Button::new("modal-save")
                                     .primary()
-                                    .compact()
+                                    .xsmall()
                                     .label("Save")
                                     .disabled(!is_valid)
                                     .on_click(move |_, window, cx| {
