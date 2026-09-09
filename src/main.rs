@@ -34,12 +34,7 @@ fn main() {
             }
         }
 
-        // Override font families (after apply_config so they take precedence)
-        {
-            let theme = gpui_kit::component::theme::Theme::global_mut(cx);
-            theme.font_family = theme::fonts::ui().into();
-            theme.mono_font_family = theme::fonts::mono().into();
-        }
+        theme::apply_design_tokens(cx);
 
         // Apply vibrancy alpha overrides after theme is fully configured
         if vibrancy {

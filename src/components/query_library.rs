@@ -708,7 +708,7 @@ impl QueryLibraryDialog {
             div()
                 .px(px(5.0))
                 .py(px(1.0))
-                .rounded(px(3.0))
+                .rounded(crate::theme::borders::radius_sm())
                 .bg(cx.theme().secondary)
                 .text_color(cx.theme().secondary_foreground)
                 .child("Global")

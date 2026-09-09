@@ -281,7 +281,7 @@ impl ForgeView {
                                 .justify_center()
                                 .w(px(14.0))
                                 .h(px(14.0))
-                                .rounded(px(4.0))
+                                .rounded(crate::theme::borders::radius_sm())
                                 .cursor_pointer()
                                 .hover(|s| s.bg(cx.theme().secondary.opacity(0.45)))
                                 .child(pin_icon)
@@ -310,7 +310,7 @@ impl ForgeView {
                                 .justify_center()
                                 .w(px(14.0))
                                 .h(px(14.0))
-                                .rounded(px(4.0))
+                                .rounded(crate::theme::borders::radius_sm())
                                 .cursor_pointer()
                                 .text_color(cx.theme().muted_foreground)
                                 .hover(|s| {

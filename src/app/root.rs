@@ -1017,7 +1017,7 @@ impl Render for AppRoot {
                     .cursor_col_resize()
                     .bg(crate::theme::colors::transparent())
                     .my(px(10.0))
-                    .rounded(px(999.0))
+                    .rounded_full()
                     .hover(|s| s.bg(islands::panel_border(&appearance, cx).opacity(0.7)))
                     .tooltip(|window, cx| {
                         Tooltip::new("Drag to resize sidebar. Double-click to hide or show.")
@@ -1077,7 +1077,7 @@ impl Render for AppRoot {
                     .cursor_col_resize()
                     .bg(crate::theme::colors::transparent())
                     .my(px(10.0))
-                    .rounded(px(999.0))
+                    .rounded_full()
                     .hover(|s| s.bg(islands::panel_border(&appearance, cx).opacity(0.7)))
                     .when(is_ai_dragging, |s: Stateful<Div>| {
                         s.bg(islands::panel_border(&appearance, cx).opacity(0.9))

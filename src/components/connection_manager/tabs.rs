@@ -670,7 +670,7 @@ impl ConnectionManager {
                 this.child(
                     div()
                         .mb(spacing::md())
-                        .rounded_md()
+                        .rounded(crate::theme::borders::radius_sm())
                         .bg(cx.theme().danger.opacity(0.08))
                         .px(spacing::sm())
                         .py(spacing::xs())

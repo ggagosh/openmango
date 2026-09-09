@@ -183,7 +183,7 @@ mod tests {
     use super::*;
 
     impl ConfigManager {
-        fn with_config_dir(config_dir: PathBuf) -> Self {
+        pub(crate) fn with_config_dir(config_dir: PathBuf) -> Self {
             Self { config_dir }
         }
     }

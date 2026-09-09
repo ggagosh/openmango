@@ -149,7 +149,7 @@ pub fn render_datatable(json: &str, id: ElementId, cx: &App) -> Option<AnyElemen
             .max_h(px(MAX_TABLE_H))
             .border_1()
             .border_color(border)
-            .rounded(px(8.0))
+            .rounded(crate::theme::borders::radius_md())
             .bg(cx.theme().table.opacity(0.55))
             .overflow_scroll()
             .on_scroll_wheel(|_, _, cx| {

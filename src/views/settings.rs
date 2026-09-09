@@ -1179,7 +1179,7 @@ fn mcp_grant_row(label: &str, description: &str, actions: impl IntoElement, cx: 
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.0))
+                        .rounded(crate::theme::borders::radius_sm())
                         .bg(cx.theme().secondary.opacity(0.5))
                         .text_color(cx.theme().secondary_foreground)
                         .child(Icon::new(IconName::Bot).xsmall()),

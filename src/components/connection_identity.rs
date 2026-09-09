@@ -90,7 +90,7 @@ pub fn connection_identity_badge(
             div()
                 .size(px(8.0))
                 .flex_shrink_0()
-                .rounded_full()
+                .rounded(borders::radius_xs())
                 .bg(colors::connection_accent(color, cx)),
         );
     }

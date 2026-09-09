@@ -8,8 +8,6 @@
       "mode": "light",
       "font.family": "JetBrainsMono Nerd Font",
       "mono_font.family": "JetBrainsMono Nerd Font Mono",
-      "radius": 8,
-      "radius.lg": 8,
       "shadow": false,
       "colors": {
         "background": "#faf4ed",

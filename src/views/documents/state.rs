@@ -128,6 +128,15 @@ impl CollectionView {
                 return;
             }
             view.update(cx, |this, cx| {
+                if let Some(panel) = this.filter_builder_panel.clone()
+                    && panel.read(cx).focus_handle(cx).contains_focused(window, cx)
+                {
+                    if is_enter && cmd_or_ctrl {
+                        panel.update(cx, |panel, cx| panel.apply_filter(window, cx));
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 let filter_focused = this
                     .filter_state
                     .as_ref()

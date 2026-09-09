@@ -68,7 +68,7 @@ pub fn render_report_preview(
         .w_full()
         .border_1()
         .border_color(border)
-        .rounded(px(8.0))
+        .rounded(crate::theme::borders::radius_md())
         .bg(cx.theme().table.opacity(0.55))
         .overflow_hidden()
         .child(title_bar);

@@ -38,6 +38,15 @@ pub fn load_theme_config(theme_id: &str) -> Option<Rc<ThemeConfig>> {
     theme_set.themes.into_iter().next().map(Rc::new)
 }
 
+/// Keep application geometry and typography consistent across all color themes.
+pub fn apply_design_tokens(cx: &mut App) {
+    let theme = gpui_kit::component::theme::Theme::global_mut(cx);
+    theme.font_family = fonts::ui().into();
+    theme.mono_font_family = fonts::mono().into();
+    theme.radius = borders::radius_sm();
+    theme.radius_lg = borders::radius_md();
+}
+
 pub fn apply_theme(
     app_theme: AppTheme,
     vibrancy: bool,
@@ -47,10 +56,7 @@ pub fn apply_theme(
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
         gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
 
-        // Re-apply font family overrides
-        let theme = gpui_kit::component::theme::Theme::global_mut(cx);
-        theme.font_family = fonts::ui().into();
-        theme.mono_font_family = fonts::mono().into();
+        apply_design_tokens(cx);
 
         if vibrancy {
             apply_vibrancy(cx);
@@ -182,7 +188,7 @@ pub mod islands {
     use super::*;
 
     pub fn tab_bar(bar: TabBar, appearance: &AppearanceSettings) -> TabBar {
-        let bar = bar.min_w(px(0.0)).max_width(px(260.0));
+        let bar = bar.min_w(px(0.0)).max_width(px(260.0)).rounded(borders::radius_sm());
         match appearance.islands.tab_style {
             // Keep the native selected surface neutral so connection colors and
             // status badges remain legible in the surrounding application theme.
@@ -194,12 +200,12 @@ pub mod islands {
 
     pub fn radius_sm(appearance: &AppearanceSettings) -> Pixels {
         let _ = appearance;
-        px(8.0)
+        borders::radius_sm()
     }
 
     pub fn radius_md(appearance: &AppearanceSettings) -> Pixels {
         let _ = appearance;
-        px(8.0)
+        borders::radius_md()
     }
 
     pub fn panel_border(_appearance: &AppearanceSettings, cx: &App) -> Hsla {
@@ -247,6 +253,28 @@ pub mod islands {
 mod tests {
     use super::{effective_vibrancy, requires_vibrancy_restart};
     use crate::state::AppTheme;
+
+    #[gpui_kit::test]
+    fn every_color_theme_uses_the_shared_radius_scale(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            for (id, _) in super::THEME_SOURCES {
+                let config = super::load_theme_config(id).expect("valid bundled theme");
+                let theme = gpui_kit::component::Theme::global_mut(cx);
+                theme.radius = gpui_kit::px(30.);
+                theme.radius_lg = gpui_kit::px(40.);
+                theme.apply_config(&config);
+                super::apply_design_tokens(cx);
+                let theme = gpui_kit::component::Theme::global(cx);
+                assert_eq!(theme.radius, super::borders::radius_sm(), "{id}");
+                assert_eq!(theme.radius_lg, super::borders::radius_md(), "{id}");
+                let base = gpui_kit::base::Theme::global(cx);
+                assert_eq!(base.tokens.radius.sm, super::borders::radius_xs(), "{id}");
+                assert_eq!(base.tokens.radius.md, super::borders::radius_sm(), "{id}");
+                assert_eq!(base.tokens.radius.lg, super::borders::radius_md(), "{id}");
+            }
+        });
+    }
 
     #[test]
     fn vibrancy_follows_user_toggle() {
@@ -368,10 +396,17 @@ pub mod fonts {
 pub mod borders {
     use gpui_kit::{Pixels, px};
 
-    pub fn radius_sm() -> Pixels {
-        px(3.0)
-    } // Subtler rounded corners
+    /// Small indicators and chart marks; matches the toolkit's small radius tier.
+    pub fn radius_xs() -> Pixels {
+        radius_sm() / 2.0
+    }
 
+    /// Buttons, inputs, tabs, rows, menus, and small labels.
+    pub fn radius_sm() -> Pixels {
+        px(6.0)
+    }
+
+    /// Panels, dialogs, cards, and other larger surfaces.
     pub fn radius_md() -> Pixels {
         px(8.0)
     }

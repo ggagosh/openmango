@@ -91,7 +91,7 @@ pub(crate) fn render_tree_row(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .cursor_pointer()
             .hover(|s| s.bg(chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
@@ -339,7 +339,7 @@ pub fn render_readonly_tree_row(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .cursor_pointer()
             .hover(|s| s.bg(agg_chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {

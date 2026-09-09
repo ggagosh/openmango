@@ -694,7 +694,7 @@ impl Render for Sidebar {
                                                         .items_center()
                                                         .justify_center()
                                                         .size(px(18.0))
-                                                        .rounded(px(4.0))
+                                                        .rounded(crate::theme::borders::radius_sm())
                                                         .cursor_pointer()
                                                         .hover(|s| s.bg(theme_foreground.opacity(0.1)))
                                                         .tooltip({

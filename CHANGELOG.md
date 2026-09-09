@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Copy ID action for documents, including ID-only copying of a selected collapsed document
 - Open a highlighted collection in Forge with Cmd/Ctrl+Shift+F, or choose Open Forge as the collection double-click action in Settings; queries start with `find({})`, ready to run ([#12](https://github.com/ggagosh/openmango/issues/12))
 - Authenticated local MCP agent access with per-connection sharing and write controls, bounded read tools, direct document insert/update/replace/delete, and metadata-only History restore tools
 - Native approval and Agent Activity workflows for Arcula database backups, syncs, and verified-backup reverts, including progress, cancellation, target fingerprints, and recovery interlocks
@@ -77,6 +78,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
+- Migrated the desktop UI to published GPUI Kit 0.6 components and removed the vendored toolkit patches
+- Forge retains editor state across tabs, uses fuzzy atomic completions, preserves output selection and scrolling, and reduces sidecar startup overhead
+- Filter Builder now uses consistent native controls, collapsible borderless groups, and scoped keyboard handling with validation before execution
+- Corner radii now follow one shared application scale across all built-in color themes
 - Settings now use a searchable full-content tab with General, Transfer, AI Assistant, Agents & MCP, and Keybindings pages
 - Connection management now uses a full-content singleton tab with explicit new-connection drafts, cancellation, draft-discard protection, and consistent New Connection entry points
 - History now observes MongoDB changes passively and never pre-reads, authorizes, approves, or blocks originating writes
@@ -86,7 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - AI enablement now discloses the workspace metadata sent to the selected provider, and complete system prompts are no longer written to debug logs
 - Transfer jobs that continue after errors retain failure counts, per-collection details, and processed-document totals
 - Release workflows now publish per-archive SHA-256 checksum assets
-- Filter bar redesigned — filter stays primary with parsed readback chips, while sort and projection live in the Options panel
+- Document query editors now provide field/value completion, typed ID queries, multiline drafts, and undoable formatting on submission, with sort and projection in Options
 - AI chat panel moved out of the documents view into its own dedicated space
 - Close buttons on tabs now only appear on hover (except the active tab)
 - Tab bar styling updated with padding and theme-aware background

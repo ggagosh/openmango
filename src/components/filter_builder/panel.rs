@@ -1,9 +1,9 @@
 use gpui_kit::component::Disableable as _;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, NumberInput};
@@ -11,7 +11,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::component::{Icon, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
@@ -20,11 +20,16 @@ use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::{borders, fonts, spacing};
 
+use super::controls::{match_mode, toolbar};
 use super::drag::{DragField, DragValue};
 use super::types::{
     Combinator, ConditionValue, DropTarget, FieldType, FilterCondition, FilterNode, FilterOperator,
     FilterTree, drag_value_for, is_valid_value_for_field_type,
 };
+
+#[cfg(test)]
+#[path = "panel_tests.rs"]
+mod tests;
 
 const SAMPLE_SIZE: i64 = 500;
 const MAX_SUGGESTIONS: usize = 7;
@@ -94,11 +99,13 @@ struct BulkValueEditor {
 }
 
 pub struct FilterBuilderPanel {
+    focus_handle: FocusHandle,
     state: Entity<AppState>,
     session_key: SessionKey,
     filter_input: Entity<EditorState>,
     tree: FilterTree,
     applied_tree: FilterTree,
+    collapsed_groups: HashSet<u64>,
     unsupported_reason: Option<String>,
     suggestions: Vec<FieldSuggestion>,
     suggestions_loaded: bool,
@@ -111,6 +118,12 @@ pub struct FilterBuilderPanel {
     _subscriptions: Vec<Subscription>,
 }
 
+impl Focusable for FilterBuilderPanel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl FilterBuilderPanel {
     pub fn new(
         state: Entity<AppState>,
@@ -121,11 +134,13 @@ impl FilterBuilderPanel {
     ) -> Self {
         let blank = Self::blank_tree();
         let mut panel = Self {
+            focus_handle: cx.focus_handle(),
             state,
             session_key,
             filter_input,
             tree: blank.clone(),
             applied_tree: blank,
+            collapsed_groups: HashSet::new(),
             unsupported_reason: None,
             suggestions: Vec::new(),
             suggestions_loaded: false,
@@ -148,6 +163,7 @@ impl FilterBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.collapsed_groups.clear();
         match FilterTree::from_document(doc) {
             Ok(tree) => {
                 self.unsupported_reason = None;
@@ -207,6 +223,7 @@ impl FilterBuilderPanel {
     }
 
     fn rebuild_condition_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.collapsed_groups.retain(|id| self.tree.find_group(*id).is_some());
         self.condition_inputs.clear();
         self._subscriptions.clear();
         for condition in self.tree.conditions() {
@@ -220,17 +237,12 @@ impl FilterBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let field_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Field path").clean_on_escape());
-        let scalar_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Value").clean_on_escape());
-        let list_input_state = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Type and press Enter").clean_on_escape()
-        });
-        let range_start_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Start").clean_on_escape());
-        let range_end_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("End").clean_on_escape());
+        let field_state = cx.new(|cx| InputState::new(window, cx).placeholder("Field path"));
+        let scalar_state = cx.new(|cx| InputState::new(window, cx).placeholder("Value"));
+        let list_input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Type and press Enter"));
+        let range_start_state = cx.new(|cx| InputState::new(window, cx).placeholder("Start"));
+        let range_end_state = cx.new(|cx| InputState::new(window, cx).placeholder("End"));
 
         let cid = condition_id;
 
@@ -240,6 +252,14 @@ impl FilterBuilderPanel {
             move |panel, state, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     let raw = state.read(cx).value().to_string();
+                    if panel.tree.condition_mut(cid).is_some_and(|condition| condition.field == raw)
+                    {
+                        if panel.suppress_suggestion_row == Some(cid) {
+                            panel.suppress_suggestion_row = None;
+                            panel.active_suggestion_row = None;
+                        }
+                        return;
+                    }
                     let suppress_autocomplete = panel.suppress_suggestion_row == Some(cid);
                     if suppress_autocomplete {
                         panel.suppress_suggestion_row = None;
@@ -286,6 +306,7 @@ impl FilterBuilderPanel {
                     && let Some(value) = condition.value.scalar_mut()
                 {
                     *value = state.read(cx).value().to_string();
+                    cx.notify();
                 }
             },
         );
@@ -321,6 +342,7 @@ impl FilterBuilderPanel {
                     && let Some((start, _)) = condition.value.range_mut()
                 {
                     *start = state.read(cx).value().to_string();
+                    cx.notify();
                 }
             },
         );
@@ -334,6 +356,7 @@ impl FilterBuilderPanel {
                     && let Some((_, end)) = condition.value.range_mut()
                 {
                     *end = state.read(cx).value().to_string();
+                    cx.notify();
                 }
             },
         );
@@ -454,7 +477,14 @@ impl FilterBuilderPanel {
     fn add_condition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.tree.add_condition();
         self.create_condition_inputs(id, window, cx);
+        self.focus_condition(id, window, cx);
         cx.notify();
+    }
+
+    fn focus_condition(&self, id: u64, window: &mut Window, cx: &mut App) {
+        if let Some(inputs) = self.condition_inputs.get(&id) {
+            window.focus(&inputs.field_state.read(cx).focus_handle(cx), cx);
+        }
     }
 
     fn add_condition_from_drag(
@@ -484,6 +514,32 @@ impl FilterBuilderPanel {
         cx.notify();
     }
 
+    fn toggle_group(&mut self, group_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.collapsed_groups.remove(&group_id) {
+            self.collapsed_groups.insert(group_id);
+            let hides_focus = self.tree.find_group(group_id).is_some_and(|group| {
+                self.condition_inputs.iter().any(|(id, inputs)| {
+                    group.contains_node(*id)
+                        && [
+                            &inputs.field_state,
+                            &inputs.scalar_state,
+                            &inputs.list_input_state,
+                            &inputs.range_start_state,
+                            &inputs.range_end_state,
+                        ]
+                        .iter()
+                        .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+                })
+            });
+            if hides_focus {
+                window.focus(&self.focus_handle, cx);
+            }
+        }
+        self.active_suggestion_row = None;
+        self.calendar_target = None;
+        cx.notify();
+    }
+
     fn duplicate_node(&mut self, node_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(duplicate_id) = self.tree.duplicate_node(node_id) {
             if matches!(self.tree.find_node(duplicate_id), Some(FilterNode::Condition(_))) {
@@ -497,6 +553,7 @@ impl FilterBuilderPanel {
 
     fn remove_node(&mut self, node_id: u64, cx: &mut Context<Self>) {
         self.tree.remove_node(node_id);
+        self.collapsed_groups.retain(|id| self.tree.find_group(*id).is_some());
         self.condition_inputs.remove(&node_id);
         cx.notify();
     }
@@ -680,8 +737,15 @@ impl FilterBuilderPanel {
         self.unsupported_reason.is_none() && self.tree.validation_error().is_none()
     }
 
-    fn apply_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn apply_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.unsupported_reason.is_some() {
+            return;
+        }
+        for condition in self.tree.conditions() {
+            self.commit_list_input(condition.id, window, cx);
+        }
+        if !self.can_run() {
+            cx.notify();
             return;
         }
         let document = self.tree.to_document();
@@ -690,7 +754,7 @@ impl FilterBuilderPanel {
         let filter_doc = if document.is_empty() { None } else { Some(document) };
 
         self.filter_input.update(cx, |state, cx| {
-            state.set_value(
+            state.replace_all(
                 if raw_store.is_empty() { "{}".to_string() } else { json.clone() },
                 window,
                 cx,
@@ -707,12 +771,19 @@ impl FilterBuilderPanel {
     }
 
     fn open_json_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for condition in self.tree.conditions() {
+            self.commit_list_input(condition.id, window, cx);
+        }
+        if self.unsupported_reason.is_none() && !self.can_run() {
+            cx.notify();
+            return;
+        }
         let should_overwrite = self.unsupported_reason.is_none();
         let next_value = self.tree.to_json_string();
 
         if should_overwrite {
             self.filter_input.update(cx, |state, cx| {
-                state.set_value(next_value, window, cx);
+                state.replace_all(next_value, window, cx);
             });
         }
 
@@ -725,11 +796,13 @@ impl FilterBuilderPanel {
     }
 
     fn attempt_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query_focus = self.filter_input.read(cx).focus_handle(cx);
         if !self.is_dirty() {
             self.state.update(cx, |state, cx| {
                 state.set_filter_builder_open(&self.session_key, false);
                 cx.notify();
             });
+            window.focus(&query_focus, cx);
             return;
         }
 
@@ -742,11 +815,12 @@ impl FilterBuilderPanel {
             "You have unapplied filter builder changes.",
             "Discard",
             true,
-            move |_window, cx| {
+            move |window, cx| {
                 state.update(cx, |state, cx| {
                     state.set_filter_builder_open(&session_key, false);
                     cx.notify();
                 });
+                window.focus(&query_focus, cx);
             },
         );
     }
@@ -843,8 +917,8 @@ impl FilterBuilderPanel {
 
         let btn = Button::new(button_id)
             .ghost()
-            .xsmall()
-            .icon(Icon::new(IconName::Calendar).xsmall())
+            .small()
+            .icon(Icon::new(IconName::Calendar).small())
             .tooltip(tooltip)
             .on_click({
                 let view = view.clone();
@@ -1020,7 +1094,7 @@ impl FilterBuilderPanel {
                     .items_start()
                     .gap(spacing::sm())
                     .child(
-                        Icon::new(IconName::TriangleAlert).xsmall().text_color(cx.theme().warning),
+                        Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning),
                     )
                     .child(
                         div()
@@ -1032,7 +1106,7 @@ impl FilterBuilderPanel {
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(cx.theme().foreground)
-                                    .child("This filter needs raw JSON"),
+                                    .child("This filter needs MQL"),
                             )
                             .child(
                                 div()
@@ -1043,9 +1117,10 @@ impl FilterBuilderPanel {
                     ),
             )
             .child(
-                div().text_xs().text_color(cx.theme().muted_foreground).child(
-                    "Start a fresh visual draft or keep editing the existing query in JSON.",
-                ),
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Start a fresh visual draft or keep editing the existing query in MQL."),
             )
             .child(
                 div()
@@ -1054,9 +1129,9 @@ impl FilterBuilderPanel {
                     .gap(spacing::xs())
                     .child(
                         Button::new("builder-unsupported-json")
-                            .xsmall()
+                            .small()
                             .primary()
-                            .label("Open JSON")
+                            .label("Edit MQL")
                             .on_click({
                                 let view = view.clone();
                                 move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -1066,7 +1141,7 @@ impl FilterBuilderPanel {
                     )
                     .child(
                         Button::new("builder-unsupported-fresh")
-                            .xsmall()
+                            .small()
                             .ghost()
                             .label("Start fresh")
                             .on_click({
@@ -1088,7 +1163,7 @@ impl FilterBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut column = div().flex().flex_col().gap(px(1.0));
+        let mut column = div().flex().flex_col().min_w(px(0.0)).gap(spacing::xs());
         column = column.child(self.render_drop_slot(
             DropTarget { parent_group_id, index: 0 },
             nodes.is_empty(),
@@ -1129,138 +1204,171 @@ impl FilterBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let accent =
-            if combinator == Combinator::And { cx.theme().primary } else { cx.theme().warning };
-        let drag_label = format!("Move {} group", combinator.short_label());
-        let append_accent = cx.theme().primary;
-
+        let accent = cx.theme().primary;
+        let collapsed = self.collapsed_groups.contains(&group_id);
+        let count = group_condition_count(children);
         div()
             .id(SharedString::from(format!("group-card-{group_id}")))
             .flex()
             .flex_col()
-            .gap(spacing::xs())
-            .rounded(borders::radius_md())
-            .border_1()
-            .border_color(accent.opacity(0.35))
-            .bg(accent.opacity(0.06))
-            .px(spacing::sm())
-            .py(px(4.0))
+            .min_w(px(0.))
+            .gap(spacing::sm())
+            .py(spacing::sm())
             .opacity(if self.drag_source == Some(group_id) { 0.55 } else { 1.0 })
             .can_drop({
                 let session_key = self.session_key.clone();
-                move |value, _window, _cx| {
-                    value
-                        .downcast_ref::<DraggedFilterNode>()
-                        .is_some_and(|drag| {
-                            drag.session_key == session_key && drag.node_id != group_id
-                        })
+                move |value, _, _| {
+                    value.downcast_ref::<DraggedFilterNode>().is_some_and(|drag| {
+                        drag.session_key == session_key && drag.node_id != group_id
+                    })
                 }
             })
-            .drag_over::<DraggedFilterNode>(move |style, _drag, _window, _cx| {
-                style
-                    .border_2()
-                    .border_color(append_accent)
-                    .bg(append_accent.opacity(0.08))
-            })
+            .drag_over::<DraggedFilterNode>(move |style, _, _, _| style.bg(accent.opacity(0.08)))
             .on_drop({
                 let view = view.clone();
                 move |drag: &DraggedFilterNode, window, cx| {
                     view.update(cx, |this, cx| {
-                        this.handle_group_append_drop(drag, group_id, window, cx)
-                    });
+                        this.collapsed_groups.remove(&group_id);
+                        this.handle_group_append_drop(drag, group_id, window, cx);
+                    })
                 }
             })
             .child(
-                div()
-                    .flex()
-                    .items_center()
+                toolbar()
                     .justify_between()
-                    .gap(spacing::sm())
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(self.render_drag_handle(group_id, drag_label, view, cx))
-                            .child(summary_chip(combinator.short_label(), accent, cx))
+                        toolbar()
+                            .child(self.render_drag_handle(group_id, "Move group".into(), view, cx))
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(cx.theme().foreground)
-                                    .child(combinator.label()),
+                                    .debug_selector(move || {
+                                        format!("builder-group-toggle-{group_id}")
+                                    })
+                                    .child(
+                                        Button::new(("toggle-filter-group", group_id))
+                                            .ghost()
+                                            .small()
+                                            .icon(
+                                                Icon::new(if collapsed {
+                                                    IconName::ChevronRight
+                                                } else {
+                                                    IconName::ChevronDown
+                                                })
+                                                .small(),
+                                            )
+                                            .label("Group")
+                                            .toggled(!collapsed)
+                                            .tooltip(if collapsed {
+                                                "Expand group"
+                                            } else {
+                                                "Collapse group"
+                                            })
+                                            .on_click({
+                                                let view = view.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |this, cx| {
+                                                        this.toggle_group(group_id, window, cx)
+                                                    })
+                                                }
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(rule_count_label(count)),
                             ),
                     )
+                    .child(self.render_combinator_toggle(Some(group_id), combinator, view, cx)),
+            )
+            .when(!collapsed, |group| {
+                group
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.0))
-                            .child(self.render_combinator_toggle(Some(group_id), combinator, view, cx))
+                        toolbar()
+                            .pl(spacing::lg())
                             .child(
                                 Button::new(("group-add-rule", group_id))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(Icon::new(IconName::Plus).xsmall())
-                                    .label("Rule")
+                                    .small()
+                                    .icon(Icon::new(IconName::Plus).small())
+                                    .label("Add condition")
                                     .on_click({
                                         let view = view.clone();
-                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                        move |_, window, cx| {
                                             view.update(cx, |this, cx| {
-                                                if let Some(id) = this.tree.add_condition_to_group(group_id) {
+                                                if let Some(id) =
+                                                    this.tree.add_condition_to_group(group_id)
+                                                {
                                                     this.create_condition_inputs(id, window, cx);
+                                                    this.focus_condition(id, window, cx);
                                                     cx.notify();
                                                 }
-                                            });
+                                            })
                                         }
                                     }),
                             )
                             .child(
                                 Button::new(("group-add-group", group_id))
                                     .ghost()
-                                    .xsmall()
-                                    .label("Group")
+                                    .small()
+                                    .label("Add group")
                                     .on_click({
                                         let view = view.clone();
-                                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        move |_, _, cx| {
                                             view.update(cx, |this, cx| {
                                                 this.tree.add_group_to_group(group_id);
                                                 cx.notify();
-                                            });
+                                            })
                                         }
                                     }),
                             )
                             .child(
                                 Button::new(("group-duplicate", group_id))
                                     .ghost()
-                                    .xsmall()
-                                    .icon(Icon::new(IconName::Copy).xsmall())
+                                    .small()
+                                    .icon(Icon::new(IconName::Copy).small())
                                     .tooltip("Duplicate group")
                                     .on_click({
                                         let view = view.clone();
-                                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                            view.update(cx, |this, cx| this.duplicate_node(group_id, window, cx));
+                                        move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.duplicate_node(group_id, window, cx)
+                                            })
                                         }
                                     }),
                             )
-                            .when(can_remove, |this| {
-                                this.child(
+                            .when(can_remove, |row| {
+                                row.child(
                                     Button::new(("group-remove", group_id))
                                         .ghost()
-                                        .xsmall()
-                                        .icon(Icon::new(IconName::Close).xsmall())
+                                        .small()
+                                        .icon(Icon::new(IconName::Close).small())
                                         .tooltip("Remove group")
                                         .on_click({
                                             let view = view.clone();
-                                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                                view.update(cx, |this, cx| this.remove_node(group_id, cx));
+                                            move |_, _, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    this.remove_node(group_id, cx)
+                                                })
                                             }
                                         }),
                                 )
                             }),
-                    ),
-            )
-            .child(self.render_node_list(children, Some(group_id), false, view, window, cx))
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || format!("builder-group-content-{group_id}"))
+                            .pl(spacing::lg())
+                            .child(self.render_node_list(
+                                children,
+                                Some(group_id),
+                                false,
+                                view,
+                                window,
+                                cx,
+                            )),
+                    )
+            })
     }
 
     fn render_condition_card(
@@ -1281,22 +1389,21 @@ impl FilterBuilderPanel {
         let drag_label = format!(
             "Move {}",
             if condition.field.trim().is_empty() {
-                "rule".to_string()
+                "condition".to_string()
             } else {
-                format!("rule {}", condition.field)
+                format!("condition {}", condition.field)
             }
         );
         let badge_tooltip: SharedString =
             hint_for_condition(condition).unwrap_or(field_type_label(condition.field_type)).into();
 
         let merge_accent = cx.theme().primary;
-        let value_is_multiline = condition.value_editor_kind().is_multiline();
 
         let mut row = div()
             .id(SharedString::from(format!("condition-card-{cid}")))
             .flex()
             .items_center()
-            .gap(px(3.0))
+            .gap(spacing::sm())
             .rounded(borders::radius_sm())
             .px(px(4.0))
             .py(px(2.0))
@@ -1331,6 +1438,7 @@ impl FilterBuilderPanel {
                 div()
                     .flex_1()
                     .min_w(px(60.0))
+                    .debug_selector(move || format!("builder-field-{cid}"))
                     .can_drop(|value, _window, _cx| value.downcast_ref::<DragField>().is_some())
                     .drag_over::<DragField>(move |style, _drag, _window, _cx| {
                         style.bg(accent.opacity(0.12)).rounded(borders::radius_sm())
@@ -1346,47 +1454,16 @@ impl FilterBuilderPanel {
                     .child(
                         Input::new(&inputs.field_state)
                             .small()
-                            .appearance(false)
                             .font_family(fonts::mono())
+                            .aria_label("Condition field")
                             .w_full(),
                     ),
             )
-            .child(self.render_operator_dropdown(condition, view, window, cx));
-
-        if !value_is_multiline {
-            row = row.child(
+            .child(
                 div()
-                    .flex_1()
-                    .min_w(px(50.0))
-                    .can_drop(|value, _window, _cx| {
-                        value.downcast_ref::<DragField>().is_some()
-                            || value.downcast_ref::<DragValue>().is_some()
-                    })
-                    .drag_over::<DragField>(move |style, _drag, _window, _cx| {
-                        style.bg(accent.opacity(0.08)).rounded(borders::radius_sm())
-                    })
-                    .drag_over::<DragValue>(move |style, _drag, _window, _cx| {
-                        style.bg(accent.opacity(0.08)).rounded(borders::radius_sm())
-                    })
-                    .on_drop({
-                        let view = view.clone();
-                        move |drag: &DragField, window, cx| {
-                            view.update(cx, |this, cx| {
-                                this.handle_value_surface_drop(cid, drag, window, cx);
-                            });
-                        }
-                    })
-                    .on_drop({
-                        let view = view.clone();
-                        move |drag: &DragValue, window, cx| {
-                            view.update(cx, |this, cx| {
-                                this.handle_dragged_value_drop(cid, drag, window, cx);
-                            });
-                        }
-                    })
-                    .child(self.render_value_editor(condition, inputs, view, window, cx)),
+                    .debug_selector(move || format!("builder-operator-{cid}"))
+                    .child(self.render_operator_dropdown(condition, view, window, cx)),
             );
-        }
 
         row = row.child(
             div()
@@ -1397,9 +1474,9 @@ impl FilterBuilderPanel {
                 .child(
                     Button::new(("condition-duplicate", cid))
                         .ghost()
-                        .xsmall()
-                        .icon(Icon::new(IconName::Copy).xsmall())
-                        .tooltip("Duplicate rule")
+                        .small()
+                        .icon(Icon::new(IconName::Copy).small())
+                        .tooltip("Duplicate condition")
                         .on_click({
                             let view = view.clone();
                             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -1411,9 +1488,9 @@ impl FilterBuilderPanel {
                     this.child(
                         Button::new(("condition-remove", cid))
                             .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Close).xsmall())
-                            .tooltip("Remove rule")
+                            .small()
+                            .icon(Icon::new(IconName::Close).small())
+                            .tooltip("Remove condition")
                             .on_click({
                                 let view = view.clone();
                                 move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
@@ -1424,12 +1501,13 @@ impl FilterBuilderPanel {
                 }),
         );
 
-        let mut card = div().flex().flex_col().gap(px(2.0)).child(row);
+        let mut card =
+            div().flex().flex_col().min_w(px(0.)).gap(spacing::sm()).py(spacing::xs()).child(row);
 
-        if value_is_multiline {
+        {
             card = card.child(
                 div()
-                    .pl(px(22.0))
+                    .pl(px(32.0))
                     .can_drop(|value, _window, _cx| {
                         value.downcast_ref::<DragField>().is_some()
                             || value.downcast_ref::<DragValue>().is_some()
@@ -1463,13 +1541,13 @@ impl FilterBuilderPanel {
         if has_error && let Some(error) = validation_error {
             card = card.child(
                 div()
-                    .pl(px(22.0))
+                    .pl(px(32.0))
                     .flex()
                     .items_center()
                     .gap(px(4.0))
                     .text_xs()
                     .text_color(cx.theme().danger)
-                    .child(Icon::new(IconName::CircleX).xsmall())
+                    .child(Icon::new(IconName::CircleX).small())
                     .child(error),
             );
         }
@@ -1477,7 +1555,7 @@ impl FilterBuilderPanel {
         if self.active_suggestion_row == Some(cid)
             && let Some(popup) = self.render_suggestions_popup(cid, view, window, cx)
         {
-            card = card.child(div().pl(px(22.0)).child(popup));
+            card = card.child(div().pl(px(32.0)).child(popup));
         }
 
         card.into_any_element()
@@ -1560,13 +1638,11 @@ impl FilterBuilderPanel {
         let mut input_row = div().flex().items_center().gap(spacing::xs());
 
         if condition.field_type == FieldType::Number || condition.operator == FilterOperator::Size {
-            input_row = input_row
-                .child(NumberInput::new(&inputs.scalar_state).small().appearance(false).flex_1());
+            input_row = input_row.child(NumberInput::new(&inputs.scalar_state).small().flex_1());
         } else {
             input_row = input_row.child(
                 Input::new(&inputs.scalar_state)
                     .small()
-                    .appearance(false)
                     .font_family(if condition.field_type == FieldType::ObjectId {
                         fonts::mono()
                     } else {
@@ -1637,7 +1713,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-remove-last", cid))
                                             .ghost()
-                                            .xsmall()
+                                            .small()
                                             .label("Remove last")
                                             .on_click({
                                                 let view = view.clone();
@@ -1651,7 +1727,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-edit", cid))
                                             .ghost()
-                                            .xsmall()
+                                            .small()
                                             .label("Edit values")
                                             .on_click({
                                                 let view = view.clone();
@@ -1669,7 +1745,7 @@ impl FilterBuilderPanel {
                                     .child(
                                         Button::new(("list-clear-all", cid))
                                             .ghost()
-                                            .xsmall()
+                                            .small()
                                             .label("Clear")
                                             .on_click({
                                                 let view = view.clone();
@@ -1722,7 +1798,7 @@ impl FilterBuilderPanel {
                             .child(
                                 Button::new(("list-edit-inline", cid))
                                     .ghost()
-                                    .xsmall()
+                                    .small()
                                     .label("Edit values")
                                     .on_click({
                                         let view = view.clone();
@@ -1784,13 +1860,9 @@ impl FilterBuilderPanel {
                 .items_center()
                 .gap(spacing::xs())
                 .child(
-                    Input::new(&inputs.list_input_state)
-                        .small()
-                        .appearance(false)
-                        .font_family(fonts::ui())
-                        .w_full(),
+                    Input::new(&inputs.list_input_state).small().font_family(fonts::ui()).w_full(),
                 )
-                .child(Button::new(("list-commit", cid)).ghost().xsmall().label("Add").on_click({
+                .child(Button::new(("list-commit", cid)).ghost().small().label("Add").on_click({
                     let view = view.clone();
                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         view.update(cx, |this, cx| this.commit_list_input(cid, window, cx));
@@ -1812,30 +1884,14 @@ impl FilterBuilderPanel {
         let cid = condition.id;
 
         let start = if use_number {
-            NumberInput::new(&inputs.range_start_state)
-                .small()
-                .appearance(false)
-                .flex_1()
-                .into_any_element()
+            NumberInput::new(&inputs.range_start_state).small().flex_1().into_any_element()
         } else {
-            Input::new(&inputs.range_start_state)
-                .small()
-                .appearance(false)
-                .w_full()
-                .into_any_element()
+            Input::new(&inputs.range_start_state).small().w_full().into_any_element()
         };
         let end = if use_number {
-            NumberInput::new(&inputs.range_end_state)
-                .small()
-                .appearance(false)
-                .flex_1()
-                .into_any_element()
+            NumberInput::new(&inputs.range_end_state).small().flex_1().into_any_element()
         } else {
-            Input::new(&inputs.range_end_state)
-                .small()
-                .appearance(false)
-                .w_full()
-                .into_any_element()
+            Input::new(&inputs.range_end_state).small().w_full().into_any_element()
         };
 
         let mut row = div()
@@ -2052,7 +2108,9 @@ impl FilterBuilderPanel {
             .flex()
             .items_center()
             .justify_center()
-            .h(px(34.0))
+            .flex_col()
+            .gap(spacing::sm())
+            .py(spacing::md())
             .rounded(borders::radius_sm())
             .border_1()
             .border_color(resting_border)
@@ -2090,7 +2148,24 @@ impl FilterBuilderPanel {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(resting_text)
-                    .child("Drop a field, rule, or group here"),
+                    .child("Or drag a field from the results"),
+            )
+            .child(
+                Button::new(("empty-add-condition", target.parent_group_id.unwrap_or(0)))
+                    .small()
+                    .label("Add condition")
+                    .icon(Icon::new(IconName::Plus).small())
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, cx| {
+                            view.update(cx, |this, cx| {
+                                let id = this.tree.insert_condition_at(target);
+                                this.create_condition_inputs(id, window, cx);
+                                this.focus_condition(id, window, cx);
+                                cx.notify();
+                            })
+                        }
+                    }),
             )
     }
 
@@ -2106,7 +2181,7 @@ impl FilterBuilderPanel {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(18.0))
+            .size(px(24.0))
             .rounded(borders::radius_sm())
             .cursor_move()
             .text_color(cx.theme().muted_foreground)
@@ -2128,7 +2203,7 @@ impl FilterBuilderPanel {
                     }
                 },
             )
-            .child(Icon::new(IconName::ChevronsUpDown).xsmall())
+            .child(Icon::new(IconName::ChevronsUpDown).small())
     }
 
     fn render_combinator_toggle(
@@ -2136,179 +2211,109 @@ impl FilterBuilderPanel {
         group_id: Option<u64>,
         current: Combinator,
         view: &Entity<Self>,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .rounded(borders::radius_sm())
-            .bg(opaque_theme_color(cx.theme().sidebar))
-            .p(px(2.0))
-            .child(toggle_chip("$and", current == Combinator::And, cx).on_click({
-                let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| {
-                        match group_id {
-                            Some(group_id) => {
-                                if let Some(combinator) = this.tree.group_combinator_mut(group_id) {
-                                    *combinator = Combinator::And;
-                                }
+        let view = view.clone();
+        toolbar().child(div().text_sm().child("Match")).child(match_mode(
+            ("builder-match-mode", group_id.unwrap_or(0)),
+            current,
+            move |mode, _, cx| {
+                view.update(cx, |this, cx| {
+                    match group_id {
+                        Some(id) => {
+                            if let Some(current) = this.tree.group_combinator_mut(id) {
+                                *current = mode;
                             }
-                            None => this.tree.combinator = Combinator::And,
                         }
-                        cx.notify();
-                    });
-                }
-            }))
-            .child(toggle_chip("$or", current == Combinator::Or, cx).on_click({
-                let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| {
-                        match group_id {
-                            Some(group_id) => {
-                                if let Some(combinator) = this.tree.group_combinator_mut(group_id) {
-                                    *combinator = Combinator::Or;
-                                }
-                            }
-                            None => this.tree.combinator = Combinator::Or,
-                        }
-                        cx.notify();
-                    });
-                }
-            }))
+                        None => this.tree.combinator = mode,
+                    }
+                    cx.notify();
+                });
+            },
+        ))
     }
 
     fn render_shell_header(&self, view: &Entity<Self>, cx: &mut Context<Self>) -> AnyElement {
-        let mut title_row = div().flex().items_center().gap(spacing::xs()).child(
-            div()
-                .text_base()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(cx.theme().foreground)
-                .child("Filter Builder"),
-        );
-
-        if self.unsupported_reason.is_some() {
-            title_row = title_row.child(summary_chip("JSON only", cx.theme().warning, cx));
-        } else if self.tree.validation_error().is_some() {
-            title_row = title_row.child(summary_chip("Needs attention", cx.theme().danger, cx));
-        } else if self.is_dirty() {
-            title_row = title_row.child(neutral_chip("Draft", cx));
-        }
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
+        let view = view.clone();
+        toolbar()
+            .debug_selector(|| "builder-header".into())
+            .flex_shrink_0()
+            .justify_between()
             .px(spacing::md())
             .pt(spacing::md())
-            .pb(px(6.0))
+            .pb(spacing::sm())
             .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .justify_between()
-                    .gap(spacing::sm())
+                toolbar()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .truncate()
-                                    .child("Build the collection filter without raw JSON."),
-                            )
-                            .child(title_row),
+                        div().text_base().font_weight(FontWeight::SEMIBOLD).child("Filter Builder"),
                     )
-                    .child(
-                        Button::new("close-filter-builder")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Close).xsmall())
-                            .tooltip("Close filter builder")
-                            .on_click({
-                                let view = view.clone();
-                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    view.update(cx, |this, cx| this.attempt_close(window, cx));
-                                }
-                            }),
-                    ),
+                    .when(self.is_dirty(), |row| row.child(neutral_chip("Draft", cx))),
             )
-            .child(shell_section_divider(cx))
+            .child(
+                Button::new("close-filter-builder")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(IconName::Close).small())
+                    .tooltip("Close filter builder")
+                    .on_click(move |_, window, cx| {
+                        view.update(cx, |this, cx| this.attempt_close(window, cx));
+                    }),
+            )
             .into_any_element()
     }
 
     fn render_shell_toolbar(&self, view: &Entity<Self>, cx: &mut Context<Self>) -> AnyElement {
         let summary = if self.unsupported_reason.is_some() {
-            "Visual edits are paused for this filter.".to_string()
+            "This filter has conditions that require MQL.".to_string()
         } else if self.tree.active_condition_count() == 0 {
-            "No rules yet. Add one or drop a field to begin.".to_string()
+            "Add a condition or drag a field from the results.".to_string()
         } else {
-            format!("{} active", rule_count_label(self.tree.active_condition_count()))
+            rule_count_label(self.tree.active_condition_count())
         };
-
-        let mut left = div().flex().items_center().gap(spacing::sm()).flex_1().min_w(px(0.0));
-
-        if self.unsupported_reason.is_none() {
-            left = left.child(self.render_combinator_toggle(None, self.tree.combinator, view, cx));
-        }
-
-        left = left.child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(summary),
-        );
-
-        let mut right = div().flex().items_center().gap(spacing::xs());
-        if self.unsupported_reason.is_none() {
-            right = right
-                .child(
-                    Button::new("root-add-rule")
-                        .ghost()
-                        .xsmall()
-                        .icon(Icon::new(IconName::Plus).xsmall())
-                        .label("Rule")
-                        .on_click({
-                            let view = view.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                view.update(cx, |this, cx| this.add_condition(window, cx));
-                            }
-                        }),
-                )
-                .child(Button::new("root-add-group").ghost().xsmall().label("Group").on_click({
-                    let view = view.clone();
-                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                        view.update(cx, |this, cx| this.add_group(cx));
-                    }
-                }));
-        }
-
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .flex_shrink_0()
+            .gap(spacing::sm())
             .px(spacing::md())
-            .pt(px(2.0))
-            .pb(px(6.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(spacing::sm())
-                    .child(left)
-                    .child(right),
-            )
-            .child(shell_section_divider(cx))
+            .pb(spacing::sm())
+            .when(self.unsupported_reason.is_none(), |column| {
+                column.child(
+                    toolbar()
+                        .justify_between()
+                        .child(self.render_combinator_toggle(None, self.tree.combinator, view, cx))
+                        .child(
+                            toolbar()
+                                .child(
+                                    Button::new("root-add-rule")
+                                        .small()
+                                        .label("Add condition")
+                                        .icon(Icon::new(IconName::Plus).small())
+                                        .on_click({
+                                            let view = view.clone();
+                                            move |_, window, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    this.add_condition(window, cx)
+                                                })
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    Button::new("root-add-group")
+                                        .ghost()
+                                        .small()
+                                        .label("Add group")
+                                        .on_click({
+                                            let view = view.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |this, cx| this.add_group(cx))
+                                            }
+                                        }),
+                                ),
+                        ),
+                )
+            })
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(summary))
             .into_any_element()
     }
 
@@ -2320,111 +2325,86 @@ impl FilterBuilderPanel {
         view: &Entity<Self>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (status_text, status_color) = if self.unsupported_reason.is_some() {
-            (
-                "This query stays in JSON until you clear it or open the editor.".to_string(),
-                cx.theme().warning,
-            )
+        let (status, color) = if self.unsupported_reason.is_some() {
+            ("Continue editing this filter in MQL.".to_string(), cx.theme().muted_foreground)
         } else if let Some(error) = validation_error {
             (error.to_string(), cx.theme().danger)
+        } else if dirty {
+            ("Unapplied changes · Cmd/Ctrl+Enter to find".to_string(), cx.theme().muted_foreground)
         } else {
-            ("Cmd/Ctrl+Enter to run".to_string(), cx.theme().muted_foreground)
+            ("Cmd/Ctrl+Enter to find".to_string(), cx.theme().muted_foreground)
         };
-
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .px(spacing::md())
-            .pt(px(6.0))
-            .pb(spacing::sm())
-            .child(shell_section_divider(cx))
+            .flex_shrink_0()
+            .gap(spacing::sm())
+            .p(spacing::md())
+            .debug_selector(|| "builder-footer".into())
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(div().text_xs().text_color(color).child(status))
             .child(
-                div()
-                    .flex()
-                    .items_center()
+                toolbar()
                     .justify_between()
-                    .gap(spacing::sm())
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_xs()
-                            .text_color(status_color)
-                            .truncate()
-                            .child(status_text),
+                        Button::new("builder-open-json")
+                            .ghost()
+                            .small()
+                            .label("Edit MQL")
+                            .icon(Icon::new(crate::assets::AppIcon::Braces).small())
+                            .disabled(self.unsupported_reason.is_none() && !can_run)
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| this.open_json_editor(window, cx))
+                                }
+                            }),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
+                        toolbar()
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        Button::new("builder-open-json")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(Icon::new(crate::assets::AppIcon::Braces).xsmall())
-                                            .label("Open JSON")
-                                            .on_click({
-                                                let view = view.clone();
-                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                                    view.update(cx, |this, cx| {
-                                                        this.open_json_editor(window, cx)
-                                                    });
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("builder-clear")
-                                            .ghost()
-                                            .xsmall()
-                                            .label("Clear")
-                                            .on_click({
-                                                let view = view.clone();
-                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                                    view.update(cx, |this, cx| this.clear_draft(window, cx));
-                                                }
-                                            }),
-                                    ),
+                                Button::new("builder-clear")
+                                    .ghost()
+                                    .small()
+                                    .label("Clear conditions")
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_, window, cx| {
+                                            view.update(cx, |this, cx| this.clear_draft(window, cx))
+                                        }
+                                    }),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        Button::new("builder-reset")
-                                            .xsmall()
-                                            .label("Reset")
-                                            .disabled(!dirty)
-                                            .on_click({
-                                                let view = view.clone();
-                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                                    view.update(cx, |this, cx| {
-                                                        this.reset_to_applied(window, cx)
-                                                    });
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("builder-run")
-                                            .primary()
-                                            .xsmall()
-                                            .label("Run")
-                                            .icon(Icon::new(IconName::Search).xsmall())
-                                            .disabled(!can_run)
-                                            .on_click({
-                                                let view = view.clone();
-                                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                                    view.update(cx, |this, cx| this.apply_filter(window, cx));
-                                                }
-                                            }),
-                                    ),
+                                Button::new("builder-reset")
+                                    .small()
+                                    .label("Revert")
+                                    .tooltip("Revert to the applied filter")
+                                    .disabled(!dirty)
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.reset_to_applied(window, cx)
+                                            })
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("builder-run")
+                                    .primary()
+                                    .small()
+                                    .label("Find")
+                                    .icon(Icon::new(IconName::Search).small())
+                                    .disabled(!can_run)
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.apply_filter(window, cx)
+                                            })
+                                        }
+                                    }),
                             ),
                     ),
             )
@@ -2462,6 +2442,10 @@ impl Render for FilterBuilderPanel {
 
         div()
             .id("filter-builder-root")
+            .debug_selector(|| "filter-builder".into())
+            .key_context("FilterBuilder")
+            .track_focus(&self.focus_handle)
+            .min_w(px(0.0))
             .flex()
             .flex_col()
             .w_full()
@@ -2470,14 +2454,15 @@ impl Render for FilterBuilderPanel {
             .bg(opaque_theme_color(cx.theme().sidebar))
             .border_l_1()
             .border_color(cx.theme().sidebar_border.opacity(0.82))
-            .shadow_md()
             .on_key_down({
                 let view = view.clone();
                 move |event: &KeyDownEvent, window, cx| match &event.keystroke.key {
                     key if key == "enter" && event.keystroke.modifiers.secondary() => {
+                        cx.stop_propagation();
                         view.update(cx, |this, cx| this.apply_filter(window, cx));
                     }
                     key if key == "escape" => {
+                        cx.stop_propagation();
                         view.update(cx, |this, cx| this.attempt_close(window, cx));
                     }
                     _ => {}
@@ -2485,7 +2470,16 @@ impl Render for FilterBuilderPanel {
             })
             .child(header)
             .child(toolbar)
-            .child(body)
+            .child(
+                div()
+                    .debug_selector(|| "builder-body".into())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .child(body),
+            )
             .child(footer)
     }
 }
@@ -2737,7 +2731,7 @@ fn render_token_chip(
         .flex()
         .items_center()
         .gap(px(4.0))
-        .rounded(px(999.0))
+        .rounded(borders::radius_xs())
         .border_1()
         .border_color(cx.theme().primary.opacity(0.25))
         .bg(cx.theme().primary.opacity(0.12))
@@ -2747,8 +2741,8 @@ fn render_token_chip(
         .child(
             Button::new("remove-token")
                 .ghost()
-                .xsmall()
-                .icon(Icon::new(IconName::Close).xsmall())
+                .small()
+                .icon(Icon::new(IconName::Close).small())
                 .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     on_remove(window, cx);
                 }),
@@ -2760,7 +2754,7 @@ fn render_preview_value_chip(label: &'static str, value: String, cx: &App) -> im
         .flex()
         .items_center()
         .gap(px(4.0))
-        .rounded(px(999.0))
+        .rounded(borders::radius_xs())
         .border_1()
         .border_color(cx.theme().sidebar_border.opacity(0.8))
         .bg(cx.theme().background.opacity(0.55))
@@ -2786,7 +2780,7 @@ fn summary_chip(label: impl Into<SharedString>, accent: Hsla, _cx: &App) -> Div 
     div()
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(999.0))
+        .rounded(borders::radius_xs())
         .border_1()
         .border_color(accent.opacity(0.28))
         .bg(accent.opacity(0.12))
@@ -2800,7 +2794,7 @@ fn neutral_chip(label: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(999.0))
+        .rounded(borders::radius_xs())
         .border_1()
         .border_color(cx.theme().sidebar_border.opacity(0.8))
         .bg(cx.theme().secondary.opacity(0.9))
@@ -2810,17 +2804,23 @@ fn neutral_chip(label: impl Into<SharedString>, cx: &App) -> Div {
         .child(label.into())
 }
 
+fn group_condition_count(nodes: &[FilterNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| match node {
+            FilterNode::Condition(_) => 1,
+            FilterNode::Group { children, .. } => group_condition_count(children),
+        })
+        .sum()
+}
+
 fn rule_count_label(count: usize) -> String {
-    format!("{count} rule{}", if count == 1 { "" } else { "s" })
+    format!("{count} condition{}", if count == 1 { "" } else { "s" })
 }
 
 fn opaque_theme_color(mut color: Hsla) -> Hsla {
     color.a = 1.0;
     color
-}
-
-fn shell_section_divider(cx: &App) -> Div {
-    div().w_full().h(px(1.0)).bg(cx.theme().sidebar_border.opacity(0.45))
 }
 
 fn list_count_label(count: usize, field_type: FieldType) -> String {
@@ -2832,17 +2832,6 @@ fn list_count_label(count: usize, field_type: FieldType) -> String {
         _ => "values",
     };
     format!("{count} {kind}")
-}
-
-fn toggle_chip(label: &'static str, active: bool, cx: &App) -> Button {
-    let mut button =
-        Button::new(SharedString::from(format!("toggle-chip-{label}"))).xsmall().label(label);
-    if active {
-        button = button.bg(cx.theme().primary.opacity(0.25));
-    } else {
-        button = button.ghost();
-    }
-    button
 }
 
 fn field_type_color(field_type: FieldType, cx: &App) -> Hsla {
@@ -2876,7 +2865,7 @@ fn type_badge(field_type: FieldType, cx: &App) -> impl IntoElement {
     div()
         .px(px(6.0))
         .py(px(2.0))
-        .rounded(px(999.0))
+        .rounded(borders::radius_xs())
         .bg(color.opacity(0.12))
         .border_1()
         .border_color(color.opacity(0.22))
@@ -2922,53 +2911,20 @@ fn type_badge_compact(
     div()
         .id(id.into())
         .px(px(4.0))
-        .py(px(1.0))
-        .rounded(px(999.0))
-        .bg(color.opacity(0.12))
-        .border_1()
-        .border_color(color.opacity(0.22))
+        .flex_shrink_0()
         .font_family(fonts::mono())
         .text_color(color)
-        .line_height(rems(1.0))
-        .child(
-            div()
-                .text_size(crate::theme::typography::text_2xs())
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(label),
-        )
+        .text_xs()
+        .child(label)
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-}
-
-fn dropdown_variant(cx: &mut App) -> ButtonCustomVariant {
-    ButtonCustomVariant::new(cx)
-        .color(cx.theme().secondary)
-        .foreground(cx.theme().foreground)
-        .hover(cx.theme().secondary_hover)
-        .active(cx.theme().secondary_hover)
-        .shadow(false)
 }
 
 fn styled_dropdown_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
-    cx: &mut App,
-) -> MenuButton {
-    MenuButton::new(id)
-        .xsmall()
-        .label(label)
-        .dropdown_caret(true)
-        .custom(dropdown_variant(cx))
-        .rounded(borders::radius_sm())
-        .with_size(Size::XSmall)
-        .refine_style(
-            &StyleRefinement::default()
-                .font_family(fonts::ui())
-                .font_weight(FontWeight::NORMAL)
-                .text_size(crate::theme::typography::text_xs())
-                .h(px(22.0))
-                .px(spacing::sm())
-                .py(px(2.0)),
-        )
+    _cx: &mut App,
+) -> Button {
+    Button::new(id).small().label(label).dropdown_caret(true)
 }
 
 fn build_typed_suggestions(documents: &[Document]) -> Vec<FieldSuggestion> {

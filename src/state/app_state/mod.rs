@@ -156,8 +156,13 @@ impl AppState {
 
     /// Create new AppState with a custom ConnectionManager (for testing)
     pub fn with_connection_manager(connection_manager: Arc<ConnectionManager>) -> Self {
-        let config = ConfigManager::default();
+        Self::with_config(connection_manager, ConfigManager::default())
+    }
 
+    pub(crate) fn with_config(
+        connection_manager: Arc<ConnectionManager>,
+        config: ConfigManager,
+    ) -> Self {
         // A malformed connection file must never be replaced with an empty list.
         let (connections, connection_load_error) = match config.load_connections() {
             Ok(connections) => (connections, None),

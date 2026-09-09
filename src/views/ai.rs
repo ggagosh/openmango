@@ -1254,7 +1254,7 @@ impl Render for AiView {
                         .gap(px(4.0))
                         .px(spacing::xs())
                         .py(px(2.0))
-                        .rounded(px(6.0))
+                        .rounded(crate::theme::borders::radius_sm())
                         .bg(cx.theme().primary.opacity(0.12))
                         .child(
                             div()
@@ -1341,7 +1341,7 @@ impl Render for AiView {
                         .px(spacing::sm())
                         .py(spacing::xs())
                         .cursor_pointer()
-                        .rounded(px(4.0))
+                        .rounded(crate::theme::borders::radius_sm())
                         .bg(bg)
                         .hover(|s: gpui_kit::StyleRefinement| {
                             s.bg(cx.theme().secondary.opacity(0.2))
@@ -1477,7 +1477,7 @@ fn info_chip(label: &str, accent: Hsla) -> AnyElement {
     div()
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(6.0))
+        .rounded(crate::theme::borders::radius_sm())
         .bg(accent.opacity(0.08))
         .text_xs()
         .text_color(accent)

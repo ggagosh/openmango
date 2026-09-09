@@ -599,7 +599,7 @@ fn empty_state(icon: IconName, title: &str, description: &str, cx: &App) -> Div 
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(8.0))
+                    .rounded(crate::theme::borders::radius_md())
                     .bg(cx.theme().secondary.opacity(0.45))
                     .child(Icon::new(icon).small().text_color(cx.theme().muted_foreground)),
             )

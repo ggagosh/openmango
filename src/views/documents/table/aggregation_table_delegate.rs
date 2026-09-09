@@ -176,7 +176,7 @@ impl TableDelegate for AggregationTableDelegate {
                     .id(("pin-btn", col_ix))
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .rounded_sm()
+                    .rounded(crate::theme::borders::radius_sm())
                     .p(px(1.0))
                     .opacity(pin_opacity)
                     .hover(|s: gpui_kit::StyleRefinement| s.opacity(1.0).bg(muted_bg))

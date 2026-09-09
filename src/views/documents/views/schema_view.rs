@@ -311,7 +311,7 @@ fn diagnostic_chip(label: &str, accent: Hsla, _cx: &App) -> Div {
     div()
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(5.0))
+        .rounded(crate::theme::borders::radius_sm())
         .bg(accent.opacity(0.1))
         .border_1()
         .border_color(accent.opacity(0.28))
@@ -536,9 +536,15 @@ fn render_tree_row_owned(
     let freq_bar = div()
         .w(px(40.0))
         .h(px(4.0))
-        .rounded(px(2.0))
+        .rounded(crate::theme::borders::radius_xs())
         .bg(palette.border)
-        .child(div().w(px(bar_width)).h_full().rounded(px(2.0)).bg(freq_color));
+        .child(
+            div()
+                .w(px(bar_width))
+                .h_full()
+                .rounded(crate::theme::borders::radius_xs())
+                .bg(freq_color),
+        );
 
     let bg = if is_selected { palette.list_active } else { gpui_kit::transparent_black() };
 
@@ -626,7 +632,7 @@ fn type_chip_static(label: &str, accent: Hsla) -> Div {
     div()
         .px(spacing::xs())
         .py(px(1.0))
-        .rounded(px(4.0))
+        .rounded(crate::theme::borders::radius_sm())
         .bg(accent.opacity(0.12))
         .border_1()
         .border_color(accent.opacity(0.3))
@@ -715,7 +721,7 @@ fn render_tree_toolbar(
             .flex()
             .items_center()
             .px(spacing::xs())
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -881,7 +887,7 @@ fn render_filter_token_chip(
         .gap(px(3.0))
         .px(spacing::xs())
         .py(px(2.0))
-        .rounded(px(6.0))
+        .rounded(crate::theme::borders::radius_sm())
         .bg(accent.opacity(0.12))
         .border_1()
         .border_color(accent.opacity(0.3))
@@ -1196,7 +1202,7 @@ fn render_sample_values_card(samples: &[(String, String)], cx: &App) -> AnyEleme
                 .text_color(color)
                 .px(spacing::xs())
                 .py(px(2.0))
-                .rounded(px(4.0))
+                .rounded(crate::theme::borders::radius_sm())
                 .bg(cx.theme().background)
                 .child(value.clone()),
         );
@@ -1229,7 +1235,7 @@ fn section_card(title: &str, subtitle: Option<&str>, body: AnyElement, cx: &App)
         .flex()
         .flex_col()
         .mb(px(SCHEMA_CARD_STACK_GAP))
-        .rounded(px(8.0))
+        .rounded(crate::theme::borders::radius_md())
         .border_1()
         .border_color(cx.theme().border)
         .bg(cx.theme().tab_bar.opacity(0.5))
@@ -1263,7 +1269,7 @@ fn hint_row(message: &str, accent: Hsla) -> Div {
     div()
         .px(spacing::xs())
         .py(px(4.0))
-        .rounded(px(6.0))
+        .rounded(crate::theme::borders::radius_sm())
         .border_1()
         .border_color(accent.opacity(0.3))
         .bg(accent.opacity(0.11))
@@ -1278,9 +1284,15 @@ fn presence_bar(pct: f64, cx: &App) -> Div {
     div()
         .w_full()
         .h(px(6.0))
-        .rounded(px(3.0))
+        .rounded(crate::theme::borders::radius_xs())
         .bg(cx.theme().border)
-        .child(div().w(relative(bar_width)).h_full().rounded(px(3.0)).bg(color))
+        .child(
+            div()
+                .w(relative(bar_width))
+                .h_full()
+                .rounded(crate::theme::borders::radius_xs())
+                .bg(color),
+        )
 }
 
 #[cfg(test)]

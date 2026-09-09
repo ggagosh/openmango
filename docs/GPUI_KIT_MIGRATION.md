@@ -2,9 +2,9 @@
 
 Branch: `migrate/gpui-kit-0.6`.
 
-Implementation complete. App launch and user acceptance are pending.
+The application uses the published toolkit. Final desktop acceptance and updated screenshots remain part of draft-PR review.
 
-## Plan
+## Scope
 
 1. Replace the patched GPUI Component 0.5 dependency with the published GPUI Kit
    0.6.0 facade, including its matching runtime, components, icons, and editor
@@ -13,8 +13,8 @@ Implementation complete. App launch and user acceptance are pending.
    supported upstream APIs, preserving editing, navigation, and dialog behavior.
 3. Replace the custom button renderer with upstream buttons and remove `vendor/`
    and the Cargo patch. Refresh the dependency lockfile.
-4. Review the resulting changes and format the source. Leave app launch and test
-   execution to the user; do not add tests as part of this migration.
+4. Validate the migrated application with formatting, Clippy, Rust tests, and
+   headless native UI checks. Keep desktop acceptance as a separate manual check.
 
 ## Sources
 
@@ -38,8 +38,8 @@ Implementation complete. App launch and user acceptance are pending.
 - Switched to native buttons with explicit small toolbar sizing, neutral tabs,
   `DataTable`, declarative dialog footers, and current chart APIs.
 - Workspace tabs now occupy the native `TitleBar` beside the platform window
-  controls. GPUI Kit's base tab components provide full-width selected capsules,
-  equal tab widths with horizontal overflow, system-font labels, and shortcut
+  controls. GPUI Kit's base tab components provide full-width selected surfaces,
+  equal tab widths with horizontal overflow, app-font labels, and shortcut
   hints from the active keymap. The duplicate tab row and empty titlebar padding
   have been removed; dragging the window uses the surrounding titlebar gutters.
 - Tab content is constrained to the titlebar's available viewport. Native scroll
@@ -50,15 +50,18 @@ Implementation complete. App launch and user acceptance are pending.
 - Adapted focus, timers, async updates, and table column context menus to the
   new runtime. Lazy document expansion continues to use application metadata;
   settings shortcut capture cancels when focus leaves the keybindings panel.
+- Native and custom UI now share the application radius scale, including all
+  built-in color themes. See [appearance tokens](APPEARANCE_TOKENS.md).
 
 Workspace tab styling follows the supplied Ghostty reference; secondary panels
 retain the configurable native tab variants. Visual behavior still needs user review.
 
 ## Verification
 
-- `cargo check --lib --bin openmango` passed.
-- `cargo clippy --lib --bin openmango -- -D warnings` passed.
-- `cargo fmt` and whitespace review completed.
+- `just fmt-check` and `just lint` passed.
+- Headless GPUI tests cover query-input focus/caret/undo, control alignment,
+  group selection and collapse, and radius consistency across color themes.
+- The complete Rust suite is run with `just test` before PR creation; local Docker
+  integration requires `DOCKER_HOST` to point to the active Docker context.
 - Bundled theme color keys match the 0.6.0 theme schema.
-- No tests were added or run, and the app was not opened. Tests specific to the
-  deleted button renderer and indentation helper were removed with that code.
+- Desktop screenshot capture is pending; automated UI checks run headlessly.

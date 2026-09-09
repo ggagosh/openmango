@@ -576,7 +576,7 @@ fn shortcut_list(shortcuts: &[String], disabled: bool, cx: &App) -> AnyElement {
             div()
                 .px(spacing::xs())
                 .py(px(2.0))
-                .rounded(px(4.0))
+                .rounded(crate::theme::borders::radius_sm())
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().secondary.opacity(0.2))

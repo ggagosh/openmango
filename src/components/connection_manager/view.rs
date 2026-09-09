@@ -116,7 +116,7 @@ impl ConnectionManager {
                         this.child(
                             div()
                                 .mb(spacing::md())
-                                .rounded_md()
+                                .rounded(crate::theme::borders::radius_sm())
                                 .border_1()
                                 .border_color(parse_error_border)
                                 .bg(parse_error_bg)

@@ -850,7 +850,7 @@ impl Render for CollectionView {
                                         .border_1()
                                         .border_color(border)
                                         .shadow_lg()
-                                        .rounded(px(8.))
+                                        .rounded(crate::theme::borders::radius_md())
                                         .bg(popover_bg)
                                         .text_color(popover_fg)
                                         .on_mouse_up_out(MouseButton::Left, {
@@ -973,7 +973,7 @@ impl Render for CollectionView {
                             .items_center()
                             .justify_between()
                             .gap(spacing::md())
-                            .rounded(px(6.0))
+                            .rounded(crate::theme::borders::radius_sm())
                             .border_1()
                             .border_color(cx.theme().danger.opacity(0.4))
                             .bg(cx.theme().danger.opacity(0.08))

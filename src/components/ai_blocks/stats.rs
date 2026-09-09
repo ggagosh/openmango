@@ -37,7 +37,7 @@ pub fn render_stats(json: &str, cx: &App) -> Option<AnyElement> {
         .bg(cx.theme().table.opacity(0.55))
         .border_1()
         .border_color(cx.theme().border.opacity(0.78))
-        .rounded(px(8.0));
+        .rounded(crate::theme::borders::radius_md());
 
     if let Some(title) = stats.title {
         container = container.child(

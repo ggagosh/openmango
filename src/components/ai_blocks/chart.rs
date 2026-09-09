@@ -52,7 +52,7 @@ fn chart_wrapper(
         .h(px(height))
         .border_1()
         .border_color(cx.theme().border.opacity(0.78))
-        .rounded(px(8.0))
+        .rounded(crate::theme::borders::radius_md())
         .bg(cx.theme().table.opacity(0.55))
         .overflow_hidden();
 
@@ -86,7 +86,7 @@ fn chart_wrapper(
                         div()
                             .w(px(8.0))
                             .h(px(8.0))
-                            .rounded(px(2.0))
+                            .rounded(crate::theme::borders::radius_xs())
                             .bg(entry.color)
                             .flex_shrink_0(),
                     )
