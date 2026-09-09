@@ -46,6 +46,8 @@ pub(in crate::views::documents) fn build_document_menu(
         "Copy Document JSON".to_string()
     };
     let multi = selected_count > 1;
+    let document_id = resolve_document(&state, &session_key, &doc_key, cx)
+        .and_then(|doc| doc.get("_id").map(format_bson_for_clipboard));
     menu = menu
         .item(
             PopupMenuItem::new("Edit JSON")
@@ -78,6 +80,16 @@ pub(in crate::views::documents) fn build_document_menu(
             PopupMenuItem::new(copy_label)
                 .icon(Icon::new(IconName::Copy))
                 .action(Box::new(CopyDocumentJson)),
+        )
+        .item(
+            PopupMenuItem::new("Copy ID")
+                .icon(Icon::new(IconName::Copy))
+                .disabled(multi || document_id.is_none())
+                .on_click(move |_, _window, cx| {
+                    if let Some(id) = &document_id {
+                        cx.write_to_clipboard(ClipboardItem::new_string(id.clone()));
+                    }
+                }),
         );
 
     let formats = match view_mode {
