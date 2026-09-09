@@ -5,6 +5,7 @@
 
 mod actions;
 mod completion;
+mod completion_menu;
 mod controller;
 mod editor;
 pub(crate) mod editor_behavior;
@@ -54,7 +55,34 @@ impl ForgeView {
         let controller = ForgeController::new();
 
         let subscriptions = vec![
-            cx.observe(&state, |_, _, cx| cx.notify()),
+            cx.observe(&state, |this, state, cx| {
+                let mut closed_tabs = Vec::new();
+                this.state.editor.buffers.retain(|id, _| {
+                    let open = state.read(cx).forge_tab_content(*id).is_some();
+                    if !open {
+                        closed_tabs.push(*id);
+                    }
+                    open
+                });
+                if !closed_tabs.is_empty() {
+                    let runtime = this.controller.runtime.clone();
+                    state
+                        .read(cx)
+                        .connection_manager()
+                        .runtime_handle()
+                        .spawn_blocking(move || runtime.dispose_sessions(&closed_tabs));
+                }
+                if this
+                    .state
+                    .editor
+                    .active_tab_id
+                    .is_some_and(|id| !this.state.editor.buffers.contains_key(&id))
+                {
+                    this.state.editor.active_tab_id = None;
+                    this.state.editor.editor_state = None;
+                }
+                cx.notify();
+            }),
             cx.subscribe(&state, |this, state, event, cx| {
                 if matches!(event, AppEvent::ViewChanged) {
                     let visible = matches!(state.read(cx).current_view, View::Forge);
@@ -139,6 +167,28 @@ impl ForgeView {
     }
 
     fn render_output(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let raw_focused = self
+            .state
+            .output
+            .raw
+            .input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        let search_focused = self
+            .state
+            .output
+            .results_search_state
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        let removed_focus = match self.state.output.output_tab {
+            ForgeOutputTab::Raw => search_focused,
+            ForgeOutputTab::Results => {
+                raw_focused || (search_focused && self.state.output.result_pages.is_empty())
+            }
+        };
+        if removed_focus {
+            ForgeController::focus_output(self, window, cx);
+        }
         let forge_view = cx.entity();
         let appearance = self.app_state.read(cx).settings.appearance.clone();
 
@@ -147,13 +197,7 @@ impl ForgeView {
                 let forge_view = forge_view.clone();
                 move |_, _window, cx| {
                     forge_view.update(cx, |this, cx| {
-                        this.clear_output_runs();
-                        if let Some(raw_state) = &this.state.output.raw_output_state {
-                            raw_state.update(cx, |state, cx| {
-                                state.set_value(String::new(), _window, cx);
-                            });
-                        }
-                        cx.notify();
+                        ForgeController::clear_output(this, _window, cx);
                     });
                 }
             });
@@ -176,35 +220,52 @@ impl ForgeView {
         let has_inline_result = self.state.output.last_result.is_some()
             || self.state.output.last_error.is_some()
             || self.state.runtime.mongosh_error.is_some();
+        let result_ids =
+            self.state.output.result_pages.iter().map(|page| page.id).collect::<Vec<_>>();
 
         let tab_bar = islands::tab_bar(TabBar::new("forge-output-tabs"), &appearance)
             .small()
             .selected_index(selected_index)
             .on_click({
                 let forge_view = forge_view.clone();
-                move |index, _window, cx| {
+                move |index, window, cx| {
                     let index = *index;
-                    forge_view.update(cx, |this, _cx| {
+                    forge_view.update(cx, |this, cx| {
+                        this.state.output.auto_select_results = false;
                         if index == 0 {
                             this.state.output.output_tab = ForgeOutputTab::Raw;
                         } else {
-                            this.state.output.output_tab = ForgeOutputTab::Results;
-                            if !this.state.output.result_pages.is_empty() {
-                                ForgeController::select_result_page(this, index - 1);
+                            if let Some(id) = result_ids.get(index - 1) {
+                                let Some(index) = this
+                                    .state
+                                    .output
+                                    .result_pages
+                                    .iter()
+                                    .position(|page| page.id == *id)
+                                else {
+                                    return;
+                                };
+                                ForgeController::select_result_page(this, index);
+                            } else if !this.state.output.result_pages.is_empty() {
+                                return;
                             }
+                            this.state.output.output_tab = ForgeOutputTab::Results;
                         }
+                        ForgeController::focus_output(this, window, cx);
+                        cx.notify();
                     });
                 }
             })
             .children(
-                std::iter::once(Tab::new().label("Raw output"))
+                std::iter::once(Tab::new().label("Console"))
                     .chain(if self.state.output.result_pages.is_empty() && has_inline_result {
-                        vec![Tab::new().label("Shell Output")].into_iter()
+                        vec![Tab::new().label("Result")].into_iter()
                     } else {
                         Vec::new().into_iter()
                     })
                     .chain(self.state.output.result_pages.iter().enumerate().map(
                         |(index, page)| {
+                            let page_id = page.id;
                             let label = format_result_tab_label(&page.label, index);
                             let view_entity = forge_view.clone();
                             let pin_icon = if page.pinned {
@@ -227,8 +288,18 @@ impl ForgeView {
                                 .child(pin_icon)
                                 .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                                     cx.stop_propagation();
-                                    view_entity.update(cx, |this, _cx| {
+                                    view_entity.update(cx, |this, cx| {
+                                        let Some(index) = this
+                                            .state
+                                            .output
+                                            .result_pages
+                                            .iter()
+                                            .position(|page| page.id == page_id)
+                                        else {
+                                            return;
+                                        };
                                         ForgeController::toggle_result_pinned(this, index);
+                                        cx.notify();
                                     });
                                 });
 
@@ -250,8 +321,18 @@ impl ForgeView {
                                 .child(Icon::new(IconName::Close).xsmall())
                                 .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                                     cx.stop_propagation();
-                                    view_entity.update(cx, |this, _cx| {
+                                    view_entity.update(cx, |this, cx| {
+                                        let Some(index) = this
+                                            .state
+                                            .output
+                                            .result_pages
+                                            .iter()
+                                            .position(|page| page.id == page_id)
+                                        else {
+                                            return;
+                                        };
                                         ForgeController::close_result_page(this, index);
+                                        cx.notify();
                                     });
                                 });
 
@@ -264,6 +345,21 @@ impl ForgeView {
             ForgeOutputTab::Results => self.render_results_body(window, cx).into_any_element(),
             ForgeOutputTab::Raw => self.render_raw_output_body(window, cx).into_any_element(),
         };
+        let following = self.state.output.raw.following();
+        let show_follow = self.state.output.output_tab == ForgeOutputTab::Raw;
+        let follow_button = Button::new("forge-output-follow")
+            .ghost()
+            .xsmall()
+            .icon(Icon::new(IconName::ChevronDown).xsmall())
+            .label(if following { "Following" } else { "Follow output" })
+            .disabled(following)
+            .tooltip("Follow new output. Scrolling up pauses following.")
+            .on_click({
+                let forge_view = forge_view.clone();
+                move |_, window, cx| {
+                    forge_view.update(cx, |this, cx| this.follow_raw_output(window, cx));
+                }
+            });
         div()
             .flex()
             .flex_col()
@@ -279,21 +375,57 @@ impl ForgeView {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(spacing::sm())
+                    .min_w(px(0.0))
                     .py(px(2.0))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(spacing::sm())
+                            .flex_1()
+                            .min_w(px(0.0))
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child("Output"),
                             )
-                            .child(tab_bar),
+                            .child(tab_bar.flex_1().min_w(px(0.0))),
                     )
-                    .child(clear_button),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_shrink_0()
+                            .gap(spacing::xs())
+                            .when(
+                                self.state.output.skipped_output_events > 0
+                                    || (show_follow && self.state.output.trimmed_output_lines > 0),
+                                |row| {
+                                    row.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                if self.state.output.skipped_output_events > 0 {
+                                                    format!(
+                                                        "{} output events skipped",
+                                                        self.state.output.skipped_output_events
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "{} lines trimmed",
+                                                        self.state.output.trimmed_output_lines
+                                                    )
+                                                },
+                                            ),
+                                    )
+                                },
+                            )
+                            .when(show_follow, |row| row.child(follow_button))
+                            .child(clear_button),
+                    ),
             )
             .child(
                 div()
@@ -324,8 +456,7 @@ impl Render for ForgeView {
             return div().size_full().into_any_element();
         }
 
-        self.ensure_editor_state(window, cx);
-        self.sync_active_tab_content(window, cx, false);
+        self.sync_active_tab_content(window, cx);
         let Some(editor_state) = &self.state.editor.editor_state else {
             return div().size_full().into_any_element();
         };
@@ -336,15 +467,14 @@ impl Render for ForgeView {
         };
         let forge_view = cx.entity();
         let editor_child: AnyElement = Editor::new(editor_state)
-            .appearance(false)
+            .bordered(false)
+            .aria_label("Forge JavaScript editor")
             .font_family(fonts::mono())
             .text_sm()
             .text_color(cx.theme().foreground)
             .h_full()
             .w_full()
             .into_any_element();
-        let editor_for_focus = editor_state.downgrade();
-        let forge_focus_handle = self.state.focus_handle.clone();
         let status_text = if self.state.runtime.mongosh_error.is_some() {
             "Shell error"
         } else if self.state.runtime.is_running {
@@ -364,19 +494,7 @@ impl Render for ForgeView {
                 .pt(spacing::sm())
                 .pb(px(6.0))
                 .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_hidden()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            window.focus(&forge_focus_handle, cx);
-                            if let Some(editor) = editor_for_focus.upgrade() {
-                                let focus = editor.read(cx).focus_handle(cx);
-                                window.focus(&focus, cx);
-                            }
-                        })
-                        .child(editor_child),
+                    div().relative().flex_1().min_h(px(0.0)).overflow_hidden().child(editor_child),
                 );
 
             if self.state.output.output_visible {
@@ -495,6 +613,13 @@ impl Render for ForgeView {
                                     }),
                             ),
                     ),
+            )
+            .children(
+                self.state
+                    .editor
+                    .active_tab_id
+                    .and_then(|id| self.state.editor.buffers.get(&id))
+                    .map(|buffer| buffer.completion_menu.clone()),
             );
 
         actions::bind_root_actions(root, self.app_state.clone(), cx).into_any_element()

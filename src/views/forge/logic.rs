@@ -143,6 +143,21 @@ pub fn label_from_template(template: &str) -> String {
     out
 }
 
+/// Byte offset of the first argument in the rendered completion template.
+pub fn cursor_from_template(template: &str) -> Option<usize> {
+    template
+        .match_indices('$')
+        .filter_map(|(offset, _)| {
+            let tail = &template[offset + 1..];
+            let tail = tail.strip_prefix('{').unwrap_or(tail);
+            let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+            let index = tail.get(..digits)?.parse::<u32>().ok()?;
+            Some((if index == 0 { u32::MAX } else { index }, offset))
+        })
+        .min_by_key(|(index, _)| *index)
+        .map(|(_, offset)| label_from_template(&template[..offset]).len())
+}
+
 pub const METHODS: &[&str] = &[
     "find",
     "findOne",

@@ -1,10 +1,10 @@
 mod format;
-mod pipeline;
 mod raw;
 mod results;
 
+pub use super::logic::result_documents as documents_from_printable;
 pub use format::format_result_tab_label;
-pub use pipeline::documents_from_printable;
+pub use raw::RawOutputState;
 
 use super::ForgeView;
 use super::types::{ForgeRunOutput, MAX_OUTPUT_LINES, MAX_OUTPUT_RUNS, SYSTEM_RUN_ID};
@@ -18,10 +18,15 @@ impl ForgeView {
             started_at: Utc::now(),
             code_preview: preview,
             raw_lines: Vec::new(),
+            evaluation_lines: Vec::new(),
             error: None,
             last_print_line: None,
         });
         self.state.output.active_run_id = Some(run_id);
+        self.state.output.output_visible = true;
+        self.state.output.output_tab = super::types::ForgeOutputTab::Raw;
+        self.state.output.auto_select_results = true;
+        self.state.output.raw.dirty = true;
         self.trim_output_runs();
     }
 
@@ -46,10 +51,12 @@ impl ForgeView {
                 started_at: Utc::now(),
                 code_preview: "Shell output".to_string(),
                 raw_lines: Vec::new(),
+                evaluation_lines: Vec::new(),
                 error: None,
                 last_print_line: None,
             });
             self.trim_output_runs();
+            self.state.output.raw.dirty = true;
         }
         SYSTEM_RUN_ID
     }
@@ -70,6 +77,7 @@ impl ForgeView {
                 started_at: Utc::now(),
                 code_preview: "Shell output".to_string(),
                 raw_lines: normalized,
+                evaluation_lines: Vec::new(),
                 error: None,
                 last_print_line: None,
             });
@@ -77,6 +85,7 @@ impl ForgeView {
         }
 
         self.trim_output_lines();
+        self.state.output.raw.dirty = true;
     }
 
     pub fn append_eval_output(&mut self, run_id: u64, printable: &serde_json::Value) {
@@ -84,10 +93,26 @@ impl ForgeView {
         if lines.is_empty() {
             return;
         }
-        self.append_output_lines(run_id, lines);
+        if let Some(run) = self.state.output.output_runs.iter_mut().find(|run| run.id == run_id) {
+            run.evaluation_lines = lines;
+        } else {
+            self.state.output.output_runs.push(ForgeRunOutput {
+                id: run_id,
+                started_at: Utc::now(),
+                code_preview: "Shell output".to_string(),
+                raw_lines: Vec::new(),
+                evaluation_lines: lines,
+                error: None,
+                last_print_line: None,
+            });
+            self.trim_output_runs();
+        }
+        self.trim_output_lines();
+        self.state.output.raw.dirty = true;
     }
 
     pub fn append_error_output(&mut self, run_id: u64, message: &str) {
+        self.state.output.raw.dirty = true;
         if let Some(run) = self.state.output.output_runs.iter_mut().find(|run| run.id == run_id) {
             run.error = Some(message.to_string());
             return;
@@ -98,6 +123,7 @@ impl ForgeView {
             started_at: Utc::now(),
             code_preview: "Shell output".to_string(),
             raw_lines: Vec::new(),
+            evaluation_lines: Vec::new(),
             error: Some(message.to_string()),
             last_print_line: None,
         });
@@ -106,11 +132,17 @@ impl ForgeView {
 
     pub fn clear_output_runs(&mut self) {
         self.state.output.output_runs.clear();
-        self.state.output.active_run_id = None;
+        if !self.state.runtime.is_running {
+            self.state.output.active_run_id = None;
+        }
         super::controller::ForgeController::clear_result_pages(self, false);
         self.state.output.last_result = None;
         self.state.output.last_error = None;
-        self.state.output.raw_output_text.clear();
+        self.state.output.raw.clear();
+        self.state.output.trimmed_output_lines = 0;
+        self.state.output.skipped_output_events = 0;
+        self.state.output.output_tab = super::types::ForgeOutputTab::Raw;
+        self.state.output.auto_select_results = true;
         self.state.output.results_search_query.clear();
         super::controller::ForgeController::sync_output_tab(self);
     }
@@ -120,9 +152,13 @@ impl ForgeView {
             return;
         }
         let overflow = self.state.output.output_runs.len().saturating_sub(MAX_OUTPUT_RUNS);
-        for _ in 0..overflow {
-            self.state.output.output_runs.remove(0);
-        }
+        self.state.output.trimmed_output_lines += self.state.output.output_runs[..overflow]
+            .iter()
+            .map(|run| run.raw_lines.len() + run.evaluation_lines.len())
+            .sum::<usize>();
+        self.state.output.output_runs.drain(..overflow);
+        self.state.output.raw.reset_history = true;
+        self.state.output.raw.dirty = true;
         if let Some(active) = self.state.output.active_run_id
             && !self.state.output.output_runs.iter().any(|run| run.id == active)
         {
@@ -132,15 +168,28 @@ impl ForgeView {
     }
 
     pub fn trim_output_lines(&mut self) {
-        let mut total: usize =
-            self.state.output.output_runs.iter().map(|run| run.raw_lines.len()).sum();
-        while total > MAX_OUTPUT_LINES && !self.state.output.output_runs.is_empty() {
-            if self.state.output.output_runs[0].raw_lines.is_empty() {
-                self.state.output.output_runs.remove(0);
-                continue;
+        let total: usize = self
+            .state
+            .output
+            .output_runs
+            .iter()
+            .map(|run| run.raw_lines.len() + run.evaluation_lines.len())
+            .sum();
+        let mut overflow = total.saturating_sub(MAX_OUTPUT_LINES);
+        if overflow > 0 {
+            self.state.output.trimmed_output_lines += overflow;
+            self.state.output.raw.reset_history = true;
+        }
+        for run in &mut self.state.output.output_runs {
+            let count = overflow.min(run.raw_lines.len());
+            run.raw_lines.drain(..count);
+            overflow -= count;
+            let count = overflow.min(run.evaluation_lines.len());
+            run.evaluation_lines.drain(..count);
+            overflow -= count;
+            if overflow == 0 {
+                break;
             }
-            self.state.output.output_runs[0].raw_lines.remove(0);
-            total = total.saturating_sub(1);
         }
     }
 }

@@ -135,5 +135,31 @@ pub fn diff_ranges(previous: &str, current: &str) -> Option<(Range<usize>, Range
         curr_end -= 1;
     }
 
+    // Shared UTF-8 prefixes/suffixes can end inside a code point.
+    while start > 0 && (!previous.is_char_boundary(start) || !current.is_char_boundary(start)) {
+        start -= 1;
+    }
+    while prev_end < previous.len()
+        && (!previous.is_char_boundary(prev_end) || !current.is_char_boundary(curr_end))
+    {
+        prev_end += 1;
+        curr_end += 1;
+    }
+
     Some((start..prev_end, start..curr_end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diff_ranges;
+
+    #[test]
+    fn changed_ranges_replace_complete_unicode_characters() {
+        for (before, after) in [("до\n", "да\n"), ("x😀y", "x😃y"), ("旧行\n次行\n", "次行\n")]
+        {
+            let (old, new) = diff_ranges(before, after).unwrap();
+            let rebuilt = format!("{}{}{}", &before[..old.start], &after[new], &before[old.end..]);
+            assert_eq!(rebuilt, after);
+        }
+    }
 }

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build:compile": "bun build ./src/bun-entry.ts --compile --outfile ../../resources/bin/mongosh-sidecar --external electron --external os-dns-native --external kerberos --external mongodb-client-encryption --external ssh2 --external cpu-features --external pac-proxy-agent --external @babel/preset-typescript/package.json"
+    "build:compile": "../../scripts/build_mongosh_sidecar.sh"
   },
   "dependencies": {
     "@mongosh/browser-runtime-electron": "3.29.1",

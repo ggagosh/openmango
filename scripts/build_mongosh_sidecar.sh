@@ -56,16 +56,16 @@ mkdir -p "$OUT_DIR"
 
 cd "$SIDECAR_DIR"
 
-if [ ! -d node_modules ]; then
-  bun install
-fi
+bun install --frozen-lockfile
 
 BUN_TARGET_FLAG=()
 if [[ -n "${BUN_TARGET:-}" ]]; then
   BUN_TARGET_FLAG=(--target "$BUN_TARGET")
 fi
 
-bun build ./src/bun-entry.ts --compile \
+# Keep bytecode shallow: most of the startup gain without embedding every mongosh function.
+bun build ./src/bun-entry.ts --compile --format=esm \
+  --minify --keep-names --sourcemap --bytecode --bytecode-depth=1 \
   ${BUN_TARGET_FLAG[@]+"${BUN_TARGET_FLAG[@]}"} \
   --outfile "$OUT_DIR/mongosh-sidecar" \
   --external electron \
