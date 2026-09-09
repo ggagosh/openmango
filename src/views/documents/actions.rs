@@ -532,12 +532,17 @@ impl CollectionView {
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
-            let (view_mode, selected_count) = {
+            let (view_mode, selected_count, focused_expanded) = {
                 let state_ref = this.state.read(cx);
                 let vm = state_ref.session_view_mode(&session_key);
-                let selected_count =
-                    state_ref.session(&session_key).map_or(0, |s| s.view.selected_docs.len());
-                (vm, selected_count)
+                let view = state_ref.session_view(&session_key);
+                let selected_count = view.map_or(0, |view| view.selected_docs.len());
+                let focused_expanded = view.is_some_and(|view| {
+                    view.selected_node_id
+                        .as_ref()
+                        .is_some_and(|id| view.expanded_nodes.contains(id))
+                });
+                (vm, selected_count, focused_expanded)
             };
 
             match view_mode {
@@ -546,6 +551,7 @@ impl CollectionView {
                     match tree_copy_target(
                         property_ctx.as_ref().map(|(_, meta)| meta.path.as_slice()),
                         selected_count,
+                        focused_expanded,
                     ) {
                         TreeCopyTarget::FocusedProperty => {
                             if let Some((sk, meta)) = property_ctx
@@ -561,6 +567,15 @@ impl CollectionView {
                                 && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
                             {
                                 let text = document_to_shell_string(&doc);
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            }
+                        }
+                        TreeCopyTarget::FocusedDocumentId => {
+                            if let Some((sk, meta)) = property_ctx
+                                && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
+                                && let Some(id) = doc.get("_id")
+                            {
+                                let text = format_bson_for_clipboard(id);
                                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                             }
                         }
@@ -1102,6 +1117,7 @@ pub(in crate::views::documents) fn copy_aggregation_as(
 enum TreeCopyTarget {
     FocusedProperty,
     FocusedDocument,
+    FocusedDocumentId,
     SelectedDocuments,
     None,
 }
@@ -1109,9 +1125,13 @@ enum TreeCopyTarget {
 fn tree_copy_target(
     focused_path: Option<&[PathSegment]>,
     selected_doc_count: usize,
+    focused_expanded: bool,
 ) -> TreeCopyTarget {
     match focused_path {
         Some(path) if !path.is_empty() => TreeCopyTarget::FocusedProperty,
+        Some(_) if !focused_expanded && selected_doc_count <= 1 => {
+            TreeCopyTarget::FocusedDocumentId
+        }
         Some(_) if selected_doc_count == 0 => TreeCopyTarget::FocusedDocument,
         _ if selected_doc_count > 0 => TreeCopyTarget::SelectedDocuments,
         _ => TreeCopyTarget::None,
@@ -1166,25 +1186,41 @@ fn format_bson_for_clipboard(value: &Bson) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TreeCopyTarget, tree_copy_target};
+    use super::{TreeCopyTarget, format_bson_for_clipboard, tree_copy_target};
     use crate::bson::PathSegment;
+    use mongodb::bson::{Bson, oid::ObjectId};
 
     #[test]
     fn tree_copy_prefers_focused_property_over_selected_parent_document() {
         let path = [PathSegment::Key("name".to_string())];
 
-        assert_eq!(tree_copy_target(Some(&path), 1), TreeCopyTarget::FocusedProperty);
+        assert_eq!(tree_copy_target(Some(&path), 1, false), TreeCopyTarget::FocusedProperty);
     }
 
     #[test]
-    fn tree_copy_uses_selected_documents_when_document_row_is_focused() {
-        assert_eq!(tree_copy_target(Some(&[]), 1), TreeCopyTarget::SelectedDocuments);
-        assert_eq!(tree_copy_target(None, 2), TreeCopyTarget::SelectedDocuments);
+    fn tree_copy_uses_documents_for_expanded_rows_and_multiple_selection() {
+        assert_eq!(tree_copy_target(Some(&[]), 1, true), TreeCopyTarget::SelectedDocuments);
+        assert_eq!(tree_copy_target(Some(&[]), 2, false), TreeCopyTarget::SelectedDocuments);
+        assert_eq!(tree_copy_target(None, 2, false), TreeCopyTarget::SelectedDocuments);
     }
 
     #[test]
     fn tree_copy_can_copy_focused_document_without_selected_docs_fallback() {
-        assert_eq!(tree_copy_target(Some(&[]), 0), TreeCopyTarget::FocusedDocument);
-        assert_eq!(tree_copy_target(None, 0), TreeCopyTarget::None);
+        assert_eq!(tree_copy_target(Some(&[]), 0, true), TreeCopyTarget::FocusedDocument);
+        assert_eq!(tree_copy_target(None, 0, false), TreeCopyTarget::None);
+    }
+
+    #[test]
+    fn tree_copy_uses_only_id_for_a_collapsed_document() {
+        assert_eq!(tree_copy_target(Some(&[]), 1, false), TreeCopyTarget::FocusedDocumentId);
+        assert_eq!(tree_copy_target(Some(&[]), 0, false), TreeCopyTarget::FocusedDocumentId);
+
+        let hex = "507f1f77bcf86cd799439011";
+        assert_eq!(
+            format_bson_for_clipboard(&Bson::ObjectId(ObjectId::parse_str(hex).unwrap())),
+            hex
+        );
+        assert_eq!(format_bson_for_clipboard(&Bson::String("custom-id".into())), "custom-id");
+        assert_eq!(format_bson_for_clipboard(&Bson::Int64(42)), "42");
     }
 }
