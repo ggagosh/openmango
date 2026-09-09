@@ -8,10 +8,29 @@ use gpui_kit::*;
 use lsp_types::{CompletionItem, CompletionTextEdit};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::state::{AppState, CollectionSubview, SessionKey};
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum CompletionScope {
+    Forge(Uuid),
+    Collection(Option<SessionKey>),
+}
+
+impl CompletionScope {
+    fn is_active(&self, state: &AppState) -> bool {
+        match self {
+            Self::Forge(id) => state.active_forge_tab_id() == Some(*id),
+            Self::Collection(Some(key)) => {
+                state.current_session_key().as_ref() == Some(key)
+                    && state.session_subview(key) == Some(CollectionSubview::Documents)
+            }
+            Self::Collection(None) => false,
+        }
+    }
+}
 
 struct CompletionRows {
-    menu: WeakEntity<ForgeCompletionMenu>,
+    menu: WeakEntity<EditorCompletionMenu>,
     items: Vec<CompletionItem>,
     selected: Option<usize>,
     explicit_selection: bool,
@@ -73,22 +92,24 @@ impl ListDelegate for CompletionRows {
 
 /// Owns the displayed candidates and commits a completion as one editor update.
 /// Text and caret never travel through separate deferred callbacks.
-pub struct ForgeCompletionMenu {
+pub(crate) struct EditorCompletionMenu {
     editor: WeakEntity<EditorState>,
     app_state: Entity<AppState>,
-    tab_id: Uuid,
+    scope: CompletionScope,
     generation: Arc<AtomicU64>,
     request_id: u64,
     source: Option<Rope>,
     cursor: usize,
     observed_source: Rope,
     observed_cursor: usize,
+    observed_anchor: Option<(Bounds<Pixels>, Pixels)>,
+    observed_scroll: Point<Pixels>,
     open: bool,
     list: Entity<ListState<CompletionRows>>,
     _subscription: Subscription,
 }
 
-impl ForgeCompletionMenu {
+impl EditorCompletionMenu {
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -96,7 +117,7 @@ impl ForgeCompletionMenu {
     pub fn new(
         editor: &Entity<EditorState>,
         app_state: Entity<AppState>,
-        tab_id: Uuid,
+        scope: CompletionScope,
         generation: Arc<AtomicU64>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -116,22 +137,32 @@ impl ForgeCompletionMenu {
         });
         let observed_source = editor.read(cx).text().clone();
         let observed_cursor = editor.read(cx).cursor();
+        let observed_anchor = editor.read(cx).cursor_layout();
+        let observed_scroll = editor.read(cx).scroll_offset();
         let subscription = cx.observe(editor, |this, editor, cx| {
             let source = editor.read(cx).text().clone();
             let cursor = editor.read(cx).cursor();
+            let anchor = editor.read(cx).cursor_layout();
+            let scroll = editor.read(cx).scroll_offset();
             let navigated = cursor != this.observed_cursor && source == this.observed_source;
+            let changed = source != this.observed_source
+                || cursor != this.observed_cursor
+                || anchor != this.observed_anchor
+                || scroll != this.observed_scroll;
             this.observed_source = source;
             this.observed_cursor = cursor;
+            this.observed_anchor = anchor;
+            this.observed_scroll = scroll;
             if navigated {
                 this.dismiss(cx);
-            } else {
+            } else if changed {
                 cx.notify();
             }
         });
         Self {
             editor: editor.downgrade(),
             app_state,
-            tab_id,
+            scope,
             generation,
             request_id: 0,
             source: None,
@@ -140,8 +171,21 @@ impl ForgeCompletionMenu {
             list,
             observed_source,
             observed_cursor,
+            observed_anchor,
+            observed_scroll,
             _subscription: subscription,
         }
+    }
+
+    pub fn set_scope(&mut self, scope: CompletionScope, cx: &mut Context<Self>) {
+        if self.scope != scope {
+            self.dismiss(cx);
+            self.scope = scope;
+        }
+    }
+
+    pub fn is_active(&self, cx: &App) -> bool {
+        self.scope.is_active(self.app_state.read(cx))
     }
 
     pub fn present(
@@ -209,11 +253,16 @@ impl ForgeCompletionMenu {
     }
 
     pub fn accept_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let was_open = self.open;
         let item = {
             let rows = self.list.read(cx).delegate();
             rows.selected.and_then(|index| rows.items.get(index)).cloned()
         };
-        item.is_some_and(|item| self.accept_item(item, window, cx))
+        if let Some(item) = item {
+            self.accept_item(item, window, cx);
+        }
+        // A stale menu still consumes acceptance; it must not submit a query.
+        was_open
     }
 
     fn accept_item(
@@ -237,7 +286,7 @@ impl ForgeCompletionMenu {
         let Some(source) = &self.source else {
             return false;
         };
-        if self.app_state.read(cx).active_forge_tab_id() != Some(self.tab_id) {
+        if !self.is_active(cx) {
             return false;
         }
         editor.update(cx, |editor, cx| {
@@ -270,26 +319,28 @@ impl ForgeCompletionMenu {
     }
 }
 
-impl Render for ForgeCompletionMenu {
+impl Render for EditorCompletionMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(editor) = self.editor.upgrade() else {
             return div().into_any_element();
         };
-        if !self.open
-            || !editor.read(cx).focus_handle(cx).is_focused(window)
-            || self.app_state.read(cx).active_forge_tab_id() != Some(self.tab_id)
+        if !self.open || !editor.read(cx).focus_handle(cx).is_focused(window) || !self.is_active(cx)
         {
+            return div().into_any_element();
+        }
+        if self.source.as_ref().is_none_or(|source| editor.read(cx).text() != source) {
             return div().into_any_element();
         }
         let Some((caret, line_height)) = editor.read(cx).cursor_layout() else {
             return div().into_any_element();
         };
-        let origin =
-            caret.origin + editor.read(cx).scroll_offset() + point(px(-4.0), line_height + px(4.0));
+        // Native caret X already includes horizontal scrolling; Y is unscrolled.
+        let origin = caret.origin
+            + point(px(-4.0), editor.read(cx).scroll_offset().y + line_height + px(4.0));
         deferred(
             anchored().position(origin).anchor(Anchor::TopLeft).child(
                 div()
-                    .id("forge-completions")
+                    .id("editor-completions")
                     .occlude()
                     .popover_style(cx)
                     .w(px(440.0))

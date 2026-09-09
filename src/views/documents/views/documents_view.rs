@@ -415,7 +415,7 @@ impl CollectionView {
                             .min_w(px(0.0))
                             .min_h(px(0.0))
                             .overflow_hidden()
-                            .child(if is_loading {
+                            .child(if is_loading && document_count == 0 {
                                 div()
                                     .flex()
                                     .flex_1()
@@ -440,7 +440,9 @@ impl CollectionView {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("No documents found"),
+                                            .child(session_key.as_ref().and_then(|key| self.state.read(cx).session_data(key))
+                                                .map(|data| super::super::query::document_empty_message(data.loaded, data.query_error.is_some(), data.filter.is_some()))
+                                                .unwrap_or("No results yet")),
                                     )
                                     .into_any_element()
                             } else {

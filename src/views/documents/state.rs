@@ -32,6 +32,10 @@ pub struct CollectionView {
     pub(crate) aggregation_focus: FocusHandle,
     pub(crate) aggregation_stage_list_scroll: UniformListScrollHandle,
     pub(crate) filter_state: Option<Entity<EditorState>>,
+    pub(crate) filter_completions: Option<std::rc::Rc<super::query_editor::QueryEditorCompletions>>,
+    pub(crate) filter_completion_menu:
+        Option<Entity<crate::views::editor_completion::EditorCompletionMenu>>,
+    pub(crate) filter_expanded: bool,
     pub(crate) sort_state: Option<Entity<EditorState>>,
     pub(crate) projection_state: Option<Entity<EditorState>>,
     pub(crate) schema_filter_state: Option<Entity<EditorState>>,
@@ -116,10 +120,29 @@ impl CollectionView {
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
 
-            if !is_escape && !is_enter && !cmd_or_ctrl {
+            if !is_escape
+                && !is_enter
+                && !cmd_or_ctrl
+                && !matches!(key.as_str(), "tab" | "up" | "down")
+            {
                 return;
             }
             view.update(cx, |this, cx| {
+                let filter_focused = this
+                    .filter_state
+                    .as_ref()
+                    .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                let option_focused = [&this.sort_state, &this.projection_state]
+                    .into_iter()
+                    .flatten()
+                    .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                if filter_focused || option_focused {
+                    if filter_focused && this.handle_query_editor_key(&event.keystroke, window, cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 let mut handled = false;
 
                 let save_selected_document =
@@ -362,6 +385,9 @@ impl CollectionView {
             aggregation_focus: cx.focus_handle(),
             aggregation_stage_list_scroll: UniformListScrollHandle::default(),
             filter_state: None,
+            filter_completions: None,
+            filter_completion_menu: None,
+            filter_expanded: false,
             sort_state: None,
             projection_state: None,
             schema_filter_state: None,

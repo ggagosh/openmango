@@ -81,7 +81,7 @@ Move ongoing synchronization and focus transitions to the relevant tab/change ev
 
 ### 2. Make accepted completions correct
 
-Use a native GPUI List with the existing MongoDB provider. [completion_menu.rs](../src/views/forge/completion_menu.rs) owns the displayed snapshot, selected candidate, and synchronous commit. [completion.rs](../src/views/forge/completion.rs) owns request cancellation and linguistic matching. Every accepted item must produce valid intended text, replace the correct token, and be one undoable action. The native Editor remains the text engine.
+Use a native GPUI List with the existing MongoDB provider. The shared [editor_completion.rs](../src/views/editor_completion.rs) owns the displayed snapshot, selected candidate, and synchronous commit for Forge and the document query bar. [completion.rs](../src/views/forge/completion.rs) owns Forge request cancellation and linguistic matching. Every accepted item must produce valid intended text, replace the correct token, and be one undoable action. The native Editor remains the text engine.
 
 Until a supported snippet acceptance path exists, emit correct plain-text edits rather than unsupported placeholders. This is a compatibility repair, not full snippet support. Argument placement and Tab-through-placeholders remain explicit toolkit requirements. Never strip arbitrary dollar-prefixed text after insertion: MongoDB operators and field references are real source text. Snippet metadata must be explicit, and literal MongoDB dollars must be escaped if a real snippet parser is introduced.
 

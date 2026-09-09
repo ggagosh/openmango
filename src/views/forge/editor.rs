@@ -11,10 +11,10 @@ use crate::helpers::auto_pair::AutoPairState;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
-use super::completion_menu::ForgeCompletionMenu;
 use super::editor_behavior::{INDENT_WIDTH, WordAction, code_word_boundary, newline_after_opening};
 use super::parser::parse_context;
 use super::state::ForgeEditorBuffer;
+use crate::views::editor_completion::{CompletionScope, EditorCompletionMenu};
 
 impl ForgeView {
     fn create_editor_buffer(
@@ -34,10 +34,10 @@ impl ForgeView {
                 .default_value(content.clone())
         });
         let completion_menu = cx.new(|cx| {
-            ForgeCompletionMenu::new(
+            EditorCompletionMenu::new(
                 &editor_state,
                 self.app_state.clone(),
-                tab_id,
+                CompletionScope::Forge(tab_id),
                 self.state.editor.completion_request_id.clone(),
                 window,
                 cx,

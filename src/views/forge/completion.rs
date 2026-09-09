@@ -12,7 +12,6 @@ use lsp_types::{
     InsertTextFormat, Range, TextEdit,
 };
 
-use super::completion_menu::ForgeCompletionMenu;
 use super::logic::{
     METHODS, PIPELINE_OPERATORS, QUERY_OPERATORS, UPDATE_OPERATORS, collection_method_template,
     cursor_from_template, db_method_template, label_from_template,
@@ -23,6 +22,7 @@ use super::runtime::active_forge_session_info;
 use super::types::{Suggestion, SuggestionKind};
 use crate::app::search::fuzzy_match_score;
 use crate::state::{AppState, SessionKey};
+use crate::views::editor_completion::EditorCompletionMenu;
 
 // ── Accumulator operators ──────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ pub struct ForgeCompletionProvider {
     request_id: Arc<AtomicU64>,
     tab_id: Uuid,
     editor: WeakEntity<EditorState>,
-    menu: WeakEntity<ForgeCompletionMenu>,
+    menu: WeakEntity<EditorCompletionMenu>,
     window: AnyWindowHandle,
     task: Rc<RefCell<Option<Task<()>>>>,
     typed_change: Rc<Cell<bool>>,
@@ -83,7 +83,7 @@ impl ForgeCompletionProvider {
         request_id: Arc<AtomicU64>,
         tab_id: Uuid,
         editor: WeakEntity<EditorState>,
-        menu: WeakEntity<ForgeCompletionMenu>,
+        menu: WeakEntity<EditorCompletionMenu>,
         window: AnyWindowHandle,
     ) -> Self {
         Self {

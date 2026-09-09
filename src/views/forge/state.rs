@@ -18,7 +18,7 @@ pub struct ForgeEditorState {
 pub struct ForgeEditorBuffer {
     pub editor_state: gpui_kit::Entity<EditorState>,
     pub completion_provider: std::rc::Rc<super::completion::ForgeCompletionProvider>,
-    pub completion_menu: gpui_kit::Entity<super::completion_menu::ForgeCompletionMenu>,
+    pub completion_menu: gpui_kit::Entity<crate::views::editor_completion::EditorCompletionMenu>,
     pub _subscription: gpui_kit::Subscription,
     pub content: String,
     pub auto_pair: AutoPairState,

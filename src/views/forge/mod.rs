@@ -5,7 +5,6 @@
 
 mod actions;
 mod completion;
-mod completion_menu;
 mod controller;
 mod editor;
 pub(crate) mod editor_behavior;

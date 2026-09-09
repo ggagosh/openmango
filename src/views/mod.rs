@@ -3,6 +3,7 @@ pub mod agent_activity;
 pub mod ai;
 pub mod databases;
 pub mod documents;
+pub(crate) mod editor_completion;
 pub mod forge;
 pub mod json_editor_detached;
 pub mod results;

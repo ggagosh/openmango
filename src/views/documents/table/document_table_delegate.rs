@@ -218,7 +218,7 @@ impl TableDelegate for DocumentTableDelegate {
     }
 
     fn loading(&self, _cx: &App) -> bool {
-        self.is_loading
+        self.is_loading && self.documents.is_empty()
     }
 
     fn render_tr(
@@ -332,14 +332,24 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let message = self
+            .session_key
+            .as_ref()
+            .and_then(|key| self.state.read(cx).session_data(key))
+            .map(|data| {
+                super::super::query::document_empty_message(
+                    data.loaded,
+                    data.query_error.is_some(),
+                    data.filter.is_some(),
+                )
+            })
+            .unwrap_or("No results yet");
         div()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                div().text_sm().text_color(cx.theme().muted_foreground).child("No documents found"),
-            )
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(message))
             .into_any_element()
     }
 

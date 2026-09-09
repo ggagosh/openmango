@@ -15,7 +15,7 @@ pub use actions::{
     clean_toolbar_icon_button, render_aggregation_actions, render_documents_actions,
     render_indexes_actions, render_schema_actions, render_stats_actions,
 };
-pub use filter_bar::{render_filter_row, render_query_options};
+pub use filter_bar::render_query_options;
 pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
@@ -32,6 +32,10 @@ use crate::theme::{islands, spacing};
 
 use super::CollectionView;
 
+fn header_container(background: Hsla) -> Div {
+    div().flex().flex_col().px(spacing::lg()).py(spacing::sm()).gap(px(2.0)).bg(background)
+}
+
 /// Render the header bar with collection title and action buttons.
 impl CollectionView {
     #[allow(clippy::too_many_arguments)]
@@ -45,9 +49,6 @@ impl CollectionView {
         selected_count: usize,
         any_selected_dirty: bool,
         is_loading: bool,
-        filter_state: Option<Entity<EditorState>>,
-        filter_valid: bool,
-        filter_active: bool,
         sort_state: Option<Entity<EditorState>>,
         projection_state: Option<Entity<EditorState>>,
         sort_valid: bool,
@@ -55,14 +56,13 @@ impl CollectionView {
         sort_active: bool,
         projection_active: bool,
         query_options_open: bool,
-        filter_builder_open: bool,
         active_subview: CollectionSubview,
         stats_loading: bool,
         aggregation_loading: bool,
         explain_loading: bool,
         schema_loading: bool,
         col_visibility_search: Entity<InputState>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
@@ -78,6 +78,10 @@ impl CollectionView {
         };
 
         let is_documents = active_subview == CollectionSubview::Documents;
+        let filter_active = session_key
+            .as_ref()
+            .and_then(|key| self.state.read(cx).session_data(key))
+            .is_some_and(|data| data.filter.is_some());
         let is_indexes = active_subview == CollectionSubview::Indexes;
         let is_stats = active_subview == CollectionSubview::Stats;
         let is_aggregation = active_subview == CollectionSubview::Aggregation;
@@ -132,16 +136,7 @@ impl CollectionView {
             render_subview_tabs(self.state.clone(), session_key.clone(), active_subview, cx);
 
         // Build the root header container
-        let mut root = div()
-            .flex()
-            .flex_col()
-            .px(spacing::lg())
-            .py(spacing::sm())
-            .gap(px(2.0))
-            .bg(islands::tool_bg(&appearance, cx))
-            .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                window.blur(cx);
-            })
+        let mut root = header_container(islands::tool_bg(&appearance, cx))
             .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
             .child(div().pl(px(0.0)).child(subview_tabs))
             .when_some(documents_toolbar_row, |s, row| {
@@ -159,21 +154,7 @@ impl CollectionView {
 
         // Add filter bar for documents subview
         if is_documents {
-            root = root.child(render_filter_row(
-                self.state.clone(),
-                session_key.clone(),
-                filter_state.clone(),
-                filter_valid,
-                filter_active,
-                sort_active,
-                projection_active,
-                query_options_open,
-                filter_builder_open,
-                explain_loading,
-                self.filter_error_message.as_deref(),
-                self.filter_dirty,
-                cx,
-            ));
+            root = root.child(self.render_filter_row(is_loading, explain_loading, window, cx));
 
             // Add query options panel if open
             if query_options_open {
@@ -186,6 +167,7 @@ impl CollectionView {
                     projection_valid,
                     sort_active,
                     projection_active,
+                    window,
                     cx,
                 ));
             }

@@ -62,6 +62,7 @@ schemars = "1.2.1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
+gpui-kit = { version = "0.6.0", features = ["test-support"] }
 cargo-husky = { version = "1", default-features = false, features = [
     "user-hooks",
 ] }
