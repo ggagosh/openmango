@@ -38,6 +38,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Workspace tabs now stay within the title bar, follow the active tab when overflowing, and accept shortcuts immediately after launch
+- Query editors retain focus and place the caret correctly on left-click, including collapsed and scrolled inputs
+- Forge completions preserve existing arguments and apply the inserted text and caret position together
+- Forge console output follows new results without stealing focus, pauses while reading older output, and preserves the distinction between printed `undefined` and `null`
+- Long-running Forge queries and idle shell sessions are no longer interrupted by the sidecar's former inactivity timeout
+- Filter Builder shortcuts stay within the builder, invalid drafts are blocked before execution, and collapsing a group preserves its inputs and query
+- Linux CI installs the Fontconfig development files required by GPUI Kit's font backend
 - Opening Forge now targets the highlighted collection, reuses matching find-all queries, and preserves existing query drafts
 - Running Forge queries or selected statements with keyboard shortcuts no longer causes a nested view-update crash
 - Transfer cancellation now blocks reruns and mode changes until the active operation has stopped, preventing stale completion races
@@ -79,7 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - Migrated the desktop UI to published GPUI Kit 0.6 components and removed the vendored toolkit patches
-- Forge retains editor state across tabs, uses fuzzy atomic completions, preserves output selection and scrolling, and reduces sidecar startup overhead
+- Forge retains editor and result-view state across tabs and uses fuzzy completions with consistent native editing shortcuts
 - Filter Builder now uses consistent native controls, collapsible borderless groups, and scoped keyboard handling with validation before execution
 - Corner radii now follow one shared application scale across all built-in color themes
 - Settings now use a searchable full-content tab with General, Transfer, AI Assistant, Agents & MCP, and Keybindings pages
@@ -104,6 +111,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Update archives and final app bundles are verified before replacing the installed application
 
 ### Performance
+- Forge sidecar startup uses precompiled bytecode, and console/result updates avoid rebuilding unchanged output
 - History uses one deployment-wide change stream per connection to avoid exhausting MongoDB connection pools, while large restores process independent documents concurrently and preserve same-document ordering
 - Document tree (JSON view) expands and scrolls much faster on large or deeply nested documents — removed a quadratic dirty-check and the redundant full-tree clones that ran on every interaction
 - Documents table is much smoother — it now re-renders only when the data or selection actually changes instead of rebuilding every visible cell every frame
