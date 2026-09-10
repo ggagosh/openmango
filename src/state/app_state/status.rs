@@ -20,7 +20,7 @@ impl AppState {
             AppEvent::Disconnected(_) => {
                 self.set_status_message(Some(StatusMessage::info("Disconnected")));
             }
-            AppEvent::ConnectionFailed(error) => {
+            AppEvent::ConnectionFailed { error, .. } => {
                 self.set_status_message(Some(StatusMessage::error(format!(
                     "Connection failed: {error}"
                 ))));

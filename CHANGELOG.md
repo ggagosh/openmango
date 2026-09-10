@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Searchable native connection list, visible disconnected connections with row actions, and separate Save and Save & Connect actions
 - Copy ID action for documents, including ID-only copying of a selected collapsed document
 - Open a highlighted collection in Forge with Cmd/Ctrl+Shift+F, or choose Open Forge as the collection double-click action in Settings; queries start with `find({})`, ready to run ([#12](https://github.com/ggagosh/openmango/issues/12))
 - Authenticated local MCP agent access with per-connection sharing and write controls, bounded read tools, direct document insert/update/replace/delete, and metadata-only History restore tools
@@ -38,6 +39,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- Prevent a crash when opening New Connection or switching saved connections; retain drafts and active sessions when connection persistence fails
+- Keep pasted URI options and encoded credentials in sync with the editor, and ignore connection test results after the tested settings change
 - Workspace tabs now stay within the title bar, follow the active tab when overflowing, and accept shortcuts immediately after launch
 - Query editors retain focus and place the caret correctly on left-click, including collapsed and scrolled inputs
 - Forge completions preserve existing arguments and apply the inserted text and caret position together

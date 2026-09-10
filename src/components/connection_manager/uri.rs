@@ -2,6 +2,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::{Context, Entity};
 
 use super::ConnectionManager;
+use crate::helpers::validate::{percent_decode, percent_encode};
 
 #[derive(Clone, Debug)]
 pub(super) struct UriParts {
@@ -18,24 +19,27 @@ impl UriParts {
         self.query
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| percent_decode(v))
             .unwrap_or_default()
     }
 
     pub(super) fn set_query(&mut self, key: &str, value: Option<String>) {
+        if self.get_query(key) == value.as_deref().unwrap_or_default() {
+            return;
+        }
         self.query.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
         if let Some(value) = value {
-            self.query.push((key.to_string(), value));
+            self.query.push((key.to_string(), percent_encode(&value)));
         }
     }
 
     pub(super) fn set_userinfo(&mut self, user: Option<String>, password: Option<String>) {
-        self.user = user;
-        self.password = password;
+        self.user = user.map(|value| percent_encode(&value));
+        self.password = password.map(|value| percent_encode(&value));
     }
 
     pub(super) fn userinfo(&self) -> (Option<String>, Option<String>) {
-        (self.user.clone(), self.password.clone())
+        (self.user.as_deref().map(percent_decode), self.password.as_deref().map(percent_decode))
     }
 
     pub(super) fn to_uri(&self) -> String {
@@ -75,6 +79,9 @@ pub(super) fn parse_uri(input: &str) -> Result<UriParts, String> {
     let (scheme, rest) = raw
         .split_once("://")
         .ok_or_else(|| "URI must include a scheme (mongodb:// or mongodb+srv://)".to_string())?;
+    if !matches!(scheme, "mongodb" | "mongodb+srv") {
+        return Err("Use a mongodb:// or mongodb+srv:// URI".into());
+    }
     if rest.is_empty() {
         return Err("URI is missing host".to_string());
     }

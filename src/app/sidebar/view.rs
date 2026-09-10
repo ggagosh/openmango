@@ -4,7 +4,7 @@ use std::rc::Rc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu as _};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -66,12 +66,6 @@ impl Render for Sidebar {
                 .collect::<HashMap<_, _>>(),
         );
 
-        let disconnected_connections: Vec<_> = self
-            .cached_connections
-            .iter()
-            .filter(|c| !active_connections.contains_key(&c.id))
-            .cloned()
-            .collect();
         let pending_agent_actions = self
             .state
             .read(cx)
@@ -91,7 +85,6 @@ impl Render for Sidebar {
         let state_for_add = state.clone();
         let state_for_activity = state.clone();
         let state_for_manager = state.clone();
-        let state_for_connect = state.clone();
         let state_for_tree = self.state.clone();
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
@@ -205,21 +198,22 @@ impl Render for Sidebar {
                 this.close_search(window, cx);
             }))
             .child(
-                // Header with "+" button
+                // Keep management actions visible when the sidebar is narrow.
                 div()
                     .flex()
+                    .flex_wrap()
+                    .gap(spacing::xs())
                     .items_center()
                     .justify_between()
                     .px(spacing::md())
-                    .h(sizing::header_height())
+                    .py(spacing::xs())
+                    .min_h(sizing::header_height())
                     .border_b_1()
                     .border_color(islands::panel_border(&appearance, cx))
                     .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(cx.theme().secondary_foreground)
-                            .child("CONNECTIONS"),
+                        Button::new("manage-connections-btn").ghost().small()
+                            .label("Connections").tooltip("Manage saved connections")
+                            .on_click(move |_, window, cx| ConnectionManager::open(state_for_manager.clone(), window, cx)),
                     )
                     .child(
                         div()
@@ -236,48 +230,13 @@ impl Render for Sidebar {
                                         window.dispatch_action(Box::new(OpenActionBar), cx);
                                     }),
                             )
-                            .child({
-                                let sidebar_entity = sidebar_entity.clone();
-                                // Connect dropdown button
-                                Button::new("connect-dropdown-btn")
-                                    .icon(Icon::new(IconName::Globe).xsmall())
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip("Connect saved connection")
-                                    .dropdown_menu(move |mut menu: PopupMenu, _window, _cx| {
-                                        if disconnected_connections.is_empty() {
-                                            menu = menu.item(
-                                                PopupMenuItem::new("All connected").disabled(true),
-                                            );
-                                        } else {
-                                            for conn in &disconnected_connections {
-                                                let conn_id = conn.id;
-                                                let state = state_for_connect.clone();
-                                                let sidebar_entity = sidebar_entity.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(conn.name.clone())
-                                                        .on_click(move |_, _window, cx| {
-                                                            sidebar_entity.update(cx, |sidebar, cx| {
-                                                                sidebar.expand_connection_and_refresh(conn_id, cx);
-                                                            });
-                                                            AppCommands::connect(
-                                                                state.clone(),
-                                                                conn_id,
-                                                                cx,
-                                                            );
-                                                        }),
-                                                );
-                                            }
-                                        }
-                                        menu
-                                    })
-                            })
                             .child(
                                 Button::new("add-connection-btn")
                                     .icon(Icon::new(IconName::Plus).xsmall())
                                     .ghost()
                                     .xsmall()
-                                    .tooltip("Add connection")
+                                    .label("New")
+                                    .tooltip("New connection")
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
                                     }),
@@ -321,16 +280,6 @@ impl Render for Sidebar {
                                                 .text_color(cx.theme().danger_foreground)
                                                 .child(label),
                                         )
-                                    }),
-                            )
-                            .child(
-                                Button::new("manage-connections-btn")
-                                    .icon(Icon::new(IconName::Settings).xsmall())
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip("Manage connections")
-                                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                        ConnectionManager::open(state_for_manager.clone(), window, cx);
                                     }),
                             )
                     ),
@@ -606,6 +555,7 @@ impl Render for Sidebar {
                                         } else {
                                             theme_primary
                                         };
+                                        let is_connected = active_connections.contains_key(&connection_id);
                                         let is_connecting =
                                             is_connection && connecting_id == Some(connection_id);
                                         let is_loading_db =
@@ -778,7 +728,7 @@ impl Render for Sidebar {
                                                 this.child(
                                                     Icon::new(IconName::Globe)
                                                         .size(sizing::icon_md())
-                                                        .text_color(connection_accent.unwrap_or(theme_primary)),
+                                                        .text_color(if is_connected { connection_accent.unwrap_or(theme_primary) } else { theme_muted_foreground }),
                                                 )
                                             })
                                             // Database: dashboard icon (blue)
@@ -819,6 +769,23 @@ impl Render for Sidebar {
                                                     ))
                                                 },
                                             )
+                                            .when(is_connection && !is_connected && !is_connecting, |row| {
+                                                let state = state_clone.clone();
+                                                let sidebar = sidebar_entity.clone();
+                                                row.child(Button::new(format!("connect-sidebar-{connection_id}")).ghost().xsmall().label("Connect")
+                                                    .on_click(move |_, _, cx| {
+                                                        cx.stop_propagation();
+                                                        sidebar.update(cx, |sidebar, cx| sidebar.expand_connection_and_refresh(connection_id, cx));
+                                                        AppCommands::connect(state.clone(), connection_id, cx);
+                                                    }))
+                                            })
+                                            .when(is_connection, |row| {
+                                                let state = state_clone.clone();
+                                                let sidebar = sidebar_entity.clone();
+                                                row.child(Button::new(format!("connection-menu-{connection_id}")).ghost().xsmall()
+                                                    .icon(IconName::Ellipsis).tooltip("Connection actions")
+                                                    .dropdown_menu(move |menu, window, cx| build_connection_menu(menu, state.clone(), sidebar.clone(), connection_id, connecting_id, window, cx)))
+                                            })
                                             .when(is_connecting || is_loading_db, |this| {
                                                 this.child(Spinner::new().xsmall())
                                             });

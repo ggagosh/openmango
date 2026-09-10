@@ -1,24 +1,16 @@
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::dialog::Dialog;
-use gpui_kit::component::input::{Input, InputState, Position};
-use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, IntoElement as _, ParentElement as _,
-    Styled as _, Window, div, px,
-};
+use gpui_kit::component::input::InputState;
+use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::components::{Button, cancel_button, open_confirm_dialog, request_remove_connection};
+use crate::components::{open_confirm_dialog, request_remove_connection};
+use crate::helpers::validate::{percent_decode, percent_encode};
 use crate::helpers::{
     UriSecrets, extract_host_from_uri, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
     validate_mongodb_uri,
 };
 use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
-use crate::state::{AppState, TabKey};
-use crate::theme::spacing;
+use crate::state::{AppCommands, AppState, TabKey, UnsavedScope};
 
 use super::uri::{bool_to_query, parse_bool, parse_uri, value_or_none};
 use super::{ConnectionManager, TestStatus};
@@ -26,11 +18,57 @@ use super::{ConnectionManager, TestStatus};
 const TEST_CONNECTION_TIMEOUT_SECS: u64 = 30;
 
 fn non_empty_value(state: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = state.read(cx).value().trim().to_string();
+    let value = state.read(cx).value().to_string();
     (!value.is_empty()).then_some(value)
 }
 
 impl ConnectionManager {
+    pub(super) fn request_save(
+        view: Entity<Self>,
+        connect: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if view.read(cx).pending_save.is_some()
+            || matches!(view.read(cx).status, TestStatus::Testing)
+            || view.read(cx).connecting_id == view.read(cx).selected_id
+                && view.read(cx).connecting_id.is_some()
+        {
+            return;
+        }
+        let state = view.read(cx).state.clone();
+        let selected_id = view.read(cx).selected_id;
+        let save = {
+            let state = state.clone();
+            move |window: &mut Window, cx: &mut App| {
+                if connect
+                    && !view.read(cx).has_unsaved_changes(cx)
+                    && let Some(connection_id) = view.read(cx).selected_id
+                {
+                    AppCommands::connect(state.clone(), connection_id, cx);
+                } else {
+                    view.update(cx, |this, cx| {
+                        this.save_connection(connect, window, cx);
+                    });
+                }
+            }
+        };
+        if connect
+            && let Some(connection_id) = selected_id
+            && state.read(cx).is_connected(connection_id)
+        {
+            crate::components::request_unsaved_action(
+                state,
+                UnsavedScope::Connection(connection_id),
+                window,
+                cx,
+                save,
+            );
+        } else {
+            save(window, cx);
+        }
+    }
+
     pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
         Self::open_with_selected(state, None, false, window, cx);
     }
@@ -61,26 +99,27 @@ impl ConnectionManager {
     }
 
     pub(crate) fn apply_open_request(
-        &mut self,
+        view: Entity<Self>,
         selected_id: Option<Uuid>,
         creating_new: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut App,
     ) {
         if creating_new {
-            Self::request_load_connection(cx.entity(), None, window, cx);
+            Self::request_load_connection(view, None, window, cx);
             return;
         }
 
         if let Some(connection) = selected_id.and_then(|connection_id| {
-            self.state
+            view.read(cx)
+                .state
                 .read(cx)
                 .connections
                 .iter()
                 .find(|connection| connection.id == connection_id)
                 .cloned()
         }) {
-            Self::request_load_connection(cx.entity(), Some(connection), window, cx);
+            Self::request_load_connection(view, Some(connection), window, cx);
         }
     }
 
@@ -94,6 +133,9 @@ impl ConnectionManager {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if view.read(cx).pending_save.is_some() {
+            return;
+        }
         let is_same_connection = connection.as_ref().is_some_and(|connection| {
             !view.read(cx).creating_new && view.read(cx).selected_id == Some(connection.id)
         });
@@ -132,7 +174,7 @@ impl ConnectionManager {
             this.load_connection(connection, window, cx);
             this.active_tab = super::ManagerTab::General;
             if creating_new {
-                let focus = this.draft.name_state.read(cx).focus_handle(cx);
+                let focus = this.draft.uri_state.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
             }
             cx.notify();
@@ -190,9 +232,11 @@ impl ConnectionManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.test_generation += 1;
+        self.connecting_id = None;
         self.status = TestStatus::Idle;
-        self.last_tested_uri = None;
-        self.pending_test_uri = None;
+        self.last_tested_fingerprint = None;
+        self.pending_test_fingerprint = None;
         self.testing_step = None;
         self.parse_error = None;
         self.creating_new = connection.is_none();
@@ -218,6 +262,7 @@ impl ConnectionManager {
             self.draft.reset(window, cx);
         }
         self.baseline_fingerprint = self.draft.fingerprint(cx);
+        self.sync_connection_list(window, cx);
     }
 
     fn load_transport_settings(
@@ -405,13 +450,99 @@ impl ConnectionManager {
         if !crate::components::should_capture_uri_change(&mut self.draft.internal_uri_value, &uri) {
             return;
         }
-        let secrets = extract_uri_secrets(&uri);
+        let mut secrets = extract_uri_secrets(&uri);
+        let sanitized = if secrets.is_empty() { uri.clone() } else { strip_uri_secrets(&uri) };
+        if let Ok(parts) = parse_uri(&uri) {
+            let (username, password) = parts.userinfo();
+            let same_user = username.as_deref().unwrap_or_default()
+                == self.draft.username_state.read(cx).value().as_ref();
+            if same_user
+                && parts.get_query("authMechanism").eq_ignore_ascii_case("MONGODB-AWS")
+                && secrets.aws_session_token.is_none()
+            {
+                secrets.aws_session_token = self.draft.uri_secrets.aws_session_token.clone();
+            }
+            if same_user
+                && !parts.get_query("proxyHost").is_empty()
+                && secrets.proxy_password.is_none()
+            {
+                secrets.proxy_password = self.draft.uri_secrets.proxy_password.clone();
+            }
+            if username.as_deref() == Some(self.draft.username_state.read(cx).value().as_ref())
+                && password.is_none()
+            {
+                secrets.password = non_empty_value(&self.draft.password_state, cx)
+                    .map(|value| percent_encode(&value));
+            }
+            if secrets.tls_certificate_key_file_password.is_none() {
+                secrets.tls_certificate_key_file_password =
+                    non_empty_value(&self.draft.tls_cert_key_password_state, cx)
+                        .map(|value| percent_encode(&value));
+            }
+        }
+        // Preserve the authority while a credential-bearing URI has no host yet.
+        if secrets.password.is_some()
+            && let Some(userinfo) = uri
+                .split_once("://")
+                .and_then(|(_, rest)| rest.split_once('@').map(|(userinfo, _)| userinfo))
+        {
+            let username = userinfo.split_once(':').map(|(user, _)| user).unwrap_or(userinfo);
+            self.draft
+                .username_state
+                .update(cx, |input, cx| input.set_value(percent_decode(username), window, cx));
+        }
+        self.import_uri_with_display(
+            inject_uri_secrets(&sanitized, &secrets),
+            sanitized,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn real_uri(&self, cx: &App) -> String {
+        let uri = self.draft.uri_state.read(cx).value().to_string();
+        let mut secrets = self.draft.uri_secrets.clone();
+        secrets.password =
+            non_empty_value(&self.draft.password_state, cx).map(|value| percent_encode(&value));
+        secrets.tls_certificate_key_file_password =
+            non_empty_value(&self.draft.tls_cert_key_password_state, cx)
+                .map(|value| percent_encode(&value));
+        inject_uri_secrets(&strip_uri_secrets(&uri), &secrets)
+    }
+
+    fn import_uri(&mut self, uri: String, window: &mut Window, cx: &mut Context<Self>) {
+        let sanitized_uri = strip_uri_secrets(&uri);
+        self.import_uri_with_display(uri, sanitized_uri, window, cx);
+    }
+
+    fn import_uri_with_display(
+        &mut self,
+        uri: String,
+        sanitized_uri: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let uri_secrets = extract_uri_secrets(&uri);
+        if self.draft.uri_state.read(cx).value().as_ref() != sanitized_uri {
+            self.draft.internal_uri_value = Some(sanitized_uri.clone());
+            self.draft
+                .uri_state
+                .update(cx, |state, cx| state.set_value(sanitized_uri.clone(), window, cx));
+        }
         self.draft.password_state.update(cx, |state, cx| {
-            state.set_value(secrets.password.clone().unwrap_or_default(), window, cx)
+            state.set_value(
+                uri_secrets.password.as_deref().map(percent_decode).unwrap_or_default(),
+                window,
+                cx,
+            )
         });
         self.draft.tls_cert_key_password_state.update(cx, |state, cx| {
             state.set_value(
-                secrets.tls_certificate_key_file_password.clone().unwrap_or_default(),
+                uri_secrets
+                    .tls_certificate_key_file_password
+                    .as_deref()
+                    .map(percent_decode)
+                    .unwrap_or_default(),
                 window,
                 cx,
             )
@@ -419,33 +550,9 @@ impl ConnectionManager {
         self.draft.uri_secrets = UriSecrets {
             password: None,
             tls_certificate_key_file_password: None,
-            proxy_password: secrets.proxy_password,
-            aws_session_token: secrets.aws_session_token,
+            proxy_password: uri_secrets.proxy_password,
+            aws_session_token: uri_secrets.aws_session_token,
         };
-        let sanitized = strip_uri_secrets(&uri);
-        if sanitized != uri {
-            self.draft.internal_uri_value = Some(sanitized.clone());
-            self.draft.uri_state.update(cx, |state, cx| state.set_value(sanitized, window, cx));
-        }
-    }
-
-    pub(super) fn real_uri(&self, cx: &App) -> String {
-        let uri = self.draft.uri_state.read(cx).value().to_string();
-        let mut secrets = self.draft.uri_secrets.clone();
-        secrets.password = non_empty_value(&self.draft.password_state, cx);
-        secrets.tls_certificate_key_file_password =
-            non_empty_value(&self.draft.tls_cert_key_password_state, cx);
-        inject_uri_secrets(&strip_uri_secrets(&uri), &secrets)
-    }
-
-    pub(super) fn import_from_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let uri = self.draft.uri_state.read(cx).value().to_string();
-        self.import_uri(uri, window, cx);
-    }
-
-    fn import_uri(&mut self, uri: String, window: &mut Window, cx: &mut Context<Self>) {
-        let uri_secrets = extract_uri_secrets(&uri);
-        let sanitized_uri = strip_uri_secrets(&uri);
         match parse_uri(&sanitized_uri) {
             Ok(parts) => {
                 let (user, _redacted_password) = parts.userinfo();
@@ -453,7 +560,11 @@ impl ConnectionManager {
                     .username_state
                     .update(cx, |state, cx| state.set_value(user.unwrap_or_default(), window, cx));
                 self.draft.password_state.update(cx, |state, cx| {
-                    state.set_value(uri_secrets.password.clone().unwrap_or_default(), window, cx)
+                    state.set_value(
+                        uri_secrets.password.as_deref().map(percent_decode).unwrap_or_default(),
+                        window,
+                        cx,
+                    )
                 });
                 self.draft.app_name_state.update(cx, |state, cx| {
                     state.set_value(parts.get_query("appName"), window, cx)
@@ -508,27 +619,35 @@ impl ConnectionManager {
                 });
                 self.draft.tls_cert_key_password_state.update(cx, |state, cx| {
                     state.set_value(
-                        uri_secrets.tls_certificate_key_file_password.clone().unwrap_or_default(),
+                        uri_secrets
+                            .tls_certificate_key_file_password
+                            .as_deref()
+                            .map(percent_decode)
+                            .unwrap_or_default(),
                         window,
                         cx,
                     )
                 });
                 self.draft.direct_connection = parse_bool(parts.get_query("directConnection"));
-                self.draft.tls = parse_bool(parts.get_query("tls"));
+                let tls = if parts.get_query("tls").is_empty() {
+                    parts.get_query("ssl")
+                } else {
+                    parts.get_query("tls")
+                };
+                self.draft.tls = if tls.is_empty() {
+                    sanitized_uri.starts_with("mongodb+srv://")
+                } else {
+                    parse_bool(tls)
+                };
                 self.draft.tls_insecure = parse_bool(parts.get_query("tlsInsecure"));
                 self.parse_error = None;
 
-                self.draft.uri_secrets = UriSecrets {
-                    password: None,
-                    tls_certificate_key_file_password: None,
-                    proxy_password: uri_secrets.proxy_password,
-                    aws_session_token: uri_secrets.aws_session_token,
-                };
-                self.draft.internal_uri_value = Some(sanitized_uri.clone());
-                self.draft.uri_state.update(cx, |state, cx| {
-                    state.set_value(sanitized_uri, window, cx);
-                    state.set_cursor_position(Position::new(0, 0), window, cx);
-                });
+                if self.draft.uri_state.read(cx).value().as_ref() != sanitized_uri {
+                    self.draft.internal_uri_value = Some(sanitized_uri.clone());
+                    self.draft
+                        .uri_state
+                        .update(cx, |state, cx| state.set_value(sanitized_uri, window, cx));
+                }
             }
             Err(err) => {
                 self.parse_error = Some(err);
@@ -550,8 +669,8 @@ impl ConnectionManager {
             }
         };
 
-        let username = value_or_none(&self.draft.username_state, cx);
-        let password = value_or_none(&self.draft.password_state, cx);
+        let username = non_empty_value(&self.draft.username_state, cx);
+        let password = non_empty_value(&self.draft.password_state, cx);
         parts.set_userinfo(username, password);
         parts.set_query("appName", value_or_none(&self.draft.app_name_state, cx));
         parts.set_query("authSource", value_or_none(&self.draft.auth_source_state, cx));
@@ -584,7 +703,19 @@ impl ConnectionManager {
         );
         parts.set_query("tlsCertificateKeyFilePassword", None);
         parts.set_query("directConnection", bool_to_query(self.draft.direct_connection));
-        parts.set_query("tls", bool_to_query(self.draft.tls));
+        let tls_key = if parts.get_query("tls").is_empty() && !parts.get_query("ssl").is_empty() {
+            "ssl"
+        } else {
+            "tls"
+        };
+        let tls = if parts.get_query(tls_key).is_empty()
+            && self.draft.tls == uri.starts_with("mongodb+srv://")
+        {
+            None
+        } else {
+            Some(self.draft.tls.to_string())
+        };
+        parts.set_query(tls_key, tls);
         parts.set_query("tlsInsecure", bool_to_query(self.draft.tls_insecure));
 
         let rebuilt = parts.to_uri();
@@ -596,17 +727,24 @@ impl ConnectionManager {
             self.draft.uri_secrets.proxy_password = extracted.proxy_password;
         }
         let updated = strip_uri_secrets(&rebuilt);
-        self.draft.internal_uri_value = Some(updated.clone());
-        self.draft.uri_state.update(cx, |state, cx| {
-            state.set_value(updated, window, cx);
-            state.set_cursor_position(Position::new(0, 0), window, cx);
-        });
+        if updated != uri {
+            self.draft.internal_uri_value = Some(updated.clone());
+            self.draft.uri_state.update(cx, |state, cx| state.set_value(updated, window, cx));
+        }
         self.parse_error = None;
         true
     }
 
-    pub(super) fn start_test(view: Entity<ConnectionManager>, cx: &mut App) {
-        let display_uri = view.read(cx).draft.uri_state.read(cx).value().to_string();
+    pub(super) fn start_test(view: Entity<ConnectionManager>, window: &mut Window, cx: &mut App) {
+        if matches!(view.read(cx).status, TestStatus::Testing)
+            || view.read(cx).pending_save.is_some()
+        {
+            return;
+        }
+        if !view.update(cx, |this, cx| this.update_uri_from_fields(window, cx)) {
+            return;
+        }
+        let fingerprint = view.read(cx).draft.fingerprint(cx);
         let real_uri = view.read(cx).real_uri(cx);
         let (ssh, proxy) = match view.read(cx).build_transport_settings(cx) {
             Ok(settings) => settings,
@@ -614,8 +752,8 @@ impl ConnectionManager {
                 view.update(cx, |this, cx| {
                     this.parse_error = Some(err.clone());
                     this.status = TestStatus::Error(err);
-                    this.last_tested_uri = None;
-                    this.pending_test_uri = None;
+                    this.last_tested_fingerprint = None;
+                    this.pending_test_fingerprint = None;
                     this.testing_step = None;
                     cx.notify();
                 });
@@ -627,8 +765,8 @@ impl ConnectionManager {
                 let message = err.to_string();
                 this.parse_error = Some(message.clone());
                 this.status = TestStatus::Error(message);
-                this.last_tested_uri = None;
-                this.pending_test_uri = None;
+                this.last_tested_fingerprint = None;
+                this.pending_test_fingerprint = None;
                 this.testing_step = None;
                 cx.notify();
             });
@@ -637,13 +775,15 @@ impl ConnectionManager {
 
         let manager = view.read(cx).state.read(cx).connection_manager();
 
-        view.update(cx, |this, cx| {
+        let generation = view.update(cx, |this, cx| {
             this.status = TestStatus::Testing;
-            this.pending_test_uri = Some(display_uri.clone());
-            this.last_tested_uri = None;
+            this.test_generation += 1;
+            this.pending_test_fingerprint = Some(fingerprint.clone());
+            this.last_tested_fingerprint = None;
             this.parse_error = None;
             this.testing_step = Some("Preparing transport settings".to_string());
             cx.notify();
+            this.test_generation
         });
 
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
@@ -677,7 +817,7 @@ impl ConnectionManager {
                             };
                             cx.update(|cx| {
                                 view.update(cx, |this, cx| {
-                                    if matches!(this.status, TestStatus::Testing) {
+                                    if this.test_generation == generation && matches!(this.status, TestStatus::Testing) {
                                         this.testing_step = Some(step.clone());
                                         cx.notify();
                                     }
@@ -688,30 +828,7 @@ impl ConnectionManager {
                             let result: Result<(), crate::error::Error> = result;
                             cx.update(|cx| {
                                 view.update(cx, |this, cx| {
-                                    let current_uri = this.draft.uri_state.read(cx).value().to_string();
-                                    let pending = this.pending_test_uri.clone();
-                                    if pending.as_deref() != Some(current_uri.trim()) {
-                                        this.status = TestStatus::Idle;
-                                        this.pending_test_uri = None;
-                                        this.last_tested_uri = None;
-                                        this.testing_step = None;
-                                        cx.notify();
-                                        return;
-                                    }
-
-                                    match result {
-                                        Ok(()) => {
-                                            this.status = TestStatus::Success;
-                                            this.last_tested_uri = Some(current_uri);
-                                        }
-                                        Err(err) => {
-                                            this.status = TestStatus::Error(err.to_string());
-                                            this.last_tested_uri = None;
-                                        }
-                                    }
-                                    this.pending_test_uri = None;
-                                    this.testing_step = None;
-                                    cx.notify();
+                                    this.finish_test(generation, result.map_err(|error| error.to_string()), cx);
                                 });
                             });
                             break;
@@ -723,11 +840,40 @@ impl ConnectionManager {
         .detach();
     }
 
+    pub(super) fn finish_test(
+        &mut self,
+        generation: u64,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.test_generation != generation {
+            return;
+        }
+        let fingerprint = self.draft.fingerprint(cx);
+        if self.pending_test_fingerprint.as_ref() != Some(&fingerprint) {
+            self.status = TestStatus::Idle;
+            self.last_tested_fingerprint = None;
+        } else {
+            self.status = match result {
+                Ok(()) => TestStatus::Success,
+                Err(error) => TestStatus::Error(error),
+            };
+            self.last_tested_fingerprint = Some(fingerprint);
+        }
+        self.pending_test_fingerprint = None;
+        self.testing_step = None;
+        cx.notify();
+    }
+
     pub(super) fn save_connection(
         &mut self,
+        connect: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Uuid> {
+        if self.pending_save.is_some() || !self.state.read(cx).connection_secrets_ready() {
+            return None;
+        }
         if !self.update_uri_from_fields(window, cx) {
             if let Some(err) = self.parse_error.clone() {
                 self.status = TestStatus::Error(err);
@@ -812,7 +958,12 @@ impl ConnectionManager {
 
         if let Some(saved) = saved_connection {
             let saved_id = saved.id;
-            self.load_connection(Some(saved), window, cx);
+            self.pending_save = Some(super::PendingSave {
+                connection_id: saved_id,
+                fingerprint: self.draft.fingerprint(cx),
+                connect,
+            });
+            cx.notify();
             return Some(saved_id);
         }
         None
@@ -834,151 +985,6 @@ impl ConnectionManager {
                 request_remove_connection(state.clone(), connection_id, window, cx);
             },
         );
-    }
-
-    pub(super) fn import_uri_from_clipboard_or_dialog(
-        view: Entity<ConnectionManager>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        ConnectionManager::open_import_uri_dialog(view, window, cx);
-    }
-
-    pub(super) fn open_import_uri_dialog(
-        view: Entity<ConnectionManager>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let input_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("mongodb+srv://user:pass@cluster0.example.mongodb.net")
-        });
-
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let value = text.lines().next().unwrap_or("").trim().to_string();
-            if !value.is_empty() {
-                input_state.update(cx, |state, cx| {
-                    state.set_value(value, window, cx);
-                    state.set_cursor_position(Position::new(0, 0), window, cx);
-                });
-            }
-        }
-
-        window.open_dialog(cx, move |dialog: Dialog, window: &mut Window, cx: &mut App| {
-            input_state.update(cx, |state, cx| {
-                state.focus(window, cx);
-            });
-            dialog
-                .title("Import Connection URI")
-                .w(px(560.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(spacing::sm())
-                        .p(spacing::md())
-                        .child(
-                            Input::new(&input_state)
-                                .font_family(crate::theme::fonts::mono())
-                                .w_full(),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(spacing::sm())
-                                .child(
-                                    Button::new("paste-uri")
-                                        .xsmall()
-                                        .label("Paste from Clipboard")
-                                        .on_click({
-                                            let input_state = input_state.clone();
-                                            move |_, window, cx| {
-                                                if let Some(text) = cx
-                                                    .read_from_clipboard()
-                                                    .and_then(|item| item.text())
-                                                {
-                                                    let value = text
-                                                        .lines()
-                                                        .next()
-                                                        .unwrap_or("")
-                                                        .trim()
-                                                        .to_string();
-                                                    if value.is_empty() {
-                                                        return;
-                                                    }
-                                                    input_state.update(cx, |state, cx| {
-                                                        state.set_value(value, window, cx);
-                                                        state.set_cursor_position(
-                                                            Position::new(0, 0),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    Button::new("clear-uri")
-                                        .xsmall()
-                                        .ghost()
-                                        .label("Clear")
-                                        .on_click({
-                                            let input_state = input_state.clone();
-                                            move |_, window, cx| {
-                                                input_state.update(cx, |state, cx| {
-                                                    state.set_value(String::new(), window, cx);
-                                                });
-                                            }
-                                        }),
-                                ),
-                        )
-                        .child(
-                            div().text_xs().text_color(cx.theme().muted_foreground).child(
-                                "Paste a mongodb:// or mongodb+srv:// URI to import settings.",
-                            ),
-                        ),
-                )
-                .footer({
-                    let view = view.clone();
-                    let input_state = input_state.clone();
-
-                    let view = view.clone();
-                    let input_state = input_state.clone();
-                    gpui_kit::component::dialog::DialogFooter::new().children(vec![
-                        cancel_button("cancel-import-uri"),
-                        Button::new("confirm-import-uri")
-                            .primary()
-                            .label("Import")
-                            .on_click({
-                                let view = view.clone();
-                                let input_state = input_state.clone();
-                                move |_, window, cx| {
-                                    let raw = input_state.read(cx).value().to_string();
-                                    let value = raw.lines().next().unwrap_or("").trim().to_string();
-                                    if value.is_empty() {
-                                        window.close_dialog(cx);
-                                        return;
-                                    }
-                                    view.update(cx, |this, cx| {
-                                        this.draft.uri_state.update(cx, |state, cx| {
-                                            state.set_value(value.clone(), window, cx);
-                                            state.set_cursor_position(
-                                                Position::new(0, 0),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                        this.import_from_uri(window, cx);
-                                    });
-                                    window.close_dialog(cx);
-                                }
-                            })
-                            .into_any_element(),
-                    ])
-                })
-        });
     }
 }
 
