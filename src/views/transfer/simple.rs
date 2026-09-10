@@ -1,10 +1,12 @@
-use gpui::*;
-use gpui_component::button::Button as MenuButton;
-use gpui_component::input::{Input, InputState, Position, RopeExt};
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::select::Select;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::button::Button as MenuButton;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Input, InputState, Position, RopeExt};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::select::Select;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::file_picker::{
@@ -104,7 +106,7 @@ impl TransferView {
         );
 
         let edit_button = |id: &'static str, view: Entity<Self>| {
-            Button::new((id, key)).ghost().compact().label("Edit...").on_click(move |_, _, cx| {
+            Button::new((id, key)).ghost().xsmall().label("Edit...").on_click(move |_, _, cx| {
                 view.update(cx, |view, cx| {
                     view.options_expanded = true;
                     cx.notify();
@@ -144,12 +146,12 @@ impl TransferView {
         let scope_button = {
             let state = state.clone();
             MenuButton::new(("simple-scope", key))
-                .compact()
+                .xsmall()
                 .label(scope.label())
                 .dropdown_caret(true)
                 .rounded(borders::radius_sm())
                 .with_size(Size::Small)
-                .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+                .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                     let collection_state = state.clone();
                     let database_state = state.clone();
                     menu.item(PopupMenuItem::new("Collection").on_click(move |_, _, cx| {
@@ -192,12 +194,12 @@ impl TransferView {
             let formats = available_transfer_formats(mode, scope);
             Some(
                 MenuButton::new(("simple-format", key))
-                    .compact()
+                    .xsmall()
                     .label(transfer_state.config.format.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
                     .with_size(Size::Small)
-                    .dropdown_menu_with_anchor(Corner::TopLeft, move |mut menu, _window, _cx| {
+                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _window, _cx| {
                         for format in formats.clone() {
                             let state = state.clone();
                             menu = menu.item(PopupMenuItem::new(format.label()).on_click(
@@ -309,7 +311,7 @@ impl TransferView {
         let action_button = if cancellation_pending {
             Button::new(("simple-cancelling", key))
                 .ghost()
-                .compact()
+                .xsmall()
                 .label("Cancelling...")
                 .disabled(true)
                 .into_any_element()
@@ -317,7 +319,7 @@ impl TransferView {
             let state = state.clone();
             Button::new(("simple-cancel", key))
                 .ghost()
-                .compact()
+                .xsmall()
                 .label("Cancel")
                 .on_click(move |_, _, cx| cancel_active_transfer(state.clone(), cx))
                 .into_any_element()
@@ -325,7 +327,7 @@ impl TransferView {
             let state = state.clone();
             Button::new(("simple-run", key))
                 .primary()
-                .compact()
+                .xsmall()
                 .label(mode.label())
                 .disabled(!can_run)
                 .on_click(move |_, window, cx| run_active_transfer(state.clone(), window, cx))
@@ -418,7 +420,7 @@ impl TransferView {
         let output = transfer_state.options.bson_output;
         let scope = transfer_state.config.scope;
         let browse = Button::new("simple-export-browse")
-            .compact()
+            .xsmall()
             .icon(IconName::Folder)
             .label("Choose...")
             .on_click(move |_, _, cx| {
@@ -441,8 +443,7 @@ impl TransferView {
                                     cx.notify();
                                 }
                             });
-                        })
-                        .ok();
+                        });
                     }
                 })
                 .detach();
@@ -472,12 +473,12 @@ impl TransferView {
         let scope = transfer_state.config.scope;
 
         MenuButton::new("simple-filename-tokens")
-            .compact()
+            .xsmall()
             .label("Insert...")
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                 let datetime_input = input_state.clone();
                 let date_input = input_state.clone();
                 let time_input = input_state.clone();
@@ -534,7 +535,7 @@ impl TransferView {
         let state = self.state.clone();
         let format = transfer_state.config.format;
         let browse = Button::new("simple-import-browse")
-            .compact()
+            .xsmall()
             .icon(IconName::Folder)
             .label("Choose...")
             .on_click(move |_, _, cx| {
@@ -568,8 +569,7 @@ impl TransferView {
                                     cx.notify();
                                 }
                             });
-                        })
-                        .ok();
+                        });
                     }
                 })
                 .detach();
@@ -625,12 +625,12 @@ impl TransferView {
                 let compression = {
                     let state = state.clone();
                     MenuButton::new(("simple-compression", key))
-                        .compact()
+                        .xsmall()
                         .label(transfer_state.options.compression.label())
                         .dropdown_caret(true)
                         .rounded(borders::radius_sm())
                         .with_size(Size::Small)
-                        .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+                        .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                             let none_state = state.clone();
                             let gzip_state = state.clone();
                             menu.item(PopupMenuItem::new("None").on_click(move |_, _, cx| {

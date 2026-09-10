@@ -1,5 +1,5 @@
-use gpui::{Context, Entity};
-use gpui_component::input::InputState;
+use gpui_kit::component::input::InputState;
+use gpui_kit::{Context, Entity};
 
 use super::ConnectionManager;
 

@@ -1,13 +1,15 @@
 //! Export connections dialog.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::checkbox::Checkbox;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::file_picker::{FileFilter, FilePickerMode, open_file_dialog_async};
 use crate::components::{Button, cancel_button};
@@ -82,7 +84,7 @@ impl Render for ExportDialogState {
                             .child({
                                 let view = view.clone();
                                 Button::new("toggle-all-export")
-                                    .compact()
+                                    .xsmall()
                                     .ghost()
                                     .label(if all_selected { "Deselect All" } else { "Select All" })
                                     .on_click(move |_, _, cx| {
@@ -239,9 +241,9 @@ fn mode_button(
     view: Entity<ExportDialogState>,
 ) -> Button {
     let is_active = current == target;
-    let mut btn = Button::new(SharedString::new_static(label)).compact().label(label);
+    let mut btn = Button::new(SharedString::new_static(label)).xsmall().label(label);
     if is_active {
-        btn = btn.active_style(gpui::hsla(0.0, 0.0, 0.25, 1.0));
+        btn = btn.bg(gpui_kit::hsla(0.0, 0.0, 0.25, 1.0));
     } else {
         btn = btn.ghost();
     }
@@ -269,9 +271,11 @@ pub fn open_export_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut
         move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
             dialog.title("Export Connections").w(px(520.0)).child(dialog_state.clone()).footer({
                 let dialog_state = dialog_state.clone();
-                move |_ok, _cancel, _window, _cx| {
-                    vec![cancel_button("cancel-export"), render_export_button(dialog_state.clone())]
-                }
+
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-export"),
+                    render_export_button(dialog_state.clone()),
+                ])
             })
         }
     });
@@ -360,7 +364,7 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
 
                 if let Some(path) = path {
                     if let Err(e) = std::fs::write(&path, &json) {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             app_state.update(cx, |state, _cx| {
                                 state.set_status_message(Some(StatusMessage::error(format!(
                                     "Failed to write file: {e}"
@@ -369,7 +373,7 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
                         });
                         return;
                     }
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, _cx| {
                             state.set_status_message(Some(StatusMessage::info(format!(
                                 "Exported {count} connection{}",

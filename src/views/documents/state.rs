@@ -1,7 +1,7 @@
-use gpui::*;
-use gpui_component::calendar::CalendarState;
-use gpui_component::input::InputState;
-use gpui_component::tree::TreeState;
+use gpui_kit::component::calendar::CalendarState;
+use gpui_kit::component::input::{EditorState, InputState};
+use gpui_kit::component::tree::TreeState;
+use gpui_kit::*;
 
 use mongodb::bson::{Bson, Document};
 use regex::{Regex, RegexBuilder};
@@ -31,10 +31,14 @@ pub struct CollectionView {
     pub(crate) documents_focus: FocusHandle,
     pub(crate) aggregation_focus: FocusHandle,
     pub(crate) aggregation_stage_list_scroll: UniformListScrollHandle,
-    pub(crate) filter_state: Option<Entity<InputState>>,
-    pub(crate) sort_state: Option<Entity<InputState>>,
-    pub(crate) projection_state: Option<Entity<InputState>>,
-    pub(crate) schema_filter_state: Option<Entity<InputState>>,
+    pub(crate) filter_state: Option<Entity<EditorState>>,
+    pub(crate) filter_completions: Option<std::rc::Rc<super::query_editor::QueryEditorCompletions>>,
+    pub(crate) filter_completion_menu:
+        Option<Entity<crate::views::editor_completion::EditorCompletionMenu>>,
+    pub(crate) filter_expanded: bool,
+    pub(crate) sort_state: Option<Entity<EditorState>>,
+    pub(crate) projection_state: Option<Entity<EditorState>>,
+    pub(crate) schema_filter_state: Option<Entity<EditorState>>,
     pub(crate) filter_auto_pair: AutoPairState,
     pub(crate) sort_auto_pair: AutoPairState,
     pub(crate) projection_auto_pair: AutoPairState,
@@ -72,7 +76,7 @@ pub struct CollectionView {
     pub(crate) projection_subscription: Option<Subscription>,
     pub(crate) schema_filter_subscription: Option<Subscription>,
     pub(crate) search_subscription: Option<Subscription>,
-    pub(crate) aggregation_stage_body_state: Option<Entity<InputState>>,
+    pub(crate) aggregation_stage_body_state: Option<Entity<EditorState>>,
     pub(crate) aggregation_results_tree_state: Option<Entity<TreeState>>,
     pub(crate) aggregation_results_scroll: UniformListScrollHandle,
     pub(crate) aggregation_limit_state: Option<Entity<InputState>>,
@@ -116,10 +120,38 @@ impl CollectionView {
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
 
-            if !is_escape && !is_enter && !cmd_or_ctrl {
+            if !is_escape
+                && !is_enter
+                && !cmd_or_ctrl
+                && !matches!(key.as_str(), "tab" | "up" | "down")
+            {
                 return;
             }
             view.update(cx, |this, cx| {
+                if let Some(panel) = this.filter_builder_panel.clone()
+                    && panel.read(cx).focus_handle(cx).contains_focused(window, cx)
+                {
+                    if is_enter && cmd_or_ctrl {
+                        panel.update(cx, |panel, cx| panel.apply_filter(window, cx));
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                let filter_focused = this
+                    .filter_state
+                    .as_ref()
+                    .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                let option_focused = [&this.sort_state, &this.projection_state]
+                    .into_iter()
+                    .flatten()
+                    .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                if filter_focused || option_focused {
+                    if filter_focused && this.handle_query_editor_key(&event.keystroke, window, cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 let mut handled = false;
 
                 let save_selected_document =
@@ -182,7 +214,7 @@ impl CollectionView {
                     {
                         let state = this.state.clone();
                         this.view_model.cancel_inline_edit(&state, cx);
-                        window.focus(&this.documents_focus);
+                        window.focus(&this.documents_focus, cx);
                         handled = true;
                     }
                     if !handled
@@ -191,7 +223,7 @@ impl CollectionView {
                     {
                         let focused = body_state.read(cx).focus_handle(cx).is_focused(window);
                         if focused {
-                            window.focus(&this.aggregation_focus);
+                            window.focus(&this.aggregation_focus, cx);
                             handled = true;
                         }
                     }
@@ -202,7 +234,7 @@ impl CollectionView {
                         this.view_model.commit_inline_edit(&this.state, cx);
                         let committed = this.view_model.inline_state().is_none();
                         if committed {
-                            window.focus(&this.documents_focus);
+                            window.focus(&this.documents_focus, cx);
                             if cmd_or_ctrl {
                                 save_selected_document(this, window, cx);
                             }
@@ -362,6 +394,9 @@ impl CollectionView {
             aggregation_focus: cx.focus_handle(),
             aggregation_stage_list_scroll: UniformListScrollHandle::default(),
             filter_state: None,
+            filter_completions: None,
+            filter_completion_menu: None,
+            filter_expanded: false,
             sort_state: None,
             projection_state: None,
             schema_filter_state: None,
@@ -417,8 +452,8 @@ impl CollectionView {
         }
     }
 
-    pub(crate) fn focus_documents(&self, window: &mut Window) {
-        window.focus(&self.documents_focus);
+    pub(crate) fn focus_documents(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.documents_focus, cx);
     }
 
     /// Ensure subview-specific data is loaded (indexes/stats) based on current subview.
@@ -579,7 +614,7 @@ impl CollectionView {
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_visible = false;
-        window.focus(&self.documents_focus);
+        window.focus(&self.documents_focus, cx);
         if let Some(search_state) = self.search_state.clone() {
             search_state.update(cx, |state, cx| {
                 state.set_value(String::new(), window, cx);

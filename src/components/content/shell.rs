@@ -1,7 +1,8 @@
-use gpui::*;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::state::AppState;
@@ -77,13 +78,12 @@ fn render_error_banner(message: String, state: Entity<AppState>, cx: &App) -> An
                 .items_center()
                 .gap(spacing::sm())
                 .flex_shrink_0()
-                .child(Button::new("show-error").ghost().compact().label("Show more").on_click({
+                .child(Button::new("show-error").ghost().xsmall().label("Show more").on_click({
                     let message = message.clone();
                     move |_, window, cx| {
                         let message = message.clone();
-                        let text_state = cx.new(|cx| {
-                            InputState::new(window, cx).code_editor("text").soft_wrap(true)
-                        });
+                        let text_state =
+                            cx.new(|cx| TextareaState::new(window, cx).soft_wrap(true));
                         text_state.update(cx, |state, cx| {
                             state.set_value(message.clone(), window, cx);
                         });
@@ -93,7 +93,7 @@ fn render_error_banner(message: String, state: Entity<AppState>, cx: &App) -> An
                                 .min_w(px(720.0))
                                 .child(
                                     div().p(spacing::md()).child(
-                                        Input::new(&text_state)
+                                        Textarea::new(&text_state)
                                             .font_family(crate::theme::fonts::mono())
                                             .h(px(320.0))
                                             .w_full()
@@ -102,29 +102,26 @@ fn render_error_banner(message: String, state: Entity<AppState>, cx: &App) -> An
                                 )
                                 .footer({
                                     let message = message.clone();
-                                    move |_ok_fn, _cancel_fn, _window, _cx| {
-                                        vec![
-                                            Button::new("copy-error")
-                                                .label("Copy")
-                                                .on_click({
-                                                    let message = message.clone();
-                                                    move |_, _window, cx| {
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(
-                                                                message.clone(),
-                                                            ),
-                                                        );
-                                                    }
-                                                })
-                                                .into_any_element(),
-                                            Button::new("close-error")
-                                                .label("Close")
-                                                .on_click(|_, window, cx| {
-                                                    window.close_dialog(cx);
-                                                })
-                                                .into_any_element(),
-                                        ]
-                                    }
+
+                                    gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                                        Button::new("copy-error")
+                                            .label("Copy")
+                                            .on_click({
+                                                let message = message.clone();
+                                                move |_, _window, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(message.clone()),
+                                                    );
+                                                }
+                                            })
+                                            .into_any_element(),
+                                        Button::new("close-error")
+                                            .label("Close")
+                                            .on_click(|_, window, cx| {
+                                                window.close_dialog(cx);
+                                            })
+                                            .into_any_element(),
+                                    ])
                                 })
                         });
                     }

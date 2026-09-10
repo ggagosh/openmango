@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::table::Table;
+use gpui_kit::component::table::DataTable;
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::state::SessionKey;
@@ -26,7 +26,7 @@ impl CollectionView {
         let table_state = self.view_model.ensure_table_state(&self.state, &view, window, cx);
         self.view_model.rebuild_table(&self.state, &view, window, cx);
 
-        let table_element = Table::new(&table_state).stripe(true).bordered(false);
+        let table_element = DataTable::new(&table_state).stripe(true).bordered(false);
 
         let documents_view = div().flex().flex_1().min_w(px(0.0)).overflow_hidden().child(
             div()

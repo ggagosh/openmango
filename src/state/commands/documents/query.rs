@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, format_relaxed_json_compact};
@@ -181,7 +181,7 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(Vec<Document>, u64), crate::error::Error> = match task.await {
                     Ok(result) => result,
                     Err(error) => Err(crate::error::Error::Parse(format!(
@@ -189,7 +189,7 @@ impl AppCommands {
                     ))),
                 };
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok((documents, total)) => {
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {

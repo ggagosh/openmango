@@ -2,11 +2,12 @@
 //!
 //! Renders the left-side panel showing all saved connections.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
@@ -70,9 +71,9 @@ impl ConnectionManager {
                     .gap(spacing::xs())
                     .child(
                         Button::new("import-connections")
-                            .compact()
+                            .xsmall()
                             .tooltip("Import Connections")
-                            .icon(Icon::new(IconName::Download).xsmall())
+                            .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
                             .on_click({
                                 let state = state.clone();
                                 move |_, window, cx| {
@@ -82,9 +83,9 @@ impl ConnectionManager {
                     )
                     .child(
                         Button::new("export-connections")
-                            .compact()
+                            .xsmall()
                             .tooltip("Export Connections")
-                            .icon(Icon::new(IconName::Upload).xsmall())
+                            .icon(Icon::new(crate::assets::AppIcon::Upload).xsmall())
                             .on_click({
                                 let state = state.clone();
                                 move |_, window, cx| {
@@ -94,7 +95,7 @@ impl ConnectionManager {
                     )
                     .child(
                         Button::new("new-connection")
-                            .compact()
+                            .xsmall()
                             .tooltip("New Connection")
                             .icon(Icon::new(IconName::Plus).xsmall())
                             .on_click({
@@ -111,7 +112,7 @@ impl ConnectionManager {
                     )
                     .child(
                         Button::new("remove-connection")
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::Delete).xsmall())
                             .disabled(selected_id.is_none())
                             .on_click({
@@ -213,7 +214,7 @@ impl ConnectionManager {
             .rounded(borders::radius_sm())
             .border_1()
             .when(is_selected, |s| s.bg(cx.theme().list_hover).border_color(cx.theme().border))
-            .when(!is_selected, |s| s.border_color(gpui::transparent_black()))
+            .when(!is_selected, |s| s.border_color(gpui_kit::transparent_black()))
             .hover(|s| s.bg(cx.theme().list_hover))
             .child(
                 div()

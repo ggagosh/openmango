@@ -1,10 +1,10 @@
 //! Pagination controls for collection view.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::button::{Button as MenuButton, ButtonVariants as _};
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button as MenuButton, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::state::{AppCommands, AppState, SessionKey};
@@ -38,14 +38,14 @@ impl CollectionView {
             let label = format!("{} / page", per_page);
             let btn = MenuButton::new("per-page-selector")
                 .ghost()
-                .compact()
+                .xsmall()
                 .label(label)
                 .dropdown_caret(true)
-                .with_size(gpui_component::Size::XSmall)
+                .with_size(gpui_kit::component::Size::XSmall)
                 .disabled(is_loading || session_key.is_none());
 
             let sk = session_key.clone();
-            btn.dropdown_menu_with_anchor(Corner::TopLeft, move |mut menu: PopupMenu, _, _| {
+            btn.dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu: PopupMenu, _, _| {
                 for &opt in PER_PAGE_OPTIONS {
                     let label = format!("{}", opt);
                     let state = state.clone();

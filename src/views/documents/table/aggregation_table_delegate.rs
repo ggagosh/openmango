@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::table::{Column, ColumnSort, TableDelegate, TableState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::state::{AppState, SessionKey};
@@ -17,6 +17,7 @@ pub struct AggregationTableDelegate {
     documents: Vec<Document>,
     selected_rows: HashSet<usize>,
     anchor_row: Option<usize>,
+    context_column: Option<usize>,
     state: Entity<AppState>,
     pub session_key: Option<SessionKey>,
 }
@@ -28,6 +29,7 @@ impl AggregationTableDelegate {
             documents: Vec::new(),
             selected_rows: HashSet::new(),
             anchor_row: None,
+            context_column: None,
             state,
             session_key,
         }
@@ -137,8 +139,8 @@ impl TableDelegate for AggregationTableDelegate {
         self.documents.len()
     }
 
-    fn column(&self, col_ix: usize, _cx: &App) -> &Column {
-        self.table_cols.column_def(col_ix)
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        self.table_cols.column_def(col_ix).clone()
     }
 
     fn render_th(
@@ -153,9 +155,10 @@ impl TableDelegate for AggregationTableDelegate {
         let state = self.state.clone();
         let session_key = self.session_key.clone();
 
-        use gpui_component::{Icon, IconName, Sizable as _};
+        use gpui_kit::component::{Icon, Sizable as _};
 
-        let pin_icon = if is_pinned { IconName::Pin } else { IconName::PinOff };
+        let pin_icon =
+            if is_pinned { crate::assets::AppIcon::Pin } else { crate::assets::AppIcon::PinOff };
         let pin_opacity: f32 = if is_pinned { 1.0 } else { 0.0 };
         let muted_bg = cx.theme().muted;
         let icon_color = if is_pinned { cx.theme().primary } else { cx.theme().muted_foreground };
@@ -173,12 +176,12 @@ impl TableDelegate for AggregationTableDelegate {
                     .id(("pin-btn", col_ix))
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .rounded_sm()
+                    .rounded(crate::theme::borders::radius_sm())
                     .p(px(1.0))
                     .opacity(pin_opacity)
-                    .hover(|s: gpui::StyleRefinement| s.opacity(1.0).bg(muted_bg))
+                    .hover(|s: gpui_kit::StyleRefinement| s.opacity(1.0).bg(muted_bg))
                     .when(!is_pinned, |this: Stateful<Div>| {
-                        this.group_hover("agg-col-header-group", |s: gpui::StyleRefinement| {
+                        this.group_hover("agg-col-header-group", |s: gpui_kit::StyleRefinement| {
                             s.opacity(0.5)
                         })
                     })
@@ -215,7 +218,13 @@ impl TableDelegate for AggregationTableDelegate {
         let is_selected = self.selected_rows.contains(&row_ix);
         let selected_bg = cx.theme().list_active;
 
-        let mut row = div().id(("agg-row", row_ix));
+        let mut row = div().id(("agg-row", row_ix)).capture_any_mouse_down(cx.listener(
+            |table, event: &MouseDownEvent, _, _| {
+                if event.button == MouseButton::Right {
+                    table.delegate_mut().context_column = None;
+                }
+            },
+        ));
 
         if is_selected {
             row = row.bg(selected_bg);
@@ -262,11 +271,19 @@ impl TableDelegate for AggregationTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(value) = self.cell_value(row_ix, col_ix) else {
-            return div().text_xs().text_color(cx.theme().muted_foreground).into_any_element();
-        };
-
-        cell_renderer::render_cell(value, row_ix, col_ix, cx)
+        let content = self
+            .cell_value(row_ix, col_ix)
+            .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
+        div()
+            .size_full()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |table, _, _, _| {
+                    table.delegate_mut().context_column = Some(col_ix);
+                }),
+            )
+            .children(content)
+            .into_any_element()
     }
 
     fn render_empty(
@@ -291,18 +308,17 @@ impl TableDelegate for AggregationTableDelegate {
     fn context_menu(
         &mut self,
         _row_ix: usize,
-        selected_col: Option<usize>,
-        menu: gpui_component::menu::PopupMenu,
+        menu: gpui_kit::component::menu::PopupMenu,
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
-    ) -> gpui_component::menu::PopupMenu {
+    ) -> gpui_kit::component::menu::PopupMenu {
         let Some(session_key) = self.session_key.clone() else {
             return menu;
         };
 
         super::column_menu::build_table_column_menu(
             menu,
-            selected_col,
+            self.context_column,
             &self.table_cols.columns,
             self.table_cols.pinned_columns(),
             super::column_menu::ColumnMenuKind::Aggregation,

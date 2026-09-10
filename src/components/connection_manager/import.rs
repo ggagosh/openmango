@@ -1,10 +1,11 @@
 //! Connection import flow.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::*;
 
 use crate::components::file_picker::{FileFilter, FilePickerMode, open_file_dialog_async};
 use crate::components::{Button, cancel_button};
@@ -31,7 +32,7 @@ pub fn open_import_flow(state: Entity<AppState>, window: &mut Window, cx: &mut A
         let json = match std::fs::read_to_string(&path) {
             Ok(j) => j,
             Err(e) => {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state_clone.update(cx, |state, _cx| {
                         state.set_status_message(Some(StatusMessage::error(format!(
                             "Failed to read file: {e}"
@@ -45,7 +46,7 @@ pub fn open_import_flow(state: Entity<AppState>, window: &mut Window, cx: &mut A
         let file = match connection_io::parse_import(&json) {
             Ok(f) => f,
             Err(e) => {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state_clone.update(cx, |state, _cx| {
                         state.set_status_message(Some(StatusMessage::error(format!(
                             "Invalid export file: {e}"
@@ -61,7 +62,7 @@ pub fn open_import_flow(state: Entity<AppState>, window: &mut Window, cx: &mut A
                 open_passphrase_dialog(state_clone.clone(), file, window, cx);
             });
         } else {
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 finish_import(state_clone.clone(), &file, cx);
             });
         }
@@ -105,47 +106,44 @@ fn open_passphrase_dialog(
                     let input_state = input_state.clone();
                     let state = state.clone();
                     let file = file.clone();
-                    move |_ok, _cancel, _window, _cx| {
-                        vec![
-                            cancel_button("cancel-import-passphrase"),
-                            Button::new("decrypt-import")
-                                .primary()
-                                .label("Decrypt & Import")
-                                .on_click({
-                                    let input_state = input_state.clone();
-                                    let state = state.clone();
-                                    let file = file.clone();
-                                    move |_, window, cx| {
-                                        let passphrase = input_state.read(cx).value().to_string();
-                                        if passphrase.is_empty() {
-                                            return;
-                                        }
 
-                                        let mut file_mut = file.borrow_mut();
-                                        if let Err(e) = connection_io::decrypt_import_file(
-                                            &mut file_mut,
-                                            &passphrase,
-                                        ) {
-                                            drop(file_mut);
-                                            state.update(cx, |state, _cx| {
-                                                state.set_status_message(Some(
-                                                    StatusMessage::error(format!(
-                                                        "Decryption failed: {e}"
-                                                    )),
-                                                ));
-                                            });
-                                            window.close_dialog(cx);
-                                            return;
-                                        }
-
-                                        finish_import(state.clone(), &file_mut, cx);
-                                        drop(file_mut);
-                                        window.close_dialog(cx);
+                    gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                        cancel_button("cancel-import-passphrase"),
+                        Button::new("decrypt-import")
+                            .primary()
+                            .label("Decrypt & Import")
+                            .on_click({
+                                let input_state = input_state.clone();
+                                let state = state.clone();
+                                let file = file.clone();
+                                move |_, window, cx| {
+                                    let passphrase = input_state.read(cx).value().to_string();
+                                    if passphrase.is_empty() {
+                                        return;
                                     }
-                                })
-                                .into_any_element(),
-                        ]
-                    }
+
+                                    let mut file_mut = file.borrow_mut();
+                                    if let Err(e) = connection_io::decrypt_import_file(
+                                        &mut file_mut,
+                                        &passphrase,
+                                    ) {
+                                        drop(file_mut);
+                                        state.update(cx, |state, _cx| {
+                                            state.set_status_message(Some(StatusMessage::error(
+                                                format!("Decryption failed: {e}"),
+                                            )));
+                                        });
+                                        window.close_dialog(cx);
+                                        return;
+                                    }
+
+                                    finish_import(state.clone(), &file_mut, cx);
+                                    drop(file_mut);
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    ])
                 })
         }
     });

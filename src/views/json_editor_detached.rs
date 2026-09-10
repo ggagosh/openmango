@@ -1,10 +1,12 @@
 //! Detached JSON editor window.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Root;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Root;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document, oid::ObjectId};
 
 use crate::bson::{
@@ -35,7 +37,7 @@ pub struct DetachedJsonEditorView {
     sessions: EditorSessionStore,
     session_id: EditorSessionId,
     window_handle: Option<AnyWindowHandle>,
-    editor_state: Option<Entity<InputState>>,
+    editor_state: Option<Entity<EditorState>>,
     inline_notice: Option<(bool, String)>,
     sync_issue: Option<SyncIssue>,
     pending_editor_content: Option<String>,
@@ -162,8 +164,8 @@ impl DetachedJsonEditorView {
             .map(|session| session.content)
             .unwrap_or_default();
         let editor_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("javascript")
+            EditorState::new(window, cx)
+                .language("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
@@ -173,7 +175,7 @@ impl DetachedJsonEditorView {
             state.set_value(initial_content, window, cx);
         });
         let focus = editor_state.read(cx).focus_handle(cx);
-        window.focus(&focus);
+        window.focus(&focus, cx);
 
         let sessions = self.sessions.clone();
         let session_id = self.session_id;
@@ -399,7 +401,7 @@ impl DetachedJsonEditorView {
             let updated_document = updated_document.clone();
             async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let result: Result<Option<Document>, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     match result {
                         Ok(Some(current)) if current == baseline_document => {
                             let _ = view.update(cx, |this, cx| {
@@ -574,7 +576,7 @@ impl DetachedJsonEditorView {
 
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result: Result<Option<Document>, crate::error::Error> = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = view.update(cx, |this, cx| match result {
                     Ok(Some(current)) => {
                         let content = document_to_shell_string(&current);
@@ -824,7 +826,7 @@ impl Render for DetachedJsonEditorView {
                             .gap(spacing::xs())
                             .child(
                                 Button::new("json-editor-window-copy")
-                                    .compact()
+                                    .xsmall()
                                     .label("Copy JSON")
                                     .on_click({
                                         let view = view.clone();
@@ -835,7 +837,7 @@ impl Render for DetachedJsonEditorView {
                             )
                             .child(
                                 Button::new("json-editor-window-format")
-                                    .compact()
+                                    .xsmall()
                                     .label("Format JSON")
                                     .on_click({
                                         let view = view.clone();
@@ -849,7 +851,7 @@ impl Render for DetachedJsonEditorView {
                             .child(
                                 Button::new("json-editor-window-save")
                                     .primary()
-                                    .compact()
+                                    .xsmall()
                                     .label(primary_label)
                                     .on_click({
                                         let view = view.clone();
@@ -890,7 +892,7 @@ impl Render for DetachedJsonEditorView {
                     ) {
                         row = row.child(
                             Button::new("json-editor-window-reload")
-                                .compact()
+                                .xsmall()
                                 .label("Reload")
                                 .on_click({
                                     let view = view.clone();
@@ -904,7 +906,7 @@ impl Render for DetachedJsonEditorView {
                     if matches!(sync_issue, Some(SyncIssue::LocalDraftConflict)) {
                         row = row.child(
                             Button::new("json-editor-window-load-inline-draft")
-                                .compact()
+                                .xsmall()
                                 .label("Load Inline Draft")
                                 .on_click({
                                     let view = view.clone();
@@ -918,7 +920,7 @@ impl Render for DetachedJsonEditorView {
                     if matches!(sync_issue, Some(SyncIssue::MissingOriginal)) {
                         row = row.child(
                             Button::new("json-editor-window-create-new")
-                                .compact()
+                                .xsmall()
                                 .label("Create as New")
                                 .on_click({
                                     let view = view.clone();
@@ -939,7 +941,7 @@ impl Render for DetachedJsonEditorView {
                     .flex_1()
                     .min_h(px(0.0))
                     .p(spacing::md())
-                    .child(Input::new(&editor).font_family(fonts::mono()).h_full().w_full()),
+                    .child(Editor::new(&editor).font_family(fonts::mono()).h_full().w_full()),
             )
     }
 }
@@ -1084,7 +1086,7 @@ fn open_detached_json_editor_window(
     sessions: EditorSessionStore,
     session_id: EditorSessionId,
     cx: &mut App,
-) -> gpui::Result<WindowHandle<Root>> {
+) -> gpui_kit::Result<WindowHandle<Root>> {
     let title = sessions
         .snapshot(session_id)
         .map(|session| session.title())

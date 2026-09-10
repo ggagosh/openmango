@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use gpui::App;
+use gpui_kit::App;
 
 use crate::state::SessionDocument;
 use crate::views::documents::tree::lazy_row::compute_row_meta;

@@ -2,14 +2,15 @@
 //!
 //! Each tab (General, TLS, Network, Advanced) is rendered here.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Disableable as _;
-use gpui_component::Sizable as _;
-use gpui_component::collapsible::Collapsible;
-use gpui_component::input::Input;
-use gpui_component::switch::Switch;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::collapsible::Collapsible;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::models::{ConnectionColor, ConnectionEnvironment};
@@ -28,7 +29,7 @@ impl ConnectionManager {
         let view = cx.entity();
         let selected_color = self.draft.color;
         let mut no_color_button =
-            Button::new("connection-color-none").compact().label("None").on_click({
+            Button::new("connection-color-none").xsmall().label("None").on_click({
                 let view = view.clone();
                 move |_, _window, cx| {
                     view.update(cx, |this, cx| {
@@ -46,8 +47,8 @@ impl ConnectionManager {
                 let accent = colors::connection_accent(color, cx);
                 let view = view.clone();
                 let mut button = Button::new(("connection-color", color as usize))
-                    .compact()
-                    .icon(div().size(px(12.0)).rounded_full().bg(accent))
+                    .xsmall()
+                    .child(div().size(px(12.0)).rounded_full().bg(accent))
                     .tooltip(color.label())
                     .on_click(move |_, _window, cx| {
                         view.update(cx, |this, cx| {
@@ -63,7 +64,7 @@ impl ConnectionManager {
             .collect::<Vec<_>>();
         let selected_environment = self.draft.environment;
         let mut no_environment_button = Button::new("connection-environment-none")
-            .compact()
+            .xsmall()
             .label(if selected_environment.is_none() { "✓ Not set" } else { "Not set" })
             .on_click({
                 let view = view.clone();
@@ -82,7 +83,7 @@ impl ConnectionManager {
             .map(|environment| {
                 let view = view.clone();
                 let mut button = Button::new(("connection-environment", environment as usize))
-                    .compact()
+                    .xsmall()
                     .label(if selected_environment == Some(environment) {
                         format!("✓ {}", environment.label())
                     } else {
@@ -376,7 +377,7 @@ impl ConnectionManager {
                             .gap(spacing::sm())
                             .child(
                                 Button::new("import-uri")
-                                    .compact()
+                                    .xsmall()
                                     .label("Import from URI")
                                     .on_click({
                                         let view = view.clone();
@@ -390,7 +391,7 @@ impl ConnectionManager {
                                     }),
                             )
                             .child(
-                                Button::new("apply-uri").compact().label("Update URI").on_click({
+                                Button::new("apply-uri").xsmall().label("Update URI").on_click({
                                     let view = view.clone();
                                     move |_, window, cx| {
                                         view.update(cx, |this, cx| {
@@ -669,7 +670,7 @@ impl ConnectionManager {
                 this.child(
                     div()
                         .mb(spacing::md())
-                        .rounded_md()
+                        .rounded(crate::theme::borders::radius_sm())
                         .bg(cx.theme().danger.opacity(0.08))
                         .px(spacing::sm())
                         .py(spacing::xs())
@@ -1051,7 +1052,7 @@ impl ConnectionManager {
                     .open(pool_expanded)
                     .child(
                         Button::new("pool-toggle")
-                            .compact()
+                            .xsmall()
                             .ghost()
                             .label(if pool_expanded {
                                 "▼ Pool & Timeouts"
@@ -1148,7 +1149,7 @@ impl ConnectionManager {
                     .open(compression_expanded)
                     .child(
                         Button::new("compression-toggle")
-                            .compact()
+                            .xsmall()
                             .ghost()
                             .label(if compression_expanded {
                                 "▼ Compression"

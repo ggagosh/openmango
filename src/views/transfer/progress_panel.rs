@@ -1,10 +1,10 @@
 //! Normalized progress UI for export, import, and copy operations.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::progress::Progress;
-use gpui_component::spinner::Spinner;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::progress::Progress;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::connection::tools_available;
@@ -267,8 +267,9 @@ pub(super) fn render_progress_status(
         ProgressState::Idle => div().into_any_element(),
     };
 
-    let progress_bar =
-        snapshot.percentage.map(|percentage| Progress::new().value(percentage).into_any_element());
+    let progress_bar = snapshot
+        .percentage
+        .map(|percentage| Progress::new("transfer-progress").value(percentage).into_any_element());
     let errors_expanded =
         transfer.runtime.database_progress.as_ref().is_some_and(|progress| progress.panel_expanded);
     let error_count = snapshot.errors.len();

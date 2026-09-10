@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertReplaceEdit, InsertTextFormat, Range,
@@ -12,7 +12,8 @@ use crate::app::search::ranked_match_score;
 use crate::state::{AppCommands, AppState, SchemaField, SessionKey};
 use crate::views::forge::parser::{PositionKind, ScopeKind, parse_context};
 
-use super::fast_filter::is_date_field;
+use super::fast_filter::{document_id_input, is_date_field};
+use crate::views::forge::logic::{cursor_from_template, label_from_template};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryInputKind {
@@ -44,6 +45,8 @@ struct QueryEditorContext {
     replace_range: Range,
     in_string_or_comment: bool,
     session_key: Option<SessionKey>,
+    value: Option<super::query_values::ValueContext>,
+    field: Option<super::query_values::FieldContext>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +55,7 @@ struct FieldCandidate {
     depth: usize,
     presence: u64,
     sampled_count: u64,
+    type_label: String,
 }
 
 const BSON_CONSTRUCTORS: &[Operator] = &[
@@ -134,13 +138,10 @@ const PROJECTION_VALUE_LITERALS: &[ValueLiteral] = &[
     ValueLiteral { label: "false", snippet: "false", detail: "Exclude field" },
 ];
 
+#[derive(Clone)]
 pub struct QueryCompletionProvider {
     state: Entity<AppState>,
     kind: QueryInputKind,
-}
-
-pub struct FilterCompletionProvider {
-    inner: QueryCompletionProvider,
 }
 
 impl QueryCompletionProvider {
@@ -148,21 +149,26 @@ impl QueryCompletionProvider {
         Self { state, kind }
     }
 
+    pub(crate) fn items(&self, rope: &Rope, offset: usize, cx: &mut App) -> Vec<CompletionItem> {
+        let ctx = self.context(rope, offset, cx);
+        match self.kind {
+            QueryInputKind::Filter => self.filter_items(&ctx, cx),
+            QueryInputKind::Sort | QueryInputKind::Projection => {
+                self.sort_or_projection_items(&ctx, cx)
+            }
+        }
+    }
+
     fn current_session_key(&self, cx: &App) -> Option<SessionKey> {
         self.state.read(cx).current_session_key()
     }
 
-    fn context(
-        &self,
-        rope: &Rope,
-        offset: usize,
-        cx: &mut Context<InputState>,
-    ) -> QueryEditorContext {
+    fn context(&self, rope: &Rope, offset: usize, cx: &mut App) -> QueryEditorContext {
         let text = rope.to_string();
         let fast_filter = self.kind == QueryInputKind::Filter && is_fast_filter_text(&text);
-        let (token_start, token) =
+        let (token_start, mut token) =
             if fast_filter { fast_filter_token(&text, offset) } else { query_token(&text, offset) };
-        let replace_range = Range {
+        let mut replace_range = Range {
             start: rope.offset_to_position(token_start),
             end: rope.offset_to_position(offset.min(rope.len())),
         };
@@ -179,23 +185,33 @@ impl QueryCompletionProvider {
         let (wrapped, wrapped_cursor) =
             wrap_query_input(self.kind, &session_key.collection, &text, offset.min(text.len()));
         let parsed = parse_context(&wrapped, wrapped_cursor);
+        let field = (self.kind == QueryInputKind::Filter && !fast_filter)
+            .then(|| super::query_values::field_context(&text, offset))
+            .flatten();
+        if let Some(field) = &field {
+            token = field.prefix.clone();
+            replace_range = Range {
+                start: rope.offset_to_position(field.range.start),
+                end: rope.offset_to_position(field.range.end),
+            };
+        }
 
         QueryEditorContext {
+            value: (self.kind == QueryInputKind::Filter && !fast_filter)
+                .then(|| super::query_values::value_context(&text, offset))
+                .flatten(),
             raw_text: text,
-            position_kind: parsed.position_kind,
+            position_kind: if field.is_some() { PositionKind::Key } else { parsed.position_kind },
             scope_kind: parsed.scope_kind,
             token,
             replace_range,
-            in_string_or_comment: parsed.in_comment,
+            in_string_or_comment: parsed.in_comment && field.is_none(),
             session_key: Some(session_key),
+            field,
         }
     }
 
-    fn field_candidates(
-        &self,
-        session_key: &SessionKey,
-        cx: &mut Context<InputState>,
-    ) -> Vec<FieldCandidate> {
+    fn field_candidates(&self, session_key: &SessionKey, cx: &mut App) -> Vec<FieldCandidate> {
         let mut fields: HashMap<String, FieldCandidate> = HashMap::new();
         let should_fetch = {
             let state_ref = self.state.read(cx);
@@ -211,7 +227,7 @@ impl QueryCompletionProvider {
             }
 
             if let Some(session_data) = state_ref.session_data(session_key) {
-                for item in &session_data.items {
+                for item in session_data.items.iter().take(100) {
                     collect_document_path_counts(&item.doc, "", 0, &mut fields);
                 }
             }
@@ -229,11 +245,42 @@ impl QueryCompletionProvider {
         ordered
     }
 
-    fn filter_items(
-        &self,
-        ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
-    ) -> Vec<CompletionItem> {
+    fn filter_items(&self, ctx: &QueryEditorContext, cx: &mut App) -> Vec<CompletionItem> {
+        if let Some(id) = document_id_input(&ctx.raw_text) {
+            let range = Range {
+                start: lsp_types::Position::new(0, 0),
+                end: Rope::from(ctx.raw_text.as_str()).offset_to_position(ctx.raw_text.len()),
+            };
+            let query = crate::bson::format_relaxed_json_compact(
+                &Bson::Document(mongodb::bson::doc! { "_id": id.clone() }).into_relaxed_extjson(),
+            );
+            let mut items = vec![completion_item(
+                query.clone(),
+                CompletionItemKind::VALUE,
+                format!("{} · exact _id match", crate::bson::bson_type_label(&id)),
+                query,
+                false,
+                range,
+            )];
+            if matches!(id, Bson::ObjectId(_)) && ctx.raw_text.trim().len() == 24 {
+                let query = format!(
+                    "{{ _id: {} }}",
+                    serde_json::to_string(ctx.raw_text.trim()).unwrap_or_default()
+                );
+                items.push(completion_item(
+                    query.clone(),
+                    CompletionItemKind::VALUE,
+                    "String · exact _id match",
+                    query,
+                    false,
+                    range,
+                ));
+            }
+            return items;
+        }
+        if let Some(value) = &ctx.value {
+            return self.value_items(ctx, value, cx);
+        }
         if ctx.in_string_or_comment {
             return Vec::new();
         }
@@ -250,15 +297,35 @@ impl QueryCompletionProvider {
         ) && !ctx.token.starts_with('$')
             && let Some(session_key) = ctx.session_key.as_ref()
         {
-            for field in filter_field_candidates(self.field_candidates(session_key, cx), &ctx.token)
-            {
-                let key = format_query_key(&field.path);
+            let parent =
+                ctx.field.as_ref().map(|field| field.parent_path.as_str()).unwrap_or_default();
+            let fields = self
+                .field_candidates(session_key, cx)
+                .into_iter()
+                .filter_map(|mut field| {
+                    if !parent.is_empty() {
+                        field.path = field.path.strip_prefix(&format!("{parent}."))?.to_string();
+                    }
+                    Some(field)
+                })
+                .collect();
+            for field in filter_field_candidates(fields, &ctx.token) {
+                let key = if ctx.field.as_ref().is_some_and(|field| field.quoted) {
+                    serde_json::to_string(&field.path).unwrap_or_default()
+                } else {
+                    format_query_key(&field.path)
+                };
+                let text = if ctx.field.as_ref().is_some_and(|field| field.has_colon) {
+                    key
+                } else {
+                    format!("{key}: ")
+                };
                 items.push(completion_item(
                     field.path,
                     CompletionItemKind::FIELD,
-                    "Field path",
-                    format!("{key}: $0"),
-                    true,
+                    field.type_label,
+                    text,
+                    false,
                     ctx.replace_range,
                 ));
             }
@@ -278,12 +345,21 @@ impl QueryCompletionProvider {
                 {
                     continue;
                 }
+                let replace_key = ctx.field.as_ref().is_some_and(|field| field.has_colon);
                 items.push(completion_item(
                     op.label,
                     CompletionItemKind::OPERATOR,
                     op.detail,
-                    op.snippet,
-                    true,
+                    if replace_key {
+                        if ctx.field.as_ref().is_some_and(|field| field.quoted) {
+                            serde_json::to_string(op.label).unwrap_or_default()
+                        } else {
+                            op.label.to_string()
+                        }
+                    } else {
+                        op.snippet.to_string()
+                    },
+                    !replace_key,
                     ctx.replace_range,
                 ));
             }
@@ -327,11 +403,27 @@ impl QueryCompletionProvider {
         rank_and_dedupe(items)
     }
 
-    fn fast_filter_items(
+    fn value_items(
         &self,
         ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
+        value: &super::query_values::ValueContext,
+        cx: &App,
     ) -> Vec<CompletionItem> {
+        let samples = ctx
+            .session_key
+            .as_ref()
+            .and_then(|key| self.state.read(cx).session_data(key))
+            .map(|data| {
+                super::query_values::sampled_values(
+                    data.items.iter().map(|item| &item.doc),
+                    &value.field,
+                )
+            })
+            .unwrap_or_default();
+        value_completion_items(&ctx.raw_text, value, &samples)
+    }
+
+    fn fast_filter_items(&self, ctx: &QueryEditorContext, cx: &mut App) -> Vec<CompletionItem> {
         let Some(session_key) = ctx.session_key.as_ref() else {
             return Vec::new();
         };
@@ -353,19 +445,24 @@ impl QueryCompletionProvider {
 
         let mut items = Vec::new();
         for field in filter_field_candidates(self.field_candidates(session_key, cx), field_token) {
-            let snippet = if token.starts_with('!') {
-                format!("!{}$0", field.path)
+            let text = if token.starts_with('!') {
+                format!("!{}", field.path)
+            } else if ctx.raw_text.trim() == token {
+                format!("{{ {}:  }}", format_query_key(&field.path))
             } else {
-                format!("{}:$0", field.path)
+                format!("{}:", field.path)
             };
-            items.push(completion_item(
+            let cursor = if text.ends_with("  }") { text.len() - 2 } else { text.len() };
+            let mut item = completion_item(
                 field.path,
                 CompletionItemKind::FIELD,
-                "Field path",
-                snippet,
-                true,
+                field.type_label,
+                text,
+                false,
                 ctx.replace_range,
-            ));
+            );
+            item.data = Some(serde_json::json!({ "cursor_offset": cursor }));
+            items.push(item);
         }
 
         rank_and_dedupe(items)
@@ -374,7 +471,7 @@ impl QueryCompletionProvider {
     fn sort_or_projection_items(
         &self,
         ctx: &QueryEditorContext,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Vec<CompletionItem> {
         let Some(session_key) = ctx.session_key.as_ref() else {
             return Vec::new();
@@ -396,7 +493,7 @@ impl QueryCompletionProvider {
                 items.push(completion_item(
                     field.path,
                     CompletionItemKind::FIELD,
-                    "Field path",
+                    field.type_label,
                     format!("{key}: {default_value}$0"),
                     true,
                     ctx.replace_range,
@@ -432,12 +529,6 @@ impl QueryCompletionProvider {
     }
 }
 
-impl FilterCompletionProvider {
-    pub fn new(state: Entity<AppState>) -> Self {
-        Self { inner: QueryCompletionProvider::new(state, QueryInputKind::Filter) }
-    }
-}
-
 impl CompletionProvider for QueryCompletionProvider {
     fn completions(
         &self,
@@ -445,24 +536,13 @@ impl CompletionProvider for QueryCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
-        let ctx = self.context(rope, offset, cx);
-        let items = match self.kind {
-            QueryInputKind::Filter => self.filter_items(&ctx, cx),
-            QueryInputKind::Sort | QueryInputKind::Projection => {
-                self.sort_or_projection_items(&ctx, cx)
-            }
-        };
+        let items = self.items(rope, offset, cx);
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         if new_text.is_empty() || new_text.chars().all(char::is_whitespace) {
             return false;
         }
@@ -470,28 +550,6 @@ impl CompletionProvider for QueryCompletionProvider {
             ch.is_ascii_alphanumeric()
                 || matches!(ch, '_' | '$' | '.' | ':' | '>' | '<' | '=' | '~' | '!')
         })
-    }
-}
-
-impl CompletionProvider for FilterCompletionProvider {
-    fn completions(
-        &self,
-        rope: &Rope,
-        offset: usize,
-        trigger: CompletionContext,
-        window: &mut Window,
-        cx: &mut Context<InputState>,
-    ) -> Task<anyhow::Result<CompletionResponse>> {
-        self.inner.completions(rope, offset, trigger, window, cx)
-    }
-
-    fn is_completion_trigger(
-        &self,
-        offset: usize,
-        new_text: &str,
-        cx: &mut Context<InputState>,
-    ) -> bool {
-        self.inner.is_completion_trigger(offset, new_text, cx)
     }
 }
 
@@ -545,6 +603,12 @@ fn collect_schema_candidates(fields: &[SchemaField], out: &mut HashMap<String, F
                     depth,
                     presence: field.presence,
                     sampled_count: 0,
+                    type_label: field
+                        .types
+                        .iter()
+                        .map(|kind| kind.bson_type.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / "),
                 });
         }
         collect_schema_candidates(&field.children, out);
@@ -568,13 +632,14 @@ fn collect_document_path_counts(
             depth: path.matches('.').count(),
             presence: 0,
             sampled_count: 0,
+            type_label: crate::bson::bson_type_label(value).to_string(),
         });
         entry.sampled_count += 1;
 
         match value {
             Bson::Document(nested) => collect_document_path_counts(nested, &path, depth + 1, out),
             Bson::Array(items) => {
-                for item in items {
+                for item in items.iter().take(8) {
                     if let Bson::Document(nested) = item {
                         collect_document_path_counts(nested, &path, depth + 1, out);
                     }
@@ -765,6 +830,93 @@ fn push_fast_value_completion(
     ));
 }
 
+fn value_completion_items(
+    raw: &str,
+    value: &super::query_values::ValueContext,
+    samples: &[Bson],
+) -> Vec<CompletionItem> {
+    let rope = Rope::from(raw);
+    let range = Range {
+        start: rope.offset_to_position(value.range.start),
+        end: rope.offset_to_position(value.range.end),
+    };
+    let mut items = Vec::new();
+    for sample in samples {
+        let label = crate::bson::format_relaxed_json_value(&sample.clone().into_relaxed_extjson());
+        let searchable = match sample {
+            Bson::String(text) => text.as_str(),
+            _ => label.as_str(),
+        };
+        if !matches_value_prefix(&value.prefix, searchable) {
+            continue;
+        }
+        items.push(completion_item(
+            label.clone(),
+            CompletionItemKind::VALUE,
+            format!("{} · loaded values", crate::bson::bson_type_label(sample)),
+            label,
+            false,
+            range,
+        ));
+    }
+    if value.direct {
+        let comparable = samples.is_empty()
+            || samples.iter().any(|value| {
+                matches!(
+                    value,
+                    Bson::Int32(_)
+                        | Bson::Int64(_)
+                        | Bson::Double(_)
+                        | Bson::Decimal128(_)
+                        | Bson::DateTime(_)
+                )
+            });
+        for op in FILTER_OPERATORS {
+            if !matches!(op.label, "$ne" | "$in" | "$exists")
+                && !(comparable && matches!(op.label, "$gt" | "$gte" | "$lt" | "$lte"))
+            {
+                continue;
+            }
+            if !matches_value_prefix(&value.prefix, op.label) {
+                continue;
+            }
+            items.push(completion_item(
+                op.label,
+                CompletionItemKind::OPERATOR,
+                op.detail,
+                format!("{{ {} }}", op.snippet),
+                true,
+                range,
+            ));
+        }
+    }
+    for constructor in BSON_CONSTRUCTORS {
+        if matches_value_prefix(&value.prefix, constructor.label) {
+            items.push(completion_item(
+                constructor.label,
+                CompletionItemKind::CONSTRUCTOR,
+                constructor.detail,
+                constructor.snippet,
+                true,
+                range,
+            ));
+        }
+    }
+    for literal in FILTER_VALUE_LITERALS {
+        if matches_value_prefix(&value.prefix, literal.label) {
+            items.push(completion_item(
+                literal.label,
+                CompletionItemKind::VALUE,
+                literal.detail,
+                literal.snippet,
+                literal.snippet.contains('$'),
+                range,
+            ));
+        }
+    }
+    rank_and_dedupe(items)
+}
+
 fn matches_value_prefix(prefix: &str, label: &str) -> bool {
     prefix.is_empty() || label.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase())
 }
@@ -777,13 +929,17 @@ fn completion_item(
     is_snippet: bool,
     replace_range: Range,
 ) -> CompletionItem {
+    let template = new_text.into();
+    let cursor = if is_snippet { cursor_from_template(&template) } else { None };
+    let text = if is_snippet { label_from_template(&template) } else { template };
     CompletionItem {
         label: label.into(),
         kind: Some(kind),
         detail: Some(detail.into()),
-        insert_text_format: is_snippet.then_some(InsertTextFormat::SNIPPET),
+        insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+        data: cursor.map(|offset| serde_json::json!({ "cursor_offset": offset })),
         text_edit: Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
-            new_text: new_text.into(),
+            new_text: text,
             insert: replace_range,
             replace: replace_range,
         })),
@@ -804,6 +960,72 @@ mod tests {
         filter_field_candidates, format_query_key, matches_value_prefix, normalize_query_path,
         query_input_in_string_or_comment, query_token, split_fast_value_token, wrap_query_input,
     };
+
+    #[test]
+    fn completion_templates_insert_plain_text_and_place_the_caret_in_the_argument() {
+        let item = super::completion_item(
+            "ObjectId",
+            lsp_types::CompletionItemKind::CONSTRUCTOR,
+            "ObjectId",
+            "ObjectId(\"$1\")$0",
+            true,
+            lsp_types::Range::default(),
+        );
+        assert_eq!(item.insert_text_format, Some(lsp_types::InsertTextFormat::PLAIN_TEXT));
+        assert_eq!(item.data.unwrap()["cursor_offset"], 10);
+        let Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) = item.text_edit else {
+            panic!("text edit");
+        };
+        assert_eq!(edit.new_text, "ObjectId(\"\")");
+        let item = super::completion_item(
+            "$gt",
+            lsp_types::CompletionItemKind::OPERATOR,
+            "Greater than",
+            "{ $gt: $1 }$0",
+            true,
+            lsp_types::Range::default(),
+        );
+        let Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) = item.text_edit else {
+            panic!("text edit");
+        };
+        assert_eq!(edit.new_text, "{ $gt:  }");
+    }
+
+    #[test]
+    fn sampled_value_completion_replaces_only_the_value_and_preserves_literal_dollars() {
+        use gpui_kit::component::RopeExt;
+        use mongodb::bson::Bson;
+        let source = "{ status: \"ac\", enabled: true }";
+        let cursor = source.find("ac").unwrap() + 2;
+        let context = super::super::query_values::value_context(source, cursor).unwrap();
+        let items = super::value_completion_items(
+            source,
+            &context,
+            &[Bson::String("active".into()), Bson::String("pending".into())],
+        );
+        assert_eq!(items.len(), 1);
+        let Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) = &items[0].text_edit
+        else {
+            panic!("text edit");
+        };
+        let rope = gpui_kit::component::input::Rope::from(source);
+        let mut result = source.to_string();
+        result.replace_range(
+            rope.position_to_offset(&edit.replace.start)
+                ..rope.position_to_offset(&edit.replace.end),
+            &edit.new_text,
+        );
+        assert_eq!(result, "{ status: \"active\", enabled: true }");
+
+        let source = "{ status:  }";
+        let context = super::super::query_values::value_context(source, 10).unwrap();
+        let items = super::value_completion_items(source, &context, &[Bson::String("$0".into())]);
+        let Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) = &items[0].text_edit
+        else {
+            panic!("text edit");
+        };
+        assert_eq!(edit.new_text, "\"$0\"");
+    }
 
     #[test]
     fn normalize_schema_array_paths_for_queries() {
@@ -866,9 +1088,15 @@ mod tests {
             depth: 0,
             presence: 10,
             sampled_count: 10,
+            type_label: "String".into(),
         };
-        let internal =
-            FieldCandidate { path: "__v".to_string(), depth: 0, presence: 10, sampled_count: 10 };
+        let internal = FieldCandidate {
+            path: "__v".to_string(),
+            depth: 0,
+            presence: 10,
+            sampled_count: 10,
+            type_label: "Int32".into(),
+        };
         assert!(compare_field_candidates(&normal, &internal).is_lt());
         assert!(field_penalty("__v") > field_penalty("status"));
     }
@@ -881,12 +1109,14 @@ mod tests {
                 depth: 0,
                 presence: 10,
                 sampled_count: 10,
+                type_label: "String".into(),
             },
             FieldCandidate {
                 path: "profile.email".to_string(),
                 depth: 1,
                 presence: 9,
                 sampled_count: 9,
+                type_label: "String".into(),
             },
         ];
 

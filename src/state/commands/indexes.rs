@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::{IndexModel, bson::Document};
 
 use crate::state::{AppEvent, AppState, SessionKey};
@@ -47,9 +47,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<Vec<IndexModel>, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(indexes) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
@@ -110,9 +110,9 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             let index_name = index_name.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::IndexDropped { name: index_name.clone() };
@@ -171,9 +171,9 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             let index_name = index_name.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::IndexCreated {
@@ -243,9 +243,9 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             let new_name = new_name.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::IndexCreated {

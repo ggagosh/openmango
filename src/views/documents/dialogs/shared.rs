@@ -1,8 +1,8 @@
 //! Shared utilities for document dialogs.
 
-use gpui::*;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants};
-use gpui_component::{ActiveTheme as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::*;
 
 use crate::theme::{borders, spacing};
 
@@ -11,7 +11,6 @@ pub fn dropdown_variant(cx: &mut App) -> ButtonCustomVariant {
     ButtonCustomVariant::new(cx)
         .color(cx.theme().secondary)
         .foreground(cx.theme().foreground)
-        .border(cx.theme().sidebar_border)
         .hover(cx.theme().secondary_hover)
         .active(cx.theme().secondary_hover)
         .shadow(false)

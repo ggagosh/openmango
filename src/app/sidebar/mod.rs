@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::*;
-use gpui_component::WindowExt as _;
-use gpui_component::input::InputState;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::input::InputState;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{
@@ -205,7 +205,7 @@ impl Sidebar {
 
         subscriptions.push(cx.on_window_closed({
             let state = state.clone();
-            move |cx| {
+            move |cx, _| {
                 state.update(cx, |state, cx| {
                     state.workspace_restore_pending = false;
                     state.update_workspace_from_state();
@@ -348,7 +348,7 @@ impl Sidebar {
 
         if let Some(ix) = self.model.refresh_entries(&self.cached_connections, &self.cached_active)
         {
-            self.scroll_handle.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+            self.scroll_handle.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center);
         }
         cx.notify();
     }
@@ -460,7 +460,7 @@ impl Sidebar {
         if let Some(ix) =
             self.model.ensure_selection_from_state(connection_id, selected_db, selected_col)
         {
-            self.scroll_handle.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+            self.scroll_handle.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center);
         }
         cx.notify();
     }
@@ -948,7 +948,7 @@ impl Sidebar {
         self.search_state.update(cx, |state, cx| {
             state.set_value(String::new(), window, cx);
         });
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -1057,7 +1057,7 @@ impl Sidebar {
 
     fn select_typeahead_match(&mut self, cx: &mut Context<Self>) {
         if let Some((ix, _node_id)) = self.model.select_typeahead_match() {
-            self.scroll_handle.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+            self.scroll_handle.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center);
             cx.notify();
         }
     }
@@ -1156,7 +1156,7 @@ impl Sidebar {
         preview: bool,
         cx: &mut Context<Self>,
     ) {
-        self.scroll_handle.scroll_to_item(next, gpui::ScrollStrategy::Center);
+        self.scroll_handle.scroll_to_item(next, gpui_kit::ScrollStrategy::Center);
         cx.notify();
         if preview {
             self.schedule_keyboard_preview(node_id, cx);

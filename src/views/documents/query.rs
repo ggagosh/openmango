@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::input::InputState;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::parse_document_from_json;
@@ -7,19 +7,21 @@ use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 
 use super::CollectionView;
 use super::fast_filter::{compile_filter_input, format_compiled_filter};
+use super::query_editor::format_query_editor;
 
 impl CollectionView {
     pub(super) fn apply_filter(
         state: Entity<AppState>,
         session_key: SessionKey,
-        filter_state: Entity<InputState>,
-        _window: &mut Window,
+        filter_state: Entity<EditorState>,
+        window: &mut Window,
         cx: &mut App,
     ) {
         let raw = filter_state.read(cx).value().to_string();
 
         match compile_filter_input(&raw) {
             Ok(compiled) => {
+                let raw = format_query_editor(&filter_state, window, cx);
                 let Some(filter) = compiled.document else {
                     state.update(cx, |state, cx| {
                         state.clear_filter(&session_key);
@@ -51,15 +53,15 @@ impl CollectionView {
     pub(super) fn apply_query_options(
         state: Entity<AppState>,
         session_key: SessionKey,
-        sort_state: Entity<InputState>,
-        projection_state: Entity<InputState>,
-        _window: &mut Window,
+        sort_state: Entity<EditorState>,
+        projection_state: Entity<EditorState>,
+        window: &mut Window,
         cx: &mut App,
     ) {
         let sort_raw = sort_state.read(cx).value().to_string();
         let projection_raw = projection_state.read(cx).value().to_string();
 
-        let (sort_raw_store, sort_doc) = match parse_optional_doc(&sort_raw) {
+        let (mut sort_raw_store, sort_doc) = match parse_optional_doc(&sort_raw) {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
@@ -72,7 +74,7 @@ impl CollectionView {
             }
         };
 
-        let (projection_raw_store, projection_doc) = match parse_optional_doc(&projection_raw) {
+        let (mut projection_raw_store, projection_doc) = match parse_optional_doc(&projection_raw) {
             Ok(result) => result,
             Err(err) => {
                 state.update(cx, |state, cx| {
@@ -84,6 +86,15 @@ impl CollectionView {
                 return;
             }
         };
+
+        let sort_formatted = format_query_editor(&sort_state, window, cx);
+        let projection_formatted = format_query_editor(&projection_state, window, cx);
+        if sort_doc.is_some() {
+            sort_raw_store = sort_formatted.trim().to_string();
+        }
+        if projection_doc.is_some() {
+            projection_raw_store = projection_formatted.trim().to_string();
+        }
 
         let message = if sort_doc.is_none() && projection_doc.is_none() {
             "Sort/projection cleared"
@@ -119,6 +130,24 @@ pub(super) fn normalized_filter_query(raw: &str) -> String {
         return trimmed.to_string();
     }
     format!("{{{trimmed}}}")
+}
+
+/// Drafts are persisted on every edit; only the empty-object shorthand is normalized.
+pub(super) fn query_drafts_equal(current: &str, stored: &str) -> bool {
+    let normalize = |text: &str| matches!(text.trim(), "" | "{}");
+    current == stored || (normalize(current) && normalize(stored))
+}
+
+pub(super) fn document_empty_message(loaded: bool, failed: bool, filtered: bool) -> &'static str {
+    if failed {
+        "No results available"
+    } else if !loaded {
+        "No results yet"
+    } else if filtered {
+        "No documents match this filter"
+    } else {
+        "This collection is empty"
+    }
 }
 
 pub(super) fn format_filter_query(raw: &str) -> Result<String, String> {
@@ -180,6 +209,25 @@ mod tests {
         assert!(is_valid_query(""));
         assert!(is_valid_query("   "));
         assert!(is_valid_query("{}"));
+    }
+
+    #[test]
+    fn draft_sync_preserves_empty_braces_and_detects_restored_multiline_queries() {
+        assert!(super::query_drafts_equal("{}", ""));
+        assert!(super::query_drafts_equal("  {} ", " "));
+        assert!(super::query_drafts_equal("{\n  age: 30\n}", "{\n  age: 30\n}"));
+        assert!(!super::query_drafts_equal("{ age: 30 }", "{ age: 40 }"));
+    }
+
+    #[test]
+    fn empty_states_distinguish_failed_queries_from_no_matches() {
+        assert_eq!(super::document_empty_message(false, false, false), "No results yet");
+        assert_eq!(super::document_empty_message(true, true, true), "No results available");
+        assert_eq!(
+            super::document_empty_message(true, false, true),
+            "No documents match this filter"
+        );
+        assert_eq!(super::document_empty_message(true, false, false), "This collection is empty");
     }
 
     #[test]

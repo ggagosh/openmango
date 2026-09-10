@@ -6,20 +6,6 @@ impl ForgeView {
         super::super::logic::format_printable_lines(printable)
     }
 
-    pub fn format_payload_lines(payload: &[serde_json::Value]) -> Vec<String> {
-        let mut lines = Vec::new();
-        for (idx, value) in payload.iter().enumerate() {
-            let mut formatted = Self::format_printable_lines(value);
-            if !formatted.is_empty() {
-                lines.append(&mut formatted);
-            }
-            if idx + 1 < payload.len() && !lines.last().is_some_and(|line| line.is_empty()) {
-                lines.push(String::new());
-            }
-        }
-        lines
-    }
-
     pub fn default_result_label_for_value(value: &serde_json::Value) -> String {
         super::super::logic::default_result_label_for_value(value)
     }

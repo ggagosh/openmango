@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::*;
 use serde::Deserialize;
 
 use crate::theme::spacing;
@@ -37,7 +37,7 @@ pub fn render_stats(json: &str, cx: &App) -> Option<AnyElement> {
         .bg(cx.theme().table.opacity(0.55))
         .border_1()
         .border_color(cx.theme().border.opacity(0.78))
-        .rounded(px(8.0));
+        .rounded(crate::theme::borders::radius_md());
 
     if let Some(title) = stats.title {
         container = container.child(

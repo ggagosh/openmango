@@ -3,9 +3,9 @@ mod types;
 
 pub use types::ActionExecution;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::*;
 
 use crate::app::search::fuzzy_match_score;
 use crate::state::AppState;
@@ -191,7 +191,7 @@ impl ActionBar {
         self.input_state = None;
         self._subscriptions.clear();
         if let Some(previous_focus) = self.previous_focus.take() {
-            window.focus(&previous_focus);
+            window.focus(&previous_focus, cx);
         }
         cx.notify();
     }

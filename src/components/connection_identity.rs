@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::models::{
@@ -90,7 +90,7 @@ pub fn connection_identity_badge(
             div()
                 .size(px(8.0))
                 .flex_shrink_0()
-                .rounded_full()
+                .rounded(borders::radius_xs())
                 .bg(colors::connection_accent(color, cx)),
         );
     }

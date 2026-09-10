@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::px;
-use gpui_component::table::{Column, ColumnSort};
+use gpui_kit::component::table::{Column, ColumnSort};
+use gpui_kit::px;
 use mongodb::bson::{Bson, Document};
 
 use crate::state::SessionDocument;

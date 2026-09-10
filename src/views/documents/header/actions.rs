@@ -2,15 +2,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_component::popover::Popover;
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{Disableable as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
@@ -82,12 +82,11 @@ fn render_delete_menu(
     let clean_delete_variant = ButtonCustomVariant::new(cx)
         .color(cx.theme().transparent)
         .foreground(cx.theme().muted_foreground)
-        .border(cx.theme().transparent)
         .hover(cx.theme().secondary.opacity(0.5))
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
     let button = MenuButton::new("delete-menu")
-        .compact()
+        .xsmall()
         .rounded(borders::radius_sm())
         .disabled(session_key.is_none())
         .with_size(Size::Small)
@@ -95,7 +94,7 @@ fn render_delete_menu(
         .icon(Icon::new(IconName::Delete).xsmall())
         .tooltip("Delete options");
 
-    let anchor = Corner::BottomLeft;
+    let anchor = Anchor::BottomLeft;
 
     button.dropdown_menu_with_anchor(anchor, {
         let session_key = session_key.clone();
@@ -262,7 +261,6 @@ fn render_copy_as_dropdown(
     let clean_variant = ButtonCustomVariant::new(cx)
         .color(cx.theme().transparent)
         .foreground(cx.theme().muted_foreground)
-        .border(cx.theme().transparent)
         .hover(cx.theme().secondary.opacity(0.5))
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
@@ -274,14 +272,14 @@ fn render_copy_as_dropdown(
     let formats: Vec<CopyFormat> = formats.to_vec();
 
     MenuButton::new("copy-as-dropdown")
-        .compact()
+        .xsmall()
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
         .label("Copy Page As")
         .icon(Icon::new(IconName::Copy).xsmall())
         .tooltip("Copy the current page")
-        .dropdown_menu_with_anchor(Corner::TopLeft, move |menu: PopupMenu, _window, _cx| {
+        .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in &formats {
                 let view_click = view.clone();
@@ -309,21 +307,20 @@ fn render_export_dropdown(
     let clean_variant = ButtonCustomVariant::new(cx)
         .color(cx.theme().transparent)
         .foreground(cx.theme().muted_foreground)
-        .border(cx.theme().transparent)
         .hover(cx.theme().secondary.opacity(0.5))
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
 
     MenuButton::new("export-dropdown")
-        .compact()
+        .xsmall()
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
         .label("Export Matching")
-        .icon(Icon::new(IconName::Download).xsmall())
+        .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
         .tooltip("Export all matching documents to file")
         .disabled(session_key.is_none())
-        .dropdown_menu_with_anchor(Corner::TopLeft, move |menu: PopupMenu, _window, _cx| {
+        .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in FileExportFormat::all() {
                 let state_click = state.clone();
@@ -366,7 +363,7 @@ fn render_documents_actions_clean(
     let state_for_transfer = state.clone();
 
     let insert_button = clean_toolbar_icon_button(
-        Button::new("insert-document-clean").compact().disabled(session_key.is_none()).on_click({
+        Button::new("insert-document-clean").xsmall().disabled(session_key.is_none()).on_click({
             let session_key = session_key.clone();
             let state_for_insert = state_for_insert.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -387,7 +384,7 @@ fn render_documents_actions_clean(
 
     let edit_button = clean_toolbar_icon_button(
         Button::new("edit-json-clean")
-            .compact()
+            .xsmall()
             .disabled(selected_doc.is_none() || session_key.is_none() || selected_count > 1)
             .on_click({
                 let selected_doc = selected_doc.clone();
@@ -411,12 +408,12 @@ fn render_documents_actions_clean(
                     );
                 }
             }),
-        IconName::Braces,
+        crate::assets::AppIcon::Braces,
         "Edit JSON",
     );
 
     let discard_button = clean_toolbar_icon_button(
-        Button::new("discard-clean").compact().disabled(!any_selected_dirty).on_click({
+        Button::new("discard-clean").xsmall().disabled(!any_selected_dirty).on_click({
             let view = view.clone();
             move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                 view.update(cx, |this, cx| {
@@ -454,7 +451,7 @@ fn render_documents_actions_clean(
     );
 
     let mut apply_button = clean_toolbar_icon_button(
-        Button::new("apply-clean").compact().disabled(!any_selected_dirty).on_click({
+        Button::new("apply-clean").xsmall().disabled(!any_selected_dirty).on_click({
             let state_for_apply = state_for_apply.clone();
             let view = view.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -520,7 +517,7 @@ fn render_documents_actions_clean(
         "Apply changes",
     );
     if any_selected_dirty {
-        apply_button = apply_button.active_style(cx.theme().secondary.opacity(0.55));
+        apply_button = apply_button.bg(cx.theme().secondary.opacity(0.55));
     }
 
     let delete_menu = render_delete_menu(
@@ -532,7 +529,7 @@ fn render_documents_actions_clean(
     );
 
     let refresh_button = clean_toolbar_icon_button(
-        Button::new("refresh-clean").compact().on_click({
+        Button::new("refresh-clean").xsmall().on_click({
             move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                 if let Some(session_key) = state_for_refresh.read(cx).current_session_key() {
                     AppCommands::load_documents_for_session(
@@ -569,7 +566,7 @@ fn render_documents_actions_clean(
 
     let tree_btn = {
         let mut btn = clean_toolbar_icon_button(
-            Button::new("view-tree").compact().on_click({
+            Button::new("view-tree").xsmall().on_click({
                 let state = state.clone();
                 let session_key = session_key.clone();
                 let view = view.clone();
@@ -592,14 +589,14 @@ fn render_documents_actions_clean(
             "Tree view",
         );
         if is_tree {
-            btn = btn.active_style(active_bg);
+            btn = btn.bg(active_bg);
         }
         btn
     };
 
     let table_btn = {
         let mut btn = clean_toolbar_icon_button(
-            Button::new("view-table").compact().on_click({
+            Button::new("view-table").xsmall().on_click({
                 let state = state.clone();
                 let session_key = session_key.clone();
                 let view = view.clone();
@@ -621,14 +618,14 @@ fn render_documents_actions_clean(
             "Table view",
         );
         if is_table {
-            btn = btn.active_style(active_bg);
+            btn = btn.bg(active_bg);
         }
         btn
     };
 
     let reset_columns_btn = if is_table {
         Some(clean_toolbar_icon_button(
-            Button::new("reset-columns").compact().on_click({
+            Button::new("reset-columns").xsmall().on_click({
                 let state = state.clone();
                 let session_key = session_key.clone();
                 let view = view.clone();
@@ -665,12 +662,11 @@ fn render_documents_actions_clean(
             let clean_variant = ButtonCustomVariant::new(cx)
                 .color(cx.theme().transparent)
                 .foreground(cx.theme().muted_foreground)
-                .border(cx.theme().transparent)
                 .hover(cx.theme().secondary.opacity(0.5))
                 .active(cx.theme().secondary.opacity(0.62))
                 .shadow(false);
             let trigger_btn = MenuButton::new("columns-visibility")
-                .compact()
+                .xsmall()
                 .rounded(borders::radius_sm())
                 .with_size(Size::Small)
                 .custom(clean_variant)
@@ -684,7 +680,7 @@ fn render_documents_actions_clean(
 
             Some(
                 Popover::new("col-visibility-popover")
-                    .anchor(gpui::Corner::TopLeft)
+                    .anchor(gpui_kit::Anchor::TopLeft)
                     .trigger(trigger_btn)
                     .content(move |_ps, _window, cx| {
                         let query = search.read(cx).value().to_string().to_lowercase();
@@ -717,7 +713,7 @@ fn render_documents_actions_clean(
                                     .py(px(2.0))
                                     .rounded(borders::radius_sm())
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(gpui::hsla(0., 0., 0.5, 0.1)))
+                                    .hover(|s| s.bg(gpui_kit::hsla(0., 0., 0.5, 0.1)))
                                     .on_click(move |_, _window, cx| {
                                         let Some(sk) = sk_cb.clone() else {
                                             return;
@@ -775,7 +771,7 @@ fn render_documents_actions_clean(
                                 div()
                                     .id("col-vis-show-all")
                                     .text_xs()
-                                    .text_color(gpui::hsla(210. / 360., 0.8, 0.55, 1.0))
+                                    .text_color(gpui_kit::hsla(210. / 360., 0.8, 0.55, 1.0))
                                     .cursor_pointer()
                                     .child("Show All")
                                     .on_click(move |_, _window, cx| {
@@ -796,7 +792,7 @@ fn render_documents_actions_clean(
                                 div()
                                     .id("col-vis-hide-all")
                                     .text_xs()
-                                    .text_color(gpui::hsla(210. / 360., 0.8, 0.55, 1.0))
+                                    .text_color(gpui_kit::hsla(210. / 360., 0.8, 0.55, 1.0))
                                     .cursor_pointer()
                                     .child("Hide All")
                                     .on_click(move |_, _window, cx| {
@@ -868,12 +864,12 @@ fn render_documents_secondary_menu(
 ) -> impl IntoElement {
     MenuButton::new("documents-actions-more")
         .ghost()
-        .compact()
+        .xsmall()
         .icon(Icon::new(IconName::Ellipsis).xsmall())
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .disabled(session_key.is_none())
-        .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _window, _cx| {
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
 
             menu = menu.item(
@@ -900,7 +896,7 @@ fn render_documents_secondary_menu(
                 .item(PopupMenuItem::separator())
                 .item(
                     PopupMenuItem::new("Export Data...")
-                        .icon(Icon::new(IconName::Download))
+                        .icon(Icon::new(crate::assets::AppIcon::Download))
                         .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
@@ -923,7 +919,7 @@ fn render_documents_secondary_menu(
                 )
                 .item(
                     PopupMenuItem::new("Import Data...")
-                        .icon(Icon::new(IconName::Upload))
+                        .icon(Icon::new(crate::assets::AppIcon::Upload))
                         .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
@@ -1017,7 +1013,7 @@ fn render_export_progress(state: Entity<AppState>, cx: &App) -> Option<Div> {
             .child(
                 crate::components::Button::new("cancel-export")
                     .ghost()
-                    .compact()
+                    .xsmall()
                     .icon(Icon::new(IconName::Close).size(px(12.0)))
                     .tooltip("Cancel export")
                     .on_click(move |_, _, cx| {
@@ -1034,8 +1030,12 @@ fn render_export_progress(state: Entity<AppState>, cx: &App) -> Option<Div> {
     )
 }
 
-pub fn clean_toolbar_icon_button(button: Button, icon: IconName, tooltip: &'static str) -> Button {
-    button.ghost().compact().icon(Icon::new(icon).xsmall()).tooltip(tooltip)
+pub fn clean_toolbar_icon_button(
+    button: Button,
+    icon: impl Into<Icon>,
+    tooltip: &'static str,
+) -> Button {
+    button.ghost().xsmall().icon(Icon::new(icon).xsmall()).tooltip(tooltip)
 }
 
 fn toolbar_separator(cx: &App) -> Div {
@@ -1053,7 +1053,7 @@ pub fn render_indexes_actions(state: Entity<AppState>, session_key: Option<Sessi
         .gap(spacing::sm())
         .child(
             Button::new("create-index")
-                .compact()
+                .xsmall()
                 .label("Create index")
                 .disabled(session_key.is_none())
                 .on_click({
@@ -1134,19 +1134,19 @@ pub fn render_schema_actions(
         .child(
             MenuButton::new("copy-schema")
                 .ghost()
-                .compact()
+                .xsmall()
                 .label("Copy Schema")
                 .dropdown_caret(true)
                 .rounded(borders::radius_sm())
                 .with_size(Size::XSmall)
                 .disabled(session_key.is_none() || schema_loading)
-                .dropdown_menu_with_anchor(Corner::BottomLeft, {
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                     let session_key = session_key.clone();
                     let state_for_copy = state_for_copy.clone();
                     move |menu: PopupMenu, _window, _cx| {
                         menu.item(
                             PopupMenuItem::new("JSON Schema")
-                                .icon(Icon::new(IconName::Braces))
+                                .icon(Icon::new(crate::assets::AppIcon::Braces))
                                 .on_click({
                                     let session_key = session_key.clone();
                                     let state = state_for_copy.clone();
@@ -1163,9 +1163,9 @@ pub fn render_schema_actions(
                                                 crate::state::commands::schema_to_json_schema(
                                                     schema,
                                                 );
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                                json,
-                                            ));
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(json),
+                                            );
                                         }
                                     }
                                 }),
@@ -1187,9 +1187,9 @@ pub fn render_schema_actions(
                                         if let Some(schema) = schema {
                                             let json =
                                                 crate::state::commands::schema_to_compass(schema);
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                                json,
-                                            ));
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(json),
+                                            );
                                         }
                                     }
                                 }),
@@ -1210,9 +1210,9 @@ pub fn render_schema_actions(
                                         if let Some(schema) = schema {
                                             let json =
                                                 crate::state::commands::schema_to_summary(schema);
-                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                                json,
-                                            ));
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(json),
+                                            );
                                         }
                                     }
                                 },
@@ -1256,7 +1256,7 @@ pub fn render_aggregation_actions(
         .child(
             Button::new("agg-run")
                 .primary()
-                .compact()
+                .xsmall()
                 .label("Run")
                 .tooltip_with_action(
                     "Run aggregation",
@@ -1283,7 +1283,7 @@ pub fn render_aggregation_actions(
         )
         .child(
             Button::new("agg-explain")
-                .compact()
+                .xsmall()
                 .label("Explain")
                 .disabled(session_key.is_none() || explain_loading)
                 .on_click({

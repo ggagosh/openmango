@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use crate::components::ConnectionManager as ConnectionManagerView;
 use crate::state::{AppEvent, AppState, StatusLevel, View};
@@ -13,12 +13,12 @@ mod tabs;
 
 use empty::render_empty_state;
 use shell::render_shell;
-use tabs::{OpenTabsBar, TabsHost, render_tabs_host};
+pub(crate) use tabs::OpenTabsBar;
+use tabs::{TabsHost, render_tabs_host};
 
 /// Content area component that shows collection view or welcome screen
 pub struct ContentArea {
     state: Entity<AppState>,
-    tabs_bar: Entity<OpenTabsBar>,
     collection_view: Option<Entity<CollectionView>>,
     database_view: Option<Entity<DatabaseView>>,
     ai_view: Option<Entity<AiView>>,
@@ -172,11 +172,8 @@ impl ContentArea {
         } else {
             None
         };
-        let tabs_bar = cx.new(|cx| OpenTabsBar::new(state.clone(), cx));
-
         Self {
             state,
-            tabs_bar,
             collection_view,
             database_view,
             ai_view,
@@ -275,7 +272,7 @@ impl ContentArea {
                     Some(cx.new(|cx| CollectionView::new(self.state.clone(), cx)));
             }
             if let Some(view) = self.collection_view.clone() {
-                view.update(cx, |view, _cx| view.focus_documents(window));
+                view.update(cx, |view, cx| view.focus_documents(window, cx));
                 return true;
             }
         }
@@ -348,8 +345,6 @@ impl Render for ContentArea {
                 cx,
             );
             let host = TabsHost {
-                state: self.state.clone(),
-                tabs_bar: self.tabs_bar.clone(),
                 current_view,
                 has_collection,
                 collection_view: self.collection_view.as_ref(),

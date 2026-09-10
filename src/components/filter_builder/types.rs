@@ -583,7 +583,7 @@ impl FilterNode {
         }
     }
 
-    fn contains_node(&self, id: u64) -> bool {
+    pub(super) fn contains_node(&self, id: u64) -> bool {
         match self {
             Self::Condition(condition) => condition.id == id,
             Self::Group { id: group_id, children, .. } => {

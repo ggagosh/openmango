@@ -1,16 +1,17 @@
 //! Tree row rendering for document viewer.
 
+use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::input::{Input, NumberInput};
-use gpui_component::list::ListItem;
-use gpui_component::menu::ContextMenuExt;
-use gpui_component::switch::Switch;
-use gpui_component::tree::{TreeEntry, TreeState};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::input::{Input, NumberInput};
+use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::ContextMenuExt;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tree::{TreeEntry, TreeState};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
@@ -68,7 +69,7 @@ pub(crate) fn render_tree_row(
         meta.map(|m| m.path.is_empty() && selected_docs.contains(&m.doc_key)).unwrap_or(false);
 
     let depth = entry.depth();
-    let is_folder = entry.is_folder();
+    let is_folder = meta.map_or_else(|| entry.is_folder(), |meta| meta.is_folder);
     let is_expanded = entry.is_expanded();
 
     let row_session = session_key.clone();
@@ -90,7 +91,7 @@ pub(crate) fn render_tree_row(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .cursor_pointer()
             .hover(|s| s.bg(chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
@@ -146,7 +147,7 @@ pub(crate) fn render_tree_row(
     let theme_primary = cx.theme().primary;
     row = row
         .border_l_2()
-        .border_color(gpui::transparent_black())
+        .border_color(gpui_kit::transparent_black())
         .when(_selected, |s| s.bg(cx.theme().list_active).border_color(theme_primary))
         .when(!_selected && is_multi_selected, |s| s.bg(cx.theme().list_active))
         .when(!_selected && !is_multi_selected, |s| s.hover(|s| s.bg(cx.theme().list_hover)));
@@ -161,7 +162,7 @@ pub(crate) fn render_tree_row(
             let range_node_meta = node_meta.clone();
             let range_tree_order = tree_order.clone();
             move |event, window, cx| {
-                window.focus(&row_focus);
+                window.focus(&row_focus, cx);
                 cx.stop_propagation();
                 let is_shift = event.modifiers.shift;
                 let anchor = row_tree.read(cx).selected_index();
@@ -324,7 +325,7 @@ pub fn render_readonly_tree_row(
     let is_root = meta.map(|meta| meta.path.is_empty()).unwrap_or(false);
 
     let depth = entry.depth();
-    let is_folder = entry.is_folder();
+    let is_folder = meta.map_or_else(|| entry.is_folder(), |meta| meta.is_folder);
     let is_expanded = entry.is_expanded();
 
     let agg_chevron_hover = cx.theme().foreground.opacity(0.1);
@@ -338,7 +339,7 @@ pub fn render_readonly_tree_row(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .cursor_pointer()
             .hover(|s| s.bg(agg_chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
@@ -553,7 +554,7 @@ fn render_value_column(
                 this.on_mouse_down(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                        window.focus(&focus_handle);
+                        window.focus(&focus_handle, cx);
                         tree_state.update(cx, |tree, cx| {
                             tree.set_selected_index(Some(ix), cx);
                         });
@@ -672,7 +673,7 @@ fn render_inline_editor(
             cx.stop_propagation();
         })
         .child(editor)
-        .child(Button::new("inline-save").compact().primary().label("Save").on_click({
+        .child(Button::new("inline-save").xsmall().primary().label("Save").on_click({
             let view = view.clone();
             move |_, _, cx| {
                 view.update(cx, |this, cx| {
@@ -681,7 +682,7 @@ fn render_inline_editor(
                 });
             }
         }))
-        .child(Button::new("inline-cancel").compact().ghost().label("Cancel").on_click({
+        .child(Button::new("inline-cancel").xsmall().ghost().label("Cancel").on_click({
             let view = view.clone();
             move |_, _, cx| {
                 view.update(cx, |this, cx| {

@@ -1,4 +1,4 @@
-use gpui::{AsyncApp, Context, Entity, WeakEntity};
+use gpui_kit::{AsyncApp, Context, Entity, WeakEntity};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -87,7 +87,7 @@ impl McpBridge {
         let (requests, mut receiver) = mpsc::channel(16);
         cx.spawn(async move |_view: WeakEntity<V>, cx: &mut AsyncApp| {
             while let Some(request) = receiver.recv().await {
-                let result = cx.update(|cx| match request {
+                cx.update(|cx| match request {
                     BridgeRequest::ListConnections(response) => {
                         let _ = response.send(shared_connections(state.read(cx)));
                     }
@@ -231,9 +231,6 @@ impl McpBridge {
                         });
                     }
                 });
-                if result.is_err() {
-                    break;
-                }
             }
         })
         .detach();

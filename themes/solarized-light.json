@@ -1,5 +1,5 @@
 {
-  "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/longbridge/gpui-kit/v0.6.0/.theme-schema.json",
   "name": "Solarized Light",
   "author": "OpenMango",
   "themes": [
@@ -8,8 +8,6 @@
       "mode": "light",
       "font.family": "JetBrainsMono Nerd Font",
       "mono_font.family": "JetBrainsMono Nerd Font Mono",
-      "radius": 8,
-      "radius.lg": 8,
       "shadow": false,
       "colors": {
         "background": "#fdf6e3",

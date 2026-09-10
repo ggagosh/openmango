@@ -1,8 +1,10 @@
 //! UI helper functions for transfer view components.
 
-use gpui::*;
-use gpui_component::checkbox::Checkbox;
-use gpui_component::{ActiveTheme as _, IconName};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::{ActiveTheme as _, IconName};
+use gpui_kit::*;
 
 use crate::components::Button;
 use crate::state::parse_export_query_document;
@@ -132,7 +134,7 @@ pub(super) fn render_query_field_row(
         .text_ellipsis()
         .child(display_text);
 
-    let edit_button = Button::new(("edit-query", field as usize)).compact().label("Edit").on_click(
+    let edit_button = Button::new(("edit-query", field as usize)).xsmall().label("Edit").on_click(
         move |_, window, cx| {
             view.update(cx, |view, cx| {
                 view.open_query_modal(field, window, cx);
@@ -145,7 +147,7 @@ pub(super) fn render_query_field_row(
         Some(
             Button::new(("clear-query", field as usize))
                 .ghost()
-                .compact()
+                .xsmall()
                 .icon(IconName::Close)
                 .on_click(move |_, _, cx| {
                     state.update(cx, |state, cx| {

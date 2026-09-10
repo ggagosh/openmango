@@ -1,82 +1,236 @@
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 
-use gpui::*;
-use gpui_component::RopeExt;
-use gpui_component::input::{InputEvent, InputState, TabSize};
+use gpui_kit::component::RopeExt;
+use gpui_kit::component::input::{self, EditorState, InputEvent, TabSize};
+use gpui_kit::*;
+use uuid::Uuid;
 
 use super::logic::statement_bounds;
+use crate::helpers::auto_pair::AutoPairState;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
-use super::editor_behavior::{IndentConfig, IndentResult, indent_after_enter};
+use super::editor_behavior::{INDENT_WIDTH, WordAction, code_word_boundary, newline_after_opening};
 use super::parser::parse_context;
+use super::state::ForgeEditorBuffer;
+use crate::views::editor_completion::{CompletionScope, EditorCompletionMenu};
 
 impl ForgeView {
-    pub fn ensure_editor_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.editor.editor_state.is_some() {
-            return;
-        }
-
+    fn create_editor_buffer(
+        &mut self,
+        tab_id: Uuid,
+        content: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor_state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("javascript")
+                .line_number(true)
+                .folding(true)
+                .tab_size(TabSize { tab_size: INDENT_WIDTH, hard_tabs: false })
+                .placeholder("// MongoDB Shell (db.)")
+                .default_value(content.clone())
+        });
+        let completion_menu = cx.new(|cx| {
+            EditorCompletionMenu::new(
+                &editor_state,
+                self.app_state.clone(),
+                CompletionScope::Forge(tab_id),
+                self.state.editor.completion_request_id.clone(),
+                window,
+                cx,
+            )
+        });
         let provider = Rc::new(ForgeCompletionProvider::new(
             self.app_state.clone(),
             self.controller.runtime.clone(),
             self.state.editor.completion_request_id.clone(),
+            tab_id,
+            editor_state.downgrade(),
+            completion_menu.downgrade(),
+            window.window_handle(),
         ));
-
-        let editor_state = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor("javascript")
-                .auto_indent(false)
-                .line_number(true)
-                .tab_size(TabSize { tab_size: 2, hard_tabs: false })
-                .placeholder("// MongoDB Shell (db.)");
-
-            editor.lsp.completion_provider = Some(provider.clone());
-            editor
+        editor_state.update(cx, |editor, _| {
+            editor.lsp_mut().completion_provider = Some(provider.clone());
         });
 
-        let subscription = cx.subscribe_in(
-            &editor_state,
-            window,
-            move |this, state, event, window, cx| match event {
-                InputEvent::Change => {
-                    if this.try_auto_pair(state, window, cx) {
+        let subscription =
+            cx.subscribe_in(&editor_state, window, move |this, state, event, window, cx| {
+                if let InputEvent::Blur = event {
+                    if let Some(buffer) = this.state.editor.buffers.get(&tab_id) {
+                        buffer.completion_provider.dismiss(cx);
+                    }
+                } else if let InputEvent::Change = event {
+                    let Some(buffer) = this.state.editor.buffers.get_mut(&tab_id) else {
+                        return;
+                    };
+                    let typed = buffer.completion_provider.take_typed_change();
+                    let text = state.read(cx).value().to_string();
+                    let cursor = state.read(cx).cursor();
+                    // Ordinary typing needs no second JavaScript parse for pairing.
+                    let previous_char = text.get(..cursor).and_then(|s| s.chars().next_back());
+                    let in_comment = matches!(previous_char, Some('{' | '[' | '(' | '"'))
+                        && parse_context(&text, cursor.saturating_sub(1)).in_comment;
+                    if typed && buffer.auto_pair.try_auto_pair(state, in_comment, window, cx) {
                         return;
                     }
-                    let text = state.read(cx).value().to_string();
-                    this.handle_editor_change(&text, cx);
-                }
-                InputEvent::PressEnter { secondary: false } => {
-                    let mut adjusted = false;
-                    state.update(cx, |state, cx| {
-                        adjusted = apply_custom_indent(state, window, cx);
+                    buffer.auto_pair.sync(&text);
+                    buffer.content.clone_from(&text);
+                    // Save to the editor's own tab, even if focus has already moved.
+                    this.app_state.update(cx, |state, _cx| {
+                        state.set_forge_tab_content(tab_id, text);
                     });
-                    if adjusted {
-                        cx.notify();
-                    }
                 }
-                _ => {}
+            });
+
+        self.state.editor.buffers.insert(
+            tab_id,
+            ForgeEditorBuffer {
+                editor_state,
+                completion_provider: provider,
+                completion_menu,
+                _subscription: subscription,
+                auto_pair: AutoPairState::new(&content),
+                content,
             },
         );
-
-        self.state.editor.editor_state = Some(editor_state);
-        self.state.editor.editor_subscription = Some(subscription);
-        self.state.editor.completion_provider = Some(provider);
     }
 
-    pub fn save_current_content(&mut self, cx: &mut Context<Self>) {
-        let Some(tab_id) = self.state.editor.active_tab_id else {
+    pub fn accept_completion_or_indent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_completion(window, cx) {
             return;
+        }
+        window.dispatch_action(Box::new(input::IndentInline), cx);
+    }
+
+    fn accept_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(editor) = &self.state.editor.editor_state
+            && editor.read(cx).focus_handle(cx).is_focused(window)
+            && let Some(buffer) =
+                self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get(&id))
+        {
+            return buffer.completion_menu.update(cx, |menu, cx| menu.accept_selected(window, cx));
+        }
+        false
+    }
+
+    pub fn dismiss_completions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(buffer) =
+            self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get_mut(&id))
+        else {
+            return false;
         };
-        let Some(editor_state) = &self.state.editor.editor_state else {
+        if !buffer.editor_state.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let dismissed = buffer.completion_provider.dismiss(cx);
+        buffer.editor_state.update(cx, |editor, cx| editor.dismiss_lsp_overlays(cx));
+        dismissed
+    }
+
+    pub fn insert_newline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_completion(window, cx) {
             return;
+        }
+        let enter = input::Enter { secondary: false, shift: false };
+        if let Some(editor) = &self.state.editor.editor_state
+            && editor.read(cx).focus_handle(cx).is_focused(window)
+        {
+            if editor.update(cx, |editor, cx| {
+                editor.route_overlay_action(Box::new(enter.clone()), window, cx)
+            }) {
+                return;
+            }
+            let source = editor.read(cx).value().to_string();
+            let selection = editor.read(cx).selected_range();
+            if let Some(edit) = newline_after_opening(&source, selection)
+                && !parse_context(&source, edit.range.start.saturating_sub(1)).in_comment
+            {
+                editor.update(cx, |editor, cx| {
+                    let range = editor.text().offset_to_offset_utf16(edit.range.start)
+                        ..editor.text().offset_to_offset_utf16(edit.range.end);
+                    editor.replace_text_in_range(Some(range), &edit.text, window, cx);
+                    editor.set_selected_range(edit.cursor..edit.cursor, cx);
+                });
+                return;
+            }
+        }
+        window.dispatch_action(Box::new(enter), cx);
+    }
+
+    pub fn edit_word(&mut self, action: WordAction, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = &self.state.editor.editor_state
+            && editor.read(cx).focus_handle(cx).is_focused(window)
+        {
+            if let Some(buffer) =
+                self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get(&id))
+            {
+                buffer.completion_provider.dismiss(cx);
+            }
+            editor.update(cx, |editor, cx| {
+                let selection = editor.selected_range();
+                let cursor = editor.cursor();
+                let target = code_word_boundary(&editor.value(), cursor, action.forward());
+                match action {
+                    WordAction::DeleteBackward | WordAction::DeleteForward => {
+                        editor.dismiss_lsp_overlays(cx);
+                        let range = if selection.is_empty() {
+                            cursor.min(target)..cursor.max(target)
+                        } else {
+                            selection
+                        };
+                        let range = editor.text().offset_to_offset_utf16(range.start)
+                            ..editor.text().offset_to_offset_utf16(range.end);
+                        editor.replace_text_in_range(Some(range), "", window, cx);
+                    }
+                    WordAction::SelectBackward | WordAction::SelectForward => {
+                        let anchor =
+                            if cursor == selection.start { selection.end } else { selection.start };
+                        // The native setter preserves reversed selections when end < start.
+                        editor.set_selected_range(anchor..target, cx);
+                    }
+                    WordAction::MoveBackward | WordAction::MoveForward => {
+                        editor.set_selected_range(target..target, cx);
+                    }
+                }
+            });
+            return;
+        }
+        let native_action: Box<dyn Action> = match action {
+            WordAction::DeleteBackward => Box::new(input::DeleteToPreviousWordStart),
+            WordAction::DeleteForward => Box::new(input::DeleteToNextWordEnd),
+            WordAction::MoveBackward => Box::new(input::MoveToPreviousWord),
+            WordAction::MoveForward => Box::new(input::MoveToNextWord),
+            WordAction::SelectBackward => Box::new(input::SelectToPreviousWordStart),
+            WordAction::SelectForward => Box::new(input::SelectToNextWordEnd),
         };
-        let text = editor_state.read(cx).value().to_string();
-        self.state.editor.current_text = text.clone();
-        self.state.editor.auto_pair.sync(&text);
-        self.app_state.update(cx, |state, _cx| {
-            state.set_forge_tab_content(tab_id, text);
-        });
+        window.dispatch_action(native_action, cx);
+    }
+
+    pub fn trigger_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab_id) = self.state.editor.active_tab_id else { return };
+        let Some(buffer) = self.state.editor.buffers.get(&tab_id) else { return };
+        buffer.completion_provider.trigger(window, cx);
+    }
+
+    pub fn navigate_completion(
+        &mut self,
+        delta: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(buffer) =
+            self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get(&id))
+            && buffer.editor_state.read(cx).focus_handle(cx).is_focused(window)
+            && buffer.completion_menu.update(cx, |menu, cx| menu.navigate(delta, window, cx))
+        {
+            return;
+        }
+        let action: Box<dyn Action> =
+            if delta < 0 { Box::new(input::MoveUp) } else { Box::new(input::MoveDown) };
+        window.dispatch_action(action, cx);
     }
 
     pub fn handle_execute_selection_or_statement(
@@ -117,52 +271,62 @@ impl ForgeView {
         if snippet.is_empty() { None } else { Some(snippet.to_string()) }
     }
 
-    pub fn sync_active_tab_content(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        force: bool,
-    ) {
+    pub fn sync_active_tab_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_id = self.app_state.read(cx).active_forge_tab_id();
-        let same_tab = active_id == self.state.editor.active_tab_id;
-        if !force && same_tab {
-            let stored = active_id
-                .and_then(|id| self.app_state.read(cx).forge_tab_content(id))
-                .unwrap_or("");
-            if stored == self.state.editor.current_text {
-                return;
+        let switched = active_id != self.state.editor.active_tab_id;
+        if switched {
+            self.state.editor.completion_request_id.fetch_add(1, Ordering::AcqRel);
+            if let Some(buffer) =
+                self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get(&id))
+            {
+                buffer.completion_provider.dismiss(cx);
             }
-        } else {
-            self.save_current_content(cx);
+            if let Some(editor) = &self.state.editor.editor_state {
+                editor.update(cx, |editor, cx| editor.dismiss_lsp_overlays(cx));
+            }
             self.state.editor.active_tab_id = active_id;
+            self.state.editor.editor_focus_requested = true;
         }
         let Some(active_id) = active_id else {
+            self.state.editor.editor_state = None;
             return;
         };
 
-        let content =
-            self.app_state.read(cx).forge_tab_content(active_id).unwrap_or("").to_string();
-
-        self.state.editor.current_text = content.clone();
-        self.state.editor.auto_pair.sync(&content);
-        if let Some(editor_state) = &self.state.editor.editor_state {
-            editor_state.update(cx, |editor, cx| {
-                editor.set_value(content.clone(), window, cx);
-            });
+        let stored = self.app_state.read(cx).forge_tab_content(active_id).unwrap_or("");
+        let created = !self.state.editor.buffers.contains_key(&active_id);
+        let externally_changed = self
+            .state
+            .editor
+            .buffers
+            .get(&active_id)
+            .is_some_and(|buffer| buffer.content != stored);
+        let content = (created || externally_changed).then(|| stored.to_string());
+        if created {
+            self.create_editor_buffer(active_id, content.clone().unwrap(), window, cx);
+        }
+        let buffer = self.state.editor.buffers.get_mut(&active_id).unwrap();
+        let editor_state = buffer.editor_state.clone();
+        if externally_changed && let Some(content) = &content {
+            buffer.completion_provider.dismiss(cx);
+            buffer.content.clone_from(content);
+            buffer.auto_pair.sync(content);
+            // Loading a saved query is an edit; changing tabs is not.
+            editor_state.update(cx, |editor, cx| editor.replace_all(content.clone(), window, cx));
+        }
+        self.state.editor.editor_state = Some(editor_state.clone());
+        if created || externally_changed || switched {
             let pending_cursor = self
                 .app_state
                 .update(cx, |state, _cx| state.take_forge_tab_pending_cursor(active_id));
             if let Some(offset) = pending_cursor {
                 editor_state.update(cx, |editor, cx| {
-                    let safe_offset = offset.min(editor.text().len());
-                    let position = editor.text().offset_to_position(safe_offset);
-                    editor.set_cursor_position(position, window, cx);
+                    editor.set_selected_range(offset..offset, cx);
                 });
             }
         }
-
-        // Schema warm-up: parse content to find collection, pre-fetch schema fields
-        self.warm_up_schema(&content, cx);
+        if let Some(content) = content {
+            self.warm_up_schema(&content, cx);
+        }
     }
 
     fn warm_up_schema(&self, content: &str, cx: &mut Context<Self>) {
@@ -192,152 +356,10 @@ impl ForgeView {
             return;
         }
 
-        let provider = self.state.editor.completion_provider.clone();
-        let editor_state = self.state.editor.editor_state.clone();
-        if let (Some(provider), Some(editor_state)) = (provider, editor_state) {
-            editor_state.update(cx, |_editor, cx| {
-                provider.schedule_schema_sample(&collection, cx);
-            });
-        }
-    }
-
-    pub fn handle_editor_change(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.state.editor.current_text = text.to_string();
-        self.state.editor.auto_pair.sync(text);
-        if let Some(tab_id) = self.state.editor.active_tab_id {
-            let content = self.state.editor.current_text.clone();
-            self.app_state.update(cx, |state, _cx| {
-                state.set_forge_tab_content(tab_id, content);
-            });
-        }
-    }
-
-    fn try_auto_pair(
-        &mut self,
-        state: &gpui::Entity<InputState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let current = state.read(cx).value().to_string();
-        let cursor = state.read(cx).cursor();
-        let in_comment = if cursor > 0 && cursor <= current.len() {
-            parse_context(&current, cursor.saturating_sub(1)).in_comment
-        } else {
-            false
-        };
-        self.state.editor.auto_pair.try_auto_pair(state, in_comment, window, cx)
-    }
-}
-
-fn apply_custom_indent(
-    state: &mut InputState,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) -> bool {
-    let text = state.value().to_string();
-    let cursor = state.cursor();
-    if cursor == 0 || cursor > text.len() {
-        return false;
-    }
-
-    let bytes = text.as_bytes();
-    if bytes[cursor - 1] != b'\n' {
-        return false;
-    }
-
-    // Read indent config from editor state
-    let config = IndentConfig {
-        width: state.current_tab_size().tab_size,
-        use_tabs: state.current_tab_size().hard_tabs,
-    };
-
-    let mut prev_non_ws = None;
-    let mut idx = cursor - 1;
-    while idx > 0 {
-        idx -= 1;
-        let ch = bytes[idx];
-        if !ch.is_ascii_whitespace() {
-            prev_non_ws = Some((idx, ch));
-            break;
-        }
-    }
-
-    let mut next_non_ws = None;
-    let mut j = cursor;
-    while j < bytes.len() {
-        let ch = bytes[j];
-        if !ch.is_ascii_whitespace() {
-            next_non_ws = Some((j, ch));
-            break;
-        }
-        j += 1;
-    }
-
-    let mut base_line_end = cursor - 1;
-    while base_line_end > 0 && bytes[base_line_end - 1] == b'\n' {
-        base_line_end -= 1;
-    }
-
-    let mut base_line_start = base_line_end;
-    while base_line_start > 0 && bytes[base_line_start - 1] != b'\n' {
-        base_line_start -= 1;
-    }
-
-    // If the previous line is empty, walk back to find a non-empty line.
-    while base_line_start < base_line_end
-        && text[base_line_start..base_line_end].trim().is_empty()
-        && base_line_start > 0
-    {
-        let mut scan = base_line_start - 1;
-        while scan > 0 && bytes[scan - 1] != b'\n' {
-            scan -= 1;
-        }
-        base_line_end = base_line_start - 1;
-        base_line_start = scan;
-    }
-
-    let mut indent_end = base_line_start;
-    while indent_end < bytes.len() {
-        let ch = bytes[indent_end];
-        if ch == b'\n' || !ch.is_ascii_whitespace() {
-            break;
-        }
-        indent_end += 1;
-    }
-    let base_indent = text.get(base_line_start..indent_end).unwrap_or("");
-
-    let prev_char = prev_non_ws.map(|(_, ch)| ch as char);
-    let next_char = next_non_ws.map(|(_, ch)| ch as char);
-
-    let result = indent_after_enter(prev_char, next_char, base_indent, &config);
-
-    match result {
-        IndentResult::None => false,
-        IndentResult::Simple(indent) => {
-            // Replace any auto-inserted horizontal whitespace after the newline.
-            let mut ws_end = cursor;
-            while ws_end < bytes.len() && matches!(bytes[ws_end], b' ' | b'\t') {
-                ws_end += 1;
-            }
-            let range = state.text().offset_to_offset_utf16(cursor)
-                ..state.text().offset_to_offset_utf16(ws_end);
-            state.replace_text_in_range(Some(range), &indent, window, cx);
-            let position = state.text().offset_to_position(cursor + indent.len());
-            state.set_cursor_position(position, window, cx);
-            true
-        }
-        IndentResult::BetweenBraces { inner, outer } => {
-            let next_idx = next_non_ws.map(|(idx, _)| idx).unwrap_or(cursor);
-            // Normalize the between-braces region to exactly one inner line.
-            debug_assert!(cursor >= 1, "between-braces indent requires newline at cursor - 1");
-            let start = cursor - 1; // include the newline inserted by Enter
-            let insertion = format!("\n{inner}\n{outer}");
-            let range = state.text().offset_to_offset_utf16(start)
-                ..state.text().offset_to_offset_utf16(next_idx);
-            state.replace_text_in_range(Some(range), &insertion, window, cx);
-            let position = state.text().offset_to_position(start + 1 + inner.len());
-            state.set_cursor_position(position, window, cx);
-            true
+        if let Some(buffer) =
+            self.state.editor.active_tab_id.and_then(|id| self.state.editor.buffers.get(&id))
+        {
+            buffer.completion_provider.schedule_schema_sample(&collection, cx);
         }
     }
 }

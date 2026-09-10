@@ -1,7 +1,8 @@
 //! Dialog helper utilities to reduce boilerplate in dialog creation.
 
-use gpui::*;
-use gpui_component::WindowExt as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::*;
 
 use crate::components::Button;
 

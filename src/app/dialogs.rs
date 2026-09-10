@@ -1,7 +1,7 @@
-use gpui::*;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::InputState;
+use gpui_kit::*;
 
 use crate::components::{
     ConnectionIdentity, FormField, cancel_button, connection_identity_badge, primary_button,
@@ -51,43 +51,41 @@ pub(crate) fn open_create_database_dialog(
                 let state = state.clone();
                 let db_state = db_state_save.clone();
                 let col_state = col_state_save.clone();
-                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
-                    let state = state.clone();
-                    let db_state = db_state.clone();
-                    let col_state = col_state.clone();
-                    vec![
-                        cancel_button("cancel-db"),
-                        primary_button("create-db", "Create", move |window, cx| {
-                            let db = db_state.read(cx).value().to_string();
-                            let col = col_state.read(cx).value().to_string();
-                            if db.trim().is_empty() || col.trim().is_empty() {
-                                return;
-                            }
-                            let Some(connection_id) = state.read(cx).selected_connection_id()
-                            else {
-                                return;
-                            };
-                            let db = db.trim().to_string();
-                            let col = col.trim().to_string();
-                            let state_for_write = state.clone();
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    connection_id,
-                                    format!("{db}.{col}"),
-                                    "Create a database and its initial collection",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |window, cx| {
-                                    window.close_dialog(cx);
-                                    AppCommands::create_database(state_for_write, db, col, cx);
-                                },
-                            );
-                        }),
-                    ]
-                }
+
+                let state = state.clone();
+                let db_state = db_state.clone();
+                let col_state = col_state.clone();
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-db"),
+                    primary_button("create-db", "Create", move |window, cx| {
+                        let db = db_state.read(cx).value().to_string();
+                        let col = col_state.read(cx).value().to_string();
+                        if db.trim().is_empty() || col.trim().is_empty() {
+                            return;
+                        }
+                        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+                            return;
+                        };
+                        let db = db.trim().to_string();
+                        let col = col.trim().to_string();
+                        let state_for_write = state.clone();
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                format!("{db}.{col}"),
+                                "Create a database and its initial collection",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |window, cx| {
+                                window.close_dialog(cx);
+                                AppCommands::create_database(state_for_write, db, col, cx);
+                            },
+                        );
+                    }),
+                ])
             })
     });
 }
@@ -118,48 +116,46 @@ pub(crate) fn open_create_collection_dialog(
                 let state = state.clone();
                 let database = database.clone();
                 let col_state = col_state_save.clone();
-                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
-                    let state = state.clone();
-                    let database = database.clone();
-                    let col_state = col_state.clone();
-                    vec![
-                        cancel_button("cancel-collection"),
-                        primary_button("create-collection", "Create", move |window, cx| {
-                            let col = col_state.read(cx).value().to_string();
-                            if col.trim().is_empty() {
-                                return;
-                            }
-                            let Some(connection_id) = state.read(cx).selected_connection_id()
-                            else {
-                                return;
-                            };
-                            let collection = col.trim().to_string();
-                            let state_for_write = state.clone();
-                            let database_for_write = database.clone();
-                            let target = format!("{database}.{collection}");
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    connection_id,
-                                    target,
-                                    "Create a collection",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |window, cx| {
-                                    window.close_dialog(cx);
-                                    AppCommands::create_collection(
-                                        state_for_write,
-                                        database_for_write,
-                                        collection,
-                                        cx,
-                                    );
-                                },
-                            );
-                        }),
-                    ]
-                }
+
+                let state = state.clone();
+                let database = database.clone();
+                let col_state = col_state.clone();
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-collection"),
+                    primary_button("create-collection", "Create", move |window, cx| {
+                        let col = col_state.read(cx).value().to_string();
+                        if col.trim().is_empty() {
+                            return;
+                        }
+                        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+                            return;
+                        };
+                        let collection = col.trim().to_string();
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        let target = format!("{database}.{collection}");
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                target,
+                                "Create a collection",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |window, cx| {
+                                window.close_dialog(cx);
+                                AppCommands::create_collection(
+                                    state_for_write,
+                                    database_for_write,
+                                    collection,
+                                    cx,
+                                );
+                            },
+                        );
+                    }),
+                ])
             })
     });
 }
@@ -193,52 +189,50 @@ pub(crate) fn open_rename_collection_dialog(
                 let database = database.clone();
                 let collection = collection.clone();
                 let name_state = name_state_save.clone();
-                move |_ok_fn, _cancel_fn, _window: &mut Window, _cx: &mut App| {
-                    let state = state.clone();
-                    let database = database.clone();
-                    let collection = collection.clone();
-                    let name_state = name_state.clone();
-                    vec![
-                        cancel_button("cancel-rename-collection"),
-                        primary_button("rename-collection", "Rename", move |window, cx| {
-                            let new_name = name_state.read(cx).value().to_string();
-                            let new_name = new_name.trim();
-                            if new_name.is_empty() || new_name == collection.as_str() {
-                                return;
-                            }
-                            let Some(connection_id) = state.read(cx).selected_connection_id()
-                            else {
-                                return;
-                            };
-                            let new_name = new_name.to_string();
-                            let state_for_write = state.clone();
-                            let database_for_write = database.clone();
-                            let collection_for_write = collection.clone();
-                            let target = format!("{database}.{collection} → {database}.{new_name}");
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    connection_id,
-                                    target,
-                                    "Rename a collection",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |window, cx| {
-                                    window.close_dialog(cx);
-                                    AppCommands::rename_collection(
-                                        state_for_write,
-                                        database_for_write,
-                                        collection_for_write,
-                                        new_name,
-                                        cx,
-                                    );
-                                },
-                            );
-                        }),
-                    ]
-                }
+
+                let state = state.clone();
+                let database = database.clone();
+                let collection = collection.clone();
+                let name_state = name_state.clone();
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-rename-collection"),
+                    primary_button("rename-collection", "Rename", move |window, cx| {
+                        let new_name = name_state.read(cx).value().to_string();
+                        let new_name = new_name.trim();
+                        if new_name.is_empty() || new_name == collection.as_str() {
+                            return;
+                        }
+                        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+                            return;
+                        };
+                        let new_name = new_name.to_string();
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        let collection_for_write = collection.clone();
+                        let target = format!("{database}.{collection} → {database}.{new_name}");
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                target,
+                                "Rename a collection",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |window, cx| {
+                                window.close_dialog(cx);
+                                AppCommands::rename_collection(
+                                    state_for_write,
+                                    database_for_write,
+                                    collection_for_write,
+                                    new_name,
+                                    cx,
+                                );
+                            },
+                        );
+                    }),
+                ])
             })
     });
 }

@@ -9,11 +9,11 @@ mod simple;
 
 pub use query_modal::QueryEditField;
 
-use gpui::*;
-use gpui_component::input::InputState;
-use gpui_component::select::{SearchableVec, SelectState};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
+use gpui_kit::component::input::{EditorState, InputState};
+use gpui_kit::component::select::{SearchableVec, SelectState};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, IndexPath, Sizable as _};
+use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
@@ -59,7 +59,7 @@ pub struct TransferView {
 
     // JSON editor modal state
     query_edit_modal: Option<QueryEditField>, // Which field is being edited (None = closed)
-    query_edit_input: Option<Entity<InputState>>, // Textarea content for modal
+    query_edit_input: Option<Entity<EditorState>>, // Textarea content for modal
     query_edit_transfer_id: Option<Uuid>,
     query_edit_previous_focus: Option<FocusHandle>,
 }
@@ -96,14 +96,14 @@ impl TransferView {
         }
     }
 
-    pub(crate) fn focus(&self, window: &mut Window, cx: &App) {
+    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         let active_transfer = self.state.read(cx).active_transfer_tab_id();
         if self.query_edit_transfer_id == active_transfer
             && let Some(input) = self.query_edit_input.as_ref()
         {
-            window.focus(&input.read(cx).focus_handle(cx));
+            window.focus(&input.read(cx).focus_handle(cx), cx);
         } else {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         }
     }
 }

@@ -12,15 +12,13 @@ fi
 # Verify sidecar source compiles without errors (bundle-only, no binary output)
 cd "$SIDECAR_DIR"
 
-if [ ! -d node_modules ]; then
-  bun install
-fi
+bun install --frozen-lockfile
 
 TMP_OUT="$(mktemp)"
 trap 'rm -f "$TMP_OUT"' EXIT
 
 bun build ./src/bun-entry.ts \
-  --target bun \
+  --target bun --format=esm --minify --keep-names \
   --outfile "$TMP_OUT" \
   --external electron \
   --external os-dns-native \

@@ -1,8 +1,9 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::input::{InputEvent, InputState, Position, RopeExt, TabSize};
-use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_component::tree::TreeState;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_kit::component::tree::TreeState;
+use gpui_kit::*;
 
 use crate::state::app_state::PipelineState;
 use crate::state::{AppCommands, SessionKey, StatusMessage};
@@ -31,7 +32,6 @@ impl CollectionView {
         let results = self.render_aggregation_results(&pipeline, session_key, window, cx);
 
         let top_split = h_resizable("agg-top-split")
-            .handle_line_visible(false)
             .child(
                 resizable_panel().size(px(280.0)).size_range(px(220.0)..px(480.0)).child(
                     div()
@@ -68,7 +68,6 @@ impl CollectionView {
             .child(div().flex().flex_1().min_h(px(0.0)).child(top_split));
 
         let main_split = v_resizable("agg-main-split")
-            .handle_line_visible(false)
             .child(
                 resizable_panel().size(px(240.0)).size_range(px(180.0)..px(900.0)).child(
                     div()
@@ -119,8 +118,8 @@ impl CollectionView {
     fn ensure_aggregation_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.aggregation_stage_body_state.is_none() {
             let body_state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("javascript")
+                EditorState::new(window, cx)
+                    .language("javascript")
                     .line_number(true)
                     .searchable(true)
                     .soft_wrap(true)
@@ -151,27 +150,17 @@ impl CollectionView {
                                 cx.notify();
                             });
                         }
-                        InputEvent::PressEnter { secondary } => {
-                            if *secondary {
-                                let Some(session_key) = view.view_model.current_session() else {
-                                    return;
-                                };
-                                crate::views::documents::request_run_aggregation(
-                                    view.state.clone(),
-                                    session_key,
-                                    false,
-                                    window,
-                                    cx,
-                                );
+                        InputEvent::PressEnter { secondary: true, .. } => {
+                            let Some(session_key) = view.view_model.current_session() else {
                                 return;
-                            }
-                            let mut adjusted = false;
-                            state.update(cx, |state, cx| {
-                                adjusted = auto_indent_between_braces(state, window, cx);
-                            });
-                            if adjusted {
-                                cx.notify();
-                            }
+                            };
+                            crate::views::documents::request_run_aggregation(
+                                view.state.clone(),
+                                session_key,
+                                false,
+                                window,
+                                cx,
+                            );
                         }
                         _ => {}
                     }
@@ -317,70 +306,4 @@ impl CollectionView {
             }
         }
     }
-}
-
-fn auto_indent_between_braces(
-    state: &mut InputState,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) -> bool {
-    let text = state.value().to_string();
-    let cursor = state.cursor();
-    if cursor >= text.len() {
-        return false;
-    }
-
-    let bytes = text.as_bytes();
-    let close = bytes[cursor];
-    let open = match close {
-        b'}' => b'{',
-        b']' => b'[',
-        _ => return false,
-    };
-
-    let mut line_start = cursor;
-    while line_start > 0 {
-        if bytes[line_start - 1] == b'\n' {
-            break;
-        }
-        line_start -= 1;
-    }
-
-    let current_indent = &text[line_start..cursor];
-    if !current_indent.chars().all(|c| c.is_whitespace()) {
-        return false;
-    }
-
-    let mut idx = line_start;
-    let mut prev_non_ws = None;
-    while idx > 0 {
-        let b = bytes[idx - 1];
-        if matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
-            idx -= 1;
-            continue;
-        }
-        prev_non_ws = Some(b);
-        break;
-    }
-
-    if prev_non_ws != Some(open) {
-        return false;
-    }
-
-    let extra_indent = " ".repeat(TabSize::default().tab_size);
-    if extra_indent.is_empty() {
-        return false;
-    }
-
-    let insert = format!("{extra_indent}\n{current_indent}");
-    let mut new_text = String::with_capacity(text.len() + insert.len());
-    new_text.push_str(&text[..cursor]);
-    new_text.push_str(&insert);
-    new_text.push_str(&text[cursor..]);
-
-    state.set_value(new_text, window, cx);
-    let new_cursor_offset = cursor + extra_indent.len();
-    let position = state.text().offset_to_position(new_cursor_offset);
-    state.set_cursor_position(Position::new(position.line, position.character), window, cx);
-    true
 }

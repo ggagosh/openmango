@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::UniformListScrollHandle;
+use gpui_kit::UniformListScrollHandle;
 
 use crate::state::SessionDocument;
 
@@ -28,4 +28,4 @@ pub struct ResultViewProps {
     pub view_mode: ResultViewMode,
 }
 
-pub type ToggleNodeCallback = Arc<dyn Fn(String, &mut gpui::App) + Send + Sync>;
+pub type ToggleNodeCallback = Arc<dyn Fn(String, &mut gpui_kit::App) + Send + Sync>;

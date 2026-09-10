@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use gpui::{
+use gpui_kit::{
     Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, KeyContext,
     Keystroke, actions,
 };
@@ -97,6 +97,17 @@ actions!(
         ClearForgeOutput,
         FocusForgeEditor,
         FocusForgeOutput,
+        AcceptForgeCompletion,
+        TriggerForgeCompletion,
+        PreviousForgeCompletion,
+        NextForgeCompletion,
+        InsertForgeNewline,
+        DeleteForgeWordBackward,
+        DeleteForgeWordForward,
+        MoveForgeWordBackward,
+        MoveForgeWordForward,
+        SelectForgeWordBackward,
+        SelectForgeWordForward,
         FindInForgeOutput,
         CopyAs,
         CopyAsJson,
@@ -228,6 +239,42 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-e", FocusForgeEditor, Some("ForgeView")),
         KeyBinding::new("cmd-o", FocusForgeOutput, Some("ForgeView")),
         KeyBinding::new("ctrl-o", FocusForgeOutput, Some("ForgeView")),
+        KeyBinding::new("tab", AcceptForgeCompletion, Some("ForgeView > Input")),
+        KeyBinding::new("ctrl-space", TriggerForgeCompletion, Some("ForgeView > Input")),
+        KeyBinding::new("up", PreviousForgeCompletion, Some("ForgeView > Input")),
+        KeyBinding::new("down", NextForgeCompletion, Some("ForgeView > Input")),
+        KeyBinding::new("enter", InsertForgeNewline, Some("ForgeView > Input")),
+        KeyBinding::new("return", InsertForgeNewline, Some("ForgeView > Input")),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-backspace" } else { "ctrl-backspace" },
+            DeleteForgeWordBackward,
+            Some("ForgeView > Input"),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-delete" } else { "ctrl-delete" },
+            DeleteForgeWordForward,
+            Some("ForgeView > Input"),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-left" } else { "ctrl-left" },
+            MoveForgeWordBackward,
+            Some("ForgeView > Input"),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-right" } else { "ctrl-right" },
+            MoveForgeWordForward,
+            Some("ForgeView > Input"),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-shift-left" } else { "ctrl-shift-left" },
+            SelectForgeWordBackward,
+            Some("ForgeView > Input"),
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") { "alt-shift-right" } else { "ctrl-shift-right" },
+            SelectForgeWordForward,
+            Some("ForgeView > Input"),
+        ),
         KeyBinding::new("cmd-f", FindInForgeOutput, Some("ForgeView && !Input")),
         KeyBinding::new("ctrl-f", FindInForgeOutput, Some("ForgeView && !Input")),
         KeyBinding::new("cmd-n", InsertDocument, Some("Documents && !Indexes && !Stats")),
@@ -560,7 +607,7 @@ pub fn effective_shortcuts_for_action(
     shortcuts
 }
 
-pub fn format_keystroke(event: &gpui::KeystrokeEvent) -> String {
+pub fn format_keystroke(event: &gpui_kit::KeystrokeEvent) -> String {
     let modifiers = event.keystroke.modifiers;
     let mut parts = Vec::new();
     if modifiers.platform {
@@ -820,7 +867,7 @@ fn context_samples() -> Vec<Vec<KeyContext>> {
 mod tests {
     use std::collections::HashSet;
 
-    use gpui::{KeyBindingContextPredicate, KeyContext};
+    use gpui_kit::{KeyBindingContextPredicate, KeyContext};
 
     use super::*;
 

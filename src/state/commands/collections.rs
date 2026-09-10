@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::state::{AppEvent, AppState, StatusMessage};
@@ -46,9 +46,9 @@ impl AppCommands {
             let state = state.clone();
             let database = database.clone();
             let collection = collection.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             let Some(conn_id) = connection_id else {
@@ -132,9 +132,9 @@ impl AppCommands {
             let database = database.clone();
             let from = from.clone();
             let to = to.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             let selection_changed = state.selected_connection_id()
@@ -220,9 +220,9 @@ impl AppCommands {
             let state = state.clone();
             let database = database.clone();
             let collection = collection.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             if let Some(conn) = state.active_connection_mut(connection_id)
@@ -288,10 +288,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let database = database.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<Vec<String>, crate::error::Error> = task.await;
 
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(collections) => {
                         state.update(cx, |state, cx| {
                             if let Some(conn) = state.active_connection_mut(connection_id) {

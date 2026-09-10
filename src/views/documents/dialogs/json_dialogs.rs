@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::state::{AppState, SessionKey};

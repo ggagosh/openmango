@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use gpui::AnyWindowHandle;
+use gpui_kit::AnyWindowHandle;
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 

@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, AsyncApp, Entity};
+use gpui_kit::{App, AppContext as _, AsyncApp, Entity};
 use uuid::Uuid;
 
 use crate::actions::ApprovalValidation;
@@ -104,17 +104,15 @@ impl AppCommands {
                     lease,
                 ))
             });
-            let Ok(Ok((operation_id, executor, broker, runtime, connections, cancellation, lease))) =
+            let Ok((operation_id, executor, broker, runtime, connections, cancellation, lease)) =
                 prepared
             else {
-                let message = prepared
-                    .ok()
-                    .and_then(Result::err)
-                    .unwrap_or_else(|| "Action approval failed".to_string());
-                let _ = cx.update(|cx| report(&state, &message, cx));
+                let message =
+                    prepared.err().unwrap_or_else(|| "Action approval failed".to_string());
+                cx.update(|cx| report(&state, &message, cx));
                 return;
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |_state, cx| {
                     cx.emit(AppEvent::AgentActivityChanged);
                     cx.notify();
@@ -128,7 +126,7 @@ impl AppCommands {
                 .map_err(|_| "Operation task stopped unexpectedly".to_string())
                 .and_then(|result| result);
             broker.unregister_cancellation(operation_id);
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     state.set_status_message(Some(match result {
                         Ok(operation) => StatusMessage::info(format!(

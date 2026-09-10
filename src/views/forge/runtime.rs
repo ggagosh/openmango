@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::*;
+use gpui_kit::*;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -36,6 +36,15 @@ impl ForgeRuntime {
         let bridge = MongoshBridge::new()?;
         Ok(bridge)
     }
+
+    pub fn dispose_sessions(&self, session_ids: &[Uuid]) {
+        let bridge = self.bridge.lock().ok().and_then(|guard| guard.clone());
+        if let Some(bridge) = bridge {
+            for &session_id in session_ids {
+                let _ = bridge.dispose_session(session_id);
+            }
+        }
+    }
 }
 
 pub fn active_forge_session_info(
@@ -68,7 +77,6 @@ fn ensure_forge_execution_allowed(
 
 impl ForgeView {
     pub fn handle_execute_query(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.state.editor.current_text = text.to_string();
         let (
             session_id,
             uri,
@@ -217,7 +225,6 @@ impl ForgeView {
                                 );
                                 this.state.output.last_result = None;
                             } else if this.state.output.result_pages.is_empty() {
-                                super::controller::ForgeController::clear_results(this);
                                 if Self::is_trivial_printable(&eval.printable) {
                                     this.state.output.last_result = None;
                                 } else {
@@ -228,7 +235,9 @@ impl ForgeView {
                             }
                             this.state.output.last_error = None;
                             super::controller::ForgeController::sync_output_tab(this);
-                            this.append_eval_output(seq, &eval.printable);
+                            if !eval.is_undefined {
+                                this.append_eval_output(seq, &eval.printable);
+                            }
                             if let Some(forge_key) = forge_key.as_ref() {
                                 this.app_state.update(cx, |state, cx| {
                                     if let Err(error) = state
@@ -420,15 +429,33 @@ impl ForgeView {
         let mut rx = bridge.subscribe_events();
         cx.spawn(async move |view: WeakEntity<ForgeView>, cx: &mut AsyncApp| {
             loop {
-                let event = match rx.recv().await {
-                    Ok(event) => event,
+                let first = match rx.recv().await {
+                    Ok(event) => Ok(event),
                     Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(count)) => Err(count),
                 };
+                let mut batch = vec![first];
+                while batch.len() < 256 {
+                    match rx.try_recv() {
+                        Ok(event) => batch.push(Ok(event)),
+                        Err(broadcast::error::TryRecvError::Lagged(count)) => batch.push(Err(count)),
+                        Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
+                    }
+                }
 
                 let update_result = cx.update(|cx| {
                     view.update(cx, |this, cx| {
-                        this.handle_mongosh_event(event, cx);
+                        for entry in batch {
+                            match entry {
+                                Ok(event) => this.handle_mongosh_event(event, cx),
+                                Err(count) => {
+                                    this.state.output.skipped_output_events += count;
+                                    let run = this.state.output.active_run_id.unwrap_or_else(|| this.ensure_system_run());
+                                    this.append_output_lines(run, vec![format!("[Output stream skipped {count} events while catching up]")]);
+                                }
+                            }
+                        }
+                        cx.notify();
                     })
                 });
 

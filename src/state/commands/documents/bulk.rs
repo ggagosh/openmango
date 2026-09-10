@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::Document;
 
 use crate::state::{AppCommands, AppEvent, AppState, SessionKey};
@@ -26,9 +26,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<usize, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(inserted) => {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentsInserted { count: inserted };
@@ -73,10 +73,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<mongodb::results::UpdateResult, crate::error::Error> =
                     task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(result) => {
                         state.update(cx, |state, cx| {
                             state.clear_all_drafts(&session_key);
@@ -136,12 +136,12 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<
                     crate::connection::types::BulkReplaceResult,
                     crate::error::Error,
                 > = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(result) => {
                         state.update(cx, |state, cx| {
                             state.clear_all_drafts(&session_key);
@@ -192,9 +192,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<u64, crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(deleted) => {
                         state.update(cx, |state, cx| {
                             let event = AppEvent::DocumentsDeleted {

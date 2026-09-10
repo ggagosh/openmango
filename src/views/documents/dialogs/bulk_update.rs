@@ -1,11 +1,13 @@
 //! Bulk update/replace dialog for documents.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
-use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
-use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::*;
 use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, document_to_shell_string, parse_document_from_json};
@@ -24,8 +26,8 @@ pub struct BulkUpdateDialog {
     selected_doc: Option<DocumentKey>,
     scope: BulkUpdateScope,
     mode: BulkUpdateMode,
-    filter_state: Entity<InputState>,
-    update_state: Entity<InputState>,
+    filter_state: Entity<EditorState>,
+    update_state: Entity<EditorState>,
     error_message: Option<String>,
     updating: bool,
     cancellation: Option<crate::connection::types::CancellationToken>,
@@ -55,15 +57,15 @@ impl BulkUpdateDialog {
         cx: &mut Context<Self>,
     ) -> Self {
         let filter_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("javascript")
+            EditorState::new(window, cx)
+                .language("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
         });
         let update_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("javascript")
+            EditorState::new(window, cx)
+                .language("javascript")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
@@ -400,7 +402,7 @@ impl BulkUpdateDialog {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         styled_dropdown_button("bulk-scope", self.scope.label(), cx).dropdown_menu_with_anchor(
-            Corner::BottomLeft,
+            Anchor::BottomLeft,
             {
                 let view = view.clone();
                 move |menu: PopupMenu, _window, _cx| {
@@ -453,7 +455,7 @@ impl BulkUpdateDialog {
 
     fn mode_button(&self, view: Entity<Self>, cx: &mut Context<Self>) -> impl IntoElement {
         styled_dropdown_button("bulk-mode", self.mode.label(), cx).dropdown_menu_with_anchor(
-            Corner::BottomLeft,
+            Anchor::BottomLeft,
             {
                 let view = view.clone();
                 move |menu: PopupMenu, _window, _cx| {
@@ -527,7 +529,7 @@ impl Render for BulkUpdateDialog {
                         .child("Custom filter"),
                 )
                 .child(
-                    Input::new(&self.filter_state)
+                    Editor::new(&self.filter_state)
                         .font_family(crate::theme::fonts::mono())
                         .h(px(140.0))
                         .w_full()
@@ -586,7 +588,7 @@ impl Render for BulkUpdateDialog {
                             .child(update_label),
                     )
                     .child(
-                        Input::new(&self.update_state)
+                        Editor::new(&self.update_state)
                             .font_family(crate::theme::fonts::mono())
                             .h(px(240.0))
                             .w_full()

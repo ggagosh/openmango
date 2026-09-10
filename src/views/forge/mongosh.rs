@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -55,6 +55,8 @@ pub struct RuntimeEvaluationResult {
     #[allow(dead_code)]
     pub result_type: Option<String>,
     pub printable: serde_json::Value,
+    #[serde(default)]
+    pub is_undefined: bool,
     #[allow(dead_code)]
     pub source: Option<serde_json::Value>,
 }
@@ -289,20 +291,6 @@ impl MongoshBridge {
         }
 
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn prune_sessions(&self, keep: &HashSet<Uuid>) {
-        let session_ids: Vec<Uuid> = match self.sessions.lock() {
-            Ok(sessions) => sessions.keys().cloned().collect(),
-            Err(_) => return,
-        };
-
-        for session_id in session_ids {
-            if !keep.contains(&session_id) {
-                let _ = self.dispose_session(session_id);
-            }
-        }
     }
 
     fn send_request(

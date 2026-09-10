@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{Context, Window};
+use gpui_kit::{Context, Window};
 
 use super::ForgeView;
 use super::runtime::ForgeRuntime;
@@ -36,13 +36,7 @@ impl ForgeController {
 
     pub fn clear_output(view: &mut ForgeView, window: &mut Window, cx: &mut Context<ForgeView>) {
         view.clear_output_runs();
-        if let Some(raw_state) = &view.state.output.raw_output_state {
-            view.state.output.raw_output_programmatic = true;
-            raw_state.update(cx, |state, cx| {
-                state.set_value(String::new(), window, cx);
-            });
-            view.state.output.raw_output_programmatic = false;
-        }
+        view.sync_raw_output(window, cx);
         cx.notify();
     }
 
@@ -55,14 +49,21 @@ impl ForgeController {
     }
 
     pub fn focus_output(view: &mut ForgeView, window: &mut Window, cx: &mut Context<ForgeView>) {
+        view.state.output.auto_select_results = false;
         match view.state.output.output_tab {
             ForgeOutputTab::Raw => {
                 let state = view.ensure_raw_output_state(window, cx);
+                view.sync_raw_output(window, cx);
                 state.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
             ForgeOutputTab::Results => {
+                if view.current_result_documents().is_none() {
+                    window.focus(&view.state.focus_handle, cx);
+                    cx.notify();
+                    return;
+                }
                 let state = view.ensure_results_search_state(window, cx);
                 state.update(cx, |state, cx| {
                     state.focus(window, cx);
@@ -72,15 +73,23 @@ impl ForgeController {
     }
 
     pub fn find_in_output(view: &mut ForgeView, window: &mut Window, cx: &mut Context<ForgeView>) {
+        view.state.output.auto_select_results = false;
         match view.state.output.output_tab {
             ForgeOutputTab::Raw => {
                 let state = view.ensure_raw_output_state(window, cx);
+                view.sync_raw_output(window, cx);
                 state.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
-                cx.dispatch_action(&gpui_component::input::Search);
+                cx.dispatch_action(&gpui_kit::component::input::Search);
             }
             ForgeOutputTab::Results => {
+                if view.current_result_documents().is_none() {
+                    view.state.output.output_tab = ForgeOutputTab::Raw;
+                    Self::find_in_output(view, window, cx);
+                    cx.notify();
+                    return;
+                }
                 let state = view.ensure_results_search_state(window, cx);
                 state.update(cx, |state, cx| {
                     state.focus(window, cx);
@@ -116,28 +125,16 @@ impl ForgeController {
                     let trimmed = line.trim();
                     if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
                 });
-                if let Some(values) = &payload {
-                    let normalized = ForgeView::format_payload_lines(values);
-                    if !normalized.is_empty() {
-                        view.append_output_lines(resolved_run_id, normalized);
-                    } else {
-                        view.append_output_lines(resolved_run_id, lines);
-                    }
-                } else {
-                    view.append_output_lines(resolved_run_id, lines);
-                }
+                // Console text is exactly what the shell printed; payloads are
+                // only for the structured result view.
+                view.append_output_lines(resolved_run_id, lines);
 
                 if let Some(values) = payload {
                     if let Some(active_run) = view.state.output.active_run_id
                         && resolved_run_id == active_run
                     {
                         let label = Self::take_run_print_label(view, resolved_run_id)
-                            .unwrap_or_else(|| {
-                                values
-                                    .first()
-                                    .map(ForgeView::default_result_label_for_value)
-                                    .unwrap_or_else(|| Self::default_result_label(view))
-                            });
+                            .unwrap_or_else(|| "Printed documents".to_string());
                         let total = values.len();
                         for (idx, value) in values.into_iter().enumerate() {
                             if let Some(docs) = ForgeView::result_documents(&value) {
@@ -146,7 +143,12 @@ impl ForgeController {
                                 } else {
                                     label.clone()
                                 };
-                                Self::push_result_page(view, tab_label, docs);
+                                Self::push_printed_result_page(
+                                    view,
+                                    resolved_run_id,
+                                    tab_label,
+                                    docs,
+                                );
                             }
                         }
                         Self::sync_output_tab(view);

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 
 use crate::components::file_picker::{FilePickerMode, open_file_dialog_async};
 use crate::connection::types::{
@@ -45,7 +45,7 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let path =
                     open_file_dialog_async(FilePickerMode::Save, filters, Some(default_name)).await;
 
@@ -87,12 +87,12 @@ impl AppCommands {
         projection: Option<mongodb::bson::Document>,
         column_widths: HashMap<String, f32>,
         column_order: Vec<String>,
-        cx: &mut gpui::AsyncApp,
+        cx: &mut gpui_kit::AsyncApp,
     ) {
         let cancellation = CancellationToken::new();
         let cancellation_for_task = cancellation.clone();
 
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             state.update(cx, |state, cx| {
                 state.set_export_progress(Some(ExportProgress {
                     count: 0,
@@ -108,7 +108,7 @@ impl AppCommands {
         let (tx, rx) = futures::channel::mpsc::unbounded::<u64>();
 
         let state_for_task = state.clone();
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             let task = cx.background_spawn({
                 let database = database.clone();
                 let collection = collection.clone();
@@ -187,14 +187,14 @@ impl AppCommands {
 
             cx.spawn({
                 let state = state_for_task.clone();
-                async move |cx: &mut gpui::AsyncApp| {
+                async move |cx: &mut gpui_kit::AsyncApp| {
                     use futures::StreamExt;
                     let mut rx = rx;
                     let progress_task = cx.spawn({
                         let state = state.clone();
-                        async move |cx: &mut gpui::AsyncApp| {
+                        async move |cx: &mut gpui_kit::AsyncApp| {
                             while let Some(count) = rx.next().await {
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     state.update(cx, |state, cx| {
                                         if let Some(progress) = state.export_progress_mut() {
                                             progress.count = count;
@@ -209,7 +209,7 @@ impl AppCommands {
                     let result = task.await;
                     progress_task.detach();
 
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             state.set_export_progress(None);
                             match result {
@@ -270,7 +270,7 @@ impl AppCommands {
 
         cx.spawn({
             let state = state.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let path =
                     open_file_dialog_async(FilePickerMode::Save, filters, Some(default_name)).await;
 
@@ -278,7 +278,7 @@ impl AppCommands {
                     return;
                 };
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::info("Exporting...")));
                         cx.notify();
@@ -302,9 +302,9 @@ impl AppCommands {
 
                     cx.spawn({
                         let state = state.clone();
-                        async move |cx: &mut gpui::AsyncApp| {
+                        async move |cx: &mut gpui_kit::AsyncApp| {
                             let result = task.await;
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 state.update(cx, |state, cx| {
                                     match result {
                                         Ok(count) => {

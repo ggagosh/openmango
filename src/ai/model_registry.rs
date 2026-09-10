@@ -1,4 +1,4 @@
-use gpui::{AppContext as _, AsyncApp, Entity, WeakEntity};
+use gpui_kit::{AppContext as _, AsyncApp, Entity, WeakEntity};
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::errors::AiError;
@@ -21,7 +21,7 @@ pub enum ModelCache {
 /// - Cloud providers with a configured API key: synchronously sets `Loaded(curated_list)`.
 /// - Cloud providers without an API key: sets `NoKey`.
 /// - Ollama: sets `Loading`, spawns a background task, writes `Loaded` / `Error` on completion.
-pub fn spawn_model_fetch<V: 'static>(state: &Entity<AppState>, cx: &mut gpui::Context<V>) {
+pub fn spawn_model_fetch<V: 'static>(state: &Entity<AppState>, cx: &mut gpui_kit::Context<V>) {
     let settings = state.read(cx).settings.ai.clone();
     let provider = settings.provider;
 
@@ -38,7 +38,7 @@ pub fn spawn_model_fetch<V: 'static>(state: &Entity<AppState>, cx: &mut gpui::Co
                 );
             cx.spawn(async move |_view: WeakEntity<V>, cx: &mut AsyncApp| {
                 let result: Result<Vec<String>, AiError> = task.await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |s, cx| {
                         s.ai_chat.cached_models = match result {
                             Ok(models) => ModelCache::Loaded(models),

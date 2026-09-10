@@ -1,10 +1,10 @@
 //! Mode-specific options panel rendering.
 
-use gpui::*;
-use gpui_component::button::Button as MenuButton;
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::select::{SearchableVec, Select, SelectState};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::button::Button as MenuButton;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::select::{SearchableVec, Select, SelectState};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 
 use crate::state::{
     AppState, BsonOutputFormat, Encoding, ExtendedJsonMode, InsertMode, TargetWriteMode,
@@ -25,8 +25,8 @@ fn target_behavior_dropdown(
         .label(current.label())
         .dropdown_caret(true)
         .rounded(borders::radius_sm())
-        .with_size(gpui_component::Size::XSmall)
-        .dropdown_menu_with_anchor(Corner::TopLeft, move |mut menu, _window, _cx| {
+        .with_size(gpui_kit::component::Size::XSmall)
+        .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _window, _cx| {
             for mode in [TargetWriteMode::Append, TargetWriteMode::Clear, TargetWriteMode::Drop] {
                 let state = state.clone();
                 menu = menu.item(PopupMenuItem::new(mode.label()).on_click(move |_, _, cx| {
@@ -64,8 +64,8 @@ pub(super) fn render_export_options(
                     .label(transfer_state.options.bson_output.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
-                    .with_size(gpui_component::Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+                    .with_size(gpui_kit::component::Size::XSmall)
+                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                         let s1 = state.clone();
                         let s2 = state.clone();
                         menu.item(PopupMenuItem::new("Folder").on_click(move |_, _, cx| {
@@ -114,8 +114,8 @@ pub(super) fn render_export_options(
                     .label(transfer_state.options.json_mode.label())
                     .dropdown_caret(true)
                     .rounded(borders::radius_sm())
-                    .with_size(gpui_component::Size::XSmall)
-                    .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+                    .with_size(gpui_kit::component::Size::XSmall)
+                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                         let s1 = state.clone();
                         let s2 = state.clone();
                         menu.item(PopupMenuItem::new("Relaxed").on_click(move |_, _, cx| {
@@ -318,8 +318,8 @@ pub(super) fn render_import_options(
             .label(transfer_state.options.encoding.label())
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
-            .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+            .with_size(gpui_kit::component::Size::XSmall)
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 menu.item(PopupMenuItem::new("UTF-8").on_click(move |_, _, cx| {
@@ -365,8 +365,8 @@ pub(super) fn render_import_options(
             .label(transfer_state.options.insert_mode.label())
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
-            .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+            .with_size(gpui_kit::component::Size::XSmall)
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 let s3 = state.clone();
@@ -499,8 +499,8 @@ pub(super) fn render_copy_options(
             .label(transfer_state.options.insert_mode.label())
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
-            .with_size(gpui_component::Size::XSmall)
-            .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _window, _cx| {
+            .with_size(gpui_kit::component::Size::XSmall)
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                 let s1 = state.clone();
                 let s2 = state.clone();
                 let s3 = state.clone();

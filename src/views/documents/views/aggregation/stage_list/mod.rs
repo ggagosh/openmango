@@ -9,9 +9,10 @@
 mod dialogs;
 mod stage_row;
 
-use gpui::Styled as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::Styled as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 
 use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::state::SessionKey;
@@ -52,7 +53,7 @@ impl CollectionView {
                     .gap(spacing::xs())
                     .child(
                         Button::new("aggregation-query-library")
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::BookOpen).xsmall())
                             .label("Library")
                             .tooltip("Query Library (Cmd/Ctrl+Shift+H)")
@@ -75,7 +76,7 @@ impl CollectionView {
                     )
                     .child(
                         Button::new("agg-import-pipeline")
-                            .compact()
+                            .xsmall()
                             .label("Import")
                             .tooltip("Import pipeline JSON")
                             .disabled(session_key.is_none())
@@ -97,7 +98,7 @@ impl CollectionView {
                     )
                     .child(
                         Button::new("agg-add-stage")
-                            .compact()
+                            .xsmall()
                             .icon(Icon::new(IconName::Plus).xsmall())
                             .label("Add Stage")
                             .tooltip("Add a pipeline stage")
@@ -155,8 +156,8 @@ impl CollectionView {
             .track_focus(&self.aggregation_focus)
             .on_mouse_down(MouseButton::Left, {
                 let focus = self.aggregation_focus.clone();
-                move |_, window, _cx| {
-                    window.focus(&focus);
+                move |_, window, cx| {
+                    window.focus(&focus, cx);
                 }
             })
             .child(header)
@@ -175,7 +176,7 @@ fn render_empty_state(
         .enumerate()
         .map(|(idx, operator)| {
             Button::new(("agg-quick-stage", idx))
-                .compact()
+                .xsmall()
                 .label(*operator)
                 .disabled(session_key.is_none())
                 .on_click({

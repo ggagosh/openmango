@@ -1,23 +1,28 @@
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use uuid::Uuid;
 
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, EditorState, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
-    InsertReplaceEdit, InsertTextFormat, Range,
+    InsertTextFormat, Range, TextEdit,
 };
 
 use super::logic::{
     METHODS, PIPELINE_OPERATORS, QUERY_OPERATORS, UPDATE_OPERATORS, collection_method_template,
-    db_method_template, label_from_template,
+    cursor_from_template, db_method_template, label_from_template,
 };
 use super::parser::{PositionKind, ScopeKind, parse_context};
 use super::runtime::ForgeRuntime;
 use super::runtime::active_forge_session_info;
 use super::types::{Suggestion, SuggestionKind};
+use crate::app::search::fuzzy_match_score;
 use crate::state::{AppState, SessionKey};
+use crate::views::editor_completion::EditorCompletionMenu;
 
 // ── Accumulator operators ──────────────────────────────────────────────────
 
@@ -58,10 +63,17 @@ struct CompletionIntent {
 
 // ── Provider ───────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct ForgeCompletionProvider {
     state: Entity<AppState>,
     runtime: Arc<ForgeRuntime>,
     request_id: Arc<AtomicU64>,
+    tab_id: Uuid,
+    editor: WeakEntity<EditorState>,
+    menu: WeakEntity<EditorCompletionMenu>,
+    window: AnyWindowHandle,
+    task: Rc<RefCell<Option<Task<()>>>>,
+    typed_change: Rc<Cell<bool>>,
 }
 
 impl ForgeCompletionProvider {
@@ -69,11 +81,100 @@ impl ForgeCompletionProvider {
         state: Entity<AppState>,
         runtime: Arc<ForgeRuntime>,
         request_id: Arc<AtomicU64>,
+        tab_id: Uuid,
+        editor: WeakEntity<EditorState>,
+        menu: WeakEntity<EditorCompletionMenu>,
+        window: AnyWindowHandle,
     ) -> Self {
-        Self { state, runtime, request_id }
+        Self {
+            state,
+            runtime,
+            request_id,
+            tab_id,
+            editor,
+            menu,
+            window,
+            task: Rc::new(RefCell::new(None)),
+            typed_change: Rc::new(Cell::new(false)),
+        }
     }
 
-    pub fn schedule_schema_sample(&self, collection: &str, cx: &mut Context<InputState>) {
+    pub fn dismiss(&self, cx: &mut App) -> bool {
+        self.task.borrow_mut().take();
+        if let Some(menu) = self.menu.upgrade() {
+            menu.update(cx, |menu, cx| menu.dismiss(cx))
+        } else {
+            self.request_id.fetch_add(1, Ordering::AcqRel);
+            false
+        }
+    }
+
+    pub fn take_typed_change(&self) -> bool {
+        self.typed_change.replace(false)
+    }
+
+    pub fn trigger(&self, window: &mut Window, cx: &mut App) {
+        let request_id = self.request_id.fetch_add(1, Ordering::AcqRel) + 1;
+        self.request(request_id, window, cx);
+    }
+
+    fn request(&self, request_id: u64, window: &mut Window, cx: &mut App) {
+        if self.request_id.load(Ordering::Acquire) != request_id
+            || self.state.read(cx).active_forge_tab_id() != Some(self.tab_id)
+        {
+            return;
+        }
+        let Some(editor) = self.editor.upgrade() else {
+            return;
+        };
+        if !editor.read(cx).focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let source = editor.read(cx).text().clone();
+        let cursor = editor.read(cx).cursor();
+        let response = self.completion_response(&source, cursor, request_id, cx);
+        let editor = self.editor.clone();
+        let menu = self.menu.clone();
+        let generation = self.request_id.clone();
+        let state = self.state.clone();
+        let tab_id = self.tab_id;
+        let window = self.window;
+        let task = cx.spawn(async move |cx: &mut AsyncApp| {
+            let items = match response.await {
+                Ok(CompletionResponse::Array(items)) => items,
+                Ok(CompletionResponse::List(list)) => list.items,
+                Err(_) => Vec::new(),
+            };
+            if generation.load(Ordering::Acquire) != request_id {
+                return;
+            }
+            let _ = window.update(cx, |_, window, cx| {
+                if state.read(cx).active_forge_tab_id() != Some(tab_id) {
+                    return;
+                }
+                let Some(editor) = editor.upgrade() else {
+                    return;
+                };
+                if !editor.read(cx).focus_handle(cx).is_focused(window)
+                    || editor.read(cx).cursor() != cursor
+                    || editor.read(cx).text() != &source
+                {
+                    return;
+                }
+                if let Some(menu) = menu.upgrade() {
+                    menu.update(cx, |menu, cx| {
+                        menu.present(request_id, source, cursor, items, window, cx)
+                    });
+                }
+            });
+        });
+        *self.task.borrow_mut() = Some(task);
+    }
+
+    pub fn schedule_schema_sample(&self, collection: &str, cx: &mut App) {
+        if self.state.read(cx).active_forge_tab_id() != Some(self.tab_id) {
+            return;
+        }
         let Some(tab_key) = self.state.read(cx).active_forge_tab_key() else {
             return;
         };
@@ -116,14 +217,14 @@ impl ForgeCompletionProvider {
         let state = self.state.clone();
         cx.spawn({
             let session_key = session_key.clone();
-            async move |_editor: WeakEntity<InputState>, cx: &mut AsyncApp| {
+            async move |cx: &mut AsyncApp| {
                 let result = task.await;
                 let fields = match result {
                     Ok(Ok(printable)) => extract_fields_from_printable(&printable),
                     _ => Vec::new(),
                 };
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, _| {
                         if !fields.is_empty() {
                             state.set_forge_schema_fields(session_key.clone(), fields);
@@ -161,7 +262,14 @@ fn context_stage(rope: &Rope, offset: usize) -> Option<CompletionIntent> {
         };
 
     let replace_start = line_start.saturating_add(token_start_in_line);
-    let replace_range = completion_range(rope, replace_start, offset);
+    let token_suffix = full_text
+        .get(offset..)
+        .unwrap_or("")
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '$'))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let replace_range = completion_range(rope, replace_start, offset + token_suffix);
 
     Some(CompletionIntent {
         position: parse_ctx.position_kind,
@@ -272,20 +380,26 @@ fn operators_for_scope(scope: ScopeKind) -> Vec<Suggestion> {
 
 // ── Pipeline Stage 3: Ranking ──────────────────────────────────────────────
 
-fn ranking_stage(mut suggestions: Vec<Suggestion>, token: &str) -> Vec<Suggestion> {
-    // Filter by prefix
-    if !token.is_empty() {
-        suggestions.retain(|s| s.label.starts_with(token));
-    }
-
-    // Deduplicate by label
+fn ranking_stage(suggestions: Vec<Suggestion>, token: &str) -> Vec<Suggestion> {
     let mut seen = std::collections::HashSet::new();
-    suggestions.retain(|s| seen.insert(s.label.clone()));
+    let mut ranked = suggestions
+        .into_iter()
+        .filter_map(|suggestion| {
+            if !seen.insert(suggestion.label.clone()) {
+                return None;
+            }
+            let name = if suggestion.kind == SuggestionKind::Method {
+                suggestion.label.split_once('(').map(|(name, _)| name).unwrap_or(&suggestion.label)
+            } else {
+                &suggestion.label
+            };
+            let score = if token.is_empty() { 0 } else { fuzzy_match_score(token, name)? };
+            Some((score, suggestion))
+        })
+        .collect::<Vec<_>>();
 
-    // Deterministic ordering:
-    // 1. Fields first, then operators, then methods, then collections
-    // 2. Alphabetical within each kind
-    suggestions.sort_by(|a, b| {
+    // Match quality comes first; kind and label keep equal matches stable.
+    ranked.sort_by(|(a_score, a), (b_score, b)| {
         let kind_ord = |k: &SuggestionKind| -> u8 {
             match k {
                 SuggestionKind::Field => 0,
@@ -294,15 +408,34 @@ fn ranking_stage(mut suggestions: Vec<Suggestion>, token: &str) -> Vec<Suggestio
                 SuggestionKind::Collection => 3,
             }
         };
-        kind_ord(&a.kind).cmp(&kind_ord(&b.kind)).then(a.label.cmp(&b.label))
+        a_score
+            .cmp(b_score)
+            .then_with(|| kind_ord(&a.kind).cmp(&kind_ord(&b.kind)))
+            .then_with(|| a.label.cmp(&b.label))
     });
 
-    suggestions
+    ranked.into_iter().map(|(_, suggestion)| suggestion).collect()
 }
 
 // ── Pipeline Stage 4: Render ───────────────────────────────────────────────
 
-fn render_stage(suggestions: Vec<Suggestion>, replace_range: &Range) -> Vec<CompletionItem> {
+fn render_stage(
+    mut suggestions: Vec<Suggestion>,
+    replace_range: &Range,
+    following: Option<char>,
+) -> Vec<CompletionItem> {
+    // Editing an existing name must preserve the call's arguments or a field's value.
+    for suggestion in &mut suggestions {
+        let delimiter = match (suggestion.kind, following) {
+            (SuggestionKind::Method, Some('(')) => '(',
+            (SuggestionKind::Operator, Some(':')) => ':',
+            _ => continue,
+        };
+        if let Some(index) = suggestion.insert_text.find(delimiter) {
+            suggestion.insert_text.truncate(index);
+            suggestion.is_snippet = false;
+        }
+    }
     suggestions_to_completion_items(suggestions, replace_range)
 }
 
@@ -312,7 +445,6 @@ fn merge_bridge_suggestions(
     local: Vec<Suggestion>,
     bridge: Vec<String>,
     scope: ScopeKind,
-    token: &str,
 ) -> Vec<Suggestion> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -346,9 +478,6 @@ fn merge_bridge_suggestions(
         };
 
         if normalized.is_empty() {
-            continue;
-        }
-        if !token.is_empty() && !normalized.starts_with(token) {
             continue;
         }
 
@@ -402,14 +531,59 @@ impl CompletionProvider for ForgeCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
+        if self.state.read(cx).active_forge_tab_id() != Some(self.tab_id) {
+            return Task::ready(Ok(CompletionResponse::Array(vec![])));
+        }
         let request_id = self.request_id.fetch_add(1, Ordering::AcqRel) + 1;
+        self.completion_response(rope, offset, request_id, cx)
+    }
 
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, cx: &mut App) -> bool {
+        // Native paste, undo/redo, and completion insertion use silent edits.
+        // Pairing must only react to the editor's ordinary input path.
+        self.typed_change.set(true);
+        let should_refresh =
+            new_text.chars().any(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
+                || (new_text.is_empty()
+                    && self.menu.upgrade().is_some_and(|menu| menu.read(cx).is_open()));
+        if should_refresh {
+            let request_id = self.request_id.fetch_add(1, Ordering::AcqRel) + 1;
+            self.task.borrow_mut().take();
+            let provider = self.clone();
+            // The native editor is leased during this hook. Read its final buffer
+            // after that update, coalescing any superseded input requests.
+            cx.defer(move |cx| {
+                let _ = provider
+                    .window
+                    .update(cx, |_, window, cx| provider.request(request_id, window, cx));
+            });
+        } else {
+            self.dismiss(cx);
+        }
+        // Forge owns the native List popup and atomic acceptance. Keep the
+        // toolkit's independent, deferred completion menu disabled.
+        false
+    }
+}
+
+impl ForgeCompletionProvider {
+    fn completion_response(
+        &self,
+        rope: &Rope,
+        offset: usize,
+        request_id: u64,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<CompletionResponse>> {
         // Stage 1: Context
         let Some(intent) = context_stage(rope, offset) else {
             return Task::ready(Ok(CompletionResponse::Array(vec![])));
         };
+        let following = rope
+            .slice(rope.position_to_offset(&intent.replace_range.end)..)
+            .chars()
+            .find(|ch| !ch.is_whitespace());
 
         // Stage 2: Candidates
         let mut schedule_schema = false;
@@ -421,7 +595,7 @@ impl CompletionProvider for ForgeCompletionProvider {
 
         // Stage 3 + 4: Rank + Render
         let ranked = ranking_stage(candidates.clone(), &intent.token);
-        let local_items = render_stage(ranked, &intent.replace_range);
+        let local_items = render_stage(ranked, &intent.replace_range, following);
 
         // For DbMember/CollectionMember: optionally enhance with bridge (debounced)
         let use_bridge = matches!(intent.scope, ScopeKind::DbMember | ScopeKind::CollectionMember);
@@ -486,26 +660,11 @@ impl CompletionProvider for ForgeCompletionProvider {
                 return Ok(CompletionResponse::Array(local_items));
             }
 
-            let merged = merge_bridge_suggestions(candidates, completions, scope, &token);
+            let merged = merge_bridge_suggestions(candidates, completions, scope);
             let ranked = ranking_stage(merged, &token);
-            let items = render_stage(ranked, &replace_range);
+            let items = render_stage(ranked, &replace_range, following);
             Ok(CompletionResponse::Array(items))
         })
-    }
-
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
-        if new_text.is_empty() {
-            return false;
-        }
-        if new_text.chars().all(|c| c.is_whitespace()) {
-            return false;
-        }
-        new_text.chars().any(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
     }
 }
 
@@ -546,15 +705,21 @@ fn suggestions_to_completion_items(
                 label: suggestion.label.clone(),
                 kind: Some(kind),
                 detail: Some(suggestion.kind.as_str().to_string()),
-                insert_text_format: if suggestion.is_snippet {
-                    Some(InsertTextFormat::SNIPPET)
-                } else {
-                    None
-                },
-                text_edit: Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
-                    new_text: suggestion.insert_text,
-                    insert: *replace_range,
-                    replace: *replace_range,
+                data: suggestion
+                    .is_snippet
+                    .then(|| cursor_from_template(&suggestion.insert_text))
+                    .flatten()
+                    .map(|offset| serde_json::json!({ "cursor_offset": offset })),
+                // GPUI Kit 0.6 inserts completion text verbatim. Render our templates
+                // to plain text until the native editor supports snippet tab stops.
+                insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    new_text: if suggestion.is_snippet {
+                        label_from_template(&suggestion.insert_text)
+                    } else {
+                        suggestion.insert_text
+                    },
+                    range: *replace_range,
                 })),
                 ..Default::default()
             }
@@ -706,7 +871,6 @@ fn build_field_suggestions(state: &AppState, collection: &str, token: &str) -> V
     fields.sort();
     fields
         .into_iter()
-        .filter(|field| field.starts_with(token))
         .map(|field| Suggestion {
             label: field.clone(),
             kind: SuggestionKind::Field,

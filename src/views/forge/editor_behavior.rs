@@ -1,22 +1,83 @@
-//! Pure editor behavior spec — no GPUI dependencies, fully testable.
+//! Bracket and quote pairing decisions for MongoDB query editors.
 
-/// Source of truth for indent width. Read from editor config.
-#[derive(Debug, Clone, Copy)]
-pub struct IndentConfig {
-    pub width: usize,
-    pub use_tabs: bool,
+use std::ops::Range;
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+pub const INDENT_WIDTH: usize = 2;
+
+#[derive(Clone, Copy)]
+pub enum WordAction {
+    MoveBackward,
+    MoveForward,
+    SelectBackward,
+    SelectForward,
+    DeleteBackward,
+    DeleteForward,
 }
 
-impl IndentConfig {
-    pub fn indent_str(&self) -> String {
-        if self.use_tabs { "\t".to_string() } else { " ".repeat(self.width) }
+impl WordAction {
+    pub fn forward(self) -> bool {
+        matches!(self, Self::MoveForward | Self::SelectForward | Self::DeleteForward)
     }
 }
 
-impl Default for IndentConfig {
-    fn default() -> Self {
-        Self { width: 2, use_tabs: false }
+/// JavaScript identifiers are words; member-access dots and other punctuation
+/// separate them. Unicode word characters keep combining marks with their name.
+pub fn code_word_boundary(source: &str, cursor: usize, forward: bool) -> usize {
+    static WORDS: OnceLock<Regex> = OnceLock::new();
+    let words = WORDS.get_or_init(|| Regex::new(r"[\w$]+|[^\w\s$]+|\s+").unwrap());
+    if forward {
+        let Some(suffix) = source.get(cursor..) else { return cursor };
+        words
+            .find_iter(suffix)
+            .find(|word| !word.as_str().trim().is_empty())
+            .map(|word| cursor + word.end())
+            .unwrap_or(source.len())
+    } else {
+        let Some(prefix) = source.get(..cursor) else { return cursor };
+        words
+            .find_iter(prefix)
+            .filter(|word| !word.as_str().trim().is_empty())
+            .last()
+            .map(|word| word.start())
+            .unwrap_or(0)
     }
+}
+
+pub struct NewlineEdit {
+    pub range: Range<usize>,
+    pub text: String,
+    pub cursor: usize,
+}
+
+/// Add one indentation level after an opener, splitting a matching closer onto
+/// its own line. The caller checks the syntax context to exclude strings/comments.
+pub fn newline_after_opening(source: &str, selection: Range<usize>) -> Option<NewlineEdit> {
+    let prefix = source.get(..selection.start)?;
+    let before = prefix.trim_end_matches([' ', '\t']);
+    let closing = match before.chars().next_back()? {
+        '{' => '}',
+        '[' => ']',
+        '(' => ')',
+        _ => return None,
+    };
+    let suffix = source.get(selection.end..)?;
+    let after = suffix.trim_start_matches([' ', '\t']);
+    let line = prefix.rsplit('\n').next()?;
+    let base_indent: String = line.chars().take_while(|ch| matches!(ch, ' ' | '\t')).collect();
+    let indent = format!("{}{}", base_indent, " ".repeat(INDENT_WIDTH));
+    let text = if after.starts_with(closing) {
+        format!("\n{indent}\n{base_indent}")
+    } else {
+        format!("\n{indent}")
+    };
+    Some(NewlineEdit {
+        range: before.len()..selection.end + suffix.len() - after.len(),
+        cursor: before.len() + 1 + indent.len(),
+        text,
+    })
 }
 
 /// What to do when user types an opening bracket or quote.
@@ -66,55 +127,6 @@ pub fn pair_action(
     }
 
     PairAction::InsertClosing(closing)
-}
-
-/// What indent to insert after Enter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IndentResult {
-    /// No custom indent needed.
-    None,
-    /// Simple indent continuation.
-    Simple(String),
-    /// Cursor between braces: inner indent for cursor, outer for closing brace.
-    BetweenBraces { inner: String, outer: String },
-}
-
-/// Pure decision function for indentation after Enter.
-///
-/// `prev_non_ws_char` — the last non-whitespace char before the newline.
-/// `next_non_ws_char` — the first non-whitespace char after the cursor.
-/// `base_indent` — the leading whitespace of the previous non-empty line.
-/// `config` — indent width configuration.
-pub fn indent_after_enter(
-    prev_non_ws_char: Option<char>,
-    next_non_ws_char: Option<char>,
-    base_indent: &str,
-    config: &IndentConfig,
-) -> IndentResult {
-    let step = config.indent_str();
-
-    let opens_block = matches!(prev_non_ws_char, Some('{') | Some('[') | Some('('));
-
-    if opens_block {
-        let expected_close = match prev_non_ws_char {
-            Some('{') => Some('}'),
-            Some('[') => Some(']'),
-            Some('(') => Some(')'),
-            _ => Option::None,
-        };
-        let inner = format!("{}{}", base_indent, step);
-        if expected_close == next_non_ws_char {
-            // Between braces: cursor on inner indent, closing brace on base indent
-            return IndentResult::BetweenBraces { inner, outer: base_indent.to_string() };
-        }
-        return IndentResult::Simple(inner);
-    }
-
-    if base_indent.is_empty() {
-        return IndentResult::None;
-    }
-
-    IndentResult::Simple(base_indent.to_string())
 }
 
 #[cfg(test)]
@@ -182,92 +194,5 @@ mod tests {
     #[test]
     fn pair_closing_brace_no_overtype_when_different() {
         assert_eq!(pair_action('}', Some(' '), false, false), PairAction::Skip);
-    }
-
-    // ── IndentResult tests ──────────────────────────────────────────
-
-    #[test]
-    fn indent_after_open_brace() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('{'), Some(' '), "  ", &config),
-            IndentResult::Simple("    ".to_string())
-        );
-    }
-
-    #[test]
-    fn indent_between_braces() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('{'), Some('}'), "  ", &config),
-            IndentResult::BetweenBraces { inner: "    ".to_string(), outer: "  ".to_string() }
-        );
-    }
-
-    #[test]
-    fn indent_between_brackets() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('['), Some(']'), "", &config),
-            IndentResult::BetweenBraces { inner: "  ".to_string(), outer: "".to_string() }
-        );
-    }
-
-    #[test]
-    fn indent_plain_line() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('x'), Some('y'), "  ", &config),
-            IndentResult::Simple("  ".to_string())
-        );
-    }
-
-    #[test]
-    fn indent_empty_file() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(indent_after_enter(None, None, "", &config), IndentResult::None);
-    }
-
-    #[test]
-    fn indent_width_from_config() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(config.indent_str(), "  ");
-    }
-
-    #[test]
-    fn indent_width_4() {
-        let config = IndentConfig { width: 4, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('{'), Some('}'), "", &config),
-            IndentResult::BetweenBraces { inner: "    ".to_string(), outer: "".to_string() }
-        );
-    }
-
-    #[test]
-    fn indent_with_tabs() {
-        let config = IndentConfig { width: 4, use_tabs: true };
-        assert_eq!(config.indent_str(), "\t");
-        assert_eq!(
-            indent_after_enter(Some('{'), Some(' '), "", &config),
-            IndentResult::Simple("\t".to_string())
-        );
-    }
-
-    #[test]
-    fn indent_after_open_bracket() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('['), Some('1'), "", &config),
-            IndentResult::Simple("  ".to_string())
-        );
-    }
-
-    #[test]
-    fn indent_after_open_paren() {
-        let config = IndentConfig { width: 2, use_tabs: false };
-        assert_eq!(
-            indent_after_enter(Some('('), Some(')'), "  ", &config),
-            IndentResult::BetweenBraces { inner: "    ".to_string(), outer: "  ".to_string() }
-        );
     }
 }

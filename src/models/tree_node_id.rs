@@ -1,6 +1,6 @@
 //! Type-safe tree node identifiers for the sidebar tree.
 
-use gpui::{ElementId, SharedString};
+use gpui_kit::{ElementId, SharedString};
 use uuid::Uuid;
 
 /// Type-safe identifier for nodes in the sidebar tree.

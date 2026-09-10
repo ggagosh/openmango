@@ -1,5 +1,6 @@
-use gpui::{FocusHandle, UniformListScrollHandle};
-use gpui_component::input::InputState;
+use gpui_kit::FocusHandle;
+use gpui_kit::component::input::{EditorState, InputState};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -7,13 +8,19 @@ use super::types::{ForgeOutputTab, ForgeRunOutput, ResultPage};
 use crate::helpers::auto_pair::AutoPairState;
 
 pub struct ForgeEditorState {
-    pub editor_state: Option<gpui::Entity<InputState>>,
-    pub editor_subscription: Option<gpui::Subscription>,
-    pub completion_provider: Option<std::rc::Rc<super::completion::ForgeCompletionProvider>>,
+    pub editor_state: Option<gpui_kit::Entity<EditorState>>,
+    pub buffers: HashMap<uuid::Uuid, ForgeEditorBuffer>,
     pub completion_request_id: Arc<AtomicU64>,
-    pub current_text: String,
     pub editor_focus_requested: bool,
     pub active_tab_id: Option<uuid::Uuid>,
+}
+
+pub struct ForgeEditorBuffer {
+    pub editor_state: gpui_kit::Entity<EditorState>,
+    pub completion_provider: std::rc::Rc<super::completion::ForgeCompletionProvider>,
+    pub completion_menu: gpui_kit::Entity<crate::views::editor_completion::EditorCompletionMenu>,
+    pub _subscription: gpui_kit::Subscription,
+    pub content: String,
     pub auto_pair: AutoPairState,
 }
 
@@ -24,12 +31,9 @@ pub struct ForgeRuntimeState {
 }
 
 pub struct ForgeOutputState {
-    pub raw_output_state: Option<gpui::Entity<InputState>>,
-    pub raw_output_subscription: Option<gpui::Subscription>,
-    pub raw_output_text: String,
-    pub raw_output_programmatic: bool,
-    pub results_search_state: Option<gpui::Entity<InputState>>,
-    pub results_search_subscription: Option<gpui::Subscription>,
+    pub raw: super::output::RawOutputState,
+    pub results_search_state: Option<gpui_kit::Entity<InputState>>,
+    pub results_search_subscription: Option<gpui_kit::Subscription>,
     pub results_search_query: String,
     pub output_runs: Vec<ForgeRunOutput>,
     pub output_tab: ForgeOutputTab,
@@ -39,9 +43,9 @@ pub struct ForgeOutputState {
     pub last_error: Option<String>,
     pub result_pages: Vec<ResultPage>,
     pub result_page_index: usize,
-    pub result_signature: Option<u64>,
-    pub result_expanded_nodes: std::collections::HashSet<String>,
-    pub result_scroll: UniformListScrollHandle,
+    pub auto_select_results: bool,
+    pub trimmed_output_lines: usize,
+    pub skipped_output_events: u64,
     pub output_visible: bool,
 }
 
@@ -57,19 +61,13 @@ impl ForgeState {
         Self {
             editor: ForgeEditorState {
                 editor_state: None,
-                editor_subscription: None,
-                completion_provider: None,
+                buffers: HashMap::new(),
                 completion_request_id: Arc::new(AtomicU64::new(0)),
-                current_text: String::new(),
                 editor_focus_requested: false,
                 active_tab_id: None,
-                auto_pair: AutoPairState::new(""),
             },
             output: ForgeOutputState {
-                raw_output_state: None,
-                raw_output_subscription: None,
-                raw_output_text: String::new(),
-                raw_output_programmatic: false,
+                raw: super::output::RawOutputState::default(),
                 results_search_state: None,
                 results_search_subscription: None,
                 results_search_query: String::new(),
@@ -81,9 +79,9 @@ impl ForgeState {
                 last_error: None,
                 result_pages: Vec::new(),
                 result_page_index: 0,
-                result_signature: None,
-                result_expanded_nodes: std::collections::HashSet::new(),
-                result_scroll: UniformListScrollHandle::new(),
+                auto_select_results: true,
+                trimmed_output_lines: 0,
+                skipped_output_events: 0,
                 output_visible: true,
             },
             runtime: ForgeRuntimeState { run_seq: 0, is_running: false, mongosh_error: None },

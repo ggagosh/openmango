@@ -1,8 +1,9 @@
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Sizable as _;
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Icon;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::ai::blocks::ReportSheet;
 use crate::components::Button;
@@ -55,8 +56,8 @@ pub fn render_report_preview(
         title_bar = title_bar.child(
             Button::new(ElementId::Name(format!("{}-dl", id).into()))
                 .primary()
-                .compact()
-                .icon(Icon::new(IconName::Download).xsmall())
+                .xsmall()
+                .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
                 .label("Download Excel")
                 .on_click(move |ev, window, cx| on_dl(ev, window, cx)),
         );
@@ -67,7 +68,7 @@ pub fn render_report_preview(
         .w_full()
         .border_1()
         .border_color(border)
-        .rounded(px(8.0))
+        .rounded(crate::theme::borders::radius_md())
         .bg(cx.theme().table.opacity(0.55))
         .overflow_hidden()
         .child(title_bar);

@@ -1,5 +1,5 @@
-use gpui::{Entity, Subscription};
-use gpui_component::input::InputState;
+use gpui_kit::component::input::InputState;
+use gpui_kit::{Entity, Subscription};
 use uuid::Uuid;
 
 use crate::state::AppState;

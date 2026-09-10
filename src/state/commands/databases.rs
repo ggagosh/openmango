@@ -1,4 +1,4 @@
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::state::{
@@ -47,9 +47,9 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let database = database.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result: Result<(), crate::error::Error> = task.await;
-                let _ = cx.update(|cx| match result {
+                cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
                             if let Some(conn) = state.active_connection_mut(connection_id) {
@@ -158,10 +158,10 @@ impl AppCommands {
         cx.spawn({
             let state = state.clone();
             let database = database.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let (stats_result, collections_result) = task.await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         let mut status_message = None;
                         let mut loaded_collections = None;

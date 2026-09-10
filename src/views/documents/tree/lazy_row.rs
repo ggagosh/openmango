@@ -4,8 +4,8 @@
 //! only for visible rows, avoiding the overhead of pre-computing
 //! metadata for all 20,000+ nodes.
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};
@@ -117,7 +117,7 @@ pub fn render_lazy_readonly_row(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(crate::theme::borders::radius_sm())
             .cursor_pointer()
             .hover(|s| s.bg(lazy_chevron_hover))
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {

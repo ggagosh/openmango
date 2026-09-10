@@ -1,6 +1,6 @@
 //! Background prefetch of sibling collection schemas.
 
-use gpui::{App, AppContext as _, Entity};
+use gpui_kit::{App, AppContext as _, Entity};
 
 use crate::state::{AppState, SessionKey};
 
@@ -80,9 +80,9 @@ impl AppCommands {
             cx.spawn({
                 let state = state.clone();
                 let key = key.clone();
-                async move |cx: &mut gpui::AsyncApp| {
+                async move |cx: &mut gpui_kit::AsyncApp| {
                     let result = task.await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         state.update(cx, |s, cx| {
                             s.clear_collection_meta_inflight(&key);
                             if let Ok(schema) = result {
@@ -132,9 +132,9 @@ impl AppCommands {
 
         cx.spawn({
             let key = key.clone();
-            async move |cx: &mut gpui::AsyncApp| {
+            async move |cx: &mut gpui_kit::AsyncApp| {
                 let result = task.await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |s, cx| {
                         s.clear_collection_meta_inflight(&key);
                         if let Ok(schema) = result {

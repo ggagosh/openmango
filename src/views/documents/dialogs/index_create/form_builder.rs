@@ -1,6 +1,6 @@
 //! Form building logic for the index create dialog.
 
-use gpui::*;
+use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::parse_document_from_json;

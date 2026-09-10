@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use gpui::*;
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
+use gpui_kit::*;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertReplaceEdit, InsertTextFormat, Range,
@@ -94,7 +94,7 @@ impl CompletionProvider for SchemaFilterCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let text = rope.to_string();
 
@@ -254,12 +254,7 @@ impl CompletionProvider for SchemaFilterCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         new_text.chars().any(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '.' | '_'))
     }
 }

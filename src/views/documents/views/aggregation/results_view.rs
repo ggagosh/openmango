@@ -1,11 +1,12 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
-use gpui_component::Disableable as _;
-use gpui_component::Sizable as _;
-use gpui_component::input::Input;
-use gpui_component::spinner::Spinner;
-use gpui_component::switch::Switch;
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::components::Button;
@@ -265,7 +266,7 @@ impl CollectionView {
                         .min_w(px(0.0))
                         .min_h(px(0.0))
                         .overflow_hidden()
-                        .child(gpui_component::table::Table::new(&agg_table)),
+                        .child(gpui_kit::component::table::DataTable::new(&agg_table)),
                 );
             }
         } else {
@@ -309,7 +310,7 @@ impl CollectionView {
 
         let tree_btn = {
             let mut btn = clean_toolbar_icon_button(
-                Button::new("agg-view-tree").compact().on_click({
+                Button::new("agg-view-tree").xsmall().on_click({
                     let state = self.state.clone();
                     let session_key = session_key.clone();
                     let view = cx.entity().clone();
@@ -331,14 +332,14 @@ impl CollectionView {
                 "Tree view",
             );
             if is_tree {
-                btn = btn.active_style(active_bg);
+                btn = btn.bg(active_bg);
             }
             btn
         };
 
         let table_btn = {
             let mut btn = clean_toolbar_icon_button(
-                Button::new("agg-view-table").compact().on_click({
+                Button::new("agg-view-table").xsmall().on_click({
                     let state = self.state.clone();
                     let session_key = session_key.clone();
                     let view = cx.entity().clone();
@@ -359,7 +360,7 @@ impl CollectionView {
                 "Table view",
             );
             if is_table {
-                btn = btn.active_style(active_bg);
+                btn = btn.bg(active_bg);
             }
             btn
         };
@@ -433,7 +434,7 @@ fn render_results_footer(
                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(page_label))
                 .child(
                     Button::new("agg-prev-page")
-                        .compact()
+                        .xsmall()
                         .label("Prev")
                         .disabled(prev_disabled)
                         .on_click({
@@ -463,7 +464,7 @@ fn render_results_footer(
                 )
                 .child(
                     Button::new("agg-next-page")
-                        .compact()
+                        .xsmall()
                         .label("Next")
                         .disabled(next_disabled)
                         .on_click({
@@ -629,7 +630,7 @@ fn render_results_tree(
                                 .child(
                                     Button::new("agg-expand-all")
                                         .ghost()
-                                        .compact()
+                                        .xsmall()
                                         .icon(Icon::new(IconName::ChevronDown).xsmall())
                                         .tooltip("Expand all")
                                         .on_click({
@@ -652,7 +653,7 @@ fn render_results_tree(
                                 .child(
                                     Button::new("agg-collapse-all")
                                         .ghost()
-                                        .compact()
+                                        .xsmall()
                                         .icon(Icon::new(IconName::ChevronUp).xsmall())
                                         .tooltip("Collapse all")
                                         .on_click({
@@ -698,7 +699,7 @@ fn render_results_tree(
                     }),
                 )
                 .flex_1()
-                .track_scroll(scroll_handle),
+                .track_scroll(&scroll_handle),
             ),
         )
         .into_any_element()
@@ -714,9 +715,11 @@ fn render_agg_copy_as(
     view_mode: &DocumentViewMode,
     cx: &App,
 ) -> impl IntoElement {
-    use gpui_component::Sizable as _;
-    use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
-    use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+    use gpui_kit::component::Sizable as _;
+    use gpui_kit::component::button::{
+        Button as MenuButton, ButtonCustomVariant, ButtonVariants as _,
+    };
+    use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 
     use crate::theme::borders;
     use crate::views::documents::actions::copy_aggregation_as;
@@ -725,7 +728,6 @@ fn render_agg_copy_as(
     let clean_variant = ButtonCustomVariant::new(cx)
         .color(cx.theme().transparent)
         .foreground(cx.theme().muted_foreground)
-        .border(cx.theme().transparent)
         .hover(cx.theme().secondary.opacity(0.5))
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
@@ -736,15 +738,15 @@ fn render_agg_copy_as(
     };
 
     MenuButton::new("agg-copy-as")
-        .compact()
+        .xsmall()
         .rounded(borders::radius_sm())
-        .with_size(gpui_component::Size::Small)
+        .with_size(gpui_kit::component::Size::Small)
         .custom(clean_variant)
         .label("Copy Results As")
         .icon(Icon::new(IconName::Copy).xsmall())
         .tooltip("Copy results to clipboard")
         .disabled(!has_results)
-        .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _window, _cx| {
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in &formats {
                 let view_click = view.clone();
@@ -767,9 +769,11 @@ fn render_agg_export(
     has_results: bool,
     cx: &App,
 ) -> impl IntoElement {
-    use gpui_component::Sizable as _;
-    use gpui_component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
-    use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+    use gpui_kit::component::Sizable as _;
+    use gpui_kit::component::button::{
+        Button as MenuButton, ButtonCustomVariant, ButtonVariants as _,
+    };
+    use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 
     use crate::state::AppCommands;
     use crate::theme::borders;
@@ -778,21 +782,20 @@ fn render_agg_export(
     let clean_variant = ButtonCustomVariant::new(cx)
         .color(cx.theme().transparent)
         .foreground(cx.theme().muted_foreground)
-        .border(cx.theme().transparent)
         .hover(cx.theme().secondary.opacity(0.5))
         .active(cx.theme().secondary.opacity(0.62))
         .shadow(false);
 
     MenuButton::new("agg-export")
-        .compact()
+        .xsmall()
         .rounded(borders::radius_sm())
-        .with_size(gpui_component::Size::Small)
+        .with_size(gpui_kit::component::Size::Small)
         .custom(clean_variant)
         .label("Export Results")
-        .icon(Icon::new(IconName::Download).xsmall())
+        .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
         .tooltip("Export results to file")
         .disabled(!has_results || session_key.is_none())
-        .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _window, _cx| {
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in FileExportFormat::all() {
                 let state_click = state.clone();
