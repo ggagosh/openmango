@@ -76,6 +76,20 @@ jobs:
       - name: Verify Docker availability
         run: docker version
 
+      - name: Pull integration test images
+        run: |
+          for test_image in mongo:7.0 testcontainers/sshd:1.3.0; do
+            for pull_attempt in 1 2 3; do
+              if docker pull "$test_image"; then
+                break
+              fi
+              if [ "$pull_attempt" -eq 3 ]; then
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
       - name: Download MongoDB Database Tools
         run: ./scripts/download_tools.sh
 
