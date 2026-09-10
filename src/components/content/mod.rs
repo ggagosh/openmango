@@ -11,6 +11,9 @@ mod empty;
 mod shell;
 mod tabs;
 
+#[cfg(test)]
+mod connection_manager_tests;
+
 use empty::render_empty_state;
 use shell::render_shell;
 pub(crate) use tabs::OpenTabsBar;
@@ -239,18 +242,23 @@ impl ContentArea {
             return;
         }
 
-        if let Some(view) = self.connection_manager_view.clone() {
-            view.update(cx, |view, cx| {
-                view.apply_open_request(request.selected_id, request.creating_new, window, cx);
-            });
+        let view = if let Some(view) = self.connection_manager_view.clone() {
+            view
         } else {
             let state = self.state.clone();
-            self.connection_manager_view = Some(cx.new(|cx| {
-                let mut view = ConnectionManagerView::new(state, None, window, cx);
-                view.apply_open_request(request.selected_id, request.creating_new, window, cx);
-                view
-            }));
-        }
+            let view = cx.new(|cx| ConnectionManagerView::new(state, None, window, cx));
+            self.connection_manager_view = Some(view.clone());
+            view
+        };
+        // Opening can read/update the manager or show a discard dialog. Its
+        // entity must be fully created and free of an existing update lease.
+        ConnectionManagerView::apply_open_request(
+            view,
+            request.selected_id,
+            request.creating_new,
+            window,
+            cx,
+        );
 
         self.connection_manager_request_generation = request.generation;
     }

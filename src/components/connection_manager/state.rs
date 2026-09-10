@@ -2,21 +2,30 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{App, AppContext as _, Context, Entity, Window};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::state::{AppCommands, AppEvent, AppState};
 
 use super::{ConnectionDraft, ConnectionManager, ManagerTab, TestStatus};
 
 impl ManagerTab {
-    pub(super) fn all() -> [ManagerTab; 4] {
-        [ManagerTab::General, ManagerTab::Tls, ManagerTab::Network, ManagerTab::Advanced]
+    pub(super) fn all() -> [ManagerTab; 6] {
+        [
+            ManagerTab::General,
+            ManagerTab::Authentication,
+            ManagerTab::Tls,
+            ManagerTab::Network,
+            ManagerTab::Advanced,
+            ManagerTab::Access,
+        ]
     }
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            ManagerTab::General => "General",
+            ManagerTab::General => "Connection",
+            ManagerTab::Authentication => "Auth",
             ManagerTab::Tls => "TLS",
             ManagerTab::Network => "Network",
             ManagerTab::Advanced => "Advanced",
+            ManagerTab::Access => "Access",
         }
     }
 
@@ -101,8 +110,8 @@ impl ConnectionDraft {
         }
     }
 
-    pub(super) fn fingerprint(&self, cx: &App) -> String {
-        let mut values = [
+    fn input_states(&self) -> [&Entity<InputState>; 33] {
+        [
             &self.name_state,
             &self.uri_state,
             &self.username_state,
@@ -137,9 +146,14 @@ impl ConnectionDraft {
             &self.proxy_username_state,
             &self.proxy_password_state,
         ]
-        .into_iter()
-        .map(|state| state.read(cx).value().to_string())
-        .collect::<Vec<_>>();
+    }
+
+    pub(super) fn fingerprint(&self, cx: &App) -> String {
+        let mut values = self
+            .input_states()
+            .into_iter()
+            .map(|state| state.read(cx).value().to_string())
+            .collect::<Vec<_>>();
         values.push(format!(
             "{:?}",
             (
@@ -165,7 +179,8 @@ impl ConnectionDraft {
                 self.proxy_enabled,
             )
         ));
-        values.join("\u{1f}")
+        values.push(serde_json::to_string(&self.uri_secrets).unwrap());
+        serde_json::to_string(&values).unwrap()
     }
 
     pub(super) fn reset(&mut self, window: &mut Window, cx: &mut Context<ConnectionManager>) {
@@ -247,7 +262,115 @@ impl ConnectionManager {
         cx: &mut Context<Self>,
     ) -> Self {
         let draft = ConnectionDraft::new(window, cx);
-        let mut subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        let manager = cx.entity().downgrade();
+        let connection_list = cx.new(|cx| {
+            gpui_kit::component::list::ListState::new(
+                super::connection_list::ConnectionList {
+                    manager,
+                    state: state.clone(),
+                    query: String::new(),
+                    connections: state.read(cx).connections_snapshot(),
+                    selected: None,
+                },
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let mut subscriptions = vec![cx.observe_in(&state, window, |view, _, window, cx| {
+            view.sync_connection_list(window, cx);
+            cx.notify();
+        })];
+        subscriptions.push(cx.subscribe_in(&state, window, |view, state, event, window, cx| {
+            match event {
+                AppEvent::Connecting(id) if Some(*id) == view.selected_id => {
+                    view.connecting_id = Some(*id);
+                }
+                AppEvent::Connected(id) if view.connecting_id == Some(*id) => {
+                    view.connecting_id = None;
+                    view.status = TestStatus::Idle;
+                }
+                AppEvent::ConnectionFailed { connection_id, error }
+                    if view.connecting_id == Some(*connection_id)
+                        && view.selected_id == Some(*connection_id) =>
+                {
+                    view.connecting_id = None;
+                    view.status = TestStatus::Error(error.clone());
+                }
+                AppEvent::ConnectionRemoved
+                    if view
+                        .selected_id
+                        .is_some_and(|id| state.read(cx).connection_by_id(id).is_none()) =>
+                {
+                    view.selected_id = None;
+                    view.creating_new = true;
+                }
+                _ => {}
+            }
+            cx.notify();
+            let AppEvent::ConnectionSaveFinished { connection_id, result } = event else {
+                return;
+            };
+            if view
+                .pending_save
+                .as_ref()
+                .is_none_or(|pending| pending.connection_id != *connection_id)
+            {
+                return;
+            }
+            let pending = view.pending_save.take().unwrap();
+            match result {
+                Ok(()) => {
+                    let unchanged = view.draft.fingerprint(cx) == pending.fingerprint;
+                    view.selected_id = Some(*connection_id);
+                    view.creating_new = false;
+                    view.new_connection_origin_id = None;
+                    view.baseline_fingerprint = pending.fingerprint;
+                    if unchanged {
+                        let saved = state.read(cx).connection_by_id(*connection_id).cloned();
+                        view.load_connection(saved, window, cx);
+                    }
+                    view.status = TestStatus::Saved;
+                    if pending.connect {
+                        let state = state.clone();
+                        let connection_id = *connection_id;
+                        window.defer(cx, move |window, cx| {
+                            if state.read(cx).is_connected(connection_id) {
+                                let connect_state = state.clone();
+                                crate::components::request_unsaved_action(
+                                    state,
+                                    crate::state::UnsavedScope::Connection(connection_id),
+                                    window,
+                                    cx,
+                                    move |_, cx| {
+                                        AppCommands::connect(connect_state, connection_id, cx)
+                                    },
+                                );
+                            } else {
+                                AppCommands::connect(state, connection_id, cx);
+                            }
+                        });
+                    }
+                }
+                Err(error) => {
+                    view.status = TestStatus::Error(format!("Could not save connection: {error}"));
+                }
+            }
+            view.sync_connection_list(window, cx);
+            cx.notify();
+        }));
+
+        for input in draft.input_states() {
+            subscriptions.push(cx.subscribe(input, |view, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    if view.has_unsaved_changes(cx) && !matches!(view.status, TestStatus::Testing) {
+                        view.status = TestStatus::Idle;
+                        view.last_tested_fingerprint = None;
+                    }
+                    cx.notify();
+                }
+            }));
+        }
 
         let uri_state = draft.uri_state.clone();
         subscriptions.push(cx.subscribe_in(
@@ -256,11 +379,6 @@ impl ConnectionManager {
             move |view, _state, event, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.capture_uri_secrets(window, cx);
-                    view.status = TestStatus::Idle;
-                    view.last_tested_uri = None;
-                    view.pending_test_uri = None;
-                    view.testing_step = None;
-                    view.parse_error = None;
                     cx.notify();
                 }
             },
@@ -268,7 +386,9 @@ impl ConnectionManager {
 
         let mut view = Self {
             state,
+            connection_list,
             selected_id,
+            connecting_id: None,
             draft,
             testing_step: None,
             active_tab: ManagerTab::General,
@@ -276,13 +396,16 @@ impl ConnectionManager {
             new_connection_origin_id: None,
             baseline_fingerprint: String::new(),
             status: TestStatus::Idle,
-            last_tested_uri: None,
-            pending_test_uri: None,
+            last_tested_fingerprint: None,
+            pending_test_fingerprint: None,
+            test_generation: 0,
+            pending_save: None,
             parse_error: None,
             _subscriptions: subscriptions,
         };
 
         if let Some(connection_id) = selected_id
+            .or_else(|| view.state.read(cx).connections.first().map(|connection| connection.id))
             && let Some(connection) = view
                 .state
                 .read(cx)

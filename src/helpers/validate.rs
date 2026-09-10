@@ -202,7 +202,7 @@ fn strip_auth_mechanism_secret(value: &str) -> Option<String> {
     (!kept.is_empty()).then(|| percent_encode(&kept.join(",")))
 }
 
-fn percent_decode(value: &str) -> String {
+pub(crate) fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -231,7 +231,7 @@ fn hex_value(value: u8) -> Option<u8> {
     }
 }
 
-fn percent_encode(value: &str) -> String {
+pub(crate) fn percent_encode(value: &str) -> String {
     use std::fmt::Write as _;
 
     let mut encoded = String::with_capacity(value.len());

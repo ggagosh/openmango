@@ -1,49 +1,32 @@
-//! Main render implementation for ConnectionManager.
-//!
-//! This file contains the core `Render` impl that composes the connection list
-//! and editor panels. Tab-specific rendering is in `tabs.rs` and
-//! connection list rendering is in `connection_list.rs`.
-
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::Disableable as _;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::{Button, request_unsaved_action};
-use crate::state::UnsavedScope;
-use crate::theme::{islands, sizing, spacing};
-
 use super::{ConnectionManager, ManagerTab, TestStatus};
+use crate::theme::{islands, spacing};
 
 impl Render for ConnectionManager {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let connections = self.state.read(cx).connections_snapshot();
-        let selected_exists =
-            self.selected_id.is_some_and(|id| connections.iter().any(|conn| conn.id == id));
-        if !selected_exists && !connections.is_empty() && !self.creating_new {
-            let next = connections.first().cloned();
-            self.load_connection(next, window, cx);
+        if self
+            .last_tested_fingerprint
+            .as_ref()
+            .is_some_and(|tested| tested != &self.draft.fingerprint(cx))
+        {
+            self.status = TestStatus::Idle;
+            self.last_tested_fingerprint = None;
         }
-
-        let selected_id = self.selected_id;
-        let is_active_selection =
-            selected_id.is_some_and(|id| self.state.read(cx).is_connected(id));
-
-        let list = self.render_connection_list(connections, selected_id, window, cx);
-        let editor = self.render_editor_panel(is_active_selection, window, cx);
-
+        let is_active = self.selected_id.is_some_and(|id| self.state.read(cx).is_connected(id));
+        let list = self.render_connection_list(cx);
+        let editor = self.render_editor_panel(is_active, window, cx);
         div()
             .flex()
-            .flex_row()
             .size_full()
-            .min_w(px(0.0))
-            .min_h(px(0.0))
+            .min_w(px(0.))
+            .min_h(px(0.))
             .overflow_hidden()
             .child(list)
             .child(editor)
@@ -51,285 +34,239 @@ impl Render for ConnectionManager {
 }
 
 impl ConnectionManager {
-    /// Renders the right-side editor panel with tabs and form fields.
     fn render_editor_panel(
         &mut self,
-        is_active_selection: bool,
+        is_active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let appearance = self.state.read(cx).settings.appearance.clone();
-        let active_tab = self.active_tab;
-        let creating_new = self.creating_new;
-        let editor_title = if creating_new {
-            "New Connection".to_string()
+        let title = if self.creating_new {
+            "New connection".to_string()
         } else {
             let name = self.draft.name_state.read(cx).value().trim().to_string();
             if name.is_empty() { "Connection".to_string() } else { name }
         };
-        let parse_error = self.parse_error.clone();
-        let global_parse_error =
-            if active_tab == ManagerTab::General { None } else { parse_error.clone() };
-        let parse_error_border = cx.theme().danger.opacity(0.5);
-        let parse_error_bg = cx.theme().danger.opacity(0.08);
-        let parse_error_fg = cx.theme().danger_foreground;
-
-        let tab_bar = self.render_tab_bar(cx);
-        let status_bar = self.render_status_bar(is_active_selection, creating_new, cx);
-
+        let dirty = self.has_unsaved_changes(cx);
+        let view = cx.entity();
+        let tabs = islands::tab_bar(TabBar::new("connection-manager-tabs"), &appearance)
+            .small()
+            .min_w(px(0.))
+            .selected_index(self.active_tab.index())
+            .on_click({
+                let view = view.clone();
+                move |index, window, cx| {
+                    view.update(cx, |this, cx| {
+                        // Publish structured edits before returning to the URI.
+                        if this.active_tab != ManagerTab::General && this.has_unsaved_changes(cx) {
+                            this.update_uri_from_fields(window, cx);
+                        }
+                        this.active_tab = ManagerTab::from_index(*index);
+                        cx.notify();
+                    });
+                }
+            })
+            .children(ManagerTab::all().into_iter().map(|tab| Tab::new().label(tab.label())));
+        let content = match self.active_tab {
+            ManagerTab::General => self.render_general_tab(None, window, cx),
+            ManagerTab::Authentication => self.render_authentication_tab(),
+            ManagerTab::Tls => self.render_tls_tab(window, cx),
+            ManagerTab::Network => self.render_network_tab(window, cx),
+            ManagerTab::Advanced => self.render_advanced_tab(window, cx),
+            ManagerTab::Access => self.render_access_tab(cx),
+        };
         div()
             .flex()
             .flex_col()
             .flex_1()
+            .min_w(px(0.))
+            .min_h(px(0.))
             .h_full()
-            .min_h(px(0.0))
-            .min_w(px(0.0))
-            // Tab bar — sticky top
             .child(
                 div()
-                    .flex_shrink_0()
                     .flex()
                     .items_center()
+                    .gap(spacing::sm())
                     .px(spacing::md())
-                    .h(sizing::header_height())
-                    .gap(spacing::md())
-                    .bg(islands::tool_bg(&appearance, cx))
+                    .py(spacing::sm())
                     .child(
                         div()
-                            .w(px(180.0))
-                            .min_w(px(120.0))
-                            .truncate()
+                            .flex_1()
+                            .min_w(px(0.))
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(editor_title),
+                            .truncate()
+                            .child(title),
                     )
-                    .child(div().flex_1().min_w(px(0.0)).child(tab_bar)),
-            )
-            // Tab content — scrollable
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scrollbar()
-                    .p(spacing::md())
-                    .when_some(global_parse_error, |this, err| {
+                    .when(dirty, |this| {
                         this.child(
                             div()
-                                .mb(spacing::md())
-                                .rounded(crate::theme::borders::radius_sm())
-                                .border_1()
-                                .border_color(parse_error_border)
-                                .bg(parse_error_bg)
-                                .px(spacing::sm())
-                                .py(spacing::xs())
                                 .text_xs()
-                                .text_color(parse_error_fg)
-                                .child(err),
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Unsaved changes"),
                         )
                     })
-                    .child(match active_tab {
-                        ManagerTab::General => self.render_general_tab(parse_error, window, cx),
-                        ManagerTab::Tls => self.render_tls_tab(window, cx),
-                        ManagerTab::Network => self.render_network_tab(window, cx),
-                        ManagerTab::Advanced => self.render_advanced_tab(window, cx),
+                    .when(self.selected_id.is_some(), |this| {
+                        this.child(
+                            Button::new("remove-connection")
+                                .small()
+                                .ghost()
+                                .label("Remove…")
+                                .disabled(self.pending_save.is_some())
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |this, cx| this.remove_connection(window, cx))
+                                }),
+                        )
                     }),
             )
-            // Status bar — sticky bottom
-            .child(div().flex_shrink_0().child(status_bar))
-            .into_any_element()
-    }
-
-    /// Renders the tab bar for switching between configuration sections.
-    fn render_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let view = cx.entity();
-        let active_tab = self.active_tab;
-        let appearance = self.state.read(cx).settings.appearance.clone();
-
-        islands::tab_bar(TabBar::new("connection-manager-tabs"), &appearance)
-            .small()
-            .min_w(px(0.0))
-            .menu(false)
-            .selected_index(active_tab.index())
-            .on_click(move |index, _window, cx| {
-                let index = *index;
-                view.update(cx, |this, cx| {
-                    this.active_tab = ManagerTab::from_index(index);
-                    cx.notify();
-                });
-            })
-            .children(ManagerTab::all().into_iter().map(|tab| Tab::new().label(tab.label())))
-            .into_any_element()
-    }
-
-    /// Renders the status bar with test status and action buttons.
-    fn render_status_bar(
-        &self,
-        is_active_selection: bool,
-        creating_new: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let view = cx.entity();
-        let state = self.state.clone();
-        let appearance = self.state.read(cx).settings.appearance.clone();
-        let status = self.status.clone();
-        let testing_step = self.testing_step.clone();
-        let is_testing = matches!(status, TestStatus::Testing);
-        let error_details = match &status {
-            TestStatus::Error(err) => Some(err.clone()),
-            _ => None,
-        };
-
-        let (status_text, status_color) = Self::format_status(&status, testing_step.as_deref(), cx);
-        let actions = Self::render_action_buttons(
-            view,
-            state,
-            is_testing,
-            is_active_selection,
-            creating_new,
-            error_details,
-        );
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(spacing::sm())
-            .px(spacing::md())
-            .h(sizing::header_height())
-            .border_t_1()
-            .border_color(islands::panel_border(&appearance, cx))
-            .bg(islands::tool_bg(&appearance, cx))
+            .child(div().px(spacing::md()).child(tabs))
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.0))
-                    .text_xs()
-                    .text_color(status_color)
-                    .truncate()
-                    .child(status_text),
+                    .min_h(px(0.))
+                    .overflow_y_scrollbar()
+                    .p(spacing::md())
+                    .child(div().w_full().max_w(px(720.)).child(content)),
             )
-            .child(actions)
+            .child(self.render_status_bar(is_active, cx))
             .into_any_element()
     }
 
-    /// Formats the test status into a display string and color.
-    fn format_status(status: &TestStatus, testing_step: Option<&str>, cx: &App) -> (String, Hsla) {
-        let text = match status {
-            TestStatus::Idle => "Test connection to verify settings".to_string(),
-            TestStatus::Testing => testing_step
-                .map(|step| format!("Testing: {step}"))
-                .unwrap_or_else(|| "Testing connection...".to_string()),
-            TestStatus::Success => "Connection OK".to_string(),
-            TestStatus::Error(_) => "Connection failed. Open Details for diagnostics.".to_string(),
+    fn render_status_bar(&self, is_active: bool, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        let saving = self.pending_save.is_some();
+        let testing = matches!(self.status, TestStatus::Testing);
+        let connecting = self.connecting_id.is_some() && self.connecting_id == self.selected_id;
+        let busy =
+            saving || testing || connecting || !self.state.read(cx).connection_secrets_ready();
+        let dirty = self.has_unsaved_changes(cx);
+        let needs_reconnect =
+            self.selected_id.is_some_and(|id| self.state.read(cx).connection_needs_reconnect(id));
+        let message = if saving {
+            "Saving connection…".to_string()
+        } else if connecting {
+            "Connecting…".to_string()
+        } else if let Some(error) = &self.parse_error {
+            error.clone()
+        } else {
+            match &self.status {
+                TestStatus::Idle => if needs_reconnect {
+                    "Connected using previous settings. Reconnect to apply saved changes."
+                } else if is_active {
+                    "Connected"
+                } else if self.creating_new {
+                    "Test is optional. Save keeps this connection for later."
+                } else {
+                    "Disconnected"
+                }
+                .to_string(),
+                TestStatus::Testing => {
+                    self.testing_step.clone().unwrap_or_else(|| "Testing connection…".into())
+                }
+                TestStatus::Success => "Test succeeded".into(),
+                TestStatus::Error(error) => error.clone(),
+                TestStatus::Saved => if needs_reconnect {
+                    "Connection saved. Reconnect to apply changes."
+                } else {
+                    "Connection saved"
+                }
+                .into(),
+            }
         };
-        let color = match status {
-            TestStatus::Success => cx.theme().primary,
-            TestStatus::Error(_) => cx.theme().danger,
-            _ => cx.theme().muted_foreground,
-        };
-        (text, color)
-    }
-
-    /// Renders the action buttons (Test and Save).
-    fn render_action_buttons(
-        view: Entity<Self>,
-        state: Entity<crate::state::AppState>,
-        is_testing: bool,
-        is_active_selection: bool,
-        creating_new: bool,
-        error_details: Option<String>,
-    ) -> AnyElement {
-        let row = div()
+        let error = matches!(self.status, TestStatus::Error(_)) || self.parse_error.is_some();
+        let mut actions = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(spacing::sm())
-            .flex_shrink_0()
-            .when(creating_new, |row| {
-                row.child(Button::new("cancel-new-connection").xsmall().label("Cancel").on_click({
-                    let view = view.clone();
-                    move |_, window, cx| {
-                        ConnectionManager::request_cancel_new(view.clone(), window, cx);
-                    }
-                }))
+            .when(self.creating_new, |row| {
+                row.child(
+                    Button::new("cancel-new-connection")
+                        .small()
+                        .ghost()
+                        .label("Cancel")
+                        .disabled(saving)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, window, cx| Self::request_cancel_new(view.clone(), window, cx)
+                        }),
+                )
             })
             .child(
                 Button::new("test-connection")
-                    .xsmall()
-                    .label(if is_testing { "Testing..." } else { "Test" })
-                    .disabled(is_testing)
+                    .small()
+                    .label("Test")
+                    .loading(testing)
+                    .disabled(busy)
                     .on_click({
                         let view = view.clone();
-                        move |_, _window, cx| {
-                            ConnectionManager::start_test(view.clone(), cx);
-                        }
+                        move |_, window, cx| Self::start_test(view.clone(), window, cx)
                     }),
             )
+            .map(|row| {
+                row.child(
+                    Button::new("save-connection")
+                        .small()
+                        .label("Save")
+                        .disabled(busy || (!dirty && !self.creating_new))
+                        .on_click({
+                            let view = view.clone();
+                            move |_, window, cx| Self::request_save(view.clone(), false, window, cx)
+                        }),
+                )
+            })
             .child(
-                Button::new("save-connection")
-                    .xsmall()
+                Button::new("save-connect")
+                    .small()
                     .primary()
-                    .label(if is_active_selection { "Save & Reconnect" } else { "Save & Connect" })
+                    .loading(connecting)
+                    .disabled(busy)
+                    .label(if is_active {
+                        if dirty { "Save & Reconnect" } else { "Reconnect" }
+                    } else if self.creating_new || dirty {
+                        "Save & Connect"
+                    } else {
+                        "Connect"
+                    })
                     .on_click({
                         let view = view.clone();
-                        let state = state.clone();
-                        move |_, window, cx| {
-                            let selected_id = view.read(cx).selected_id;
-                            let save_view = view.clone();
-                            let save_state = state.clone();
-                            let save = move |window: &mut Window, cx: &mut App| {
-                                let mut saved_id = None;
-                                save_view.update(cx, |this, cx| {
-                                    saved_id = this.save_connection(window, cx);
-                                });
-                                if let Some(connection_id) = saved_id {
-                                    save_state.update(cx, |state, cx| {
-                                        state.connect_when_secrets_ready(connection_id, cx);
-                                    });
-                                }
-                            };
-                            if let Some(connection_id) = selected_id {
-                                request_unsaved_action(
-                                    state.clone(),
-                                    UnsavedScope::Connection(connection_id),
-                                    window,
-                                    cx,
-                                    save,
-                                );
-                            } else {
-                                save(window, cx);
-                            }
-                        }
+                        move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
                     }),
             );
-
-        let row = if let Some(error_details) = error_details {
-            row.child(Button::new("test-details").xsmall().label("Details").on_click(
-                move |_, window, cx| {
-                    let details = error_details.clone();
-                    window.open_dialog(cx, move |dialog: Dialog, _window, _cx| {
-                        dialog
-                            .title("Connection Test Details")
-                            .w(px(780.0))
-                            .margin_top(px(20.0))
-                            .min_h(px(420.0))
-                            .child(
+        if let TestStatus::Error(details) = &self.status {
+            let details = details.clone();
+            actions = actions.child(
+                Button::new("connection-error-details").small().ghost().label("Details").on_click(
+                    move |_, window, cx| {
+                        let details = details.clone();
+                        window.open_dialog(cx, move |dialog: Dialog, _, _| {
+                            dialog.title("Connection details").child(
                                 div()
-                                    .flex()
-                                    .flex_col()
-                                    .h_full()
+                                    .max_h(px(360.))
                                     .overflow_y_scrollbar()
-                                    .p(spacing::md())
-                                    .text_xs()
-                                    .font_family(crate::theme::fonts::mono())
+                                    .text_sm()
                                     .child(details.clone()),
                             )
-                    });
-                },
-            ))
-        } else {
-            row
-        };
-
-        row.into_any_element()
+                        });
+                    },
+                ),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::sm())
+            .px(spacing::md())
+            .py(spacing::sm())
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(if error { cx.theme().danger } else { cx.theme().muted_foreground })
+                    .child(message),
+            )
+            .child(actions)
+            .into_any_element()
     }
 }

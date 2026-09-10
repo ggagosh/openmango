@@ -13,13 +13,20 @@ pub enum AppEvent {
     // Connection lifecycle
     ConnectionAdded,
     ConnectionUpdated,
+    ConnectionSaveFinished {
+        connection_id: Uuid,
+        result: Result<(), String>,
+    },
     ConnectionRemoved,
 
     // Connection state changes
     Connecting(Uuid),
     Connected(Uuid),
     Disconnected(Uuid),
-    ConnectionFailed(String),
+    ConnectionFailed {
+        connection_id: Uuid,
+        error: String,
+    },
 
     // Data loaded
     DatabasesLoaded(Vec<String>),

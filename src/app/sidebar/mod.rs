@@ -92,6 +92,7 @@ impl Sidebar {
             match event {
                 AppEvent::ConnectionAdded
                 | AppEvent::ConnectionUpdated
+                | AppEvent::ConnectionSaveFinished { .. }
                 | AppEvent::ConnectionRemoved
                 | AppEvent::DatabasesLoaded(_) => {
                     this.refresh_tree(cx);
@@ -145,8 +146,10 @@ impl Sidebar {
                     this.model.clear_selection();
                     this.refresh_tree(cx);
                 }
-                AppEvent::ConnectionFailed(_) => {
-                    this.model.connecting_connection = None;
+                AppEvent::ConnectionFailed { connection_id, .. } => {
+                    if this.model.connecting_connection == Some(*connection_id) {
+                        this.model.connecting_connection = None;
+                    }
                     this.model.loading_databases.clear();
                     this.model.clear_selection();
                     cx.notify();

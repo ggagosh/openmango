@@ -269,13 +269,15 @@ impl SidebarModel {
         let mut items = Vec::new();
         for conn in connections {
             let active_conn = active.get(&conn.id);
-            if active_conn.is_none() {
-                continue; // Only show connected
-            }
-
             let conn_node_id = TreeNodeId::connection(conn.id);
-            let conn_expanded = expanded.contains(&conn_node_id);
-            items.push(SidebarEntry::new(conn_node_id, conn.name.clone(), 0, true, conn_expanded));
+            let conn_expanded = active_conn.is_some() && expanded.contains(&conn_node_id);
+            items.push(SidebarEntry::new(
+                conn_node_id,
+                conn.name.clone(),
+                0,
+                active_conn.is_some(),
+                conn_expanded,
+            ));
 
             if let Some(active_conn) = active_conn
                 && conn_expanded
@@ -330,6 +332,22 @@ impl SidebarModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_saved_connections_remain_visible() {
+        let connection = SavedConnection::new("Saved".into(), "mongodb://localhost".into());
+        let id = TreeNodeId::connection(connection.id);
+        let expanded = HashSet::from([id.clone()]);
+        let entries = SidebarModel::build_entries(
+            &[connection],
+            &std::collections::HashMap::new(),
+            &expanded,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, id);
+        assert!(!entries[0].is_folder);
+        assert!(!entries[0].is_expanded);
+    }
 
     fn model_with_entries(entries: Vec<SidebarEntry>) -> SidebarModel {
         let entry_index_by_id = SidebarModel::build_index(&entries);

@@ -14,7 +14,7 @@ impl AppCommands {
             state.update(cx, |state, cx| {
                 let message = "Connection credentials are still loading or require recovery.";
                 state.set_status_message(Some(StatusMessage::error(message)));
-                cx.emit(AppEvent::ConnectionFailed(message.to_string()));
+                cx.emit(AppEvent::ConnectionFailed { connection_id, error: message.to_string() });
                 cx.notify();
             });
             return;
@@ -29,10 +29,17 @@ impl AppCommands {
 
         let Some(saved) = saved else {
             state.update(cx, |_, cx| {
-                cx.emit(AppEvent::ConnectionFailed("Connection not found".to_string()));
+                cx.emit(AppEvent::ConnectionFailed {
+                    connection_id,
+                    error: "Connection not found".to_string(),
+                });
             });
             return;
         };
+
+        if state.read(cx).is_connected(connection_id) {
+            Self::disconnect(state.clone(), connection_id, cx);
+        }
 
         // Emit connecting event
         state.update(cx, |state, cx| {
@@ -79,7 +86,12 @@ impl AppCommands {
                                     runtime_meta,
                                 },
                             );
-                            state.update_connection(saved.clone(), cx);
+                            // A connection attempt uses a snapshot; retain settings edited while it ran.
+                            if let Some(mut latest) = state.connection_by_id(connection_id).cloned()
+                            {
+                                latest.last_connected = saved.last_connected;
+                                state.update_connection(latest, cx);
+                            }
                             state.select_connection(Some(connection_id), cx);
                             state.update_workspace_from_state();
                             let connected = AppEvent::Connected(connection_id);
@@ -104,7 +116,8 @@ impl AppCommands {
                     Err(e) => {
                         log::error!("Failed to connect: {}", e);
                         state.update(cx, |state, cx| {
-                            let event = AppEvent::ConnectionFailed(e.to_string());
+                            let event =
+                                AppEvent::ConnectionFailed { connection_id, error: e.to_string() };
                             state.update_status_from_event(&event);
                             cx.emit(event);
                         });

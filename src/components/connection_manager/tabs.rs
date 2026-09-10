@@ -4,9 +4,11 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::collapsible::Collapsible;
+use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -19,7 +21,6 @@ use crate::theme::{colors, spacing};
 use super::ConnectionManager;
 
 impl ConnectionManager {
-    /// General tab: Name, URI, Read-only, Username/Password, App name, Auth fields.
     pub(super) fn render_general_tab(
         &mut self,
         parse_error: Option<String>,
@@ -28,8 +29,11 @@ impl ConnectionManager {
     ) -> AnyElement {
         let view = cx.entity();
         let selected_color = self.draft.color;
-        let mut no_color_button =
-            Button::new("connection-color-none").xsmall().label("None").on_click({
+        let no_color_button = Button::new("connection-color-none")
+            .xsmall()
+            .label("None")
+            .selected(selected_color.is_none())
+            .on_click({
                 let view = view.clone();
                 move |_, _window, cx| {
                     view.update(cx, |this, cx| {
@@ -38,15 +42,13 @@ impl ConnectionManager {
                     });
                 }
             });
-        if selected_color.is_none() {
-            no_color_button = no_color_button.primary();
-        }
         let color_buttons = ConnectionColor::ALL
             .into_iter()
             .map(|color| {
                 let accent = colors::connection_accent(color, cx);
                 let view = view.clone();
-                let mut button = Button::new(("connection-color", color as usize))
+                Button::new(("connection-color", color as usize))
+                    .selected(selected_color == Some(color))
                     .xsmall()
                     .child(div().size(px(12.0)).rounded_full().bg(accent))
                     .tooltip(color.label())
@@ -55,17 +57,119 @@ impl ConnectionManager {
                             this.draft.color = Some(color);
                             cx.notify();
                         });
-                    });
-                if selected_color == Some(color) {
-                    button = button.primary();
-                }
-                button.into_any_element()
+                    })
             })
             .collect::<Vec<_>>();
+
+        div().flex().flex_col().gap(spacing::lg())
+            .child(v_form()
+                .child(field().label("Connection URI")
+                    .description("Paste a MongoDB URI. Auth, TLS, and advanced options are filled automatically.")
+                    .child(Input::new(&self.draft.uri_state).font_family(crate::theme::fonts::mono())))
+                .child(field().label("Name")
+                    .description("Optional. Defaults to the server name.")
+                    .child(Input::new(&self.draft.name_state))))
+            .when_some(parse_error, |this, error| {
+                this.child(div().text_sm().text_color(cx.theme().danger).child(error))
+            })
+            // Connection color
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .child(
+                        div().text_sm().text_color(cx.theme().foreground).child("Connection color"),
+                    )
+                    .child(
+                        ButtonGroup::new("connection-colors").small().child(no_color_button)
+                            .children(color_buttons),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Accents this connection in the sidebar and tabs."),
+                    ),
+            )
+
+            // Read-only switch
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Switch::new("connection-read-only")
+                            .checked(self.draft.read_only)
+                            .small()
+                            .on_click({
+                                let view = view.clone();
+                                move |checked, _window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.draft.read_only = *checked;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child("Read-only (safe mode)"),
+                            )
+                            .child(
+                                div().text_xs().text_color(cx.theme().secondary_foreground).child(
+                                    "Block inserts, updates, deletes, drops, and index changes",
+                                ),
+                            ),
+                    ),
+            )
+
+            .into_any_element()
+    }
+
+    pub(super) fn render_authentication_tab(&self) -> AnyElement {
+        v_form()
+            .child(field().label("Username").child(Input::new(&self.draft.username_state)))
+            .child(
+                field()
+                    .label("Password")
+                    .child(Input::new(&self.draft.password_state).mask_toggle()),
+            )
+            .child(
+                field()
+                    .label("Authentication database")
+                    .description("Leave empty to use the URI database or MongoDB default.")
+                    .child(Input::new(&self.draft.auth_source_state)),
+            )
+            .child(
+                field()
+                    .label("Authentication mechanism")
+                    .description("Optional. MongoDB negotiates the mechanism when empty.")
+                    .child(Input::new(&self.draft.auth_mechanism_state)),
+            )
+            .child(
+                field()
+                    .label("Mechanism properties")
+                    .child(Input::new(&self.draft.auth_mechanism_props_state)),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_access_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
         let selected_environment = self.draft.environment;
-        let mut no_environment_button = Button::new("connection-environment-none")
+        let no_environment_button = Button::new("connection-environment-none")
+            .selected(selected_environment.is_none())
             .xsmall()
-            .label(if selected_environment.is_none() { "✓ Not set" } else { "Not set" })
+            .label("Not set")
             .on_click({
                 let view = view.clone();
                 move |_, _window, cx| {
@@ -75,20 +179,14 @@ impl ConnectionManager {
                     });
                 }
             });
-        if selected_environment.is_none() {
-            no_environment_button = no_environment_button.primary();
-        }
         let environment_buttons = ConnectionEnvironment::ALL
             .into_iter()
             .map(|environment| {
                 let view = view.clone();
-                let mut button = Button::new(("connection-environment", environment as usize))
+                Button::new(("connection-environment", environment as usize))
+                    .selected(selected_environment == Some(environment))
                     .xsmall()
-                    .label(if selected_environment == Some(environment) {
-                        format!("✓ {}", environment.label())
-                    } else {
-                        environment.label().to_string()
-                    })
+                    .label(environment.label())
                     .on_click(move |_, _window, cx| {
                         view.update(cx, |this, cx| {
                             if environment == ConnectionEnvironment::Production
@@ -100,52 +198,11 @@ impl ConnectionManager {
                             this.draft.environment = Some(environment);
                             cx.notify();
                         });
-                    });
-                if selected_environment == Some(environment) {
-                    button = button.primary();
-                }
-                button.into_any_element()
+                    })
             })
             .collect::<Vec<_>>();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::lg())
-            // Name
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child("Name"))
-                    .child(Input::new(&self.draft.name_state)),
-            )
-            // Connection color
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(
-                        div().text_sm().text_color(cx.theme().foreground).child("Connection color"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(no_color_button)
-                            .children(color_buttons),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Accents this connection in the sidebar and tabs."),
-                    ),
-            )
+        div().flex().flex_col().gap(spacing::lg())
             // Environment identity
             .child(
                 div()
@@ -154,12 +211,7 @@ impl ConnectionManager {
                     .gap(spacing::xs())
                     .child(div().text_sm().text_color(cx.theme().foreground).child("Environment"))
                     .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(no_environment_button)
+                        ButtonGroup::new("connection-environments").small().child(no_environment_button)
                             .children(environment_buttons),
                     )
                     .child(
@@ -358,171 +410,7 @@ impl ConnectionManager {
                         },
                     ),
             )
-            // URI
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child("URI"))
-                    .child(
-                        Input::new(&self.draft.uri_state)
-                            .font_family(crate::theme::fonts::mono())
-                            .w_full(),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::sm())
-                            .child(
-                                Button::new("import-uri")
-                                    .xsmall()
-                                    .label("Import from URI")
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |_, window, cx| {
-                                            ConnectionManager::import_uri_from_clipboard_or_dialog(
-                                                view.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("apply-uri").xsmall().label("Update URI").on_click({
-                                    let view = view.clone();
-                                    move |_, window, cx| {
-                                        view.update(cx, |this, cx| {
-                                            this.update_uri_from_fields(window, cx);
-                                        });
-                                    }
-                                }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Keep URI as the source of truth; fields below sync on update."),
-                    )
-                    .child(if let Some(err) = parse_error {
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().danger_foreground)
-                            .child(err)
-                            .into_any_element()
-                    } else {
-                        div().into_any_element()
-                    }),
-            )
-            // Read-only switch
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(
-                        Switch::new("connection-read-only")
-                            .checked(self.draft.read_only)
-                            .small()
-                            .on_click({
-                                let view = view.clone();
-                                move |checked, _window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.draft.read_only = *checked;
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child("Read-only (safe mode)"),
-                            )
-                            .child(
-                                div().text_xs().text_color(cx.theme().secondary_foreground).child(
-                                    "Block inserts, updates, deletes, drops, and index changes",
-                                ),
-                            ),
-                    ),
-            )
-            // Username / Password
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(2)
-                    .gap(spacing::md())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div().text_sm().text_color(cx.theme().foreground).child("Username"),
-                            )
-                            .child(Input::new(&self.draft.username_state)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div().text_sm().text_color(cx.theme().foreground).child("Password"),
-                            )
-                            .child(Input::new(&self.draft.password_state).mask_toggle()),
-                    ),
-            )
-            // App name
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child("App name"))
-                    .child(Input::new(&self.draft.app_name_state)),
-            )
-            // Auth fields
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child("Auth source"))
-                    .child(Input::new(&self.draft.auth_source_state)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(
-                        div().text_sm().text_color(cx.theme().foreground).child("Auth mechanism"),
-                    )
-                    .child(Input::new(&self.draft.auth_mechanism_state)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child("Auth mechanism properties"),
-                    )
-                    .child(Input::new(&self.draft.auth_mechanism_props_state)),
-            )
+
             .into_any_element()
     }
 
@@ -573,39 +461,22 @@ impl ConnectionManager {
                     )
                     .child(div().text_sm().text_color(cx.theme().foreground).child("TLS insecure")),
             )
+            .child(v_form().child(
+                field().label("TLS CA file").child(Input::new(&self.draft.tls_ca_file_state)),
+            ))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(div().text_sm().text_color(cx.theme().foreground).child("TLS CA file"))
-                    .child(Input::new(&self.draft.tls_ca_file_state)),
+                v_form().child(
+                    field()
+                        .label("TLS certificate key file")
+                        .child(Input::new(&self.draft.tls_cert_key_file_state)),
+                ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child("TLS certificate key file"),
-                    )
-                    .child(Input::new(&self.draft.tls_cert_key_file_state)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child("TLS certificate key password"),
-                    )
-                    .child(Input::new(&self.draft.tls_cert_key_password_state).mask_toggle()),
+                v_form().child(
+                    field()
+                        .label("TLS certificate key password")
+                        .child(Input::new(&self.draft.tls_cert_key_password_state).mask_toggle()),
+                ),
             )
             .into_any_element()
     }
@@ -618,47 +489,32 @@ impl ConnectionManager {
     ) -> AnyElement {
         let view = cx.entity();
 
-        let ssh_auth_block = if self.draft.ssh_use_identity_file {
-            div()
-                .grid()
-                .grid_cols(2)
-                .gap(spacing::md())
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(spacing::xs())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child("Identity file"),
-                        )
-                        .child(Input::new(&self.draft.ssh_identity_file_state)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(spacing::xs())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child("Identity passphrase"),
-                        )
-                        .child(Input::new(&self.draft.ssh_identity_passphrase_state).mask_toggle()),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .gap(spacing::xs())
-                .child(div().text_sm().text_color(cx.theme().foreground).child("SSH password"))
-                .child(Input::new(&self.draft.ssh_password_state).mask_toggle())
-                .into_any_element()
-        };
+        let ssh_auth_block =
+            if self.draft.ssh_use_identity_file {
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .gap(spacing::md())
+                    .child(
+                        v_form().child(
+                            field()
+                                .label("Identity file")
+                                .child(Input::new(&self.draft.ssh_identity_file_state)),
+                        ),
+                    )
+                    .child(v_form().child(field().label("Identity passphrase").child(
+                        Input::new(&self.draft.ssh_identity_passphrase_state).mask_toggle(),
+                    )))
+                    .into_any_element()
+            } else {
+                v_form()
+                    .child(
+                        field()
+                            .label("SSH password")
+                            .child(Input::new(&self.draft.ssh_password_state).mask_toggle()),
+                    )
+                    .into_any_element()
+            };
 
         let both_enabled = self.draft.ssh_enabled && self.draft.proxy_enabled;
 
@@ -724,57 +580,25 @@ impl ConnectionManager {
                             .grid()
                             .grid_cols(2)
                             .gap(spacing::md())
+                            .child(v_form().child(
+                                field().label("Host").child(Input::new(&self.draft.ssh_host_state)),
+                            ))
+                            .child(v_form().child(
+                                field().label("Port").child(Input::new(&self.draft.ssh_port_state)),
+                            ))
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Host"),
-                                    )
-                                    .child(Input::new(&self.draft.ssh_host_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Username")
+                                        .child(Input::new(&self.draft.ssh_username_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Port"),
-                                    )
-                                    .child(Input::new(&self.draft.ssh_port_state)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Username"),
-                                    )
-                                    .child(Input::new(&self.draft.ssh_username_state)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Local bind host"),
-                                    )
-                                    .child(Input::new(&self.draft.ssh_local_bind_host_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Local bind host")
+                                        .child(Input::new(&self.draft.ssh_local_bind_host_state)),
+                                ),
                             ),
                     )
                     .child(
@@ -881,59 +705,29 @@ impl ConnectionManager {
                             .grid_cols(2)
                             .gap(spacing::md())
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Proxy host"),
-                                    )
-                                    .child(Input::new(&self.draft.proxy_host_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Proxy host")
+                                        .child(Input::new(&self.draft.proxy_host_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Proxy port"),
-                                    )
-                                    .child(Input::new(&self.draft.proxy_port_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Proxy port")
+                                        .child(Input::new(&self.draft.proxy_port_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Proxy username"),
-                                    )
-                                    .child(Input::new(&self.draft.proxy_username_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Proxy username")
+                                        .child(Input::new(&self.draft.proxy_username_state)),
+                                ),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Proxy password"),
-                                    )
-                                    .child(
-                                        Input::new(&self.draft.proxy_password_state).mask_toggle(),
-                                    ),
-                            ),
+                            .child(v_form().child(field().label("Proxy password").child(
+                                Input::new(&self.draft.proxy_password_state).mask_toggle(),
+                            ))),
                     )
                     .child(
                         div()
@@ -959,6 +753,9 @@ impl ConnectionManager {
             .flex()
             .flex_col()
             .gap(spacing::lg())
+            .child(v_form().child(
+                field().label("Application name").child(Input::new(&self.draft.app_name_state)),
+            ))
             // Direct connection switch
             .child(
                 div()
@@ -993,57 +790,29 @@ impl ConnectionManager {
                     .grid_cols(2)
                     .gap(spacing::md())
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child("Read preference"),
-                            )
-                            .child(Input::new(&self.draft.read_preference_state)),
+                        v_form().child(
+                            field()
+                                .label("Read preference")
+                                .child(Input::new(&self.draft.read_preference_state)),
+                        ),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child("Read concern level"),
-                            )
-                            .child(Input::new(&self.draft.read_concern_state)),
+                        v_form().child(
+                            field()
+                                .label("Read concern level")
+                                .child(Input::new(&self.draft.read_concern_state)),
+                        ),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child("Write concern (w)"),
-                            )
-                            .child(Input::new(&self.draft.write_concern_state)),
+                        v_form().child(
+                            field()
+                                .label("Write concern (w)")
+                                .child(Input::new(&self.draft.write_concern_state)),
+                        ),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(spacing::xs())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child("wTimeoutMS"),
-                            )
-                            .child(Input::new(&self.draft.w_timeout_state)),
-                    ),
+                    .child(v_form().child(
+                        field().label("wTimeoutMS").child(Input::new(&self.draft.w_timeout_state)),
+                    )),
             )
             // Pool & Timeouts collapsible
             .child(
@@ -1076,69 +845,39 @@ impl ConnectionManager {
                             .gap(spacing::md())
                             .mt(spacing::sm())
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Connect timeout (ms)"),
-                                    )
-                                    .child(Input::new(&self.draft.connect_timeout_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Connect timeout (ms)")
+                                        .child(Input::new(&self.draft.connect_timeout_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Server selection timeout (ms)"),
-                                    )
-                                    .child(Input::new(&self.draft.server_selection_timeout_state)),
+                                v_form().child(
+                                    field().label("Server selection timeout (ms)").child(
+                                        Input::new(&self.draft.server_selection_timeout_state),
+                                    ),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Max pool size"),
-                                    )
-                                    .child(Input::new(&self.draft.max_pool_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Max pool size")
+                                        .child(Input::new(&self.draft.max_pool_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Min pool size"),
-                                    )
-                                    .child(Input::new(&self.draft.min_pool_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Min pool size")
+                                        .child(Input::new(&self.draft.min_pool_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Heartbeat frequency (ms)"),
-                                    )
-                                    .child(Input::new(&self.draft.heartbeat_frequency_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Heartbeat frequency (ms)")
+                                        .child(Input::new(&self.draft.heartbeat_frequency_state)),
+                                ),
                             ),
                     ),
             )
@@ -1174,30 +913,18 @@ impl ConnectionManager {
                             .gap(spacing::lg())
                             .mt(spacing::sm())
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Compressors"),
-                                    )
-                                    .child(Input::new(&self.draft.compressors_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Compressors")
+                                        .child(Input::new(&self.draft.compressors_state)),
+                                ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .child("Zlib compression level"),
-                                    )
-                                    .child(Input::new(&self.draft.zlib_level_state)),
+                                v_form().child(
+                                    field()
+                                        .label("Zlib compression level")
+                                        .child(Input::new(&self.draft.zlib_level_state)),
+                                ),
                             ),
                     ),
             )

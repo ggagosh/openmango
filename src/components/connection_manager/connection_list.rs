@@ -1,245 +1,214 @@
-//! Connection list panel rendering.
-//!
-//! Renders the left-side panel showing all saved connections.
-
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::Disableable as _;
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, IconName, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, IndexPath, Sizable as _};
 use gpui_kit::*;
-use uuid::Uuid;
 
-use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
+use crate::components::{ConnectionIdentity, connection_identity_badge};
 use crate::helpers::extract_host_from_uri;
 use crate::models::SavedConnection;
-use crate::theme::{borders, sizing, spacing};
+use crate::state::AppState;
+use crate::theme::{sizing, spacing};
 
 use super::ConnectionManager;
 use super::export_dialog::open_export_dialog;
 use super::import::open_import_flow;
 
-impl ConnectionManager {
-    /// Renders the connection list panel (left side of the manager).
-    pub(super) fn render_connection_list(
-        &mut self,
-        connections: Vec<SavedConnection>,
-        selected_id: Option<Uuid>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let view = cx.entity();
-        let header = self.render_list_header(cx);
-        let creating_new = self.creating_new;
+pub(super) struct ConnectionList {
+    pub(super) manager: WeakEntity<ConnectionManager>,
+    pub(super) state: Entity<AppState>,
+    pub(super) query: String,
+    pub(super) connections: Vec<SavedConnection>,
+    pub(super) selected: Option<IndexPath>,
+}
 
-        div()
-            .flex()
-            .flex_col()
-            .w(px(260.0))
-            .min_w(px(260.0))
-            .h_full()
-            .border_r_1()
-            .border_color(cx.theme().border)
-            .child(div().flex_shrink_0().child(header))
-            .child(
-                div().flex_1().min_h(px(0.0)).overflow_y_scrollbar().child(
-                    Self::render_list_content(view, connections, selected_id, creating_new, cx),
-                ),
-            )
-            .into_any_element()
-    }
-
-    /// Renders the header with title and action buttons.
-    fn render_list_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let view = cx.entity();
-        let selected_id = self.selected_id;
-        let state = self.state.clone();
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px(spacing::md())
-            .h(sizing::header_height())
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(div().text_xs().text_color(cx.theme().secondary_foreground).child("Connections"))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::xs())
-                    .child(
-                        Button::new("import-connections")
-                            .xsmall()
-                            .tooltip("Import Connections")
-                            .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
-                            .on_click({
-                                let state = state.clone();
-                                move |_, window, cx| {
-                                    open_import_flow(state.clone(), window, cx);
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new("export-connections")
-                            .xsmall()
-                            .tooltip("Export Connections")
-                            .icon(Icon::new(crate::assets::AppIcon::Upload).xsmall())
-                            .on_click({
-                                let state = state.clone();
-                                move |_, window, cx| {
-                                    open_export_dialog(state.clone(), window, cx);
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new("new-connection")
-                            .xsmall()
-                            .tooltip("New Connection")
-                            .icon(Icon::new(IconName::Plus).xsmall())
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, cx| {
-                                    ConnectionManager::request_load_connection(
-                                        view.clone(),
-                                        None,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new("remove-connection")
-                            .xsmall()
-                            .icon(Icon::new(IconName::Delete).xsmall())
-                            .disabled(selected_id.is_none())
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.remove_connection(window, cx);
-                                    });
-                                }
-                            }),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    /// Renders the list of connections or an empty state.
-    fn render_list_content(
-        view: Entity<Self>,
-        connections: Vec<SavedConnection>,
-        selected_id: Option<Uuid>,
-        creating_new: bool,
-        cx: &App,
-    ) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::xs())
-            .p(spacing::xs())
-            .when(creating_new, |list| list.child(Self::render_new_connection_item(cx)))
-            .when(connections.is_empty() && !creating_new, |list| {
-                list.child(
-                    div()
-                        .p(spacing::sm())
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("No connections"),
-                )
+impl ConnectionList {
+    fn refresh(&mut self, cx: &App) {
+        self.connections = self
+            .state
+            .read(cx)
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.name.to_lowercase().contains(&self.query)
+                    || extract_host_from_uri(&connection.uri)
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&self.query)
             })
-            .children(
-                connections.into_iter().map(move |conn| {
-                    Self::render_connection_item(view.clone(), conn, selected_id, cx)
-                }),
-            )
-            .into_any_element()
+            .cloned()
+            .collect();
     }
+}
 
-    fn render_new_connection_item(cx: &App) -> AnyElement {
-        div()
-            .flex()
-            .items_center()
-            .gap(spacing::sm())
-            .px(spacing::sm())
-            .py(spacing::sm())
-            .rounded(borders::radius_sm())
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().list_hover)
-            .child(Icon::new(IconName::Plus).small().text_color(cx.theme().primary))
-            .child(
+impl ListDelegate for ConnectionList {
+    type Item = ListItem;
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.connections.len()
+    }
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let connection = self.connections.get(ix.row)?;
+        let identity = ConnectionIdentity::from(connection);
+        let host = extract_host_from_uri(&connection.uri).unwrap_or_default();
+        let connected = self.state.read(cx).is_connected(connection.id);
+        Some(
+            ListItem::new(connection.id.to_string()).child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
+                    .min_w(px(0.))
+                    .gap(px(2.))
+                    .child(connection_identity_badge(&identity, true, cx))
                     .child(
-                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child("New Connection"),
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(host),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Unsaved draft"),
+                            .child(if connected { "Connected" } else { "Disconnected" }),
                     ),
-            )
-            .into_any_element()
+            ),
+        )
     }
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected = ix;
+    }
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        let Some(connection) = self.selected.and_then(|ix| self.connections.get(ix.row)).cloned()
+        else {
+            return;
+        };
+        let manager = self.manager.clone();
+        let handle = window.window_handle();
+        // End the list lease before the manager updates the confirmed selection.
+        cx.defer(move |cx| {
+            let Some(manager) = manager.upgrade() else {
+                return;
+            };
+            let _ = handle.update(cx, |_, window, cx| {
+                ConnectionManager::request_load_connection(
+                    manager.clone(),
+                    Some(connection),
+                    window,
+                    cx,
+                );
+                manager.update(cx, |manager, cx| manager.sync_connection_list(window, cx));
+            });
+        });
+    }
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        self.query = query.to_lowercase();
+        self.refresh(cx);
+        Task::ready(())
+    }
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        div().p(spacing::md()).text_sm().text_color(cx.theme().muted_foreground).child(
+            if self.query.is_empty() {
+                "No saved connections. Choose New to add one."
+            } else {
+                "No matching connections."
+            },
+        )
+    }
+}
 
-    /// Renders a single connection item in the list.
-    fn render_connection_item(
-        view: Entity<Self>,
-        conn: SavedConnection,
-        selected_id: Option<Uuid>,
-        cx: &App,
-    ) -> AnyElement {
-        let is_selected = Some(conn.id) == selected_id;
-        let host = extract_host_from_uri(&conn.uri).unwrap_or_else(|| "Unknown host".to_string());
-        let last_connected = conn
-            .last_connected
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| "Never".to_string());
-        let identity = ConnectionIdentity::from(&conn);
-
+impl ConnectionManager {
+    pub(super) fn sync_connection_list(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.connection_list.update(cx, |list, cx| {
+            list.delegate_mut().refresh(cx);
+            let selected = list
+                .delegate()
+                .connections
+                .iter()
+                .position(|connection| Some(connection.id) == self.selected_id)
+                .map(IndexPath::new);
+            list.set_selected_index(selected, window, cx);
+            cx.notify();
+        });
+    }
+    pub(super) fn render_connection_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = self.state.clone();
+        let view = cx.entity();
         div()
             .flex()
             .flex_col()
-            .gap(px(2.0))
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .cursor_pointer()
-            .rounded(borders::radius_sm())
-            .border_1()
-            .when(is_selected, |s| s.bg(cx.theme().list_hover).border_color(cx.theme().border))
-            .when(!is_selected, |s| s.border_color(gpui_kit::transparent_black()))
-            .hover(|s| s.bg(cx.theme().list_hover))
+            .w(px(224.))
+            .min_w(px(180.))
+            .max_w(px(224.))
+            .h_full()
+            .border_r_1()
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(connection_identity_badge(&identity, true, cx)),
+                    .px(spacing::sm())
+                    .h(sizing::header_height())
+                    .child(div().text_sm().child("Saved connections"))
+                    .child(
+                        Button::new("new-connection")
+                            .small()
+                            .ghost()
+                            .label("New")
+                            .disabled(self.pending_save.is_some())
+                            .on_click(move |_, window, cx| {
+                                Self::request_load_connection(view.clone(), None, window, cx)
+                            }),
+                    ),
             )
-            .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(host))
+            .child(List::new(&self.connection_list).small().flex_1().min_h(px(0.)))
             .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("Last: {last_connected}")),
+                div().p(spacing::sm()).child(
+                    Button::new("connection-list-more")
+                        .small()
+                        .ghost()
+                        .label("Import / Export")
+                        .dropdown_menu(move |menu, _, _| {
+                            menu.item(PopupMenuItem::new("Import connections…").on_click({
+                                let state = state.clone();
+                                move |_, window, cx| open_import_flow(state.clone(), window, cx)
+                            }))
+                            .item(
+                                PopupMenuItem::new("Export connections…").on_click({
+                                    let state = state.clone();
+                                    move |_, window, cx| {
+                                        open_export_dialog(state.clone(), window, cx)
+                                    }
+                                }),
+                            )
+                        }),
+                ),
             )
-            .on_mouse_down(MouseButton::Left, {
-                move |_, window, cx| {
-                    ConnectionManager::request_load_connection(
-                        view.clone(),
-                        Some(conn.clone()),
-                        window,
-                        cx,
-                    );
-                }
-            })
             .into_any_element()
     }
 }

@@ -115,6 +115,12 @@ impl AppState {
         self.conn.active.get(&connection_id)
     }
 
+    pub(crate) fn connection_needs_reconnect(&self, connection_id: Uuid) -> bool {
+        self.active_connection_by_id(connection_id)
+            .zip(self.connection_by_id(connection_id))
+            .is_some_and(|(active, saved)| connection_transport_changed(&active.config, saved))
+    }
+
     pub(crate) fn active_connection_mut(
         &mut self,
         connection_id: Uuid,
@@ -602,10 +608,8 @@ impl AppState {
 
     fn finish_update_connection(&mut self, connection: SavedConnection, cx: &mut Context<Self>) {
         let mut updated = false;
-        let mut transport_changed = false;
         for existing in &mut self.connections {
             if existing.id == connection.id {
-                transport_changed = connection_transport_changed(existing, &connection);
                 *existing = connection.clone();
                 updated = true;
                 break;
@@ -617,22 +621,6 @@ impl AppState {
             cx.emit(AppEvent::ConnectionAdded);
             cx.notify();
             return;
-        }
-
-        if let Some(active) = self.conn.active.get_mut(&connection.id) {
-            active.config = connection.clone();
-            if transport_changed {
-                self.connection_manager().disconnect(connection.id);
-                self.conn.active.remove(&connection.id);
-                self.reset_connection_runtime_state(connection.id, cx);
-                if self.conn.selected_connection == Some(connection.id) {
-                    self.current_view = View::Welcome;
-                    cx.emit(AppEvent::ViewChanged);
-                }
-                let event = AppEvent::Disconnected(connection.id);
-                self.update_status_from_event(&event);
-                cx.emit(event);
-            }
         }
 
         let event = AppEvent::ConnectionUpdated;
@@ -688,10 +676,30 @@ impl AppState {
                     Ok(()) => match state.config.save_connections(&state.connections) {
                         Ok(()) => {
                             state.connection_secret_sync_pending = false;
+                            for (connection_id, _) in &candidate_bundles {
+                                if let Some(connection) =
+                                    state.connection_by_id(*connection_id).cloned()
+                                    && let Some(active) = state.conn.active.get_mut(connection_id)
+                                    && !connection_transport_changed(&active.config, &connection)
+                                {
+                                    active.config = connection;
+                                }
+                                cx.emit(AppEvent::ConnectionSaveFinished {
+                                    connection_id: *connection_id,
+                                    result: Ok(()),
+                                });
+                            }
+                            cx.notify();
                             state.cleanup_secret_bundles(stale_bundles, cx);
                             state.take_connections_waiting_for_secrets()
                         }
                         Err(error) => {
+                            for (connection_id, _) in &candidate_bundles {
+                                cx.emit(AppEvent::ConnectionSaveFinished {
+                                    connection_id: *connection_id,
+                                    result: Err(error.to_string()),
+                                });
+                            }
                             state.connection_secret_sync_pending = false;
                             state.connections_waiting_for_secret_sync.clear();
                             state.restore_connections_after_secret_failure(
@@ -705,6 +713,12 @@ impl AppState {
                         }
                     },
                     Err(error) => {
+                        for (connection_id, _) in &candidate_bundles {
+                            cx.emit(AppEvent::ConnectionSaveFinished {
+                                connection_id: *connection_id,
+                                result: Err(error.to_string()),
+                            });
+                        }
                         state.connection_secret_sync_pending = false;
                         state.connections_waiting_for_secret_sync.clear();
                         state.restore_connections_after_secret_failure(
@@ -731,8 +745,14 @@ impl AppState {
         candidate_bundles: &[(Uuid, Uuid)],
         cx: &mut Context<Self>,
     ) {
-        for (connection_id, _) in candidate_bundles {
-            if self.conn.active.remove(connection_id).is_some() {
+        for (connection_id, secret_id) in candidate_bundles {
+            if self
+                .conn
+                .active
+                .get(connection_id)
+                .is_some_and(|active| active.config.secret_id == Some(*secret_id))
+            {
+                self.conn.active.remove(connection_id);
                 self.connection_manager().disconnect(*connection_id);
                 self.reset_connection_runtime_state(*connection_id, cx);
                 cx.emit(AppEvent::Disconnected(*connection_id));
