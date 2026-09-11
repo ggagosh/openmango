@@ -4,7 +4,7 @@ use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
-    DocumentKey, PathSegment, bson_value_for_edit, document_to_shell_string,
+    DocumentKey, PathSegment, document_to_json_string, format_bson_for_clipboard,
     format_relaxed_json_value, get_bson_at_path, parse_document_from_json,
     parse_documents_from_json,
 };
@@ -26,7 +26,7 @@ use super::super::CollectionView;
 pub(in crate::views::documents) fn build_document_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
-    view: Entity<CollectionView>,
+    _view: Entity<CollectionView>,
     session_key: SessionKey,
     doc_key: DocumentKey,
     is_dirty: bool,
@@ -53,23 +53,7 @@ pub(in crate::views::documents) fn build_document_menu(
             PopupMenuItem::new("Edit JSON")
                 .icon(Icon::new(crate::assets::AppIcon::Braces))
                 .disabled(multi)
-                .action(Box::new(EditDocumentJson))
-                .on_click({
-                    let view = view.clone();
-                    let state = state.clone();
-                    let session_key = session_key.clone();
-                    let doc_key = doc_key.clone();
-                    move |_, window, cx| {
-                        CollectionView::open_document_json_editor(
-                            view.clone(),
-                            state.clone(),
-                            session_key.clone(),
-                            doc_key.clone(),
-                            window,
-                            cx,
-                        );
-                    }
-                }),
+                .action(Box::new(EditDocumentJson)),
         )
         .item(
             PopupMenuItem::new(delete_label)
@@ -93,7 +77,7 @@ pub(in crate::views::documents) fn build_document_menu(
         );
 
     let formats = match view_mode {
-        DocumentViewMode::Tree => CopyFormat::tree_formats(),
+        DocumentViewMode::Tree | DocumentViewMode::Json => CopyFormat::tree_formats(),
         DocumentViewMode::Table => CopyFormat::table_formats(),
     };
     let copy_as_submenu = PopupMenu::build(window, cx, |mut menu, _window, _cx| {
@@ -114,72 +98,17 @@ pub(in crate::views::documents) fn build_document_menu(
 
     menu = menu
         .item(
-            PopupMenuItem::new("Duplicate Document")
+            PopupMenuItem::new("Duplicate as new document…")
                 .icon(Icon::new(IconName::Copy))
                 .disabled(multi)
-                .action(Box::new(DuplicateDocument))
-                .on_click({
-                    let state = state.clone();
-                    let session_key = session_key.clone();
-                    let doc_key = doc_key.clone();
-                    move |_, window, cx| {
-                        if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx) {
-                            let mut new_doc = doc.clone();
-                            new_doc.insert("_id", mongodb::bson::oid::ObjectId::new());
-                            let state_for_write = state.clone();
-                            let session_for_write = session_key.clone();
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    session_key.connection_id,
-                                    session_key.namespace(),
-                                    "Insert a duplicated document",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |_window, cx| {
-                                    AppCommands::insert_document(
-                                        state_for_write,
-                                        session_for_write,
-                                        new_doc,
-                                        cx,
-                                    );
-                                },
-                            );
-                        }
-                    }
-                }),
+                .action(Box::new(DuplicateDocument)),
         )
-        .item(PopupMenuItem::new("Paste Document(s)").action(Box::new(PasteDocuments)).on_click({
-            let state = state.clone();
-            let session_key = session_key.clone();
-            move |_, window, cx| {
-                paste_documents_from_clipboard(state.clone(), session_key.clone(), window, cx);
-            }
-        }))
+        .item(PopupMenuItem::new("Paste as new documents…").action(Box::new(PasteDocuments)))
         .item(
-            PopupMenuItem::new("Discard Changes")
+            PopupMenuItem::new("Discard selected changes…")
                 .icon(Icon::new(IconName::Undo))
                 .action(Box::new(DiscardDocumentChanges))
-                .disabled(!is_dirty)
-                .on_click({
-                    let view = view.clone();
-                    let session_key = session_key.clone();
-                    let doc_key = doc_key.clone();
-                    move |_, _window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.state.update(cx, |state, cx| {
-                                state.clear_draft(&session_key, &doc_key);
-                                cx.notify();
-                            });
-                            this.view_model.clear_inline_edit();
-                            this.view_model.rebuild_tree(&this.state, cx);
-                            this.view_model.sync_dirty_state(&this.state, cx);
-                            cx.notify();
-                        });
-                    }
-                }),
+                .disabled(!is_dirty),
         );
 
     menu
@@ -197,9 +126,14 @@ pub(super) fn build_property_menu(
     let is_array_element = matches!(meta.path.last(), Some(PathSegment::Index(_)));
     let has_index = meta.path.iter().any(|segment| matches!(segment, PathSegment::Index(_)));
     let allow_bulk = !has_index;
-    let is_id = matches!(meta.path.last(), Some(PathSegment::Key(key)) if key == "_id");
+    let is_id = matches!(meta.path.first(), Some(PathSegment::Key(key)) if key == "_id");
     let is_array = matches!(meta.value, Some(Bson::Array(_)));
     let can_edit_value = !is_id;
+    menu = menu.item(
+        PopupMenuItem::new("Paste value")
+            .disabled(!can_edit_value)
+            .action(Box::new(PasteDocuments)),
+    );
     let can_rename_field = !is_id && !is_array_element;
     let can_remove_field = !is_id && !is_array_element;
     let can_remove_element = is_array_element && meta.value.is_some();
@@ -407,7 +341,7 @@ pub(super) fn build_property_menu(
         }),
     );
     menu = menu.item(
-        PopupMenuItem::new("Copy as JSON")
+        PopupMenuItem::new("Copy field and value as JSON")
             .icon(Icon::new(crate::assets::AppIcon::Braces))
             .on_click({
                 let state = state.clone();
@@ -419,17 +353,9 @@ pub(super) fn build_property_menu(
                     if let Some(doc) = resolve_document(&state, &session_key, &doc_key, cx)
                         && let Some(value) = get_bson_at_path(&doc, &path)
                     {
-                        let json_value = format_bson_for_clipboard(value);
-                        let needs_quotes = matches!(value, Bson::String(_));
-                        let text = if needs_quotes {
-                            format!(
-                                "\"{}\": {}",
-                                key_label,
-                                serde_json::to_string(&json_value).unwrap_or(json_value)
-                            )
-                        } else {
-                            format!("\"{}\": {}", key_label, json_value)
-                        };
+                        let mut field = Document::new();
+                        field.insert(key_label.clone(), value.clone());
+                        let text = document_to_json_string(&field);
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                 }
@@ -533,7 +459,16 @@ pub(crate) fn paste_documents_from_clipboard(
             session_key.connection_id,
             target,
             format!("Insert {} documents from the clipboard", docs.len()),
-            None,
+            Some(crate::components::WriteConfirmation {
+                title: "Paste as new documents".into(),
+                message: format!(
+                    "Insert {} document(s) into {} with new _id values?",
+                    docs.len(),
+                    session_key.namespace()
+                ),
+                confirm_label: "Insert documents".into(),
+                destructive: false,
+            }),
         ),
         window,
         cx,
@@ -541,17 +476,6 @@ pub(crate) fn paste_documents_from_clipboard(
             AppCommands::insert_documents(state_for_write, session_key, docs, cx);
         },
     );
-}
-
-fn format_bson_for_clipboard(value: &Bson) -> String {
-    match value {
-        Bson::Document(doc) => document_to_shell_string(doc),
-        Bson::Array(arr) => {
-            let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            format_relaxed_json_value(&value)
-        }
-        _ => bson_value_for_edit(value),
-    }
 }
 
 fn path_to_dot_notation(path: &[PathSegment]) -> String {

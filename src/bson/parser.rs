@@ -527,8 +527,8 @@ fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String
 /// Parse an edited string value back into BSON, matching the original type.
 pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> {
     let trimmed = input.trim();
-    match original {
-        Bson::String(_) => Ok(Bson::String(trimmed.to_string())),
+    let result = match original {
+        Bson::String(_) => Ok(Bson::String(input.to_string())),
         Bson::Int32(_) => {
             trimmed.parse::<i32>().map(Bson::Int32).map_err(|_| "Expected int32".to_string())
         }
@@ -556,7 +556,50 @@ pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> 
         Bson::DateTime(_) => DateTime::parse_rfc3339_str(trimmed)
             .map(Bson::DateTime)
             .map_err(|_| "Expected RFC3339 date".to_string()),
-        _ => Err("Unsupported type".to_string()),
+        _ => Err("Expected this field's BSON type in Extended JSON".to_string()),
+    };
+    result.or_else(|error| {
+        let value = parse_bson_from_relaxed_json(trimmed).map_err(|_| error.clone())?;
+        if value.element_type() == original.element_type() { Ok(value) } else { Err(error) }
+    })
+}
+
+#[cfg(test)]
+mod field_edit_tests {
+    use super::*;
+    #[test]
+    fn field_input_preserves_whitespace_and_bson_type() {
+        assert!(!crate::bson::is_editable_value(
+            &Bson::Int32(1),
+            &[
+                crate::bson::PathSegment::Key("_id".into()),
+                crate::bson::PathSegment::Key("part".into())
+            ]
+        ));
+        assert!(crate::bson::is_editable_value(
+            &Bson::Int32(1),
+            &[
+                crate::bson::PathSegment::Key("nested".into()),
+                crate::bson::PathSegment::Key("_id".into())
+            ]
+        ));
+        assert_eq!(
+            parse_edited_value(&Bson::String(String::new()), "  text\n ").unwrap(),
+            Bson::String("  text\n ".into())
+        );
+        assert_eq!(
+            parse_edited_value(&Bson::Int64(0), "{\"$numberLong\":\"9223372036854775807\"}")
+                .unwrap(),
+            Bson::Int64(i64::MAX)
+        );
+        assert!(
+            parse_edited_value(&Bson::Int32(0), "{\"$numberLong\":\"9223372036854775807\"}")
+                .is_err()
+        );
+        assert_eq!(
+            parse_edited_value(&Bson::Array(vec![]), "[1,2]").unwrap(),
+            Bson::Array(vec![Bson::Int32(1), Bson::Int32(2)])
+        );
     }
 }
 

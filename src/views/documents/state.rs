@@ -38,6 +38,16 @@ pub struct CollectionView {
     pub(crate) filter_expanded: bool,
     pub(crate) sort_state: Option<Entity<EditorState>>,
     pub(crate) projection_state: Option<Entity<EditorState>>,
+    pub(crate) json_document: Option<(
+        SessionKey,
+        DocumentKey,
+        crate::state::EditorSessionId,
+        Entity<crate::views::json_editor_detached::DetachedJsonEditorView>,
+    )>,
+    pub(crate) json_editor_cache: HashMap<
+        crate::state::EditorSessionId,
+        Entity<crate::views::json_editor_detached::DetachedJsonEditorView>,
+    >,
     pub(crate) schema_filter_state: Option<Entity<EditorState>>,
     pub(crate) filter_auto_pair: AutoPairState,
     pub(crate) sort_auto_pair: AutoPairState,
@@ -152,47 +162,19 @@ impl CollectionView {
                     }
                     return;
                 }
+                if this.view_model.current_session().is_some_and(|key| {
+                    this.state.read(cx).session_view_mode(&key)
+                        == crate::state::DocumentViewMode::Json
+                        && this.state.read(cx).session_subview(&key)
+                            == Some(CollectionSubview::Documents)
+                }) {
+                    return;
+                }
                 let mut handled = false;
 
                 let save_selected_document =
                     |this: &mut CollectionView, window: &mut Window, cx: &mut Context<Self>| {
-                        let Some(session_key) = this.view_model.current_session() else {
-                            return false;
-                        };
-                        let (doc_key, doc) = {
-                            let state_ref = this.state.read(cx);
-                            let doc_key = state_ref.session_selected_doc(&session_key);
-                            let doc = doc_key
-                                .as_ref()
-                                .and_then(|doc_key| state_ref.session_draft(&session_key, doc_key));
-                            (doc_key, doc)
-                        };
-                        let (Some(doc_key), Some(doc)) = (doc_key, doc) else {
-                            return false;
-                        };
-                        let state = this.state.clone();
-                        let state_for_write = state.clone();
-                        crate::components::request_connection_write(
-                            state,
-                            crate::components::WriteRequest::new(
-                                session_key.connection_id,
-                                session_key.namespace(),
-                                "Save document changes",
-                                None,
-                            ),
-                            window,
-                            cx,
-                            move |_window, cx| {
-                                AppCommands::save_document(
-                                    state_for_write,
-                                    session_key,
-                                    doc_key,
-                                    doc,
-                                    cx,
-                                );
-                            },
-                        );
-                        true
+                        this.save_selected_documents(window, cx)
                     };
                 let is_aggregation = this
                     .view_model
@@ -230,6 +212,14 @@ impl CollectionView {
                 } else if is_enter {
                     let modifiers = event.keystroke.modifiers;
                     let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+                    if !cmd_or_ctrl
+                        && this.view_model.inline_state().is_some()
+                        && !this.documents_focus.is_focused(window)
+                        && !this.view_model.inline_input_focused(window, cx)
+                    {
+                        // Done, Cancel, and the boolean switch keep their native Enter action.
+                        return;
+                    }
                     if this.view_model.inline_state().is_some() {
                         this.view_model.commit_inline_edit(&this.state, cx);
                         let committed = this.view_model.inline_state().is_none();
@@ -348,6 +338,14 @@ impl CollectionView {
                 this.input_session = None;
                 cx.notify();
             }
+            AppEvent::DocumentDraftChanged { session } => {
+                if this.view_model.is_current_session(session) {
+                    this.view_model.rebuild_tree(&state, cx);
+                    this.view_model.invalidate_table();
+                    this.update_search_results(cx);
+                    cx.notify();
+                }
+            }
             AppEvent::DocumentSaved { session, document, .. } => {
                 if !this.view_model.is_current_session(session) {
                     return;
@@ -430,6 +428,8 @@ impl CollectionView {
             aggregation_stage_count: 0,
             aggregation_drag_over: None,
             aggregation_drag_source: None,
+            json_document: None,
+            json_editor_cache: HashMap::new(),
             filter_subscription: None,
             sort_subscription: None,
             projection_subscription: None,

@@ -150,6 +150,13 @@ impl AppState {
 
     pub fn set_draft(&mut self, session_key: &SessionKey, doc_key: DocumentKey, doc: Document) {
         if let Some(session) = self.session_mut(session_key) {
+            if let Some(original) = session.data.items.iter().find(|item| item.key == doc_key) {
+                session
+                    .view
+                    .draft_baselines
+                    .entry(doc_key.clone())
+                    .or_insert_with(|| original.doc.clone());
+            }
             session.view.drafts.insert(doc_key.clone(), doc);
             session.view.dirty.insert(doc_key);
         }
@@ -158,6 +165,7 @@ impl AppState {
     pub fn clear_draft(&mut self, session_key: &SessionKey, doc_key: &DocumentKey) {
         if let Some(session) = self.session_mut(session_key) {
             session.view.drafts.remove(doc_key);
+            session.view.draft_baselines.remove(doc_key);
             session.view.dirty.remove(doc_key);
         }
     }
@@ -165,6 +173,7 @@ impl AppState {
     pub fn clear_all_drafts(&mut self, session_key: &SessionKey) {
         if let Some(session) = self.session_mut(session_key) {
             session.view.drafts.clear();
+            session.view.draft_baselines.clear();
             session.view.dirty.clear();
         }
     }
@@ -181,11 +190,14 @@ impl AppState {
             return false;
         };
 
+        let baseline =
+            session.view.draft_baselines.entry(doc_key.clone()).or_insert_with(|| original.clone());
         let draft = session.view.drafts.entry(doc_key.clone()).or_insert_with(|| original.clone());
 
         if set_bson_at_path(draft, path, new_value) {
-            if draft == original {
+            if draft == baseline {
                 session.view.drafts.remove(doc_key);
+                session.view.draft_baselines.remove(doc_key);
                 session.view.dirty.remove(doc_key);
             } else {
                 session.view.dirty.insert(doc_key.clone());
@@ -193,6 +205,32 @@ impl AppState {
             return true;
         }
         false
+    }
+
+    pub fn document_edit_baseline(
+        &self,
+        key: &SessionKey,
+        document: &DocumentKey,
+    ) -> Option<Document> {
+        self.session(key)
+            .and_then(|session| session.view.draft_baselines.get(document).cloned())
+            .or_else(|| self.document_for_key(key, document))
+    }
+
+    pub fn document_field_edit_restriction(&self, key: &SessionKey) -> Option<&'static str> {
+        if self.connection_read_only(key.connection_id) {
+            Some("Connection is read-only.")
+        } else if self.session_view(key).is_some_and(|view| !view.saving_documents.is_empty()) {
+            Some("Wait for the document save to finish before editing.")
+        } else if self.session_data(key).is_some_and(|data| data.is_loading) {
+            Some("Wait for the current page to finish loading before editing.")
+        } else if self.session_data(key).is_some_and(|data| data.projection.is_some()) {
+            Some(
+                "Open JSON to edit the full document, or clear the projection to edit fields here.",
+            )
+        } else {
+            None
+        }
     }
 }
 
@@ -223,6 +261,16 @@ mod tests {
         assert!(updated);
         let session = state.session(&session_key).unwrap();
         assert!(session.view.dirty.contains(&doc_key));
+        assert_eq!(state.document_edit_baseline(&session_key, &doc_key), Some(original.clone()));
+        let refreshed = doc! { "_id": "doc1", "name": "server update" };
+        state.update_draft_value(
+            &session_key,
+            &doc_key,
+            &refreshed,
+            &path,
+            Bson::String("gamma".into()),
+        );
+        assert_eq!(state.document_edit_baseline(&session_key, &doc_key), Some(original.clone()));
 
         let cleared = state.update_draft_value(
             &session_key,

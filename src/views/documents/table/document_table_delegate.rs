@@ -368,6 +368,25 @@ impl TableDelegate for DocumentTableDelegate {
         };
         let doc_key = item.key.clone();
         let is_dirty = self.is_row_dirty(row_ix);
+        self.state.update(cx, |state, cx| {
+            if !state
+                .session_view(&session_key)
+                .is_some_and(|view| view.selected_docs.contains(&doc_key))
+            {
+                state.select_single_doc(
+                    &session_key,
+                    doc_key.clone(),
+                    crate::bson::doc_root_id(&doc_key),
+                );
+            } else {
+                state.set_selected_node(
+                    &session_key,
+                    doc_key.clone(),
+                    crate::bson::doc_root_id(&doc_key),
+                );
+            }
+            cx.notify();
+        });
         let selected_count = {
             let state_ref = self.state.read(cx);
             state_ref.session_view(&session_key).map(|v| v.selected_docs.len().max(1)).unwrap_or(1)

@@ -1,6 +1,7 @@
 //! Detached JSON editor window.
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Disableable as _;
 use gpui_kit::component::Root;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
@@ -9,12 +10,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::bson::{Bson, Document, oid::ObjectId};
 
-use crate::bson::{
-    DocumentKey, document_to_shell_string, format_relaxed_json_value, parse_bson_from_relaxed_json,
-    parse_document_from_json, parse_value_from_relaxed_json,
-};
+use crate::bson::{DocumentKey, document_to_json_string, parse_document_from_json};
 use crate::components::{Button, request_connection_write, request_unsaved_action};
-use crate::keyboard::CloseEditorWindow;
+use crate::keyboard::{CloseEditorWindow, SaveDocument};
 use crate::state::{
     AppCommands, AppEvent, AppState, EditorSessionId, EditorSessionStore, EditorSessionTarget,
     SessionKey, UnsavedScope,
@@ -43,6 +41,8 @@ pub struct DetachedJsonEditorView {
     pending_editor_content: Option<String>,
     awaiting_create_as_new: bool,
     save_in_flight: bool,
+    embedded: bool,
+    reloading: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -54,7 +54,7 @@ impl DetachedJsonEditorView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut subscriptions = Vec::new();
-        subscriptions.push(cx.subscribe(&state, |this, state, event, cx| {
+        subscriptions.push(cx.subscribe(&state, |this, _state, event, cx| {
             let Some(session) = this.sessions.snapshot(this.session_id) else {
                 return;
             };
@@ -75,11 +75,6 @@ impl DetachedJsonEditorView {
                         } if tab_doc_key == document
                     ) =>
                 {
-                    if let Some(latest) =
-                        state.read(cx).session_draft_or_document(saved_session, document)
-                    {
-                        this.sessions.refresh_document_baseline(this.session_id, latest);
-                    }
                     this.awaiting_create_as_new = false;
                     this.set_save_in_flight(false);
                     this.clear_sync_issue();
@@ -114,7 +109,18 @@ impl DetachedJsonEditorView {
                     this.awaiting_create_as_new = false;
                     this.set_save_in_flight(false);
                     this.clear_sync_issue();
-                    this.close_window(cx);
+                    if this.embedded {
+                        this.sessions.close(this.session_id);
+                        this.state.update(cx, |state, cx| {
+                            state.set_view_mode(
+                                inserted_session,
+                                crate::state::DocumentViewMode::Tree,
+                            );
+                            cx.notify();
+                        });
+                    } else {
+                        this.close_window(cx);
+                    }
                 }
                 AppEvent::DocumentInsertFailed {
                     session: failed_session,
@@ -149,8 +155,15 @@ impl DetachedJsonEditorView {
             pending_editor_content: None,
             awaiting_create_as_new: false,
             save_in_flight: false,
+            embedded: false,
+            reloading: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(crate) fn embedded(mut self) -> Self {
+        self.embedded = true;
+        self
     }
 
     fn ensure_editor_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -165,7 +178,7 @@ impl DetachedJsonEditorView {
             .unwrap_or_default();
         let editor_state = cx.new(|cx| {
             EditorState::new(window, cx)
-                .language("javascript")
+                .language("json")
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(true)
@@ -180,13 +193,20 @@ impl DetachedJsonEditorView {
         let sessions = self.sessions.clone();
         let session_id = self.session_id;
         let input_sub =
-            cx.subscribe_in(&editor_state, window, move |_view, state, event, _window, cx| {
+            cx.subscribe_in(&editor_state, window, move |view, state, event, _window, cx| {
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
 
                 let value = state.read(cx).value().to_string();
                 sessions.update_content(session_id, value);
+                if view.embedded {
+                    view.set_notice(
+                        false,
+                        if sessions.is_dirty(session_id) { "Unsaved JSON changes" } else { "" },
+                    );
+                    cx.notify();
+                }
             });
         self._subscriptions.push(input_sub);
         self.editor_state = Some(editor_state);
@@ -227,12 +247,21 @@ impl DetachedJsonEditorView {
     }
 
     fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
+        if self.save_in_flight
+            || self.reloading
+            || self.sessions.snapshot(self.session_id).is_some_and(|session| {
+                self.state.read(cx).connection_read_only(session.session_key.connection_id)
+            })
+        {
+            return;
+        }
         let Some(editor_state) = self.editor_state.clone() else {
             return;
         };
         let raw = editor_state.read(cx).value().to_string();
-        let formatted = match parse_value_from_relaxed_json(&raw) {
-            Ok(value) => format_relaxed_json_value(&value),
+        let formatted = match parse_document_from_json(&raw) {
+            Ok(value) => document_to_json_string(&value),
             Err(err) => {
                 self.set_error(format!("Invalid JSON: {err}"));
                 return;
@@ -248,6 +277,10 @@ impl DetachedJsonEditorView {
     }
 
     fn save_or_insert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
+        if self.reloading || self.save_in_flight {
+            return;
+        }
         let Some(session) = self.sessions.snapshot(self.session_id) else {
             self.set_error("Editor session is no longer available.");
             return;
@@ -276,6 +309,7 @@ impl DetachedJsonEditorView {
     }
 
     fn save_or_insert_authorized(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
         if self.state.read(cx).unsaved_guard_is_active() {
             self.set_notice(false, "Finish the open unsaved-changes prompt before saving.");
             cx.notify();
@@ -501,7 +535,7 @@ impl DetachedJsonEditorView {
             return;
         };
 
-        let content = document_to_shell_string(&draft);
+        let content = document_to_json_string(&draft);
         self.sessions.update_content(self.session_id, content.clone());
         self.pending_editor_content = Some(content);
         self.clear_sync_issue();
@@ -517,19 +551,36 @@ impl DetachedJsonEditorView {
         }
         let session_id = self.session_id;
         let sessions = self.sessions.clone();
+        let embedded = self.embedded;
+        let state = self.state.clone();
+        let session_key = sessions.snapshot(session_id).map(|session| session.session_key);
         request_unsaved_action(
             self.state.clone(),
             UnsavedScope::Editor(session_id),
             window,
             cx,
-            move |window, _cx| {
+            move |window, cx| {
                 sessions.close(session_id);
-                window.remove_window();
+                if embedded {
+                    if let Some(key) = session_key {
+                        state.update(cx, |state, cx| {
+                            state.set_view_mode(&key, crate::state::DocumentViewMode::Tree);
+                            cx.notify();
+                        });
+                    }
+                } else {
+                    window.remove_window();
+                }
             },
         );
     }
 
     fn close_window(&mut self, cx: &mut Context<Self>) {
+        if self.embedded {
+            self.set_notice(false, "Document saved.");
+            cx.notify();
+            return;
+        }
         self.sessions.close(self.session_id);
         if let Some(handle) = self.window_handle {
             let _ = handle.update(cx, |_view, window, _cx| {
@@ -538,7 +589,10 @@ impl DetachedJsonEditorView {
         }
     }
 
-    fn reload_document(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_document(&mut self, cx: &mut Context<Self>) {
+        if self.reloading || self.save_in_flight {
+            return;
+        }
         let Some(session) = self.sessions.snapshot(self.session_id) else {
             self.set_error("Editor session is no longer available.");
             return;
@@ -565,7 +619,9 @@ impl DetachedJsonEditorView {
             return;
         };
 
-        self.set_notice(false, "Reloading latest document...");
+        self.reloading = true;
+        self.sessions.set_save_in_flight(self.session_id, true);
+        self.set_notice(false, "Loading the full document…");
 
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
@@ -577,9 +633,9 @@ impl DetachedJsonEditorView {
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result: Result<Option<Document>, crate::error::Error> = task.await;
             cx.update(|cx| {
-                let _ = view.update(cx, |this, cx| match result {
+                let _ = view.update(cx, |this, cx| { this.reloading = false; this.sessions.set_save_in_flight(this.session_id, false); cx.notify(); match result {
                     Ok(Some(current)) => {
-                        let content = document_to_shell_string(&current);
+                        let content = document_to_json_string(&current);
                         this.sessions
                             .refresh_document_baseline(this.session_id, current.clone());
                         this.sessions.update_content(this.session_id, content.clone());
@@ -600,13 +656,14 @@ impl DetachedJsonEditorView {
                             format!("Failed to reload latest document: {err}"),
                         );
                     }
-                });
+                }});
             });
         })
         .detach();
     }
 
     fn create_as_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
         if self.state.read(cx).unsaved_guard_is_active() {
             self.set_notice(false, "Finish the open unsaved-changes prompt before saving.");
             cx.notify();
@@ -679,6 +736,7 @@ impl DetachedJsonEditorView {
     }
 
     fn copy_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
         let Some(editor_state) = self.editor_state.clone() else {
             return;
         };
@@ -727,15 +785,17 @@ impl Render for DetachedJsonEditorView {
             EditorSessionTarget::Insert => "Insert document",
             EditorSessionTarget::Document { .. } => "Edit document",
         };
-        let primary_label = match &session.target {
-            EditorSessionTarget::Insert => "Insert & Close",
-            EditorSessionTarget::Document { .. } => "Save & Close",
+        let primary_label = match (&session.target, self.embedded) {
+            (EditorSessionTarget::Document { .. }, true) => "Save document",
+            (EditorSessionTarget::Insert, _) => "Insert & Close",
+            (EditorSessionTarget::Document { .. }, false) => "Save & Close",
         };
         let notice = self.inline_notice.clone();
         let sync_issue = self.sync_issue;
         let state_ref = self.state.read(cx);
         let appearance = state_ref.settings.appearance.clone();
         let vibrancy = state_ref.startup_vibrancy;
+        let read_only = state_ref.connection_read_only(session.session_key.connection_id);
         let connection_identity = crate::components::connection_identity_for(
             &self.state,
             session.session_key.connection_id,
@@ -760,12 +820,19 @@ impl Render for DetachedJsonEditorView {
             .flex()
             .flex_col()
             .size_full()
-            .when(vibrancy, |s| s.pt(px(28.0)))
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .when(self.embedded, |view| view.flex_1())
+            .when(vibrancy && !self.embedded, |s| s.pt(px(28.0)))
             .bg(islands::content_bg(&appearance, cx))
             .text_color(cx.theme().foreground)
             .on_action(cx.listener(|this, _: &CloseEditorWindow, window, cx| {
                 cx.stop_propagation();
                 this.request_close_window(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SaveDocument, window, cx| {
+                cx.stop_propagation();
+                this.save_or_insert(window, cx);
             }))
             .on_key_down({
                 let view = view.clone();
@@ -796,6 +863,8 @@ impl Render for DetachedJsonEditorView {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
+                    .gap(spacing::sm())
                     .items_center()
                     .justify_between()
                     .px(spacing::md())
@@ -811,13 +880,16 @@ impl Render for DetachedJsonEditorView {
                             .child(
                                 div().text_sm().font_weight(FontWeight::MEDIUM).child(mode_label),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!("{}  •  {}", subtitle, session.title())),
-                            )
-                            .child(connection_identity),
+                            .when(!self.embedded, |column| {
+                                column
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format!("{}  •  {}", subtitle, session.title())),
+                                    )
+                                    .child(connection_identity)
+                            }),
                     )
                     .child(
                         div()
@@ -839,6 +911,7 @@ impl Render for DetachedJsonEditorView {
                                 Button::new("json-editor-window-format")
                                     .xsmall()
                                     .label("Format JSON")
+                                    .disabled(read_only || self.save_in_flight || self.reloading)
                                     .on_click({
                                         let view = view.clone();
                                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -853,6 +926,15 @@ impl Render for DetachedJsonEditorView {
                                     .primary()
                                     .xsmall()
                                     .label(primary_label)
+                                    .disabled(
+                                        read_only
+                                            || self.save_in_flight
+                                            || self.reloading
+                                            || (matches!(
+                                                session.target,
+                                                EditorSessionTarget::Document { .. }
+                                            ) && !session.is_dirty()),
+                                    )
                                     .on_click({
                                         let view = view.clone();
                                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -935,81 +1017,55 @@ impl Render for DetachedJsonEditorView {
                 this.child(row)
             })
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .p(spacing::md())
-                    .child(Editor::new(&editor).font_family(fonts::mono()).h_full().w_full()),
+                div().flex().flex_col().flex_1().min_h(px(0.0)).p(spacing::md()).child(
+                    Editor::new(&editor)
+                        .readonly(read_only || self.save_in_flight || self.reloading)
+                        .font_family(fonts::mono())
+                        .h_full()
+                        .w_full(),
+                ),
             )
     }
 }
 
-pub fn open_document_json_editor_window(
+pub(crate) fn detach_json_editor(
     state: Entity<AppState>,
-    session_key: SessionKey,
-    doc_key: DocumentKey,
+    session_id: EditorSessionId,
     cx: &mut App,
 ) {
-    if state.read(cx).active_connection_by_id(session_key.connection_id).is_none() {
-        return;
-    }
-
-    state.update(cx, |state, cx| {
-        if state.promote_preview_collection_tab(&session_key) {
-            cx.notify();
-        }
-    });
-
     let sessions = state.read(cx).editor_sessions();
-    if let Some(existing_id) = sessions.find_any_document_session() {
-        if focus_existing_window(&sessions, existing_id, cx) {
-            return;
-        }
-        if sessions.is_dirty(existing_id) {
-            log::warn!("Could not focus the existing JSON editor; preserving its unsaved content");
-            return;
-        }
-        sessions.close(existing_id);
+    let Some(session) = sessions.snapshot(session_id) else { return };
+    if session.save_in_flight {
+        return;
     }
-
-    let Some(document) = state.read(cx).session_draft_or_document(&session_key, &doc_key) else {
-        log::warn!("Could not open JSON editor: document is no longer available");
+    if focus_existing_window(&sessions, session_id, cx) {
         return;
-    };
-
-    let original_id = document
-        .get("_id")
-        .cloned()
-        .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok());
-    let Some(original_id) = original_id else {
-        log::warn!("Could not open JSON editor: failed to resolve original _id");
-        return;
-    };
-
-    let session_id = sessions.create_document_session(
-        session_key,
-        doc_key,
-        original_id,
-        document.clone(),
-        document_to_shell_string(&document),
-    );
-    match open_detached_json_editor_window(state, sessions.clone(), session_id, cx) {
+    }
+    match open_detached_json_editor_window(state.clone(), sessions.clone(), session_id, cx) {
         Ok(window) => {
             focus_window_handle(&window, cx);
             sessions.register_window(session_id, window.into());
+            state.update(cx, |state, cx| {
+                state.set_view_mode(&session.session_key, crate::state::DocumentViewMode::Tree);
+                cx.notify();
+            });
         }
-        Err(err) => {
-            sessions.close(session_id);
-            log::error!("Failed to open JSON editor window: {err}");
-        }
+        Err(error) => log::error!("Failed to open JSON editor window: {error}"),
     }
 }
 
 pub fn open_insert_json_editor_window(
     state: Entity<AppState>,
     session_key: SessionKey,
+    cx: &mut App,
+) {
+    open_insert_json_editor_with_content(state, session_key, "{}".to_string(), cx);
+}
+
+pub(crate) fn open_insert_json_editor_with_content(
+    state: Entity<AppState>,
+    session_key: SessionKey,
+    content: String,
     cx: &mut App,
 ) {
     if state.read(cx).active_connection_by_id(session_key.connection_id).is_none() {
@@ -1036,7 +1092,7 @@ pub fn open_insert_json_editor_window(
         sessions.close(existing_id);
     }
 
-    let session_id = sessions.create_insert_session(session_key, "{}".to_string());
+    let session_id = sessions.create_insert_session(session_key, content);
     match open_detached_json_editor_window(state, sessions.clone(), session_id, cx) {
         Ok(window) => {
             focus_window_handle(&window, cx);

@@ -80,6 +80,15 @@ impl AppCommands {
         session_key: SessionKey,
         cx: &mut App,
     ) {
+        if state.read(cx).session_has_invalid_edit(&session_key) {
+            state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error(
+                    "Finish or cancel the invalid field edit before loading documents.",
+                )));
+                cx.notify();
+            });
+            return;
+        }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };

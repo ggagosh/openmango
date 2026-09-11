@@ -56,6 +56,9 @@ pub enum AppEvent {
         count: usize,
         error: String,
     },
+    DocumentDraftChanged {
+        session: SessionKey,
+    },
     DocumentSaved {
         session: SessionKey,
         document: DocumentKey,
