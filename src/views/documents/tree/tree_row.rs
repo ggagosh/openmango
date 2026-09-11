@@ -9,7 +9,9 @@ use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tree::{TreeEntry, TreeState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, Sizable as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -42,6 +44,7 @@ pub(crate) fn render_tree_row(
     node_meta: &Arc<HashMap<String, NodeMeta>>,
     editing_node_id: &Option<String>,
     inline_state: &Option<InlineEditor>,
+    inline_error: Option<&str>,
     view: Entity<CollectionView>,
     tree_state: Entity<TreeState>,
     state: Entity<AppState>,
@@ -137,92 +140,91 @@ pub(crate) fn render_tree_row(
         None
     };
 
-    let mut row = div()
-        .id(("tree-row", ix))
-        .flex()
-        .items_center()
-        .w_full()
-        .gap(spacing::xs())
-        .rounded(borders::radius_sm());
-    let theme_primary = cx.theme().primary;
-    row = row
-        .border_l_2()
-        .border_color(gpui_kit::transparent_black())
-        .when(_selected, |s| s.bg(cx.theme().list_active).border_color(theme_primary))
-        .when(!_selected && is_multi_selected, |s| s.bg(cx.theme().list_active))
-        .when(!_selected && !is_multi_selected, |s| s.hover(|s| s.bg(cx.theme().list_hover)));
+    let row = div().id(("tree-row", ix)).flex().items_center().w_full().gap(spacing::xs());
 
-    let row = row
-        // Prevent TreeState from toggling expansion on single click.
-        // Also handle selection when clicking outside key/value columns.
-        .on_mouse_down(MouseButton::Left, {
-            let row_session = row_session.clone();
-            let row_state = row_state.clone();
-            let row_tree = row_tree.clone();
-            let range_node_meta = node_meta.clone();
-            let range_tree_order = tree_order.clone();
-            move |event, window, cx| {
-                window.focus(&row_focus, cx);
-                cx.stop_propagation();
-                let is_shift = event.modifiers.shift;
-                let anchor = row_tree.read(cx).selected_index();
-                // Only move the anchor on non-shift clicks so repeated
-                // shift+clicks always extend from the original anchor.
-                if !is_shift {
-                    row_tree.update(cx, |tree, cx| {
-                        tree.set_selected_index(Some(ix), cx);
-                    });
-                }
-                if let (Some(meta), Some(session_key)) =
-                    (range_node_meta.get(&row_item_id), row_session.clone())
+    // Consume the whole Kit row, including padding, before Tree handles expansion.
+    let on_mouse_down = {
+        let row_session = row_session.clone();
+        let row_state = row_state.clone();
+        let row_tree = row_tree.clone();
+        let range_node_meta = node_meta.clone();
+        let range_tree_order = tree_order.clone();
+        move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
+            let can_select = row_view.update(cx, |this, cx| {
+                let editing = this.view_model.editing_node_id();
+                if editing.is_some()
+                    && (editing.as_deref() != Some(row_item_id.as_str()) || event.click_count != 2)
                 {
-                    let is_cmd = event.modifiers.secondary() || event.modifiers.control;
-                    row_state.update(cx, |state, cx| {
-                        if is_shift && meta.path.is_empty() {
-                            let anchor_ix = anchor.unwrap_or(0);
-                            let lo = anchor_ix.min(ix);
-                            let hi = anchor_ix.max(ix);
-                            let doc_keys: HashSet<DocumentKey> = range_tree_order
-                                [lo..=hi.min(range_tree_order.len().saturating_sub(1))]
-                                .iter()
-                                .filter_map(|id| range_node_meta.get(id))
-                                .filter(|m| m.path.is_empty())
-                                .map(|m| m.doc_key.clone())
-                                .collect();
-                            state.select_doc_range(
-                                &session_key,
-                                doc_keys,
-                                meta.doc_key.clone(),
-                                row_item_id.clone(),
-                            );
-                        } else if is_cmd && meta.path.is_empty() {
-                            state.toggle_doc_selection(&session_key, &meta.doc_key);
-                            state.set_selected_node(
-                                &session_key,
-                                meta.doc_key.clone(),
-                                row_item_id.clone(),
-                            );
-                        } else {
-                            state.select_single_doc(
-                                &session_key,
-                                meta.doc_key.clone(),
-                                row_item_id.clone(),
-                            );
-                        }
-                        if event.click_count == 2 && meta.is_folder {
-                            state.toggle_expanded_node(&session_key, &row_item_id);
-                        }
+                    this.finish_document_edit(cx)
+                } else {
+                    true
+                }
+            });
+            if !can_select {
+                return;
+            }
+            window.focus(&row_focus, cx);
+            let is_shift = event.modifiers.shift;
+            let anchor = row_tree.read(cx).selected_index();
+            // Only move the anchor on non-shift clicks so repeated
+            // shift+clicks always extend from the original anchor.
+            if !is_shift {
+                row_tree.update(cx, |tree, cx| {
+                    tree.set_selected_index(Some(ix), cx);
+                });
+            }
+            if let (Some(meta), Some(session_key)) =
+                (range_node_meta.get(&row_item_id), row_session.clone())
+            {
+                let is_cmd = event.modifiers.secondary() || event.modifiers.control;
+                row_state.update(cx, |state, cx| {
+                    if is_shift && meta.path.is_empty() {
+                        let anchor_ix = anchor.unwrap_or(0);
+                        let lo = anchor_ix.min(ix);
+                        let hi = anchor_ix.max(ix);
+                        let doc_keys: HashSet<DocumentKey> = range_tree_order
+                            [lo..=hi.min(range_tree_order.len().saturating_sub(1))]
+                            .iter()
+                            .filter_map(|id| range_node_meta.get(id))
+                            .filter(|m| m.path.is_empty())
+                            .map(|m| m.doc_key.clone())
+                            .collect();
+                        state.select_doc_range(
+                            &session_key,
+                            doc_keys,
+                            meta.doc_key.clone(),
+                            row_item_id.clone(),
+                        );
+                    } else if is_cmd && meta.path.is_empty() {
+                        state.toggle_doc_selection(&session_key, &meta.doc_key);
+                        state.set_selected_node(
+                            &session_key,
+                            meta.doc_key.clone(),
+                            row_item_id.clone(),
+                        );
+                    } else {
+                        state.select_single_doc(
+                            &session_key,
+                            meta.doc_key.clone(),
+                            row_item_id.clone(),
+                        );
+                    }
+                    if event.click_count == 2 && meta.is_folder {
+                        state.toggle_expanded_node(&session_key, &row_item_id);
+                    }
+                    cx.notify();
+                });
+                if event.click_count == 2 && meta.is_folder {
+                    row_view.update(cx, |this, cx| {
+                        this.view_model.rebuild_tree(&this.state, cx);
                         cx.notify();
                     });
-                    if event.click_count == 2 && meta.is_folder {
-                        row_view.update(cx, |this, cx| {
-                            this.view_model.rebuild_tree(&this.state, cx);
-                            cx.notify();
-                        });
-                    }
                 }
             }
-        })
+        }
+    };
+    let row = row
         .child(render_key_column(
             ix,
             depth,
@@ -245,15 +247,12 @@ pub(crate) fn render_tree_row(
             &value_label,
             value_color,
             inline_state,
+            inline_error,
             node_meta.clone(),
             view.clone(),
-            tree_state.clone(),
-            state.clone(),
-            session_key.clone(),
             value_drag,
             search_opts,
             current_match_id,
-            documents_focus.clone(),
             cx,
         ))
         .child(
@@ -266,13 +265,13 @@ pub(crate) fn render_tree_row(
                 .child(type_label),
         );
 
-    let selected_count = selected_docs.len();
     let row = row.context_menu({
         let node_meta = node_meta.clone();
         let menu_item_id = item_id.clone();
         let state = state.clone();
         let view = view.clone();
         let session_key = session_key.clone();
+        let tree_state = tree_state.clone();
         move |menu, window, cx| {
             let menu = menu.action_context(documents_focus.clone());
             let Some(meta) = node_meta.get(&menu_item_id).cloned() else {
@@ -281,6 +280,33 @@ pub(crate) fn render_tree_row(
             let Some(session_key) = session_key.clone() else {
                 return menu;
             };
+            tree_state.update(cx, |tree, cx| tree.set_selected_index(Some(ix), cx));
+
+            // A field always targets its own document; a selected root keeps the multi-selection.
+            state.update(cx, |state, cx| {
+                let already_selected = state
+                    .session_view(&session_key)
+                    .is_some_and(|view| view.selected_docs.contains(&meta.doc_key));
+                if !meta.path.is_empty() || !already_selected {
+                    state.select_single_doc(
+                        &session_key,
+                        meta.doc_key.clone(),
+                        menu_item_id.clone(),
+                    );
+                } else {
+                    state.set_selected_node(
+                        &session_key,
+                        meta.doc_key.clone(),
+                        menu_item_id.clone(),
+                    );
+                }
+                cx.notify();
+            });
+            let selected_count = state
+                .read(cx)
+                .session_view(&session_key)
+                .map(|view| view.selected_docs.len())
+                .unwrap_or(0);
 
             if meta.path.is_empty() {
                 build_document_menu(
@@ -301,7 +327,12 @@ pub(crate) fn render_tree_row(
         }
     });
 
-    ListItem::new(ix).child(row).selected(false).px_0().py(px(2.0))
+    ListItem::new(ix)
+        .child(row)
+        .selected(!is_editing && if is_root { is_multi_selected } else { _selected })
+        .px_0()
+        .py(px(2.0))
+        .on_mouse_down(MouseButton::Left, on_mouse_down)
 }
 
 #[allow(dead_code)]
@@ -369,33 +400,30 @@ pub fn render_readonly_tree_row(
         div().w(px(18.0)).into_any_element()
     };
 
-    let mut row =
-        div().flex().items_center().w_full().gap(spacing::xs()).rounded(borders::radius_sm());
-    row = row
-        .when(selected, |s: Div| s.bg(cx.theme().list_active))
-        .when(!selected, |s: Div| s.hover(|s| s.bg(cx.theme().list_hover)));
-    let row = row
-        .on_mouse_down(MouseButton::Left, {
-            let row_item_id = item_id.clone();
-            let row_view = view.clone();
-            let row_tree = tree_state.clone();
-            move |event, _window, cx| {
-                cx.stop_propagation();
-                row_tree.update(cx, |tree, cx| {
-                    tree.set_selected_index(Some(ix), cx);
+    let row = div().flex().items_center().w_full().gap(spacing::xs());
+    // Consume the whole Kit row, including padding, before Tree handles expansion.
+    let on_mouse_down = {
+        let row_item_id = item_id.clone();
+        let row_view = view.clone();
+        let row_tree = tree_state.clone();
+        move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
+            row_tree.update(cx, |tree, cx| {
+                tree.set_selected_index(Some(ix), cx);
+            });
+            if event.click_count == 2 && is_folder {
+                row_view.update(cx, |this, cx| {
+                    if this.aggregation_results_expanded_nodes.contains(&row_item_id) {
+                        this.aggregation_results_expanded_nodes.remove(&row_item_id);
+                    } else {
+                        this.aggregation_results_expanded_nodes.insert(row_item_id.clone());
+                    }
+                    cx.notify();
                 });
-                if event.click_count == 2 && is_folder {
-                    row_view.update(cx, |this, cx| {
-                        if this.aggregation_results_expanded_nodes.contains(&row_item_id) {
-                            this.aggregation_results_expanded_nodes.remove(&row_item_id);
-                        } else {
-                            this.aggregation_results_expanded_nodes.insert(row_item_id.clone());
-                        }
-                        cx.notify();
-                    });
-                }
             }
-        })
+        }
+    };
+    let row = row
         .child(render_key_column(
             ix,
             depth,
@@ -420,7 +448,12 @@ pub fn render_readonly_tree_row(
                 .child(type_label),
         );
 
-    ListItem::new(ix).child(row).selected(false).px_0().py(px(2.0))
+    ListItem::new(ix)
+        .child(row)
+        .selected(selected)
+        .px_0()
+        .py(px(2.0))
+        .on_mouse_down(MouseButton::Left, on_mouse_down)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -503,15 +536,12 @@ fn render_value_column(
     value_label: &str,
     value_color: Hsla,
     inline_state: &Option<InlineEditor>,
+    inline_error: Option<&str>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
     view: Entity<CollectionView>,
-    tree_state: Entity<TreeState>,
-    state: Entity<AppState>,
-    session_key: Option<SessionKey>,
     value_drag: Option<DragValue>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
-    documents_focus: FocusHandle,
     cx: &App,
 ) -> impl IntoElement {
     let item_id = item_id.to_string();
@@ -519,7 +549,6 @@ fn render_value_column(
     let is_match =
         search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&value_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
-    let focus_handle = documents_focus.clone();
 
     // Index-based id avoids allocating + hashing a per-node string every frame.
     let mut value = div()
@@ -529,15 +558,15 @@ fn render_value_column(
         .gap(spacing::xs())
         .flex_1()
         .min_w(px(0.0))
-        .when(is_dirty && !selected, {
+        .when(is_dirty && !selected && !is_editing, {
             let dirty_bg = colors::bg_dirty(cx);
             move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
-        .when(is_match && !is_dirty && !selected, {
+        .when(is_match && !is_dirty && !selected && !is_editing, {
             let dirty_bg = colors::bg_dirty(cx);
             move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
         })
-        .when(is_current_match && !selected, |s| {
+        .when(is_current_match && !selected && !is_editing, |s| {
             s.border_1()
                 .border_color(cx.theme().primary)
                 .rounded(borders::radius_sm())
@@ -548,27 +577,11 @@ fn render_value_column(
             let item_id = item_id.clone();
             let node_meta = node_meta.clone();
             let view = view.clone();
-            let tree_state = tree_state.clone();
-            let state = state.clone();
             move |this| {
                 this.on_mouse_down(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                        window.focus(&focus_handle, cx);
-                        tree_state.update(cx, |tree, cx| {
-                            tree.set_selected_index(Some(ix), cx);
-                        });
                         if let Some(meta) = node_meta.get(&item_id) {
-                            if let Some(session_key) = session_key.clone() {
-                                state.update(cx, |state, cx| {
-                                    state.set_selected_node(
-                                        &session_key,
-                                        meta.doc_key.clone(),
-                                        item_id.clone(),
-                                    );
-                                    cx.notify();
-                                });
-                            }
                             view.update(cx, |this, cx| {
                                 if event.click_count == 2 && meta.is_editable {
                                     this.view_model.begin_inline_edit(
@@ -587,7 +600,7 @@ fn render_value_column(
             }
         })
         .child(if is_editing {
-            render_inline_editor(ix, inline_state, view.clone(), cx)
+            render_inline_editor(ix, inline_state, inline_error, view.clone(), cx)
         } else {
             div()
                 .text_sm()
@@ -615,23 +628,36 @@ fn render_value_column(
 fn render_inline_editor(
     ix: usize,
     inline_state: &Option<InlineEditor>,
+    inline_error: Option<&str>,
     view: Entity<CollectionView>,
     cx: &App,
 ) -> AnyElement {
     let Some(inline_state) = inline_state else {
         return div().into_any_element();
     };
+    let border_color = if inline_error.is_some() { cx.theme().danger } else { cx.theme().ring };
 
     let editor = match inline_state {
         InlineEditor::Text(state) => Input::new(state)
             .font_family(crate::theme::fonts::mono())
-            .small()
+            .xsmall()
+            .text_sm()
+            .focus_bordered(false)
+            .border_color(border_color)
+            .rounded(borders::radius_xs())
             .flex_1()
+            .min_w(px(0.0))
             .into_any_element(),
         InlineEditor::Number(state) => NumberInput::new(state)
             .font_family(crate::theme::fonts::mono())
-            .small()
+            .xsmall()
+            .text_sm()
+            .focus_ring(false)
+            .border_color(border_color)
+            .rounded(borders::radius_xs())
             .flex_1()
+            .min_w(px(0.0))
+            .max_w(px(320.0))
             .into_any_element(),
         InlineEditor::Bool(current) => {
             let current = *current;
@@ -639,7 +665,7 @@ fn render_inline_editor(
                 .flex()
                 .items_center()
                 .gap(spacing::xs())
-                .child(Switch::new(("inline-bool", ix)).checked(current).small().on_click({
+                .child(Switch::new(("inline-bool", ix)).checked(current).xsmall().on_click({
                     let view = view.clone();
                     move |checked, _window, cx| {
                         view.update(cx, |this, cx| {
@@ -667,30 +693,49 @@ fn render_inline_editor(
         .gap(spacing::xs())
         .flex_1()
         .min_w(px(0.0))
+        .max_w(px(640.0))
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            // Prevent the parent row's mousedown handler from stealing focus,
-            // which would blur the inline editor before the Save button click fires.
+            // Keep focus and Done/Cancel handling inside the editing controls.
             cx.stop_propagation();
         })
         .child(editor)
-        .child(Button::new("inline-save").xsmall().primary().label("Save").on_click({
-            let view = view.clone();
-            move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.view_model.commit_inline_edit(&this.state, cx);
-                    cx.notify();
-                });
-            }
-        }))
-        .child(Button::new("inline-cancel").xsmall().ghost().label("Cancel").on_click({
-            let view = view.clone();
-            move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.view_model.clear_inline_edit();
-                    cx.notify();
-                });
-            }
-        }))
+        .child(
+            Button::new("inline-save")
+                .xsmall()
+                .ghost()
+                .label("Done")
+                .tooltip("Keep this field change in the document draft (Enter)")
+                .disabled(inline_error.is_some())
+                .on_click({
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.view_model.commit_inline_edit(&this.state, cx);
+                            if this.view_model.inline_state().is_none() {
+                                window.focus(&this.documents_focus, cx);
+                            }
+                            cx.notify();
+                        });
+                    }
+                }),
+        )
+        .child(
+            Button::new("inline-cancel")
+                .xsmall()
+                .ghost()
+                .label("Cancel")
+                .tooltip("Restore this field's previous value (Escape)")
+                .on_click({
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.view_model.cancel_inline_edit(&this.state, cx);
+                            window.focus(&this.documents_focus, cx);
+                            cx.notify();
+                        });
+                    }
+                }),
+        )
         .into_any_element()
 }
 

@@ -160,6 +160,7 @@ impl Sidebar {
                 | AppEvent::DocumentInsertFailed { .. }
                 | AppEvent::DocumentsInserted { .. }
                 | AppEvent::DocumentsInsertFailed { .. }
+                | AppEvent::DocumentDraftChanged { .. }
                 | AppEvent::DocumentSaved { .. }
                 | AppEvent::DocumentSaveFailed { .. }
                 | AppEvent::DocumentDeleted { .. }

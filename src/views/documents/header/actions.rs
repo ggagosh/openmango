@@ -10,6 +10,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::bson::Document;
 
@@ -88,10 +89,15 @@ fn render_delete_menu(
     let button = MenuButton::new("delete-menu")
         .xsmall()
         .rounded(borders::radius_sm())
-        .disabled(session_key.is_none())
+        .disabled(
+            session_key
+                .as_ref()
+                .is_none_or(|key| state.read(cx).connection_read_only(key.connection_id)),
+        )
         .with_size(Size::Small)
         .custom(clean_delete_variant)
         .icon(Icon::new(IconName::Delete).xsmall())
+        .label("Delete")
         .tooltip("Delete options");
 
     let anchor = Anchor::BottomLeft;
@@ -253,6 +259,7 @@ fn render_delete_menu(
 fn render_copy_as_dropdown(
     view: Entity<CollectionView>,
     view_mode: DocumentViewMode,
+    selected_count: usize,
     cx: &App,
 ) -> impl IntoElement {
     use crate::views::documents::actions::copy_documents_as;
@@ -266,7 +273,7 @@ fn render_copy_as_dropdown(
         .shadow(false);
 
     let formats = match view_mode {
-        DocumentViewMode::Tree => CopyFormat::tree_formats(),
+        DocumentViewMode::Tree | DocumentViewMode::Json => CopyFormat::tree_formats(),
         DocumentViewMode::Table => CopyFormat::table_formats(),
     };
     let formats: Vec<CopyFormat> = formats.to_vec();
@@ -276,9 +283,9 @@ fn render_copy_as_dropdown(
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
-        .label("Copy Page As")
+        .label(if selected_count > 0 { "Copy selected" } else { "Copy page" })
         .icon(Icon::new(IconName::Copy).xsmall())
-        .tooltip("Copy the current page")
+        .tooltip("Copy documents in a selected format")
         .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu: PopupMenu, _window, _cx| {
             let mut menu = menu;
             for &fmt in &formats {
@@ -286,7 +293,16 @@ fn render_copy_as_dropdown(
                 let item = PopupMenuItem::new(fmt.label()).icon(fmt.icon()).on_click(
                     move |_, _window, cx| {
                         view_click.update(cx, |this, cx| {
-                            copy_documents_as(this, fmt, ExportScope::CurrentPage, cx);
+                            copy_documents_as(
+                                this,
+                                fmt,
+                                if selected_count > 0 {
+                                    ExportScope::Selected
+                                } else {
+                                    ExportScope::CurrentPage
+                                },
+                                cx,
+                            );
                         });
                     },
                 );
@@ -356,14 +372,16 @@ fn render_documents_actions_clean(
     cx: &mut Context<CollectionView>,
 ) -> Div {
     let state_for_refresh = state.clone();
-    let state_for_apply = state.clone();
     let state_for_dialog = state.clone();
     let state_for_insert = state.clone();
     let state_for_delete = state.clone();
     let state_for_transfer = state.clone();
+    let writable = session_key
+        .as_ref()
+        .is_some_and(|key| !state.read(cx).connection_read_only(key.connection_id));
 
     let insert_button = clean_toolbar_icon_button(
-        Button::new("insert-document-clean").xsmall().disabled(session_key.is_none()).on_click({
+        Button::new("insert-document-clean").xsmall().disabled(!writable || is_loading).on_click({
             let session_key = session_key.clone();
             let state_for_insert = state_for_insert.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -380,7 +398,8 @@ fn render_documents_actions_clean(
         }),
         IconName::Plus,
         "Insert document",
-    );
+    )
+    .label("Insert");
 
     let edit_button = clean_toolbar_icon_button(
         Button::new("edit-json-clean")
@@ -410,115 +429,37 @@ fn render_documents_actions_clean(
             }),
         crate::assets::AppIcon::Braces,
         "Edit JSON",
-    );
+    )
+    .label("Edit");
 
-    let discard_button = clean_toolbar_icon_button(
-        Button::new("discard-clean").xsmall().disabled(!any_selected_dirty).on_click({
+    let saving = session_key
+        .as_ref()
+        .and_then(|key| state.read(cx).session_view(key))
+        .is_some_and(|view| !view.saving_documents.is_empty());
+    let discard_button = Button::new("discard-clean")
+        .ghost()
+        .xsmall()
+        .label("Discard")
+        .disabled(!any_selected_dirty || saving)
+        .on_click({
             let view = view.clone();
-            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            move |_, window, cx| {
+                view.update(cx, |this, cx| this.discard_selected_documents(window, cx));
+            }
+        });
+    let apply_button = Button::new("apply-clean")
+        .primary()
+        .xsmall()
+        .label(if saving { "Saving…" } else { "Save" })
+        .disabled(!any_selected_dirty || saving)
+        .on_click({
+            let view = view.clone();
+            move |_, window, cx| {
                 view.update(cx, |this, cx| {
-                    let Some(session_key) = this.view_model.current_session() else {
-                        return;
-                    };
-                    let dirty_selected: Vec<_> = {
-                        let state_ref = this.state.read(cx);
-                        let Some(session) = state_ref.session(&session_key) else {
-                            return;
-                        };
-                        session
-                            .view
-                            .selected_docs
-                            .iter()
-                            .filter(|dk| session.view.dirty.contains(*dk))
-                            .cloned()
-                            .collect()
-                    };
-                    this.state.update(cx, |state, cx| {
-                        for doc_key in &dirty_selected {
-                            state.clear_draft(&session_key, doc_key);
-                        }
-                        cx.notify();
-                    });
-                    this.view_model.clear_inline_edit();
-                    this.view_model.rebuild_tree(&this.state, cx);
-                    this.view_model.sync_dirty_state(&this.state, cx);
-                    cx.notify();
+                    this.save_selected_documents(window, cx);
                 });
             }
-        }),
-        IconName::CircleX,
-        "Discard changes",
-    );
-
-    let mut apply_button = clean_toolbar_icon_button(
-        Button::new("apply-clean").xsmall().disabled(!any_selected_dirty).on_click({
-            let state_for_apply = state_for_apply.clone();
-            let view = view.clone();
-            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                view.update(cx, |this, cx| {
-                    this.view_model.commit_inline_edit(&this.state, cx);
-                });
-                let Some(session_key) = state_for_apply.read(cx).current_session_key() else {
-                    return;
-                };
-                let dirty_docs: Vec<_> = {
-                    let state_ref = state_for_apply.read(cx);
-                    let Some(session) = state_ref.session(&session_key) else {
-                        return;
-                    };
-                    session
-                        .view
-                        .selected_docs
-                        .iter()
-                        .filter(|dk| session.view.dirty.contains(*dk))
-                        .cloned()
-                        .collect()
-                };
-                let documents = dirty_docs
-                    .into_iter()
-                    .filter_map(|doc_key| {
-                        state_for_apply
-                            .read(cx)
-                            .session_draft(&session_key, &doc_key)
-                            .map(|document| (doc_key, document))
-                    })
-                    .collect::<Vec<_>>();
-                if documents.is_empty() {
-                    return;
-                }
-                let write_count = documents.len();
-                let state_for_write = state_for_apply.clone();
-                request_connection_write(
-                    state_for_apply.clone(),
-                    crate::components::WriteRequest::new(
-                        session_key.connection_id,
-                        session_key.namespace(),
-                        format!("Save {write_count} document change(s)"),
-                        None,
-                    )
-                    .for_writes(write_count),
-                    window,
-                    cx,
-                    move |_window, cx| {
-                        for (doc_key, document) in documents {
-                            AppCommands::save_document(
-                                state_for_write.clone(),
-                                session_key.clone(),
-                                doc_key,
-                                document,
-                                cx,
-                            );
-                        }
-                    },
-                );
-            }
-        }),
-        IconName::Check,
-        "Apply changes",
-    );
-    if any_selected_dirty {
-        apply_button = apply_button.bg(cx.theme().secondary.opacity(0.55));
-    }
+        });
 
     let delete_menu = render_delete_menu(
         state_for_delete.clone(),
@@ -530,12 +471,17 @@ fn render_documents_actions_clean(
 
     let refresh_button = clean_toolbar_icon_button(
         Button::new("refresh-clean").xsmall().on_click({
-            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                if let Some(session_key) = state_for_refresh.read(cx).current_session_key() {
-                    AppCommands::load_documents_for_session(
+            let view = view.clone();
+            let session_key = session_key.clone();
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                if let Some(key) = session_key.clone() {
+                    CollectionView::reload_document_page(
+                        view.clone(),
                         state_for_refresh.clone(),
-                        session_key,
+                        key,
+                        window,
                         cx,
+                        |_, _| {},
                     );
                 }
             }
@@ -548,7 +494,7 @@ fn render_documents_actions_clean(
     let view_mode =
         session_key.as_ref().map(|sk| state.read(cx).session_view_mode(sk)).unwrap_or_default();
 
-    let copy_as_dropdown = render_copy_as_dropdown(view.clone(), view_mode, cx);
+    let copy_as_dropdown = render_copy_as_dropdown(view.clone(), view_mode, selected_count, cx);
     let export_dropdown = render_export_dropdown(state.clone(), session_key.clone(), cx);
 
     let secondary_actions_menu = render_documents_secondary_menu(
@@ -567,27 +513,21 @@ fn render_documents_actions_clean(
     let tree_btn = {
         let mut btn = clean_toolbar_icon_button(
             Button::new("view-tree").xsmall().on_click({
-                let state = state.clone();
                 let session_key = session_key.clone();
                 let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     let Some(sk) = session_key.clone() else {
                         return;
                     };
-                    state.update(cx, |state, cx| {
-                        state.set_view_mode(&sk, DocumentViewMode::Tree);
-                        state.clear_all_selection(&sk);
-                        cx.notify();
-                    });
                     view.update(cx, |this, cx| {
-                        this.view_model.invalidate_table();
-                        cx.notify();
+                        this.change_document_view(sk, DocumentViewMode::Tree, window, cx);
                     });
                 }
             }),
             IconName::Menu,
             "Tree view",
-        );
+        )
+        .label("Tree");
         if is_tree {
             btn = btn.bg(active_bg);
         }
@@ -597,26 +537,21 @@ fn render_documents_actions_clean(
     let table_btn = {
         let mut btn = clean_toolbar_icon_button(
             Button::new("view-table").xsmall().on_click({
-                let state = state.clone();
                 let session_key = session_key.clone();
                 let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     let Some(sk) = session_key.clone() else {
                         return;
                     };
-                    state.update(cx, |state, cx| {
-                        state.set_view_mode(&sk, DocumentViewMode::Table);
-                        state.clear_all_selection(&sk);
-                        cx.notify();
-                    });
-                    view.update(cx, |_this, cx| {
-                        cx.notify();
+                    view.update(cx, |this, cx| {
+                        this.change_document_view(sk, DocumentViewMode::Table, window, cx);
                     });
                 }
             }),
             IconName::LayoutDashboard,
             "Table view",
-        );
+        )
+        .label("Table");
         if is_table {
             btn = btn.bg(active_bg);
         }
@@ -704,20 +639,15 @@ fn render_documents_actions_clean(
                                 let state_cb = state_pop.clone();
                                 let view_cb = view_pop.clone();
                                 let sk_cb = sk.clone();
-                                div()
-                                    .id(SharedString::from(format!("col-row-{}", key)))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
+                                Checkbox::new(SharedString::from(format!("col-vis-{}", key)))
+                                    .checked(is_visible)
+                                    .label(label)
+                                    .with_size(Size::XSmall)
+                                    .w_full()
                                     .px(px(6.0))
                                     .py(px(2.0))
-                                    .rounded(borders::radius_sm())
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(gpui_kit::hsla(0., 0., 0.5, 0.1)))
                                     .on_click(move |_, _window, cx| {
-                                        let Some(sk) = sk_cb.clone() else {
-                                            return;
-                                        };
+                                        let Some(sk) = sk_cb.clone() else { return };
                                         state_cb.update(cx, |state, cx| {
                                             state.toggle_table_hidden_column(&sk, col_key.clone());
                                             cx.notify();
@@ -727,22 +657,6 @@ fn render_documents_actions_clean(
                                             cx.notify();
                                         });
                                     })
-                                    .child(
-                                        Checkbox::new(SharedString::from(format!(
-                                            "col-vis-{}",
-                                            key
-                                        )))
-                                        .checked(is_visible)
-                                        .with_size(Size::XSmall),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_ellipsis()
-                                            .overflow_x_hidden()
-                                            .max_w(px(170.0))
-                                            .child(label),
-                                    )
                             })
                             .collect();
                         let list = div()
@@ -768,12 +682,10 @@ fn render_documents_actions_clean(
                             .px(px(6.0))
                             .py(px(2.0))
                             .child(
-                                div()
-                                    .id("col-vis-show-all")
-                                    .text_xs()
-                                    .text_color(gpui_kit::hsla(210. / 360., 0.8, 0.55, 1.0))
-                                    .cursor_pointer()
-                                    .child("Show All")
+                                Button::new("col-vis-show-all")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Show All")
                                     .on_click(move |_, _window, cx| {
                                         let Some(sk) = sk_show.clone() else {
                                             return;
@@ -789,12 +701,10 @@ fn render_documents_actions_clean(
                                     }),
                             )
                             .child(
-                                div()
-                                    .id("col-vis-hide-all")
-                                    .text_xs()
-                                    .text_color(gpui_kit::hsla(210. / 360., 0.8, 0.55, 1.0))
-                                    .cursor_pointer()
-                                    .child("Hide All")
+                                Button::new("col-vis-hide-all")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Hide All")
                                     .on_click(move |_, _window, cx| {
                                         let Some(sk) = sk_hide.clone() else {
                                             return;
@@ -830,7 +740,31 @@ fn render_documents_actions_clean(
         None
     };
 
-    let mut row = div().flex().items_center().gap(px(2.0)).child(tree_btn).child(table_btn);
+    let json_btn = Button::new("view-json")
+        .ghost()
+        .xsmall()
+        .label("JSON")
+        .disabled(is_loading || saving)
+        .when(view_mode == DocumentViewMode::Json, |button| button.bg(active_bg))
+        .on_click({
+            let view = view.clone();
+            let session_key = session_key.clone();
+            move |_, window, cx| {
+                if let Some(key) = session_key.clone() {
+                    view.update(cx, |this, cx| {
+                        this.change_document_view(key, DocumentViewMode::Json, window, cx)
+                    });
+                }
+            }
+        });
+    let mut row = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(4.0))
+        .child(tree_btn)
+        .child(table_btn)
+        .child(json_btn);
     if let Some(btn) = reset_columns_btn {
         row = row.child(btn);
     }
@@ -839,10 +773,18 @@ fn render_documents_actions_clean(
     }
     row.child(toolbar_separator(cx))
         .child(insert_button)
-        .child(edit_button)
-        .child(discard_button)
-        .child(apply_button)
+        .when(view_mode != DocumentViewMode::Json, |row| row.child(edit_button))
+        .when(any_selected_dirty, |row| row.child(discard_button).child(apply_button))
         .child(delete_menu)
+        .when(selected_count > 0, |row| {
+            row.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .px_2()
+                    .child(format!("{selected_count} selected")),
+            )
+        })
         .child(toolbar_separator(cx))
         .child(refresh_button)
         .child(toolbar_separator(cx))
@@ -873,29 +815,31 @@ fn render_documents_secondary_menu(
             let mut menu = menu;
 
             menu = menu.item(
-                PopupMenuItem::new("Bulk Update").icon(Icon::new(IconName::Replace)).on_click({
-                    let session_key = session_key.clone();
-                    let selected_doc = selected_doc.clone();
-                    let state_for_dialog = state_for_dialog.clone();
-                    move |_, window, cx| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        BulkUpdateDialog::open(
-                            state_for_dialog.clone(),
-                            session_key,
-                            selected_doc.clone(),
-                            window,
-                            cx,
-                        );
-                    }
-                }),
+                PopupMenuItem::new("Bulk update documents…")
+                    .icon(Icon::new(IconName::Replace))
+                    .on_click({
+                        let session_key = session_key.clone();
+                        let selected_doc = selected_doc.clone();
+                        let state_for_dialog = state_for_dialog.clone();
+                        move |_, window, cx| {
+                            let Some(session_key) = session_key.clone() else {
+                                return;
+                            };
+                            BulkUpdateDialog::open(
+                                state_for_dialog.clone(),
+                                session_key,
+                                selected_doc.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
             );
 
             menu = menu
                 .item(PopupMenuItem::separator())
                 .item(
-                    PopupMenuItem::new("Export Data...")
+                    PopupMenuItem::new("Export entire collection…")
                         .icon(Icon::new(crate::assets::AppIcon::Download))
                         .on_click({
                             let session_key = session_key.clone();
@@ -918,7 +862,7 @@ fn render_documents_secondary_menu(
                         }),
                 )
                 .item(
-                    PopupMenuItem::new("Import Data...")
+                    PopupMenuItem::new("Import into collection…")
                         .icon(Icon::new(crate::assets::AppIcon::Upload))
                         .on_click({
                             let session_key = session_key.clone();
@@ -941,8 +885,9 @@ fn render_documents_secondary_menu(
                         }),
                 )
                 .item(
-                    PopupMenuItem::new("Copy Data To...").icon(Icon::new(IconName::Copy)).on_click(
-                        {
+                    PopupMenuItem::new("Copy collection to…")
+                        .icon(Icon::new(IconName::Copy))
+                        .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
                             move |_, _, cx| {
@@ -960,8 +905,7 @@ fn render_documents_secondary_menu(
                                     );
                                 });
                             }
-                        },
-                    ),
+                        }),
                 );
 
             if ai_available {

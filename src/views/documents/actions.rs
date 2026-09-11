@@ -2,8 +2,7 @@ use gpui_kit::*;
 use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 
 use crate::bson::{
-    PathSegment, bson_value_for_edit, document_to_shell_string, format_relaxed_json_value,
-    get_bson_at_path,
+    PathSegment, document_to_json_string, format_bson_for_clipboard, get_bson_at_path,
 };
 use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
 use crate::keyboard::{
@@ -89,7 +88,8 @@ impl CollectionView {
             IndexCreateDialog::open(this.state.clone(), session_key, window, cx);
         }))
         .on_action(cx.listener(|this, _: &EditDocumentJson, window, cx| {
-            let Some((session_key, doc_key)) = this.selected_doc_key_for_current_session(cx) else {
+            let Some((session_key, _doc_key)) = this.selected_doc_key_for_current_session(cx)
+            else {
                 return;
             };
             let selected_count = this
@@ -101,16 +101,9 @@ impl CollectionView {
             if selected_count > 1 {
                 return;
             }
-            CollectionView::open_document_json_editor(
-                cx.entity(),
-                this.state.clone(),
-                session_key,
-                doc_key,
-                window,
-                cx,
-            );
+            this.change_document_view(session_key, DocumentViewMode::Json, window, cx);
         }))
-        .on_action(cx.listener(|this, _: &DuplicateDocument, window, cx| {
+        .on_action(cx.listener(|this, _: &DuplicateDocument, _window, cx| {
             let Some((session_key, _doc_key, doc)) = this.selected_document_for_current_session(cx)
             else {
                 return;
@@ -126,22 +119,11 @@ impl CollectionView {
             }
             let mut new_doc = doc.clone();
             new_doc.insert("_id", ObjectId::new());
-            let state = this.state.clone();
-            let state_for_write = state.clone();
-            let target = session_key.namespace();
-            request_connection_write(
-                state,
-                crate::components::WriteRequest::new(
-                    session_key.connection_id,
-                    target,
-                    "Insert a duplicated document",
-                    None,
-                ),
-                window,
+            crate::views::json_editor_detached::open_insert_json_editor_with_content(
+                this.state.clone(),
+                session_key,
+                document_to_json_string(&new_doc),
                 cx,
-                move |_window, cx| {
-                    AppCommands::insert_document(state_for_write, session_key, new_doc, cx);
-                },
             );
         }))
         .on_action(cx.listener(|this, _: &DeleteDocument, window, cx| {
@@ -153,7 +135,13 @@ impl CollectionView {
                 let Some(session) = state_ref.session(&session_key) else {
                     return;
                 };
-                session.view.selected_docs.iter().cloned().collect()
+                session
+                    .data
+                    .items
+                    .iter()
+                    .filter(|item| session.view.selected_docs.contains(&item.key))
+                    .map(|item| item.key.clone())
+                    .collect()
             };
             if selected_docs.is_empty() {
                 return;
@@ -264,6 +252,50 @@ impl CollectionView {
             );
         }))
         .on_action(cx.listener(|this, _: &PasteDocuments, window, cx| {
+            if let Some((session_key, meta)) = this.selected_property_context(cx) {
+                if !this.finish_document_edit(cx) {
+                    return;
+                }
+                let result = (|| {
+                    if let Some(reason) =
+                        this.state.read(cx).document_field_edit_restriction(&session_key)
+                    {
+                        return Err(reason.to_string());
+                    }
+                    if matches!(meta.path.first(), Some(PathSegment::Key(key)) if key == "_id") {
+                        return Err("The document _id cannot be changed.".into());
+                    }
+                    let text = cx
+                        .read_from_clipboard()
+                        .and_then(|item| item.text())
+                        .ok_or("Clipboard has no text.")?;
+                    let document = this
+                        .resolve_document(&session_key, &meta.doc_key, cx)
+                        .ok_or("Document is no longer available.")?;
+                    let original = get_bson_at_path(&document, &meta.path)
+                        .ok_or("Field is no longer available.")?;
+                    crate::bson::parse_edited_value(original, &text)
+                })();
+                match result {
+                    Ok(value) => {
+                        this.view_model.update_draft_value(
+                            &this.state,
+                            &meta.doc_key,
+                            &meta.path,
+                            value,
+                            cx,
+                        );
+                        this.view_model.rebuild_tree(&this.state, cx);
+                        this.view_model.invalidate_table();
+                        cx.notify();
+                    }
+                    Err(error) => this.state.update(cx, |state, cx| {
+                        state.set_status_message(Some(StatusMessage::error(error)));
+                        cx.notify();
+                    }),
+                }
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -278,7 +310,13 @@ impl CollectionView {
                 let Some(session) = state_ref.session(&session_key) else {
                     return;
                 };
-                session.view.selected_docs.iter().cloned().collect()
+                session
+                    .data
+                    .items
+                    .iter()
+                    .filter(|item| session.view.selected_docs.contains(&item.key))
+                    .map(|item| item.key.clone())
+                    .collect()
             };
             if selected_docs.is_empty() {
                 return;
@@ -286,7 +324,7 @@ impl CollectionView {
             if selected_docs.len() == 1 {
                 let doc_key = &selected_docs[0];
                 if let Some(doc) = this.resolve_document(&session_key, doc_key, cx) {
-                    let json = document_to_shell_string(&doc);
+                    let json = document_to_json_string(&doc);
                     cx.write_to_clipboard(ClipboardItem::new_string(json));
                 }
             } else {
@@ -301,7 +339,7 @@ impl CollectionView {
                         .collect()
                 };
                 let task = cx.background_spawn(async move {
-                    let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
+                    let parts: Vec<String> = docs.iter().map(document_to_json_string).collect();
                     format!("[{}]", parts.join(",\n"))
                 });
                 cx.spawn(async move |_this, cx: &mut gpui_kit::AsyncApp| {
@@ -312,61 +350,7 @@ impl CollectionView {
             }
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, window, cx| {
-            this.view_model.commit_inline_edit(&this.state, cx);
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let dirty_selected: Vec<_> = {
-                let state_ref = this.state.read(cx);
-                let Some(session) = state_ref.session(&session_key) else {
-                    return;
-                };
-                session
-                    .view
-                    .selected_docs
-                    .iter()
-                    .filter(|dk| session.view.dirty.contains(*dk))
-                    .cloned()
-                    .collect()
-            };
-            let documents = dirty_selected
-                .into_iter()
-                .filter_map(|doc_key| {
-                    this.state
-                        .read(cx)
-                        .session_draft(&session_key, &doc_key)
-                        .map(|document| (doc_key, document))
-                })
-                .collect::<Vec<_>>();
-            if documents.is_empty() {
-                return;
-            }
-            let state = this.state.clone();
-            let state_for_write = state.clone();
-            let write_count = documents.len();
-            request_connection_write(
-                state,
-                crate::components::WriteRequest::new(
-                    session_key.connection_id,
-                    session_key.namespace(),
-                    format!("Save {write_count} document change(s)"),
-                    None,
-                )
-                .for_writes(write_count),
-                window,
-                cx,
-                move |_window, cx| {
-                    for (doc_key, document) in documents {
-                        AppCommands::save_document(
-                            state_for_write.clone(),
-                            session_key.clone(),
-                            doc_key,
-                            document,
-                            cx,
-                        );
-                    }
-                },
-            );
+            this.save_selected_documents(window, cx);
         }))
         .on_action(cx.listener(|this, _: &EditValueType, window, cx| {
             let Some((session_key, meta)) = this.selected_property_context(cx) else {
@@ -495,7 +479,13 @@ impl CollectionView {
                 let Some(session) = state_ref.session(&session_key) else {
                     return;
                 };
-                session.view.selected_docs.iter().cloned().collect()
+                session
+                    .data
+                    .items
+                    .iter()
+                    .filter(|item| session.view.selected_docs.contains(&item.key))
+                    .map(|item| item.key.clone())
+                    .collect()
             };
             if selected_docs.is_empty() {
                 return;
@@ -503,7 +493,7 @@ impl CollectionView {
             if selected_docs.len() == 1 {
                 let doc_key = &selected_docs[0];
                 if let Some(doc) = this.resolve_document(&session_key, doc_key, cx) {
-                    let json = document_to_shell_string(&doc);
+                    let json = document_to_json_string(&doc);
                     cx.write_to_clipboard(ClipboardItem::new_string(json));
                 }
             } else {
@@ -518,7 +508,7 @@ impl CollectionView {
                         .collect()
                 };
                 let task = cx.background_spawn(async move {
-                    let parts: Vec<String> = docs.iter().map(document_to_shell_string).collect();
+                    let parts: Vec<String> = docs.iter().map(document_to_json_string).collect();
                     format!("[{}]", parts.join(",\n"))
                 });
                 cx.spawn(async move |_this, cx: &mut gpui_kit::AsyncApp| {
@@ -546,7 +536,7 @@ impl CollectionView {
             };
 
             match view_mode {
-                DocumentViewMode::Tree => {
+                DocumentViewMode::Tree | DocumentViewMode::Json => {
                     let property_ctx = this.selected_property_context(cx);
                     match tree_copy_target(
                         property_ctx.as_ref().map(|(_, meta)| meta.path.as_slice()),
@@ -566,7 +556,7 @@ impl CollectionView {
                             if let Some((sk, meta)) = property_ctx
                                 && let Some(doc) = this.resolve_document(&sk, &meta.doc_key, cx)
                             {
-                                let text = document_to_shell_string(&doc);
+                                let text = document_to_json_string(&doc);
                                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                             }
                         }
@@ -613,38 +603,13 @@ impl CollectionView {
             };
             cx.write_to_clipboard(ClipboardItem::new_string(meta.key_label));
         }))
-        .on_action(cx.listener(|this, _: &DiscardDocumentChanges, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let dirty_selected: Vec<_> = {
-                let state_ref = this.state.read(cx);
-                let Some(session) = state_ref.session(&session_key) else {
-                    return;
-                };
-                session
-                    .view
-                    .selected_docs
-                    .iter()
-                    .filter(|dk| session.view.dirty.contains(*dk))
-                    .cloned()
-                    .collect()
-            };
-            if dirty_selected.is_empty() {
-                return;
-            }
-            this.state.update(cx, |state, cx| {
-                for doc_key in &dirty_selected {
-                    state.clear_draft(&session_key, doc_key);
-                }
-                cx.notify();
-            });
-            this.view_model.clear_inline_edit();
-            this.view_model.rebuild_tree(&this.state, cx);
-            this.view_model.sync_dirty_state(&this.state, cx);
-            cx.notify();
+        .on_action(cx.listener(|this, _: &DiscardDocumentChanges, window, cx| {
+            this.discard_selected_documents(window, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowDocumentsSubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -654,6 +619,9 @@ impl CollectionView {
             });
         }))
         .on_action(cx.listener(|this, _: &ShowIndexesSubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -664,6 +632,9 @@ impl CollectionView {
             AppCommands::load_collection_indexes(this.state.clone(), session_key, false, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowStatsSubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -678,6 +649,9 @@ impl CollectionView {
             }
         }))
         .on_action(cx.listener(|this, _: &ShowAggregationSubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -687,6 +661,9 @@ impl CollectionView {
             });
         }))
         .on_action(cx.listener(|this, _: &ShowHistorySubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -704,6 +681,9 @@ impl CollectionView {
             AppCommands::load_collection_history(this.state.clone(), session_key, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowSchemaSubview, _window, cx| {
+            if !this.finish_document_edit(cx) {
+                return;
+            }
             let Some(session_key) = this.view_model.current_session() else {
                 return;
             };
@@ -1044,8 +1024,16 @@ pub(in crate::views::documents) fn copy_documents_as(
         let snapshot = ViewExportSnapshot::from_session_state(
             &session.data.items,
             &session.view.selected_docs,
-            &session.view.table_column_order,
-            &session.view.table_hidden_columns,
+            if session.view.view_mode == DocumentViewMode::Table {
+                &session.view.table_column_order
+            } else {
+                &[]
+            },
+            &if session.view.view_mode == DocumentViewMode::Table {
+                session.view.table_hidden_columns.clone()
+            } else {
+                Default::default()
+            },
             &session.view.table_pinned_columns,
             &session.view.drafts,
             session_key.collection.clone(),
@@ -1153,7 +1141,7 @@ fn property_flags(meta: &NodeMeta) -> PropertyFlags {
     let is_array_element = matches!(meta.path.last(), Some(PathSegment::Index(_)));
     let has_index = meta.path.iter().any(|segment| matches!(segment, PathSegment::Index(_)));
     let allow_bulk = !has_index;
-    let is_id = matches!(meta.path.last(), Some(PathSegment::Key(key)) if key == "_id");
+    let is_id = matches!(meta.path.first(), Some(PathSegment::Key(key)) if key == "_id");
     let is_array = matches!(meta.value, Some(Bson::Array(_)));
     let can_edit_value = !is_id;
     let can_rename_field = !is_id && !is_array_element;
@@ -1170,17 +1158,6 @@ fn property_flags(meta: &NodeMeta) -> PropertyFlags {
         can_add_field,
         is_array,
         is_array_element,
-    }
-}
-
-fn format_bson_for_clipboard(value: &Bson) -> String {
-    match value {
-        Bson::Document(doc) => document_to_shell_string(doc),
-        Bson::Array(arr) => {
-            let value = Bson::Array(arr.clone()).into_relaxed_extjson();
-            format_relaxed_json_value(&value)
-        }
-        _ => bson_value_for_edit(value),
     }
 }
 

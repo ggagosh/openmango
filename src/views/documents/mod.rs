@@ -7,6 +7,7 @@ mod explain;
 mod fast_filter;
 pub(crate) use fast_filter::compile_filter_input;
 mod header;
+mod json_view;
 mod node_meta;
 mod pagination;
 mod query;
@@ -20,6 +21,7 @@ mod state;
 mod types;
 mod view;
 mod view_model;
+mod workflow;
 
 pub mod dialogs;
 pub mod export;

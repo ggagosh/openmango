@@ -7,7 +7,7 @@ use gpui_kit::AnyWindowHandle;
 use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
-use crate::bson::{DocumentKey, document_to_shell_string};
+use crate::bson::{DocumentKey, document_to_json_string};
 use crate::state::app_state::SessionKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -185,7 +185,13 @@ impl EditorSessionStore {
             else {
                 return false;
             };
-            session.baseline_content = document_to_shell_string(&baseline_document);
+            session.baseline_content = if crate::bson::parse_document_from_json(&session.content)
+                .is_ok_and(|document| document == baseline_document)
+            {
+                session.content.clone()
+            } else {
+                document_to_json_string(&baseline_document)
+            };
             **current = baseline_document;
             true
         })
@@ -343,6 +349,12 @@ mod tests {
             panic!("expected document target");
         };
         assert_eq!(baseline_document.get_str("name").ok(), Some("after"));
+        let content = "{ \"_id\": 1, \"name\": \"after\" }".to_string();
+        store.update_content(session_id, content.clone());
+        store.refresh_document_baseline(session_id, doc! { "_id": 1, "name": "after" });
+        let snapshot = store.snapshot(session_id).unwrap();
+        assert_eq!(snapshot.content, content);
+        assert!(!snapshot.is_dirty());
     }
 
     #[test]

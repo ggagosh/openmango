@@ -39,7 +39,7 @@ pub fn escape_key(key: &str) -> String {
 /// Check if a BSON value at the given path is editable inline.
 pub fn is_editable_value(value: &Bson, path: &[PathSegment]) -> bool {
     // _id field is not editable
-    if matches!(path.last(), Some(PathSegment::Key(key)) if key == "_id") {
+    if matches!(path.first(), Some(PathSegment::Key(key)) if key == "_id") {
         return false;
     }
 

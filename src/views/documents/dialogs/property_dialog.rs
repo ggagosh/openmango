@@ -26,6 +26,7 @@ pub struct PropertyActionDialog {
     session_key: SessionKey,
     doc_key: DocumentKey,
     action: PropertyActionKind,
+    path: Vec<PathSegment>,
     path_dot: String,
     parent_dot: String,
     array_dot: String,
@@ -195,6 +196,9 @@ impl PropertyActionDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let allow_bulk = allow_bulk && !meta.path.iter().any(|segment| {
+            matches!(segment, PathSegment::Key(key) if key.contains('.') || key.starts_with('$'))
+        });
         let mut parent_path = parent_path(&meta.path);
         if action == PropertyActionKind::AddField && matches!(meta.value, Some(Bson::Document(_))) {
             parent_path = meta.path.clone();
@@ -274,7 +278,12 @@ impl PropertyActionDialog {
         }
 
         if should_prefill_value && let Some(value) = meta.value.as_ref() {
-            let raw = format_bson_for_input(value);
+            let raw = if value_type == ValueType::ExtendedJson {
+                serde_json::to_string_pretty(&value.clone().into_canonical_extjson())
+                    .expect("Extended JSON is serializable")
+            } else {
+                format_bson_for_input(value)
+            };
             value_state.update(cx, |state, cx| {
                 state.set_value(raw, window, cx);
             });
@@ -285,6 +294,7 @@ impl PropertyActionDialog {
             session_key,
             doc_key: meta.doc_key.clone(),
             action,
+            path: meta.path.clone(),
             path_dot,
             parent_dot,
             array_dot,
@@ -356,6 +366,7 @@ impl PropertyActionDialog {
         let trimmed = raw.trim();
 
         match self.value_type {
+            ValueType::ExtendedJson => crate::bson::parse_bson_from_relaxed_json(trimmed),
             ValueType::String => Ok(Bson::String(raw)),
             ValueType::Bool => parse_bool(trimmed),
             ValueType::Int32 => parse_i32(trimmed),
@@ -391,6 +402,15 @@ impl PropertyActionDialog {
         }
 
         self.error_message = None;
+        if self.effective_scope() == UpdateScope::CurrentDocument {
+            if let Err(error) = self.stage_property_edit(cx) {
+                self.error_message = Some(error);
+                cx.notify();
+            } else {
+                window.close_dialog(cx);
+            }
+            return;
+        }
         let update_doc = match self.build_update_doc(cx) {
             Ok(doc) => doc,
             Err(err) => {
@@ -401,38 +421,7 @@ impl PropertyActionDialog {
         };
 
         match self.effective_scope() {
-            UpdateScope::CurrentDocument => {
-                let state = self.state.clone();
-                let state_for_write = state.clone();
-                let session_key = self.session_key.clone();
-                let session_for_write = session_key.clone();
-                let doc_key = self.doc_key.clone();
-                let view = cx.entity();
-                request_connection_write(
-                    state,
-                    crate::components::WriteRequest::new(
-                        session_key.connection_id,
-                        session_key.namespace(),
-                        "Update a document property",
-                        None,
-                    ),
-                    window,
-                    cx,
-                    move |_window, cx| {
-                        view.update(cx, |view, cx| {
-                            view.updating = true;
-                            cx.notify();
-                            AppCommands::update_document_by_key(
-                                state_for_write,
-                                session_for_write,
-                                doc_key,
-                                update_doc,
-                                cx,
-                            );
-                        });
-                    },
-                );
-            }
+            UpdateScope::CurrentDocument => unreachable!("single-document edits are staged above"),
             UpdateScope::MatchQuery => {
                 self.confirm_bulk_update(self.current_filter(cx), update_doc, window, cx);
             }
@@ -440,6 +429,52 @@ impl PropertyActionDialog {
                 self.confirm_bulk_update(Document::new(), update_doc, window, cx);
             }
         }
+    }
+
+    fn stage_property_edit(&self, cx: &mut Context<Self>) -> Result<(), String> {
+        let state = self.state.read(cx);
+        if let Some(reason) = state.document_field_edit_restriction(&self.session_key) {
+            return Err(reason.into());
+        }
+        let baseline = state
+            .document_edit_baseline(&self.session_key, &self.doc_key)
+            .ok_or("Document is no longer available.")?;
+        let mut document = state
+            .session_draft_or_document(&self.session_key, &self.doc_key)
+            .ok_or("Document is no longer available.")?;
+        let value = if matches!(
+            self.action,
+            PropertyActionKind::RenameField | PropertyActionKind::RemoveField
+        ) {
+            Bson::Null
+        } else {
+            self.parse_value(cx)?
+        };
+        let field = self.field_state.read(cx).value().to_string();
+        super::property_dialog_support::apply_property_edit(
+            &mut document,
+            &self.path,
+            self.action,
+            field.trim(),
+            value,
+        )?;
+        self.state.update(cx, |state, cx| {
+            if document == baseline {
+                state.clear_draft(&self.session_key, &self.doc_key);
+            } else {
+                state.set_draft(&self.session_key, self.doc_key.clone(), document);
+            }
+            let session = state.ensure_session(self.session_key.clone());
+            session.generation = session.generation.wrapping_add(1);
+            state.set_collection_dirty(
+                self.session_key.clone(),
+                !state.session_view(&self.session_key).is_none_or(|view| view.dirty.is_empty()),
+                cx,
+            );
+            cx.emit(AppEvent::DocumentDraftChanged { session: self.session_key.clone() });
+            cx.notify();
+        });
+        Ok(())
     }
 
     fn confirm_bulk_update(
@@ -655,6 +690,7 @@ impl PropertyActionDialog {
                         ValueType::Double,
                         ValueType::Date,
                         ValueType::Null,
+                        ValueType::ExtendedJson,
                     ] {
                         menu = menu.item(PopupMenuItem::new(kind.label()).on_click({
                             let view = view.clone();
@@ -696,16 +732,24 @@ impl Render for PropertyActionDialog {
                 | PropertyActionKind::RemoveMatchingValues
         );
 
-        let action_label = match self.action {
-            PropertyActionKind::EditValue => "Set Value",
-            PropertyActionKind::AddField => "Add Field",
-            PropertyActionKind::RenameField => "Rename",
-            PropertyActionKind::RemoveField => "Remove",
-            PropertyActionKind::AddElement => "Add Element",
-            PropertyActionKind::RemoveMatchingValues => "Remove",
+        let action_label = if self.effective_scope() == UpdateScope::CurrentDocument {
+            "Stage change"
+        } else {
+            match self.action {
+                PropertyActionKind::EditValue => "Set Value",
+                PropertyActionKind::AddField => "Add Field",
+                PropertyActionKind::RenameField => "Rename",
+                PropertyActionKind::RemoveField => "Remove",
+                PropertyActionKind::AddElement => "Add Element",
+                PropertyActionKind::RemoveMatchingValues => "Remove",
+            }
         };
 
-        let default_label = if !self.allow_bulk { "Scope locked to current document." } else { "" };
+        let default_label = if self.effective_scope() == UpdateScope::CurrentDocument {
+            "Staged locally. Save the document to apply changes."
+        } else {
+            "Updates matching documents in the collection."
+        };
         let status = status_text(
             self.error_message.as_ref(),
             self.updating,

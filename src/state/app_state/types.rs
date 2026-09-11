@@ -37,6 +37,7 @@ pub enum DocumentViewMode {
     #[default]
     Tree,
     Table,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1194,6 +1195,8 @@ pub struct SessionViewState {
     pub selected_docs: HashSet<DocumentKey>,
     pub expanded_nodes: HashSet<String>,
     pub drafts: HashMap<DocumentKey, Document>,
+    pub draft_baselines: HashMap<DocumentKey, Document>,
+    pub saving_documents: HashSet<DocumentKey>,
     pub dirty: HashSet<DocumentKey>,
     pub subview: CollectionSubview,
     pub view_mode: DocumentViewMode,

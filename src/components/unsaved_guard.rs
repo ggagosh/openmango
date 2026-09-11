@@ -28,7 +28,11 @@ type Continuation = Box<dyn FnOnce(&mut Window, &mut App)>;
 
 fn has_in_flight_editor_save(inventory: &UnsavedInventory) -> bool {
     inventory.changes.iter().any(|change| {
-        matches!(change, UnsavedChange::DetachedEditor(EditorSession { save_in_flight: true, .. }))
+        matches!(
+            change,
+            UnsavedChange::DetachedEditor(EditorSession { save_in_flight: true, .. })
+                | UnsavedChange::InlineDocument { save_in_flight: true, .. }
+        )
     })
 }
 
@@ -658,7 +662,7 @@ fn execute_save(
             else {
                 unreachable!();
             };
-            let original_id = original_id.as_ref().ok_or_else(|| {
+            let original_id = original_id.as_deref().ok_or_else(|| {
                 Error::Parse("Could not resolve the edited document's _id.".to_string())
             })?;
             let baseline_document = baseline_document.as_ref().ok_or_else(|| {
@@ -725,6 +729,7 @@ fn apply_saved_change(
                 }
                 if unchanged {
                     session.view.drafts.remove(&doc_key);
+                    session.view.draft_baselines.remove(&doc_key);
                     session.view.dirty.remove(&doc_key);
                 }
             }

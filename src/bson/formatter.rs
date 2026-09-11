@@ -2,6 +2,41 @@
 
 use mongodb::bson::Bson;
 
+/// Strict, type-preserving Extended JSON for document editing and clipboard round trips.
+pub fn document_to_json_string(document: &mongodb::bson::Document) -> String {
+    serde_json::to_string_pretty(&Bson::Document(document.clone()).into_canonical_extjson())
+        .expect("Extended JSON is serializable")
+}
+
+/// Copy scalar text naturally; use Extended JSON for structured and specialized BSON values.
+pub fn format_bson_for_clipboard(value: &Bson) -> String {
+    match value {
+        Bson::String(_)
+        | Bson::ObjectId(_)
+        | Bson::DateTime(_)
+        | Bson::Int32(_)
+        | Bson::Int64(_)
+        | Bson::Double(_)
+        | Bson::Boolean(_)
+        | Bson::Null => bson_value_for_edit(value),
+        _ => serde_json::to_string_pretty(&value.clone().into_canonical_extjson())
+            .expect("Extended JSON is serializable"),
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+    use mongodb::bson::{Decimal128, doc};
+    #[test]
+    fn document_json_preserves_numeric_types_and_string_whitespace() {
+        let document = doc! { "small_long": Bson::Int64(1), "large_long": Bson::Int64(i64::MAX), "decimal": Bson::Decimal128("12.30".parse::<Decimal128>().unwrap()), "text": "  value  " };
+        let text = document_to_json_string(&document);
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+        assert_eq!(crate::bson::parse_document_from_json(&text).unwrap(), document);
+    }
+}
+
 /// Get a human-readable type label for a BSON value.
 pub fn bson_type_label(value: &Bson) -> &'static str {
     match value {

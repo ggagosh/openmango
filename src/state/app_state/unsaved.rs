@@ -3,7 +3,7 @@ use mongodb::bson::{Bson, Document};
 use uuid::Uuid;
 
 use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
-use crate::state::{EditorSession, EditorSessionId, EditorSessionTarget, SessionKey, TabKey};
+use crate::state::{EditorSession, EditorSessionId, SessionKey, TabKey};
 
 use super::AppState;
 
@@ -22,9 +22,10 @@ pub enum UnsavedChange {
     InlineDocument {
         session_key: SessionKey,
         doc_key: DocumentKey,
-        original_id: Option<Bson>,
+        original_id: Option<Box<Bson>>,
         baseline_document: Option<Document>,
         document: Document,
+        save_in_flight: bool,
     },
     InvalidInlineEdit {
         session_key: SessionKey,
@@ -48,6 +49,10 @@ impl UnsavedInventory {
 }
 
 impl AppState {
+    pub fn session_has_invalid_edit(&self, key: &SessionKey) -> bool {
+        self.invalid_inline_edits.contains(key)
+    }
+
     pub fn set_invalid_inline_edit(&mut self, session_key: SessionKey, invalid: bool) {
         if invalid {
             self.invalid_inline_edits.insert(session_key);
@@ -90,17 +95,19 @@ impl AppState {
                     let Some(document) = session.view.drafts.get(doc_key).cloned() else {
                         continue;
                     };
-                    let baseline_document = self.document_for_key(session_key, doc_key);
+                    let baseline_document = self.document_edit_baseline(session_key, doc_key);
                     let original_id = baseline_document
                         .as_ref()
                         .and_then(|document| document.get("_id").cloned())
-                        .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok());
+                        .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok())
+                        .map(Box::new);
                     changes.push(UnsavedChange::InlineDocument {
                         session_key: session_key.clone(),
                         doc_key: doc_key.clone(),
                         original_id,
                         baseline_document,
                         document,
+                        save_in_flight: session.view.saving_documents.contains(doc_key),
                     });
                 }
             }

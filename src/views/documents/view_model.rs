@@ -44,7 +44,6 @@ pub struct DocumentViewModel {
     inline_editor_state: Option<InlineEditor>,
     inline_editor_subscription: Option<Subscription>,
     inline_value_subscription: Option<Subscription>,
-    inline_blur_subscription: Option<Subscription>,
     editing_node_id: Option<String>,
     editing_doc_key: Option<DocumentKey>,
     editing_path: Vec<PathSegment>,
@@ -90,7 +89,6 @@ impl DocumentViewModel {
             inline_editor_state: None,
             inline_editor_subscription: None,
             inline_value_subscription: None,
-            inline_blur_subscription: None,
             editing_node_id: None,
             editing_doc_key: None,
             editing_path: Vec::new(),
@@ -351,7 +349,6 @@ impl DocumentViewModel {
         self.inline_editor_state = None;
         self.inline_editor_subscription = None;
         self.inline_value_subscription = None;
-        self.inline_blur_subscription = None;
     }
 
     pub fn begin_inline_edit(
@@ -363,6 +360,23 @@ impl DocumentViewModel {
         cx: &mut Context<CollectionView>,
     ) {
         if !meta.is_editable {
+            return;
+        }
+        if self.editing_node_id.is_some() {
+            self.commit_inline_edit(state, cx);
+            if self.editing_node_id.is_some() {
+                return;
+            }
+        }
+        if let Some(reason) = self
+            .current_session
+            .as_ref()
+            .and_then(|key| state.read(cx).document_field_edit_restriction(key))
+        {
+            state.update(cx, |state, cx| {
+                state.set_status_message(Some(crate::state::StatusMessage::error(reason)));
+                cx.notify();
+            });
             return;
         }
         self.inline_editor_subscription = None;
@@ -415,7 +429,7 @@ impl DocumentViewModel {
                                 StepAction::Increment => 1,
                                 StepAction::Decrement => -1,
                             };
-                            (value + delta).to_string()
+                            value.saturating_add(delta).to_string()
                         };
                         state.update(cx, |input, cx| {
                             input.set_value(next, window, cx);
@@ -473,16 +487,6 @@ impl DocumentViewModel {
                     }
                 });
             self.inline_value_subscription = Some(value_sub);
-
-            let app_state = state.clone();
-            let blur_sub =
-                cx.subscribe_in(input, window, move |view, _state, event, _window, cx| {
-                    if matches!(event, InputEvent::Blur) {
-                        view.view_model.commit_inline_edit(&app_state, cx);
-                        cx.notify();
-                    }
-                });
-            self.inline_blur_subscription = Some(blur_sub);
         }
         if let Some(input) = focus_state {
             let focus = input.read(cx).focus_handle(cx);
@@ -507,6 +511,20 @@ impl DocumentViewModel {
                 parse_edited_value(original, state.read(cx).value().as_ref())
             }
             _ => Err("Unsupported inline editor state".to_string()),
+        }
+    }
+
+    pub fn inline_edit_error(&self, cx: &App) -> Option<String> {
+        self.inline_editor_state.as_ref()?;
+        self.inline_edited_value(cx).err()
+    }
+
+    pub fn inline_input_focused(&self, window: &Window, cx: &App) -> bool {
+        match self.inline_editor_state.as_ref() {
+            Some(InlineEditor::Text(input) | InlineEditor::Number(input)) => {
+                input.read(cx).focus_handle(cx).is_focused(window)
+            }
+            _ => false,
         }
     }
 
@@ -597,6 +615,11 @@ impl DocumentViewModel {
                 if let Some(session_key) = self.current_session.clone() {
                     state.update(cx, |state, cx| {
                         state.set_invalid_inline_edit(session_key, true);
+                        state.set_status_message(Some(crate::state::StatusMessage::error(
+                            format!(
+                                "Invalid field value: {err}. Correct it or press Escape to cancel."
+                            ),
+                        )));
                         cx.notify();
                     });
                 }
@@ -656,8 +679,6 @@ impl DocumentViewModel {
         });
 
         // Subscribe to table events for row selection and double-click.
-        let state_clone = state.clone();
-        let view_clone = view.clone();
         cx.subscribe_in(&table_state, window, move |cv, ts, event, window, cx| {
             use gpui_kit::component::table::TableEvent;
             match event {
@@ -685,11 +706,13 @@ impl DocumentViewModel {
                     let session_key = cv.view_model.current_session();
                     let doc_key = ts.read(cx).delegate().document_key(row_ix);
                     if let (Some(sk), Some(dk)) = (session_key, doc_key) {
-                        CollectionView::open_document_json_editor(
-                            view_clone.clone(),
-                            state_clone.clone(),
+                        cv.state.update(cx, |state, cx| {
+                            state.select_single_doc(&sk, dk.clone(), crate::bson::doc_root_id(&dk));
+                            cx.notify();
+                        });
+                        cv.change_document_view(
                             sk,
-                            dk,
+                            crate::state::DocumentViewMode::Json,
                             window,
                             cx,
                         );
@@ -933,5 +956,60 @@ impl DocumentViewModel {
         let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns..."));
         self.col_visibility_search = Some(state.clone());
         state
+    }
+}
+
+#[cfg(test)]
+mod inline_edit_tests {
+    use gpui_kit::AppContext as _;
+    use mongodb::bson::{Bson, doc};
+
+    use super::{CollectionView, InlineEditor};
+    use crate::bson::{DocumentKey, PathSegment, path_to_id};
+    use crate::state::{AppState, SessionDocument, SessionKey};
+
+    #[gpui_kit::test]
+    fn cancel_restores_the_prior_draft_without_losing_other_field_changes(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let key = SessionKey::new(uuid::Uuid::new_v4(), "db", "collection");
+            let original = doc! { "_id": 1, "enabled": false, "name": "original" };
+            let document = DocumentKey::from_document(&original, 0);
+            let previous = doc! { "_id": 1, "enabled": false, "name": "staged" };
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, _| {
+                let session = state.ensure_session(key.clone());
+                session.data.index_by_key.insert(document.clone(), 0);
+                session.data.items.push(SessionDocument { key: document.clone(), doc: original });
+                state.set_draft(&key, document.clone(), previous.clone());
+            });
+            let view = cx.new(|cx| CollectionView::new(state.clone(), cx));
+            view.update(cx, |view, cx| {
+                let model = &mut view.view_model;
+                let path = vec![PathSegment::Key("enabled".into())];
+                model.current_session = Some(key.clone());
+                model.editing_node_id = Some(path_to_id(&document, &path));
+                model.editing_doc_key = Some(document.clone());
+                model.editing_path = path;
+                model.editing_original = Some(Bson::Boolean(false));
+                model.editing_draft_before = Some(previous.clone());
+                model.inline_editor_state = Some(InlineEditor::Bool(true));
+                model.sync_inline_edit_draft(&state, cx);
+                assert!(
+                    state
+                        .read(cx)
+                        .session_draft(&key, &document)
+                        .unwrap()
+                        .get_bool("enabled")
+                        .unwrap()
+                );
+                model.cancel_inline_edit(&state, cx);
+                assert_eq!(state.read(cx).session_draft(&key, &document), Some(previous));
+                assert!(model.editing_node_id().is_none());
+                assert!(!state.read(cx).session_has_invalid_edit(&key));
+            });
+        });
     }
 }

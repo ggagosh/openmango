@@ -69,8 +69,9 @@ impl CollectionView {
         let (connection_name, appearance) = {
             let state_ref = self.state.read(cx);
             (
-                state_ref
-                    .selected_connection_id()
+                session_key
+                    .as_ref()
+                    .map(|key| key.connection_id)
                     .and_then(|id| state_ref.connection_name(id))
                     .unwrap_or_else(|| "Connection".to_string()),
                 state_ref.settings.appearance.clone(),
@@ -132,8 +133,13 @@ impl CollectionView {
         };
 
         // Build subview tabs
-        let subview_tabs =
-            render_subview_tabs(self.state.clone(), session_key.clone(), active_subview, cx);
+        let subview_tabs = render_subview_tabs(
+            cx.entity(),
+            self.state.clone(),
+            session_key.clone(),
+            active_subview,
+            cx,
+        );
 
         // Build the root header container
         let mut root = header_container(islands::tool_bg(&appearance, cx))
@@ -146,6 +152,7 @@ impl CollectionView {
                         .items_center()
                         .justify_start()
                         .w_full()
+                        .min_w(px(0.0))
                         .pt(px(1.0))
                         .pb(px(1.0))
                         .child(row),

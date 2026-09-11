@@ -20,7 +20,7 @@ fn filter_doc_to_columns(
     let mut map = serde_json::Map::new();
     for col in &snapshot.columns {
         if let Some(val) = doc.get(&col.key) {
-            map.insert(col.key.clone(), val.clone().into_relaxed_extjson());
+            map.insert(col.key.clone(), val.clone().into_canonical_extjson());
         }
     }
     serde_json::Value::Object(map)
