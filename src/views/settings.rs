@@ -703,9 +703,9 @@ fn render_updates_section(
     let auto_update_checkbox = {
         let state = state.clone();
         gpui_kit::component::checkbox::Checkbox::new("auto-update").checked(auto_update).on_click(
-            move |_, _, cx| {
+            move |checked, _, cx| {
                 state.update(cx, |state, cx| {
-                    state.settings.auto_update = !auto_update;
+                    state.settings.auto_update = *checked;
                     state.save_settings();
                     cx.notify();
                 });
@@ -715,12 +715,37 @@ fn render_updates_section(
 
     section(
         "Updates",
-        div().flex().flex_col().gap(spacing::md()).child(setting_row_with_description(
-            "Automatic updates",
-            "Automatically check for and download updates; restart to install",
-            auto_update_checkbox,
-            cx,
-        )),
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .child(setting_row_with_description(
+                "Automatic updates",
+                "Check and download in the background; installation always waits for your approval",
+                auto_update_checkbox,
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Update channel",
+                "Stable releases by default; nightly builds include unreleased changes",
+                crate::components::updater::channel_picker(
+                    "settings-update-channel",
+                    state.clone(),
+                    cx,
+                ),
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Software Update",
+                "Review available versions, download progress, and installation errors",
+                Button::new("settings-check-updates").small().label("Check for updates…").on_click(
+                    move |_, window, cx| {
+                        AppCommands::check_for_updates(state.clone(), cx);
+                        crate::components::updater::open_updates(state.clone(), window, cx);
+                    },
+                ),
+                cx,
+            )),
         cx,
     )
 }

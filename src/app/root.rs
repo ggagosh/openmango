@@ -422,10 +422,17 @@ impl AppRoot {
             let recheck_secs = std::env::var("OPENMANGO_UPDATE_INTERVAL_SECS")
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(4 * 60 * 60);
-            async move |_this: WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
+                .unwrap_or(4 * 60 * 60)
+                .max(1);
+            async move |this: WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
                 cx.background_executor().timer(std::time::Duration::from_secs(startup_delay)).await;
-                let should_check = cx.update(|cx| state.read(cx).settings.auto_update);
+                if this.upgrade().is_none() {
+                    return;
+                }
+                let should_check = cx.update(|cx| {
+                    state.read(cx).settings.auto_update
+                        && AppCommands::automatic_updates_supported()
+                });
                 if should_check {
                     cx.update(|cx| {
                         AppCommands::check_for_updates(state.clone(), cx);
@@ -436,9 +443,22 @@ impl AppRoot {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(recheck_secs))
                         .await;
+                    if this.upgrade().is_none() {
+                        break;
+                    }
                     let should_check = cx.update(|cx| {
                         let s = state.read(cx);
-                        s.settings.auto_update && matches!(s.update_status, UpdateStatus::Idle)
+                        s.settings.auto_update
+                            && AppCommands::automatic_updates_supported()
+                            && matches!(
+                                s.update_status,
+                                UpdateStatus::Idle
+                                    | UpdateStatus::UpToDate { .. }
+                                    | UpdateStatus::Failed {
+                                        stage: crate::state::app_state::updater::UpdateStage::Check,
+                                        ..
+                                    }
+                            )
                     });
                     if should_check {
                         cx.update(|cx| {
@@ -968,8 +988,9 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &FocusContent, window, cx| {
                 this.focus_current_content(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &DownloadUpdate, _window, cx| {
+            .on_action(cx.listener(|this, _: &DownloadUpdate, window, cx| {
                 AppCommands::download_update(this.state.clone(), cx);
+                crate::components::updater::open_updates(this.state.clone(), window, cx);
             }))
             .on_action(cx.listener(|this, _: &InstallUpdate, _window, cx| {
                 AppCommands::install_update(this.state.clone(), cx);

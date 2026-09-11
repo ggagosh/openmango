@@ -358,30 +358,28 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             id: SharedString::from("cmd:download-update"),
             label: SharedString::from("Download Update"),
             detail: match &state.update_status {
-                UpdateStatus::Available { version, .. } => {
-                    Some(SharedString::from(format!("v{version}")))
-                }
+                UpdateStatus::Available(release) => Some(SharedString::from(release.label())),
                 _ => None,
             },
             category: ActionCategory::Command,
-            available: matches!(state.update_status, UpdateStatus::Available { .. }),
+            available: matches!(state.update_status, UpdateStatus::Available(_)),
             priority: -10,
-            highlighted: matches!(state.update_status, UpdateStatus::Available { .. }),
+            highlighted: matches!(state.update_status, UpdateStatus::Available(_)),
             ..Default::default()
         },
         ActionItem {
             id: SharedString::from("cmd:install-update"),
             label: SharedString::from("Restart to Update"),
             detail: match &state.update_status {
-                UpdateStatus::ReadyToInstall { version, .. } => {
-                    Some(SharedString::from(format!("v{version}")))
+                UpdateStatus::ReadyToInstall(download) => {
+                    Some(SharedString::from(download.release.label()))
                 }
                 _ => None,
             },
             category: ActionCategory::Command,
-            available: matches!(state.update_status, UpdateStatus::ReadyToInstall { .. }),
+            available: matches!(state.update_status, UpdateStatus::ReadyToInstall(_)),
             priority: -20,
-            highlighted: matches!(state.update_status, UpdateStatus::ReadyToInstall { .. }),
+            highlighted: matches!(state.update_status, UpdateStatus::ReadyToInstall(_)),
             ..Default::default()
         },
         ActionItem {

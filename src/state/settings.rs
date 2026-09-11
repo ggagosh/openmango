@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::app_state::updater::UpdateChannel;
 use super::app_state::{InsertMode, TransferFormat};
 use crate::ai::settings::AiSettings;
 
@@ -29,6 +30,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub auto_update: bool,
     #[serde(default)]
+    pub update_channel: UpdateChannel,
+    #[serde(default)]
     pub collection_double_click_action: CollectionDoubleClickAction,
 }
 
@@ -43,6 +46,7 @@ impl Default for AppSettings {
             interactive_query_timeout_ms: default_interactive_query_timeout_ms(),
             last_seen_version: default_current_version(),
             auto_update: true,
+            update_channel: UpdateChannel::default(),
             collection_double_click_action: CollectionDoubleClickAction::default(),
         }
     }

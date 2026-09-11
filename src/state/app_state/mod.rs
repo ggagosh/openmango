@@ -140,6 +140,8 @@ pub struct AppState {
 
     // Auto-update
     pub update_status: UpdateStatus,
+    pub(crate) update_request_id: u64,
+    pub(crate) update_task: Option<tokio::task::AbortHandle>,
 
     // Lightweight file export progress (Save As)
     export_progress: Option<crate::state::commands::ExportProgress>,
@@ -259,6 +261,8 @@ impl AppState {
             changelog_pending: false,
             aggregation_workspace_save_gen,
             update_status: UpdateStatus::Idle,
+            update_request_id: 0,
+            update_task: None,
             export_progress: None,
             editor_sessions: EditorSessionStore::default(),
         }
