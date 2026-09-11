@@ -210,12 +210,11 @@ impl CollectionView {
             move |_, cx| {
                 view.update(cx, |this, cx| {
                     if this.json_document.as_ref().is_some_and(|(session, _, _, _)| session == &key)
+                        && let Some((_, _, editor, _)) = this.json_document.take()
                     {
-                        if let Some((_, _, editor, _)) = this.json_document.take() {
-                            let sessions = this.state.read(cx).editor_sessions();
-                            if sessions.window_handle(editor).is_none() {
-                                sessions.close(editor);
-                            }
+                        let sessions = this.state.read(cx).editor_sessions();
+                        if sessions.window_handle(editor).is_none() {
+                            sessions.close(editor);
                         }
                     }
                     if this.view_model.is_current_session(&key) {

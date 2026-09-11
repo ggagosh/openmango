@@ -22,7 +22,7 @@ pub enum UnsavedChange {
     InlineDocument {
         session_key: SessionKey,
         doc_key: DocumentKey,
-        original_id: Option<Bson>,
+        original_id: Option<Box<Bson>>,
         baseline_document: Option<Document>,
         document: Document,
         save_in_flight: bool,
@@ -99,7 +99,8 @@ impl AppState {
                     let original_id = baseline_document
                         .as_ref()
                         .and_then(|document| document.get("_id").cloned())
-                        .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok());
+                        .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok())
+                        .map(Box::new);
                     changes.push(UnsavedChange::InlineDocument {
                         session_key: session_key.clone(),
                         doc_key: doc_key.clone(),

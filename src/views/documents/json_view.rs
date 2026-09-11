@@ -76,17 +76,17 @@ impl CollectionView {
             session == key && document == &doc_key && sessions.snapshot(*id).is_some()
         });
         if !matches {
-            if let Some((_, _, id, editor)) = self.json_document.take() {
-                if sessions.window_handle(id).is_none() {
-                    if sessions
-                        .snapshot(id)
-                        .is_some_and(|session| session.is_dirty() || session.save_in_flight)
-                    {
-                        // Keep pending save callbacks alive when switching collection tabs.
-                        self.json_editor_cache.insert(id, editor);
-                    } else {
-                        sessions.close(id);
-                    }
+            if let Some((_, _, id, editor)) = self.json_document.take()
+                && sessions.window_handle(id).is_none()
+            {
+                if sessions
+                    .snapshot(id)
+                    .is_some_and(|session| session.is_dirty() || session.save_in_flight)
+                {
+                    // Keep pending save callbacks alive when switching collection tabs.
+                    self.json_editor_cache.insert(id, editor);
+                } else {
+                    sessions.close(id);
                 }
             }
             let state = self.state.read(cx);

@@ -662,7 +662,7 @@ fn execute_save(
             else {
                 unreachable!();
             };
-            let original_id = original_id.as_ref().ok_or_else(|| {
+            let original_id = original_id.as_deref().ok_or_else(|| {
                 Error::Parse("Could not resolve the edited document's _id.".to_string())
             })?;
             let baseline_document = baseline_document.as_ref().ok_or_else(|| {
