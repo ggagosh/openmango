@@ -62,6 +62,7 @@ pub fn export_support_bundle(state: &AppState, destination: &Path) -> anyhow::Re
     writeln!(contents, "Architecture: {}", std::env::consts::ARCH)?;
     writeln!(contents, "Log location: {}", app_log_path().display())?;
     writeln!(contents, "Auto update: {}", state.settings.auto_update)?;
+    writeln!(contents, "Update channel: {}", state.settings.update_channel.label())?;
     writeln!(contents, "AI enabled: {}", state.settings.ai.enabled)?;
     writeln!(contents, "AI provider: {}", state.settings.ai.provider.label())?;
     writeln!(contents, "AI model: {}", state.settings.ai.model)?;

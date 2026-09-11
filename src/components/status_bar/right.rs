@@ -1,11 +1,12 @@
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::state::app_state::updater::UpdateStatus;
-use crate::state::{AppCommands, AppState, StatusLevel, StatusMessage};
+use crate::state::{AppState, StatusLevel, StatusMessage};
 
 pub(crate) fn render_status_right(
     status_message: Option<StatusMessage>,
@@ -17,67 +18,25 @@ pub(crate) fn render_status_right(
 ) -> AnyElement {
     let state_for_ai = state.clone();
     let inner = match &update_status {
-        UpdateStatus::Available { version, .. } => div()
-            .id("update-available")
-            .cursor_pointer()
-            .text_xs()
-            .text_color(cx.theme().primary)
-            .child(format!("v{version} available \u{2193}"))
-            .on_click(move |_, _window, cx| {
-                AppCommands::download_update(state.clone(), cx);
+        UpdateStatus::Idle | UpdateStatus::UpToDate { .. } | UpdateStatus::Unavailable(_) => {
+            let label = status_message
+                .filter(|message| matches!(message.level, StatusLevel::Info))
+                .map(|message| message.text)
+                .unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
+            div().text_xs().text_color(cx.theme().muted_foreground).child(label).into_any_element()
+        }
+        _ => crate::components::Button::new("software-update-status")
+            .ghost()
+            .xsmall()
+            .label(crate::components::updater::status_label(&update_status))
+            .tooltip("View software update details")
+            .when(matches!(update_status, UpdateStatus::Failed { .. }), |button| {
+                button.text_color(cx.theme().danger)
+            })
+            .on_click(move |_, window, cx| {
+                crate::components::updater::open_updates(state.clone(), window, cx)
             })
             .into_any_element(),
-        UpdateStatus::Downloading { progress_pct, .. } => div()
-            .text_xs()
-            .text_color(cx.theme().secondary_foreground)
-            .child(format!("Updating\u{2026} {progress_pct}%"))
-            .into_any_element(),
-        UpdateStatus::ReadyToInstall { .. } => div()
-            .id("update-restart")
-            .cursor_pointer()
-            .text_xs()
-            .text_color(cx.theme().primary)
-            .child("Restart to update \u{21BB}")
-            .on_click(move |_, _window, cx| {
-                AppCommands::install_update(state.clone(), cx);
-            })
-            .into_any_element(),
-        UpdateStatus::Failed(error) => {
-            let details = error.clone();
-            div()
-                .id("update-check-retry")
-                .cursor_pointer()
-                .text_xs()
-                .text_color(cx.theme().danger)
-                .child("Update check failed · Retry")
-                .tooltip(move |window, cx| Tooltip::new(details.clone()).build(window, cx))
-                .on_click(move |_, _window, cx| {
-                    AppCommands::check_for_updates(state.clone(), cx);
-                })
-                .into_any_element()
-        }
-        _ => {
-            // Idle or Checking — show status message or version
-            match status_message {
-                Some(message) => match message.level {
-                    StatusLevel::Info => div()
-                        .text_xs()
-                        .text_color(cx.theme().secondary_foreground)
-                        .child(message.text)
-                        .into_any_element(),
-                    StatusLevel::Error => div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("v{}", env!("CARGO_PKG_VERSION")))
-                        .into_any_element(),
-                },
-                None => div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("v{}", env!("CARGO_PKG_VERSION")))
-                    .into_any_element(),
-            }
-        }
     };
 
     let ai_icon_color =

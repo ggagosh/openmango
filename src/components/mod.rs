@@ -38,6 +38,7 @@ pub mod form_field;
 pub mod query_library;
 mod status_bar;
 mod unsaved_guard;
+pub mod updater;
 pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
 pub use connection_dialog::ConnectionDialog;

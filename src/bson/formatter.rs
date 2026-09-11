@@ -24,19 +24,6 @@ pub fn format_bson_for_clipboard(value: &Bson) -> String {
     }
 }
 
-#[cfg(test)]
-mod json_tests {
-    use super::*;
-    use mongodb::bson::{Decimal128, doc};
-    #[test]
-    fn document_json_preserves_numeric_types_and_string_whitespace() {
-        let document = doc! { "small_long": Bson::Int64(1), "large_long": Bson::Int64(i64::MAX), "decimal": Bson::Decimal128("12.30".parse::<Decimal128>().unwrap()), "text": "  value  " };
-        let text = document_to_json_string(&document);
-        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
-        assert_eq!(crate::bson::parse_document_from_json(&text).unwrap(), document);
-    }
-}
-
 /// Get a human-readable type label for a BSON value.
 pub fn bson_type_label(value: &Bson) -> &'static str {
     match value {
@@ -120,4 +107,17 @@ fn sanitize_for_preview(input: &str) -> String {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+    use mongodb::bson::{Decimal128, doc};
+    #[test]
+    fn document_json_preserves_numeric_types_and_string_whitespace() {
+        let document = doc! { "small_long": Bson::Int64(1), "large_long": Bson::Int64(i64::MAX), "decimal": Bson::Decimal128("12.30".parse::<Decimal128>().unwrap()), "text": "  value  " };
+        let text = document_to_json_string(&document);
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+        assert_eq!(crate::bson::parse_document_from_json(&text).unwrap(), document);
+    }
 }
