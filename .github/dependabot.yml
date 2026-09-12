@@ -8,11 +8,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Every Cargo.lock change is a cold CI build, so batch bumps into two PRs:
-    # GPUI on its own (0.x minors break the build), everything else together.
+    # Every Cargo.lock change is a cold CI build, so batch the safe bumps.
+    # GPUI gets its own PR (0.x minors break the build). Semver-major bumps of
+    # anything else fall outside both groups and arrive as individual PRs.
     groups:
       gpui:
         patterns: ["gpui*"]
       cargo:
         patterns: ["*"]
         exclude-patterns: ["gpui*"]
+        update-types: ["minor", "patch"]
