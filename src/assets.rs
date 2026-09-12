@@ -8,7 +8,6 @@ use rust_embed::RustEmbed;
 #[derive(RustEmbed)]
 #[folder = "assets"]
 #[include = "icons/**/*.svg"]
-#[include = "logo/**/*.svg"]
 #[include = "logo/**/*.png"]
 #[include = "fonts/**/*.ttf"]
 #[include = "fonts/**/*.otf"]

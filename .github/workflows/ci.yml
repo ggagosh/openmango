@@ -37,6 +37,9 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
+      - name: Compile macOS app icon
+        run: bash ./scripts/build_app_icon.sh
+
       - name: Check
         run: cargo check --release --features mimalloc
 

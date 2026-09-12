@@ -15,7 +15,7 @@ pub(crate) fn render_empty_state(hint: String, cx: &App) -> AnyElement {
                 .flex_col()
                 .gap(spacing::lg())
                 .items_center()
-                .child(img("logo/openmango-logo.svg").w(px(120.0)).h(px(120.0)))
+                .child(img("logo/openmango.png").w(px(120.0)).h(px(120.0)))
                 .child(
                     div()
                         .text_2xl()

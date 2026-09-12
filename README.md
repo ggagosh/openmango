@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo/openmango-1024.png" width="128" alt="OpenMango logo" />
+  <img src="assets/logo/openmango.png" width="128" alt="OpenMango logo" />
 </p>
 
 <h1 align="center">OpenMango</h1>
