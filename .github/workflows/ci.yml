@@ -23,39 +23,30 @@ env:
 jobs:
   quality:
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
-
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
       - name: Disable lld linker flags for CI
         run: rm -f .cargo/config.toml
-
       - name: Format check
         run: cargo fmt --check
-
       - name: Compile macOS app icon
         run: bash ./scripts/build_app_icon.sh
-
-      - name: Check
-        run: cargo check --release --features mimalloc
-
       - name: Clippy
-        run: cargo clippy --release --features mimalloc -- -D warnings
-
+        run: cargo clippy --locked --release -- -D warnings
       - name: Verify Forge sidecar bundle
         run: ./scripts/check_mongosh_sidecar.sh
-
       - name: Run unit tests
-        run: cargo test --lib -- --test-threads=1
+        run: cargo test --locked --lib -- --test-threads=1
 
   linux:
     name: Linux (${{ matrix.arch }})
@@ -71,15 +62,17 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
             target: aarch64-unknown-linux-gnu
-    env:
-      CARGO_BUILD_JOBS: 2
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
       - name: Install Linux dependencies
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Format check
@@ -87,6 +80,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run unit tests
+        # Debug profile: the integration-test seams in src/ are gated on cfg(debug_assertions).
         run: cargo test --locked --lib -- --test-threads=1
       - name: Verify bundled helper scripts
         run: bash scripts/check_linux_tools.sh
@@ -102,7 +96,7 @@ jobs:
         env:
           OPENMANGO_GUI_WINDOW_MANAGER: xfwm4
         run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui-xfce.png
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Linux-preview-${{ matrix.arch }}
           path: |
@@ -118,24 +112,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux system deps for GPUI linking
         run: |
           bash scripts/bootstrap_linux.sh
           pkg-config --modversion fontconfig
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Disable lld linker flags for CI
-        run: rm -f .cargo/config.toml
-
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
       - name: Verify Docker availability
         run: docker version
-
       - name: Pull integration test images
         run: |
           for test_image in mongo:7.0 testcontainers/sshd:1.3.0; do
@@ -149,14 +138,15 @@ jobs:
               sleep 5
             done
           done
-
       - name: Download MongoDB Database Tools
         run: ./scripts/download_tools.sh
-
+      - name: Build integration tests
+        # One invocation links all suites in parallel; the loop below then only runs them.
+        run: cargo test --locked --no-run --tests
       - name: Run integration tests
         run: |
           for test_file in tests/*_tests.rs; do
             test_name="$(basename "${test_file}" .rs)"
             echo "Running ${test_name}"
-            cargo test --test "${test_name}" -- --test-threads=1
+            cargo test --locked --test "${test_name}" -- --test-threads=1
           done

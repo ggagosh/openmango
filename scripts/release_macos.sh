@@ -141,7 +141,7 @@ if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]; then
         --key "$NOTARY_KEY_PATH" \
         --key-id "$APPLE_API_KEY_ID" \
         --issuer "$APPLE_API_ISSUER_ID" \
-        --wait
+        --wait --timeout 30m
     echo "Stapling notarization ticket..."
     xcrun stapler staple "$APP_DIR"
     # Re-create zip with stapled app

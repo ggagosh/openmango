@@ -10,117 +10,63 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-
-env:
-  CARGO_INCREMENTAL: 0
-  CARGO_NET_RETRY: 10
-  RUST_BACKTRACE: short
-  OPENMANGO_RELEASE_CHANNEL: stable
+  contents: read
 
 jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tag matches Cargo.toml version
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+      - name: CHANGELOG has a section for this version
+        run: grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+
   linux:
+    needs: verify
     if: vars.LINUX_RELEASES_ENABLED == 'true'
     uses: ./.github/workflows/linux-release.yml
     with:
       channel: stable
-    secrets:
-      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
-
-  publish-linux:
-    needs: linux
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: OpenMango-linux-*
-          merge-multiple: true
-          path: linux-release
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: linux-release/*.AppImage*
+    secrets: inherit
 
   macos:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            suffix: macos-arm64
-          - target: x86_64-apple-darwin
-            suffix: macos-x86_64
+    needs: verify
+    uses: ./.github/workflows/macos-release.yml
+    with:
+      channel: stable
+    secrets: inherit
+
+  publish:
+    needs: [verify, macos, linux]
+    if: always() && needs.verify.result == 'success' && needs.macos.result == 'success' && (needs.linux.result == 'success' || needs.linux.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          bun-version: "1.4.2"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "release-${{ matrix.target }}"
-
-      - name: Ensure scripts executable
-        run: chmod +x scripts/release_macos.sh scripts/build_mongosh_sidecar.sh scripts/check_mongosh_sidecar.sh
-
-      - name: Disable lld linker flags for CI
-        run: rm -f .cargo/config.toml
-
-      - name: Build Forge mongosh sidecar
-        run: ./scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
-
-      - name: Download MongoDB Database Tools
-        run: bash scripts/download_tools.sh ${{ matrix.target }}
-
-      - name: Import signing certificate
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          pattern: OpenMango-*
+          merge-multiple: true
+          path: release
+      - run: ls -la release/
+      - name: Release notes from CHANGELOG
         run: |
-          if [[ -z "${MACOS_CERTIFICATE:-}" ]]; then
-            echo "No signing certificate provided, skipping codesign import."
-            exit 0
-          fi
-          CERT_PATH="$RUNNER_TEMP/cert.p12"
-          if base64 --help 2>&1 | grep -q -- "-d"; then
-            echo "$MACOS_CERTIFICATE" | base64 -d > "$CERT_PATH"
-          else
-            echo "$MACOS_CERTIFICATE" | base64 -D > "$CERT_PATH"
-          fi
-          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
-          echo "::add-mask::$KEYCHAIN_PASSWORD"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychain -d user -s "$KEYCHAIN"
-
-      - name: Build and package
-        env:
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
-          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
-          REQUIRE_BUNDLED_TOOLS: "1"
-        run: scripts/release_macos.sh ${{ matrix.target }}
-
-      - name: Generate SHA-256 checksum
-        run: |
-          for file in dist/OpenMango-*-${{ matrix.suffix }}.zip; do
-            shasum -a 256 "$file" | awk '{print $1}' > "$file.sha256"
-          done
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+          awk -v v="${GITHUB_REF_NAME#v}" \
+            '/^## \[/ { p = ($0 ~ "^## \\[" v "\\]") } p && !/^## \[/' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          cat release-notes.md
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: |
-            dist/OpenMango-*-${{ matrix.suffix }}.zip
-            dist/OpenMango-*-${{ matrix.suffix }}.zip.sha256
+          body_path: release-notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release/OpenMango-*

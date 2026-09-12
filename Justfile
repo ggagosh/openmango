@@ -15,7 +15,7 @@ lint:
     cargo clippy --all-targets -- -D warnings
 
 lint-release:
-    cargo clippy --release --features mimalloc -- -D warnings
+    cargo clippy --release -- -D warnings
 
 fmt:
     cargo fmt
@@ -27,17 +27,17 @@ check:
     cargo check
 
 check-release:
-    cargo check --release --features mimalloc
+    cargo check --release
 
 # Build
 build:
     cargo build
 
 release:
-    cargo build --release --features mimalloc
+    cargo build --release
 
 bundle:
-    cargo bundle --release --features mimalloc
+    cargo bundle --release
 
 # Compile the macOS app icon (requires Xcode 26 or newer)
 app-icon:
@@ -64,7 +64,7 @@ clean:
     cargo clean
 
 # CI checks (matches GitHub Actions quality job; integration-tests still require Docker)
-ci: fmt-check check-release lint-release check-sidecar unit-test
+ci: fmt-check lint-release check-sidecar unit-test
 
 # macOS additionally validates the platform-specific app icon.
 ci-macos: ci app-icon
@@ -75,6 +75,14 @@ bootstrap-linux:
 
 package-linux:
     bash ./scripts/release_linux.sh
+
+# Cut a release: bump version, rotate CHANGELOG, open the release PR
+prepare-release VERSION:
+    bash ./scripts/prepare_release.sh {{VERSION}}
+
+# After the release PR merges: tag main and push the tag (starts the Release workflow)
+tag-release VERSION:
+    bash ./scripts/prepare_release.sh {{VERSION}} --tag
 
 # All checks before commit
 precommit: ci test
