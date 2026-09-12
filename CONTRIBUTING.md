@@ -99,6 +99,15 @@ Add or extend tests whenever you change behavior. PRs without relevant test cove
 
 3. **Commit style:** short imperative subjects (e.g., `fix srv error`, `add changelog`)
 
+## Releasing
+
+Releases are cut from `main` in two steps:
+
+1. `just prepare-release 0.2.2` bumps `Cargo.toml` and `Cargo.lock`, moves the CHANGELOG `[Unreleased]` entries under `[0.2.2]`, and opens a `release 0.2.2` pull request.
+2. After that pull request merges, `just tag-release 0.2.2` tags `main` and pushes `v0.2.2`.
+
+The tag starts the Release workflow: it checks that the tag matches `Cargo.toml`, builds and signs the macOS and Linux packages, and publishes one GitHub release with the CHANGELOG section as its notes. Nightly builds publish automatically from every push to `main`.
+
 ## Reporting Issues
 
 Found a bug or have a feature idea? [Open an issue](https://github.com/ggagosh/openmango/issues/new/choose) using one of the templates.

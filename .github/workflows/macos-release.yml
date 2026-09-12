@@ -1,0 +1,101 @@
+name: macOS Apps
+
+# Signing and notarization use the repository secrets MACOS_CERTIFICATE,
+# MACOS_CERTIFICATE_PASSWORD, MACOS_SIGNING_IDENTITY, APPLE_API_KEY_ID,
+# APPLE_API_ISSUER_ID, and APPLE_API_KEY; callers pass them with `secrets: inherit`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [nightly, stable]
+        default: nightly
+        required: true
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            suffix: macos-arm64
+          - target: x86_64-apple-darwin
+            suffix: macos-x86_64
+    env:
+      OPENMANGO_RELEASE_CHANNEL: ${{ inputs.channel }}
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      RUST_BACKTRACE: short
+      CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Disable lld linker flags for CI
+        run: rm -f .cargo/config.toml
+      - name: Build Forge mongosh sidecar
+        run: bash scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
+      - name: Download MongoDB Database Tools
+        run: bash scripts/download_tools.sh ${{ matrix.target }}
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "${MACOS_CERTIFICATE:-}" ]]; then
+            echo "No signing certificate provided, skipping codesign import."
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$MACOS_CERTIFICATE" | base64 -D > "$CERT_PATH"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+      - name: Build and package
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
+          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
+          REQUIRE_BUNDLED_TOOLS: "1"
+        run: bash scripts/release_macos.sh ${{ matrix.target }}
+      - name: Generate SHA-256 checksum
+        run: |
+          for file in dist/OpenMango-*-${{ matrix.suffix }}.zip; do
+            shasum -a 256 "$file" | awk '{print $1}' > "$file.sha256"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: OpenMango-${{ matrix.suffix }}
+          if-no-files-found: error
+          path: |
+            dist/OpenMango-*-${{ matrix.suffix }}.zip
+            dist/OpenMango-*-${{ matrix.suffix }}.zip.sha256
