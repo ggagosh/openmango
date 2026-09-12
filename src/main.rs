@@ -11,11 +11,30 @@ use openmango::state::ConfigManager;
 use openmango::theme;
 
 fn main() {
+    if std::env::args_os().any(|argument| argument == "--version") {
+        println!("OpenMango {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().any(|argument| argument == "--install-desktop") {
+        match openmango::helpers::linux::install_desktop() {
+            Ok(path) => println!(
+                "Installed OpenMango to {}. Open it from your application menu.",
+                path.display()
+            ),
+            Err(error) => {
+                eprintln!("Could not install OpenMango: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     openmango::helpers::support::init_logging();
 
     gpui_kit::application().with_assets(Assets).run(|cx: &mut gpui_kit::App| {
         // Initialize the toolkit before applying the app keymap and theme.
         gpui_kit::init(cx);
+        cx.set_app_identity("com.openmango.app", "OpenMango");
         let saved_settings = ConfigManager::default().load_settings().unwrap_or_default();
         keyboard::bind_keymap(cx, &saved_settings.keybindings);
         if let Err(err) = cx.text_system().add_fonts(embedded_fonts()) {
@@ -51,6 +70,9 @@ fn main() {
 
         cx.open_window(
             WindowOptions {
+                app_id: Some("com.openmango.app".into()),
+                #[cfg(target_os = "linux")]
+                window_decorations: Some(WindowDecorations::Client),
                 window_bounds: Some(window_bounds),
                 window_background: if vibrancy {
                     WindowBackgroundAppearance::Blurred
@@ -64,6 +86,8 @@ fn main() {
                 ..TitleBar::window_options()
             },
             |window, cx| {
+                #[cfg(target_os = "linux")]
+                window.on_next_frame(|_, _| openmango::helpers::linux::notify_update_ready());
                 let app_view = cx.new(|cx| AppRoot::new(window, cx));
                 let app_view_for_close = app_view.clone();
 

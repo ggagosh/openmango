@@ -39,6 +39,21 @@ pub struct UpdateRelease {
     pub checksum_url: Option<String>,
     pub sha256: Option<String>,
     pub size: u64,
+    pub linux_manifest: Option<LinuxUpdateManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinuxUpdateManifest {
+    pub schema: u32,
+    pub os: String,
+    pub arch: String,
+    pub channel: UpdateChannel,
+    pub version: String,
+    pub commit: String,
+    pub filename: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
 impl UpdateRelease {

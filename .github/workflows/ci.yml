@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,6 +18,7 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
+  CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
 
 jobs:
   quality:
@@ -52,20 +57,72 @@ jobs:
       - name: Run unit tests
         run: cargo test --lib -- --test-threads=1
 
+  linux:
+    name: Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: bash scripts/bootstrap_linux.sh --desktop-tests
+      - name: Format check
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run unit tests
+        run: cargo test --locked --lib -- --test-threads=1
+      - name: Verify bundled helper scripts
+        run: bash scripts/check_linux_tools.sh
+      - name: Verify Forge sidecar bundle
+        run: bash scripts/check_mongosh_sidecar.sh
+      - name: Package Linux preview
+        run: bash scripts/release_linux.sh '${{ matrix.target }}'
+      - name: Check packaged application and helpers
+        run: bash scripts/check_linux_package.sh 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' --database-tests
+      - name: Smoke-test packaged desktop session
+        run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui.png
+      - name: Verify combined title bar on Xfce
+        env:
+          OPENMANGO_GUI_WINDOW_MANAGER: xfwm4
+        run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui-xfce.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Linux-preview-${{ matrix.arch }}
+          path: |
+            dist/OpenMango-*-linux-${{ matrix.arch }}.AppImage*
+            target/linux-gui.png
+            target/linux-gui.log
+            target/linux-gui-xfce.png
+            target/linux-gui-xfce.log
+          if-no-files-found: error
+          retention-days: 14
+
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux system deps for GPUI linking
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfontconfig-dev \
-            libxcb1-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev
+          bash scripts/bootstrap_linux.sh
           pkg-config --modversion fontconfig
 
       - name: Install Rust

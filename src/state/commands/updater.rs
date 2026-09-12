@@ -28,7 +28,7 @@ fn begin(state: &Entity<AppState>, status: UpdateStatus, cx: &mut App) -> u64 {
 
 impl AppCommands {
     pub fn automatic_updates_supported() -> bool {
-        install::running_bundle().is_ok()
+        install::running_installation().is_ok()
     }
 
     pub fn check_for_updates(state: Entity<AppState>, cx: &mut App) {
@@ -39,7 +39,7 @@ impl AppCommands {
         if !state.read(cx).update_status.can_check() {
             return;
         }
-        if let Err(error) = install::running_bundle() {
+        if let Err(error) = install::running_installation() {
             state.update(cx, |state, cx| {
                 state.update_status = UpdateStatus::Unavailable(error.to_string());
                 cx.notify();
@@ -250,7 +250,7 @@ impl AppCommands {
         };
         let request = begin(&state, UpdateStatus::Installing(download.release.clone()), cx);
         let download_for_task = download.clone();
-        let task = cx.background_spawn(async move { install::prepare(&download_for_task.archive) });
+        let task = cx.background_spawn(async move { install::prepare(&download_for_task) });
         cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             let result = task.await;
             cx.update(|cx| {

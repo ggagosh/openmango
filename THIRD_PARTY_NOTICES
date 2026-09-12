@@ -1,5 +1,12 @@
 This application bundles the following third-party software:
 
+Linux AppImages additionally include the AppImage type-2 runtime (20251108),
+the Bun 1.4.2 runtime in the compiled Forge sidecar, and minisign-verify 0.2.5.
+Their upstream license files are included in usr/share/doc/openmango/licenses.
+The AppImage and Bun runtimes contain statically linked third-party libraries
+under additional licenses; their upstream inventories and source references are
+preserved in those files. See docs/LINUX.md for the distribution qualification gate.
+
 ================================================================================
 MongoDB Database Tools (mongodump, mongorestore)
 ================================================================================

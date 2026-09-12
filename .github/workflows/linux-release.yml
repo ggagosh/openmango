@@ -1,0 +1,86 @@
+name: Linux AppImages
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [nightly, stable]
+        default: nightly
+        required: true
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+    secrets:
+      LINUX_SIGNING_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+    env:
+      OPENMANGO_RELEASE_CHANNEL: ${{ inputs.channel }}
+      OPENMANGO_LINUX_UPDATE_PUBLIC_KEY: ${{ vars.LINUX_UPDATE_PUBLIC_KEY }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-release-${{ matrix.arch }}
+      - name: Install Linux dependencies
+        run: bash scripts/bootstrap_linux.sh --desktop-tests
+      - name: Load Linux signing key
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: |
+          test -n "$LINUX_SIGNING_KEY"
+          test -n "$OPENMANGO_LINUX_UPDATE_PUBLIC_KEY"
+          umask 077
+          printf '%s\n' "$LINUX_SIGNING_KEY" > "$RUNNER_TEMP/linux-signing.key"
+      - name: Build and sign AppImage
+        env:
+          REQUIRE_LINUX_SIGNING: "1"
+          OPENMANGO_LINUX_SIGNING_KEY_FILE: ${{ runner.temp }}/linux-signing.key
+        run: bash scripts/release_linux.sh '${{ matrix.target }}'
+      - name: Validate packaged application
+        run: bash scripts/check_linux_package.sh 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' --database-tests
+      - name: Smoke-test packaged desktop session
+        run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui.png
+      - name: Verify combined title bar on Xfce
+        env:
+          OPENMANGO_GUI_WINDOW_MANAGER: xfwm4
+        run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui-xfce.png
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/linux-signing.key"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMango-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            dist/OpenMango-*-linux-${{ matrix.arch }}.AppImage
+            dist/OpenMango-*-linux-${{ matrix.arch }}.AppImage.sha256
+            dist/OpenMango-*-linux-${{ matrix.arch }}.AppImage.json
+            dist/OpenMango-*-linux-${{ matrix.arch }}.AppImage.json.minisig

@@ -799,16 +799,20 @@ fn canonical_conflict_key(shortcut: &str) -> String {
 }
 
 fn is_reserved_shortcut(shortcut: &str) -> bool {
-    matches!(
-        shortcut,
-        "cmd-space"
-            | "cmd-tab"
-            | "cmd-shift-3"
-            | "cmd-shift-4"
-            | "cmd-shift-5"
-            | "alt-cmd-escape"
-            | "ctrl-cmd-q"
-    )
+    let reserved: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "cmd-space",
+            "cmd-tab",
+            "cmd-shift-3",
+            "cmd-shift-4",
+            "cmd-shift-5",
+            "alt-cmd-escape",
+            "ctrl-cmd-q",
+        ]
+    } else {
+        &["alt-tab", "alt-shift-tab", "alt-f4", "ctrl-alt-delete"]
+    };
+    reserved.iter().any(|key| normalize_shortcut(key).is_ok_and(|key| key == shortcut))
 }
 
 fn is_unmodified_printable(shortcut: &str) -> bool {
@@ -932,10 +936,12 @@ mod tests {
         assert!(
             shortcuts("show-schema-subview.").contains(&normalize_shortcut("ctrl-alt-5").unwrap())
         );
-        assert!(shortcuts("run-transfer.").contains(&"cmd-enter".to_string()));
+        assert!(shortcuts("run-transfer.").contains(&normalize_shortcut("cmd-enter").unwrap()));
         assert!(shortcuts("run-transfer.").contains(&"ctrl-enter".to_string()));
         assert!(shortcuts("cancel-transfer.").contains(&"escape".to_string()));
-        assert!(shortcuts("save-transfer-query.").contains(&"cmd-enter".to_string()));
+        assert!(
+            shortcuts("save-transfer-query.").contains(&normalize_shortcut("cmd-enter").unwrap())
+        );
         assert!(shortcuts("close-transfer-query-modal.").contains(&"escape".to_string()));
         assert!(!contexts_overlap(
             Some("Transfer && !TransferRunning && !TransferQueryModal"),
@@ -1031,7 +1037,7 @@ mod tests {
         let issues = validate_keybinding_override(
             &KeybindingSettings::default(),
             "open-action-bar.workspace",
-            "cmd-space",
+            if cfg!(target_os = "macos") { "cmd-space" } else { "alt-tab" },
         )
         .unwrap();
         assert!(issues.iter().any(|issue| issue.severity == KeybindingIssueSeverity::Error));

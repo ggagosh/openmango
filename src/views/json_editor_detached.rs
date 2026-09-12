@@ -1155,6 +1155,7 @@ fn open_detached_json_editor_window(
 
     cx.open_window(
         WindowOptions {
+            app_id: Some("com.openmango.app".into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_background: if vibrancy {
                 WindowBackgroundAppearance::Blurred

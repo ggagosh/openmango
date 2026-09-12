@@ -10,6 +10,10 @@ Thanks for your interest in contributing! This guide will help you get set up an
 - **Docker** — required for integration tests (Testcontainers)
 - **[Bun](https://bun.sh)** — for the Forge shell sidecar (`tools/forge-sidecar/`)
 
+For Linux dependencies, AppImage packaging, and desktop checks, see
+[Linux development](docs/LINUX.md). Keep Linux build output in a separate target
+directory when sharing a checkout with macOS.
+
 ## Getting Started
 
 ```sh
@@ -30,7 +34,9 @@ This compiles and launches the app in development mode.
 | `just lint` | Clippy with `-D warnings` |
 | `just fmt-check` | Check formatting |
 | `just test` | Run all tests |
-| `just ci` | Full local CI (`fmt-check` + `lint` + `check` + `check-sidecar`) |
+| `just ci` | Common CI checks: formatting, release check/Clippy, sidecar bundle, and unit tests |
+| `just ci-macos` | Common checks plus macOS icon compilation |
+| `just package-linux` | Build the native Linux AppImage and bundled tools |
 
 Always use `just` commands rather than calling `cargo` directly.
 

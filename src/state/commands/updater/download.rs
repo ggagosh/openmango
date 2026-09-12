@@ -19,7 +19,7 @@ fn staging_file(cache: &Path) -> Result<tempfile::NamedTempFile> {
     std::fs::create_dir_all(cache).context("Could not create the update download folder")?;
     tempfile::Builder::new()
         .prefix("OpenMango-update-")
-        .suffix(".zip")
+        .suffix(".download")
         .tempfile_in(cache)
         .context("Could not create a temporary update file")
 }

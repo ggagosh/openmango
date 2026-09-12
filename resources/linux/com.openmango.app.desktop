@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenMango
+Comment=Browse, query, and manage MongoDB databases
+Exec=openmango
+Icon=com.openmango.app
+Terminal=false
+Categories=Development;Database;
+StartupNotify=true
+StartupWMClass=com.openmango.app
