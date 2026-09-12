@@ -75,8 +75,10 @@ fn verify_signature(bundle: &Path, requirement: &str) -> Result<()> {
         "The app signature is invalid: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
+    // Without '=', codesign interprets the requirement as a file path.
     let identity = Command::new("/usr/bin/codesign")
-        .args(["--verify", "--strict", "-R", requirement])
+        .args(["--verify", "--strict", "-R"])
+        .arg(format!("={requirement}"))
         .arg(bundle)
         .output()
         .context("Could not verify the app's signing identity")?;
@@ -192,6 +194,25 @@ pub(super) fn activate_and_restart(prepared: PreparedInstall) -> Result<()> {
 mod tests {
     use super::{bundle_for_executable, replace_bundle};
     use std::path::Path;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn signature_verification_accepts_only_the_matching_inline_requirement() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("signed-update");
+        std::fs::copy("/bin/echo", &binary).unwrap();
+        let signed = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-", "--identifier", "com.openmango.updater-test"])
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(signed.status.success(), "{}", String::from_utf8_lossy(&signed.stderr));
+
+        super::verify_signature(&binary, r#"identifier "com.openmango.updater-test""#).unwrap();
+        let error =
+            super::verify_signature(&binary, r#"identifier "com.openmango.other""#).unwrap_err();
+        assert!(error.to_string().contains("signing identity does not match"));
+    }
 
     #[test]
     fn development_executables_never_target_applications() {

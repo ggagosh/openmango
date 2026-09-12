@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reload a database to refresh its collection list from the server without reconnecting
 
 ### Fixed
+- macOS updates no longer reject valid app signatures with "invalid requirement specification"
 - Prevent a crash when opening New Connection or switching saved connections; retain drafts and active sessions when connection persistence fails
 - Keep pasted URI options and encoded credentials in sync with the editor, and ignore connection test results after the tested settings change
 - Workspace tabs now stay within the title bar, follow the active tab when overflowing, and accept shortcuts immediately after launch
