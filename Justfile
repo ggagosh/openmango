@@ -39,6 +39,10 @@ release:
 bundle:
     cargo bundle --release --features mimalloc
 
+# Compile the macOS app icon (requires Xcode 26 or newer)
+app-icon:
+    bash ./scripts/build_app_icon.sh
+
 # Testing
 test:
     cargo test
@@ -60,7 +64,7 @@ clean:
     cargo clean
 
 # CI checks (matches GitHub Actions quality job; integration-tests still require Docker)
-ci: fmt-check check-release lint-release check-sidecar unit-test
+ci: fmt-check check-release lint-release check-sidecar app-icon unit-test
 
 # All checks before commit
 precommit: ci test

@@ -6,7 +6,9 @@ use gpui_kit::component::RopeExt as _;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
@@ -399,25 +401,89 @@ impl CollectionView {
 }
 
 fn render_query_segment(
-    id: impl Into<ElementId>,
     label: &'static str,
+    empty_label: &'static str,
     state: Option<Entity<EditorState>>,
     valid: bool,
     disabled: bool,
-    window: &Window,
+    _window: &Window,
     cx: &App,
 ) -> impl IntoElement {
     let mut row = div()
-        .id(id)
         .flex()
-        .flex_col()
-        .gap(spacing::xs())
-        .flex_1()
-        .min_w(px(0.0))
-        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label));
+        .items_center()
+        .gap(spacing::sm())
+        .flex_shrink_0()
+        .child(div().text_sm().text_color(cx.theme().muted_foreground).child(label));
     if let Some(state) = state {
-        let rows = state.read(cx).text().lines_len().clamp(1, 4);
-        row = row.child(query_editor(&state, rows, label, disabled, !valid, window, cx));
+        let raw = state.read(cx).value().to_string();
+        let fields = crate::bson::parse_document_from_json(&raw).map(|doc| doc.len()).unwrap_or(0);
+        let summary = if !valid {
+            "Invalid JSON".to_string()
+        } else {
+            match fields {
+                0 => empty_label.to_string(),
+                1 => "1 field".to_string(),
+                count => format!("{count} fields"),
+            }
+        };
+        let focus = state.read(cx).focus_handle(cx);
+        let id = state.entity_id();
+        row = row.child(
+            div().debug_selector(move || format!("query-option-{label}")).child(
+                Popover::new(("query-option", id))
+                    .trigger(
+                        Button::new(("edit-query-option", id))
+                            .small()
+                            .label(summary)
+                            .icon(Icon::new(IconName::ChevronDown).small())
+                            .tooltip(format!("Edit {label}"))
+                            .when(!valid, |button| button.text_color(cx.theme().danger))
+                            .disabled(disabled),
+                    )
+                    .track_focus(&focus)
+                    .content(move |_, window, cx| {
+                        let input = state.read(cx);
+                        let rows = input.text().lines_len().clamp(4, 12);
+                        let invalid = !super::super::query::is_valid_query(&input.value());
+                        let popover = cx.entity();
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w(rems(34.0))
+                            .max_w(window.viewport_size().width - px(48.0))
+                            .gap(spacing::sm())
+                            .font_family(crate::theme::fonts::ui())
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label))
+                            .child(query_editor(&state, rows, label, disabled, invalid, window, cx))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(spacing::sm())
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Enter applies · Esc closes"),
+                                    )
+                                    .child(
+                                        Button::new("close-query-option")
+                                            .small()
+                                            .label("Done")
+                                            .on_click(move |_, window, cx| {
+                                                popover.update(cx, |popover, cx| {
+                                                    popover.dismiss(window, cx)
+                                                });
+                                            }),
+                                    ),
+                            )
+                    }),
+            ),
+        );
+    } else {
+        row = row.child(Button::new(label).small().label(empty_label).disabled(true));
     }
     row
 }
@@ -441,78 +507,39 @@ pub fn render_query_options(
 
     let apply_disabled = session_key.is_none() || !sort_valid || !projection_valid;
     let disabled = session_key.is_none();
-    let control_height = query_editor_height(1, window);
-
-    div()
-        .flex()
-        .items_end()
-        .gap(spacing::sm())
-        .font_family(crate::theme::fonts::ui())
-        .child(
-            div()
-                .flex()
-                .items_start()
-                .gap(spacing::sm())
-                .flex_1()
-                .min_w(px(0.0))
-                .child(render_query_segment(
-                    "query-segment-sort",
-                    "Sort",
-                    sort_state.clone(),
-                    sort_valid,
-                    disabled,
-                    window,
-                    cx,
-                ))
-                .child(render_query_segment(
-                    "query-segment-project",
-                    "Projection",
-                    projection_state.clone(),
-                    projection_valid,
-                    disabled,
-                    window,
-                    cx,
-                )),
-        )
-        .child(
-            filter_action_button(
-                Button::new("apply-query").with_size(Size::Medium).h(control_height),
-                IconName::Check,
-                "Apply",
-            )
-            .disabled(apply_disabled)
-            .on_click({
-                let session_key = session_key.clone();
-                let sort_state = sort_state.clone();
-                let projection_state = projection_state.clone();
-                let state_for_query = state_for_query.clone();
-                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                    let Some(session_key) = session_key.clone() else {
-                        return;
-                    };
-                    let Some(sort_state) = sort_state.clone() else {
-                        return;
-                    };
-                    let Some(projection_state) = projection_state.clone() else {
-                        return;
-                    };
-                    CollectionView::apply_query_options(
-                        state_for_query.clone(),
-                        session_key,
-                        sort_state,
-                        projection_state,
-                        window,
-                        cx,
-                    );
-                }
-            }),
-        )
-        .child(
-            filter_action_button(
-                Button::new("clear-query").ghost().with_size(Size::Medium).h(control_height),
-                IconName::Close,
-                "Clear",
-            )
+    let apply_button = filter_action_button(
+        Button::new("apply-query").primary().small(),
+        IconName::Check,
+        "Apply",
+    )
+    .disabled(apply_disabled)
+    .on_click({
+        let session_key = session_key.clone();
+        let sort_state = sort_state.clone();
+        let projection_state = projection_state.clone();
+        let state_for_query = state_for_query.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let Some(session_key) = session_key.clone() else {
+                return;
+            };
+            let Some(sort_state) = sort_state.clone() else {
+                return;
+            };
+            let Some(projection_state) = projection_state.clone() else {
+                return;
+            };
+            CollectionView::apply_query_options(
+                state_for_query.clone(),
+                session_key,
+                sort_state,
+                projection_state,
+                window,
+                cx,
+            );
+        }
+    });
+    let clear_button =
+        filter_action_button(Button::new("clear-query").ghost().small(), IconName::Close, "Clear")
             .disabled(session_key.is_none() || (!sort_active && !projection_active))
             .on_click({
                 let session_key = session_key.clone();
@@ -544,8 +571,30 @@ pub fn render_query_options(
                         cx,
                     );
                 }
-            }),
-        )
+            });
+
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .w_full()
+        .min_w(px(0.0))
+        .gap(spacing::sm())
+        .font_family(crate::theme::fonts::ui())
+        .child(render_query_segment(
+            "Sort", "Unsorted", sort_state, sort_valid, disabled, window, cx,
+        ))
+        .child(render_query_segment(
+            "Projection",
+            "All fields",
+            projection_state,
+            projection_valid,
+            disabled,
+            window,
+            cx,
+        ))
+        .child(clear_button)
+        .child(apply_button)
 }
 
 fn filter_action_button(button: Button, icon: IconName, label: &'static str) -> Button {

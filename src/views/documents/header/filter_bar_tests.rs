@@ -15,11 +15,27 @@ struct QueryHarness {
     input: Entity<EditorState>,
     width: Pixels,
     expanded: bool,
+    option: bool,
     _subscription: gpui_kit::Subscription,
 }
 
 impl Render for QueryHarness {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.option {
+            return super::super::header_container(cx.theme().background).size_full().child(
+                div().w(self.width).debug_selector(|| "option-row".into()).child(
+                    super::render_query_segment(
+                        "Projection",
+                        "All fields",
+                        Some(self.input.clone()),
+                        true,
+                        false,
+                        window,
+                        cx,
+                    ),
+                ),
+            );
+        }
         let rows =
             if self.expanded { 10 } else { self.input.read(cx).text().lines_len().clamp(1, 4) };
         super::super::header_container(cx.theme().background).size_full().child(
@@ -53,7 +69,13 @@ fn harness<'a>(
             let subscription =
                 cx.subscribe_in(&input, window, |_, _, _: &InputEvent, _, cx| cx.notify());
             input.update(cx, |input, cx| input.focus(window, cx));
-            QueryHarness { input, width: px(600.), expanded: false, _subscription: subscription }
+            QueryHarness {
+                input,
+                width: px(600.),
+                expanded: false,
+                option: false,
+                _subscription: subscription,
+            }
         });
         view = Some(query.clone());
         Root::new(query, window, cx).bordered(false)
@@ -82,6 +104,39 @@ fn caret_point(
         let (caret, _) = input.cursor_layout().expect("laid out caret");
         point(caret.left() + px(0.25), caret.center().y + input.scroll_offset().y)
     })
+}
+
+#[gpui_kit::test]
+fn query_options_stay_compact_and_open_the_complete_projection(cx: &mut TestAppContext) {
+    let projection = "{\n  _id: 1,\n  title: 1,\n  year: 1,\n  rated: 1,\n  runtime: 1,\n  genres: 1,\n  released: 1,\n  imdb: 1\n}";
+    let (view, input, cx) = harness(cx, projection);
+    for (width, rem) in [(600., 16.), (360., 20.)] {
+        view.update(cx, |view, cx| {
+            view.option = true;
+            view.width = px(width);
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            Theme::global_mut(cx).font_size = px(rem);
+            window.refresh();
+        });
+        draw(cx);
+        assert!(
+            cx.debug_bounds("option-row").unwrap().size.height <= px(rem * 2.5),
+            "a multiline projection must not expand the query toolbar"
+        );
+        let trigger = cx.debug_bounds("query-option-Projection").unwrap();
+        cx.simulate_click(trigger.center(), Modifiers::default());
+        draw(cx);
+        input.read_with(cx, |input, _| {
+            let required_height = input.line_height().unwrap() * input.text().lines_len() as f32;
+            assert!(input.input_bounds().size.height >= required_height);
+            assert!(input.input_bounds().size.width > px(200.));
+            assert_eq!(input.value().as_ref(), projection);
+        });
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+    }
 }
 
 #[gpui_kit::test]

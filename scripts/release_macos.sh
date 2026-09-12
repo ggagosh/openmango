@@ -11,9 +11,10 @@ TARGET="${1:-}"
 
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/${APP_NAME}.app"
-ICON_ICNS="$ROOT_DIR/assets/logo/openmango.icns"
+ICON_DIR="$ROOT_DIR/target/app-icon"
 
 mkdir -p "$DIST_DIR"
+bash "$ROOT_DIR/scripts/build_app_icon.sh" "$ICON_DIR"
 
 if [[ -n "$TARGET" ]]; then
     rustup target add "$TARGET"
@@ -70,13 +71,7 @@ if [[ -f "$ROOT_DIR/THIRD_PARTY_NOTICES" ]]; then
     cp "$ROOT_DIR/THIRD_PARTY_NOTICES" "$APP_DIR/Contents/Resources/"
 fi
 
-HAS_ICON=false
-if [[ -f "$ICON_ICNS" ]]; then
-    cp "$ICON_ICNS" "$APP_DIR/Contents/Resources/openmango.icns"
-    HAS_ICON=true
-else
-    echo "Warning: $ICON_ICNS not found. App will use the default icon."
-fi
+cp "$ICON_DIR/Assets.car" "$ICON_DIR/openmango.icns" "$APP_DIR/Contents/Resources/"
 
 cat > "$APP_DIR/Contents/Info.plist" <<EOF2
 <?xml version="1.0" encoding="UTF-8"?>
@@ -99,19 +94,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF2
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-EOF2
-
-if [[ "$HAS_ICON" == true ]]; then
-cat >> "$APP_DIR/Contents/Info.plist" <<EOF2
-    <key>CFBundleIconFile</key>
-    <string>openmango</string>
-EOF2
-fi
-
-cat >> "$APP_DIR/Contents/Info.plist" <<EOF2
 </dict>
 </plist>
 EOF2
+
+/usr/libexec/PlistBuddy -c "Merge '$ICON_DIR/icon-info.plist'" "$APP_DIR/Contents/Info.plist"
 
 SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
 if [[ -n "$SIGNING_IDENTITY" ]]; then

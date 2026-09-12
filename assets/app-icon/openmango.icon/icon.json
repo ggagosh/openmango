@@ -1,0 +1,117 @@
+{
+  "fill" : {
+    "solid" : "gray:1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "hidden-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "light",
+              "value" : false
+            }
+          ],
+          "image-name" : "layer-fruit-color-darker.png",
+          "name" : "layer-fruit-color-darker",
+          "opacity" : 1
+        },
+        {
+          "blend-mode" : "normal",
+          "fill-specializations" : [
+            {
+              "value" : "automatic"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.38403,0.64839,1.04685,1.00000",
+                  "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.5548560049019607,
+                    "y" : 0.24296112273361228
+                  },
+                  "stop" : {
+                    "x" : 0.409359681372549,
+                    "y" : 0.7386026847977685
+                  }
+                }
+              }
+            }
+          ],
+          "glass" : true,
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "light",
+              "value" : true
+            }
+          ],
+          "image-name" : "layer-fruit-color.png",
+          "name" : "layer-fruit-color",
+          "opacity" : 1
+        },
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.38403,0.64839,1.04685,1.00000",
+                  "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.0828125,
+                    "y" : 1
+                  },
+                  "stop" : {
+                    "x" : 0.7217087765957447,
+                    "y" : 0.6602470930232558
+                  }
+                }
+              }
+            }
+          ],
+          "image-name" : "layer-leaf-color.png",
+          "name" : "layer-leaf-color"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

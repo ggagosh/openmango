@@ -512,14 +512,9 @@ impl Render for CollectionView {
                             }
                             let raw = state.read(cx).value().to_string();
                             view.sort_auto_pair.sync(&raw);
-                            let next_error = query_validation_error(&raw).is_some();
-                            if view.sort_error != next_error {
-                                view.sort_error = next_error;
-                                cx.notify();
-                            } else {
-                                view.sort_error = next_error;
-                            }
+                            view.sort_error = query_validation_error(&raw).is_some();
                             view.persist_query_input_drafts(cx);
+                            cx.notify();
                         }
                         InputEvent::PressEnter { shift: false, .. } => {
                             let raw = state.read(cx).value().to_string();
@@ -591,14 +586,9 @@ impl Render for CollectionView {
                         }
                         let raw = state.read(cx).value().to_string();
                         view.projection_auto_pair.sync(&raw);
-                        let next_error = query_validation_error(&raw).is_some();
-                        if view.projection_error != next_error {
-                            view.projection_error = next_error;
-                            cx.notify();
-                        } else {
-                            view.projection_error = next_error;
-                        }
+                        view.projection_error = query_validation_error(&raw).is_some();
                         view.persist_query_input_drafts(cx);
+                        cx.notify();
                     }
                     InputEvent::PressEnter { shift: true, .. } => {}
                     InputEvent::PressEnter { shift: false, .. } => {
