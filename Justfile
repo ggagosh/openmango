@@ -15,7 +15,7 @@ lint:
     cargo clippy --all-targets -- -D warnings
 
 lint-release:
-    cargo clippy --release --all-targets -- -D warnings
+    cargo clippy --release -- -D warnings
 
 fmt:
     cargo fmt

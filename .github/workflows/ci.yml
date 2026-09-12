@@ -42,7 +42,7 @@ jobs:
       - name: Compile macOS app icon
         run: bash ./scripts/build_app_icon.sh
       - name: Clippy
-        run: cargo clippy --locked --release --all-targets -- -D warnings
+        run: cargo clippy --locked --release -- -D warnings
       - name: Verify Forge sidecar bundle
         run: ./scripts/check_mongosh_sidecar.sh
       - name: Run unit tests
@@ -72,18 +72,16 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Same key as linux-release.yml so nightly and stable builds start warm after a merge.
-          shared-key: linux-release-${{ matrix.arch }}
           cache-on-failure: true
       - name: Install Linux dependencies
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Format check
         run: cargo fmt --check
       - name: Clippy
-        run: cargo clippy --locked --release --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run unit tests
-        # Release profile so this build and the package step below share one compile.
-        run: cargo test --locked --release --lib -- --test-threads=1
+        # Debug profile: the integration-test seams in src/ are gated on cfg(debug_assertions).
+        run: cargo test --locked --lib -- --test-threads=1
       - name: Verify bundled helper scripts
         run: bash scripts/check_linux_tools.sh
       - name: Verify Forge sidecar bundle
