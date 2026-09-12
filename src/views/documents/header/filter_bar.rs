@@ -430,7 +430,7 @@ fn render_query_segment(
         let focus = state.read(cx).focus_handle(cx);
         let id = state.entity_id();
         row = row.child(
-            div().debug_selector(move || format!("query-option-{label}").into()).child(
+            div().debug_selector(move || format!("query-option-{label}")).child(
                 Popover::new(("query-option", id))
                     .trigger(
                         Button::new(("edit-query-option", id))
