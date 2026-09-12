@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/initial.gif" width="900" alt="OpenMango browsing and editing a MongoDB collection" />
+  <img src="assets/readme/overview.png" width="900" alt="OpenMango inspecting The Matrix in Atlas sample data, with nested fields and BSON types" />
 </p>
 
 ## Why OpenMango
@@ -48,9 +48,21 @@ OpenMango puts the tools used in day-to-day MongoDB work into one fast, keyboard
    - `macos-x86_64` for Intel
 3. Unzip it and move `OpenMango.app` to `/Applications`.
 
-Stable builds are signed and notarized. Each release also includes a SHA-256 checksum. OpenMango can download the matching update in the background, verifies its checksum, and installs it only after you choose **Restart to update**.
+Stable builds are signed and notarized. Each release also includes a SHA-256 checksum. OpenMango can download the matching update in the background, verifies its checksum, and installs it only after you choose **Restart and install**.
 
 Want current development builds? Use the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly); nightly builds may be unstable.
+
+## Document views
+
+Browse nested BSON in Tree view, then open the complete document as syntax-highlighted Extended JSON.
+
+<details>
+  <summary>Compare Tree and JSON views — 6-second loop</summary>
+
+  <p align="center">
+    <img src="assets/readme/document-views.gif" width="900" alt="The same Atlas sample movie shown in OpenMango's Tree view and syntax-highlighted JSON editor" />
+  </p>
+</details>
 
 ## Get started
 
@@ -87,6 +99,7 @@ The main data path is deliberately direct: GPUI views dispatch state commands, c
 ### Prerequisites
 
 - macOS and the stable Rust toolchain
+- Xcode 26 or newer for app icon compilation, macOS packaging, and `just ci`
 - [just](https://github.com/casey/just)
 - [lld](https://lld.llvm.org/) at `/opt/homebrew/opt/lld/bin/ld64.lld` (the repository linker configuration uses this path)
 - [Bun](https://bun.sh/) when changing or rebuilding Forge
@@ -129,9 +142,10 @@ Credentials remain in Keychain; development does not fall back to a plaintext fi
 | `just check` | Fast compile check |
 | `just fmt-check` | Check Rust formatting |
 | `just lint` | Run Clippy with warnings denied |
+| `just app-icon` | Compile the native macOS app icon and PNG export |
 | `just unit-test` | Run library tests serially |
 | `just test` | Run all Rust tests; integration suites require Docker |
-| `just ci` | Match the hosted quality job: format, release check, release Clippy, sidecar check, and unit tests |
+| `just ci` | Match the hosted quality job: format, release check, release Clippy, sidecar check, app icon compilation, and unit tests |
 | `just precommit` | Run `just ci` followed by the full test suite |
 
 Run one integration suite serially with:
