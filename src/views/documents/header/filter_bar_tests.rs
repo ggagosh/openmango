@@ -307,6 +307,11 @@ fn header_query_keeps_focus_after_left_and_right_clicks(cx: &mut TestAppContext)
             cx.simulate_mouse_down(location, button, Modifiers::default());
             cx.simulate_mouse_up(location, button, Modifiers::default());
             draw(cx);
+            if button == gpui_kit::MouseButton::Right && !cfg!(target_os = "macos") {
+                // Kit's Linux popup takes keyboard focus until it is dismissed.
+                cx.simulate_keystrokes("escape");
+                draw(cx);
+            }
             assert!(
                 cx.update(|window, cx| input.read(cx).focus_handle(cx).is_focused(window)),
                 "the header must preserve editor focus after {button:?} click; expanded={expanded}"

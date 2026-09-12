@@ -47,7 +47,7 @@ fn paste_uri(manager: &Entity<ConnectionManager>, uri: &str, cx: &mut VisualTest
         window.focus(&manager.read(cx).draft.uri_state.read(cx).focus_handle(cx), cx);
         cx.write_to_clipboard(ClipboardItem::new_string(uri.to_string()));
     });
-    cx.simulate_keystrokes("cmd-a cmd-v");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a cmd-v" } else { "ctrl-a ctrl-v" });
     draw(cx);
 }
 
@@ -94,7 +94,7 @@ fn connection_editor_pastes_options_and_saves_without_connecting(cx: &mut TestAp
     cx.update(|window, cx| {
         window.focus(&manager.read(cx).draft.uri_state.read(cx).focus_handle(cx), cx)
     });
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" });
     cx.simulate_input("mongodb+srv://user:p%40ss@cluster.example/app?authSource=admin&appName=Imported%20App&retryWrites=false&tls=false");
     draw(cx);
     manager.read_with(cx, |view, cx| {

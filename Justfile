@@ -64,7 +64,17 @@ clean:
     cargo clean
 
 # CI checks (matches GitHub Actions quality job; integration-tests still require Docker)
-ci: fmt-check check-release lint-release check-sidecar app-icon unit-test
+ci: fmt-check check-release lint-release check-sidecar unit-test
+
+# macOS additionally validates the platform-specific app icon.
+ci-macos: ci app-icon
+
+# Run these inside Linux (a VM or container also works).
+bootstrap-linux:
+    bash ./scripts/bootstrap_linux.sh
+
+package-linux:
+    bash ./scripts/release_linux.sh
 
 # All checks before commit
 precommit: ci test

@@ -163,7 +163,7 @@ impl Render for UpdatePanel {
                 body = body.child(div().text_sm().child("The download is verified. You can finish your work now and restart when ready."));
             }
             UpdateStatus::Installing(_) => {
-                body = body.child(div().text_sm().child("Extracting and checking the app signature. Your installed application has not been replaced."));
+                body = body.child(div().text_sm().child("Preparing and verifying the application. Your installed copy has not been replaced."));
             }
             UpdateStatus::Failed { message, .. } => {
                 body = body.child(Alert::error("update-error", message.clone()));

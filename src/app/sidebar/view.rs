@@ -501,7 +501,11 @@ impl Render for Sidebar {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .text_center()
-                                    .child("Use the connect button or Cmd+K to connect"),
+                                    .child(if cfg!(target_os = "macos") {
+                                        "Use the connect button or Cmd+K to connect"
+                                    } else {
+                                        "Use the connect button or Ctrl+K to connect"
+                                    }),
                             )
                             .into_any_element()
                     } else {

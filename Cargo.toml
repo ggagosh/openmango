@@ -61,6 +61,10 @@ tower-http = { version = "0.6.8", features = ["limit"] }
 schemars = "1.2.1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+minisign-verify = "=0.2.5"
+
 [dev-dependencies]
 gpui-kit = { version = "0.6.0", features = ["test-support"] }
 cargo-husky = { version = "1", default-features = false, features = [

@@ -596,8 +596,10 @@ fn render_appearance_section(
     let vibrancy_checkbox = {
         let state = state.clone();
         let checked = settings.appearance.vibrancy;
-        gpui_kit::component::checkbox::Checkbox::new("vibrancy").checked(checked).on_click(
-            move |_, window, cx| {
+        gpui_kit::component::checkbox::Checkbox::new("vibrancy")
+            .checked(checked && cfg!(target_os = "macos"))
+            .disabled(!cfg!(target_os = "macos"))
+            .on_click(move |_, window, cx| {
                 state.update(cx, |state, cx| {
                     state.settings.appearance.vibrancy = !checked;
                     state.save_settings();
@@ -615,8 +617,7 @@ fn render_appearance_section(
                         move |window, cx| request_app_quit(state.clone(), window, cx)
                     },
                 );
-            },
-        )
+            })
     };
 
     section(
@@ -634,7 +635,11 @@ fn render_appearance_section(
             ))
             .child(setting_row_with_description(
                 "Vibrancy",
-                "Blurred transparent window background (restart required)",
+                if cfg!(target_os = "macos") {
+                    "Blurred transparent window background (restart required)"
+                } else {
+                    "Available on macOS"
+                },
                 vibrancy_checkbox,
                 cx,
             )),
@@ -699,6 +704,8 @@ fn render_updates_section(
     cx: &App,
 ) -> impl IntoElement {
     let auto_update = settings.auto_update;
+    #[cfg(target_os = "linux")]
+    let desktop_state = state.clone();
 
     let auto_update_checkbox = {
         let state = state.clone();
@@ -713,41 +720,59 @@ fn render_updates_section(
         )
     };
 
-    section(
-        "Updates",
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::md())
-            .child(setting_row_with_description(
-                "Automatic updates",
-                "Check and download in the background; installation always waits for your approval",
-                auto_update_checkbox,
+    let content = div()
+        .flex()
+        .flex_col()
+        .gap(spacing::md())
+        .child(setting_row_with_description(
+            "Automatic updates",
+            "Check and download in the background; installation always waits for your approval",
+            auto_update_checkbox,
+            cx,
+        ))
+        .child(setting_row_with_description(
+            "Update channel",
+            "Stable releases by default; nightly builds include unreleased changes",
+            crate::components::updater::channel_picker(
+                "settings-update-channel",
+                state.clone(),
                 cx,
-            ))
-            .child(setting_row_with_description(
-                "Update channel",
-                "Stable releases by default; nightly builds include unreleased changes",
-                crate::components::updater::channel_picker(
-                    "settings-update-channel",
-                    state.clone(),
-                    cx,
-                ),
-                cx,
-            ))
-            .child(setting_row_with_description(
-                "Software Update",
-                "Review available versions, download progress, and installation errors",
-                Button::new("settings-check-updates").small().label("Check for updates…").on_click(
-                    move |_, window, cx| {
-                        AppCommands::check_for_updates(state.clone(), cx);
-                        crate::components::updater::open_updates(state.clone(), window, cx);
-                    },
-                ),
-                cx,
-            )),
+            ),
+            cx,
+        ))
+        .child(setting_row_with_description(
+            "Software Update",
+            "Review available versions, download progress, and installation errors",
+            Button::new("settings-check-updates").small().label("Check for updates…").on_click(
+                move |_, window, cx| {
+                    AppCommands::check_for_updates(state.clone(), cx);
+                    crate::components::updater::open_updates(state.clone(), window, cx);
+                },
+            ),
+            cx,
+        ));
+    #[cfg(target_os = "linux")]
+    let content = content.child(setting_row_with_description(
+        "Desktop shortcut",
+        "Install this AppImage in your user applications folder and add it to the application menu",
+        Button::new("install-desktop-shortcut").small().label("Install shortcut").on_click(move |_, _, cx| {
+            let state = desktop_state.clone();
+            let task = cx.background_spawn(async { crate::helpers::linux::install_desktop() });
+            cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+                let result = task.await;
+                cx.update(|cx| state.update(cx, |state, cx| {
+                    let message = match result {
+                        Ok(path) => crate::state::StatusMessage::info(format!("Desktop shortcut installed. Open {} from your application menu", path.display())),
+                        Err(error) => crate::state::StatusMessage::error(format!("Desktop installation failed: {error:#}")),
+                    };
+                    state.set_status_message(Some(message));
+                    cx.notify();
+                }));
+            }).detach();
+        }),
         cx,
-    )
+    ));
+    section("Updates", content, cx)
 }
 
 fn render_support_section(state: Entity<AppState>, cx: &App) -> impl IntoElement {
@@ -2649,6 +2674,8 @@ fn setting_row_with_description(
             div()
                 .flex()
                 .flex_col()
+                .flex_1()
+                .min_w(px(0.0))
                 .gap(px(2.0))
                 .child(
                     div()
@@ -2663,7 +2690,7 @@ fn setting_row_with_description(
                         .child(description.to_string()),
                 ),
         )
-        .child(control)
+        .child(div().flex_shrink_0().child(control))
 }
 
 #[cfg(test)]

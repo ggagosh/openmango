@@ -4,7 +4,12 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
 
-use crate::state::app_state::updater::{RELEASES_URL, UpdateChannel, UpdateRelease};
+#[cfg(not(target_os = "linux"))]
+use crate::state::app_state::updater::RELEASES_URL;
+use crate::state::app_state::updater::{UpdateChannel, UpdateRelease};
+
+#[cfg(target_os = "linux")]
+pub(super) mod linux;
 
 pub(super) const REPOSITORY_API: &str = "https://api.github.com/repos/ggagosh/openmango";
 
@@ -86,7 +91,11 @@ pub(super) async fn check(
             sha[..7].to_string()
         }
     };
-    Ok(Some(Arc::new(candidate(&release, channel, version)?)))
+    #[cfg(target_os = "linux")]
+    let update = linux::candidate(&release, channel, version).await?;
+    #[cfg(not(target_os = "linux"))]
+    let update = candidate(&release, channel, version)?;
+    Ok(Some(Arc::new(update)))
 }
 
 fn valid_sha(sha: &str) -> bool {
@@ -114,6 +123,7 @@ fn nightly_is_newer(comparison: &Value) -> Result<bool> {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn candidate(release: &Value, channel: UpdateChannel, version: String) -> Result<UpdateRelease> {
     let suffix = match std::env::consts::ARCH {
         "aarch64" => "macos-arm64.zip",
@@ -161,6 +171,7 @@ fn candidate(release: &Value, channel: UpdateChannel, version: String) -> Result
         checksum_url,
         sha256,
         size,
+        linux_manifest: None,
     })
 }
 

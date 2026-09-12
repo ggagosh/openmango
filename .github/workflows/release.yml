@@ -19,6 +19,27 @@ env:
   OPENMANGO_RELEASE_CHANNEL: stable
 
 jobs:
+  linux:
+    if: vars.LINUX_RELEASES_ENABLED == 'true'
+    uses: ./.github/workflows/linux-release.yml
+    with:
+      channel: stable
+    secrets:
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+
+  publish-linux:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OpenMango-linux-*
+          merge-multiple: true
+          path: linux-release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: linux-release/*.AppImage*
+
   macos:
     runs-on: macos-latest
     strategy:
@@ -52,22 +73,8 @@ jobs:
       - name: Build Forge mongosh sidecar
         run: ./scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
 
-
       - name: Download MongoDB Database Tools
-        run: |
-          TOOLS_VERSION="100.14.1"
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-            TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-arm64-${TOOLS_VERSION}.zip"
-            TOOLS_ARCH="macos-arm64"
-          else
-            TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-x86_64-${TOOLS_VERSION}.zip"
-            TOOLS_ARCH="macos-x86_64"
-          fi
-          mkdir -p resources/bin/${TOOLS_ARCH}
-          curl -sL "$TOOLS_URL" -o /tmp/tools.zip
-          unzip -q -j /tmp/tools.zip "*/bin/mongodump" "*/bin/mongorestore" -d resources/bin/${TOOLS_ARCH}/
-          chmod +x resources/bin/${TOOLS_ARCH}/*
-          echo "Downloaded MongoDB tools for ${TOOLS_ARCH}"
+        run: bash scripts/download_tools.sh ${{ matrix.target }}
 
       - name: Import signing certificate
         env:

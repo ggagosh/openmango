@@ -1,52 +1,47 @@
 #!/usr/bin/env bash
-# Download MongoDB Database Tools for local development
+# Pinned MongoDB Database Tools; hashes come from the publisher's full.json.
 set -euo pipefail
 
-TOOLS_VERSION="100.14.1"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES_DIR="$SCRIPT_DIR/../resources/bin"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib.sh"
+openmango_platform "${1:-}"
+TOOLS_VERSION=100.14.1
 
-# Detect architecture and OS
-ARCH=$(uname -m)
-OS=$(uname -s)
+case "$OPENMANGO_ARCH_DIR" in
+    macos-arm64)
+        archive="mongodb-database-tools-macos-arm64-${TOOLS_VERSION}.zip"
+        checksum=c75e80b7c92d8884d7d47796111dda0461b64b915449731e043a186e2a62d6f8 ;;
+    macos-x86_64)
+        archive="mongodb-database-tools-macos-x86_64-${TOOLS_VERSION}.zip"
+        checksum=dcd9ddab8f21da21191ee2169dfd352d8280ec9a90ef13c145d201e32256fe1c ;;
+    linux-x86_64)
+        archive="mongodb-database-tools-ubuntu2204-x86_64-${TOOLS_VERSION}.tgz"
+        checksum=96567f4a8239ac460a21a4c8ab7e54cda84092036044927bbd5a4eeee5d08117 ;;
+    linux-arm64)
+        archive="mongodb-database-tools-ubuntu2204-arm64-${TOOLS_VERSION}.tgz"
+        checksum=670727e163df0ce86978f50ebd5dcd75e345e0027889654c1c0cccf6cd4183d9 ;;
+esac
 
-if [ "$OS" = "Darwin" ]; then
-    if [ "$ARCH" = "arm64" ]; then
-        TOOLS_ARCH="macos-arm64"
-        TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-arm64-${TOOLS_VERSION}.zip"
-    else
-        TOOLS_ARCH="macos-x86_64"
-        TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-macos-x86_64-${TOOLS_VERSION}.zip"
-    fi
-elif [ "$OS" = "Linux" ]; then
-    TOOLS_ARCH="linux-x86_64"
-    TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-${TOOLS_VERSION}.tgz"
+cache="${CARGO_TARGET_DIR:-"$ROOT_DIR/target"}/downloads/$archive"
+download_verified "https://fastdl.mongodb.org/tools/db/$archive" "$checksum" "$cache"
+temporary="$(mktemp -d)"
+trap 'rm -rf "$temporary"' EXIT
+destination="$ROOT_DIR/resources/bin/$OPENMANGO_ARCH_DIR"
+mkdir -p "$destination"
+
+if [[ "$archive" == *.zip ]]; then
+    unzip -q -j "$cache" "*/bin/mongodump" "*/bin/mongorestore" \
+        "*/LICENSE.md" "*/THIRD-PARTY-NOTICES" -d "$temporary"
 else
-    echo "Unsupported OS: $OS"
-    exit 1
+    tar -xzf "$cache" -C "$temporary" --strip-components=2 \
+        "${archive%.tgz}/bin/mongodump" "${archive%.tgz}/bin/mongorestore"
+    tar -xzf "$cache" -C "$temporary" --strip-components=1 \
+        "${archive%.tgz}/LICENSE.md" "${archive%.tgz}/THIRD-PARTY-NOTICES"
 fi
-
-DEST_DIR="$RESOURCES_DIR/$TOOLS_ARCH"
-
-echo "Downloading MongoDB Database Tools ${TOOLS_VERSION} for ${TOOLS_ARCH}..."
-mkdir -p "$DEST_DIR"
-
-# Create temp directory for download
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
-
-if [[ "$TOOLS_URL" == *.zip ]]; then
-    curl -sL "$TOOLS_URL" -o "$TMP_DIR/tools.zip"
-    unzip -q -j "$TMP_DIR/tools.zip" "*/bin/mongodump" "*/bin/mongorestore" -d "$DEST_DIR/"
-else
-    curl -sL "$TOOLS_URL" -o "$TMP_DIR/tools.tgz"
-    tar -xzf "$TMP_DIR/tools.tgz" -C "$TMP_DIR"
-    cp "$TMP_DIR"/mongodb-database-tools-*/bin/mongodump "$DEST_DIR/"
-    cp "$TMP_DIR"/mongodb-database-tools-*/bin/mongorestore "$DEST_DIR/"
-fi
-
-chmod +x "$DEST_DIR/mongodump" "$DEST_DIR/mongorestore"
-
-echo "MongoDB tools installed to: $DEST_DIR"
-echo "  - mongodump: $("$DEST_DIR/mongodump" --version 2>/dev/null | head -1 || echo 'installed')"
-echo "  - mongorestore: $("$DEST_DIR/mongorestore" --version 2>/dev/null | head -1 || echo 'installed')"
+for tool in mongodump mongorestore; do
+    test -s "$temporary/$tool"
+    install -m 755 "$temporary/$tool" "$destination/$tool"
+done
+mkdir -p "$destination/licenses"
+install -m 644 "$temporary/LICENSE.md" "$temporary/THIRD-PARTY-NOTICES" "$destination/licenses/"
+echo "Verified MongoDB tools $TOOLS_VERSION installed to $destination"

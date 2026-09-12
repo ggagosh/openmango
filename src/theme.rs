@@ -67,15 +67,15 @@ pub fn apply_theme(
 }
 
 pub fn effective_vibrancy(_app_theme: AppTheme, user_vibrancy: bool) -> bool {
-    user_vibrancy
+    cfg!(target_os = "macos") && user_vibrancy
 }
 
 pub fn requires_vibrancy_restart(
     startup_vibrancy: bool,
-    _target_theme: AppTheme,
+    target_theme: AppTheme,
     user_vibrancy: bool,
 ) -> bool {
-    startup_vibrancy != user_vibrancy
+    startup_vibrancy != effective_vibrancy(target_theme, user_vibrancy)
 }
 
 /// Reduce alpha on background/sidebar so the macOS blur effect shows through.
@@ -279,15 +279,21 @@ mod tests {
     #[test]
     fn vibrancy_follows_user_toggle() {
         assert!(!effective_vibrancy(AppTheme::VercelDark, false));
-        assert!(effective_vibrancy(AppTheme::VercelDark, true));
+        assert_eq!(effective_vibrancy(AppTheme::VercelDark, true), cfg!(target_os = "macos"));
     }
 
     #[test]
     fn restart_required_when_vibrancy_changes() {
         assert!(requires_vibrancy_restart(true, AppTheme::VercelDark, false));
-        assert!(requires_vibrancy_restart(false, AppTheme::VercelDark, true));
+        assert_eq!(
+            requires_vibrancy_restart(false, AppTheme::VercelDark, true),
+            cfg!(target_os = "macos")
+        );
         assert!(!requires_vibrancy_restart(false, AppTheme::VercelDark, false));
-        assert!(!requires_vibrancy_restart(true, AppTheme::VercelDark, true));
+        assert_eq!(
+            requires_vibrancy_restart(true, AppTheme::VercelDark, true),
+            !cfg!(target_os = "macos")
+        );
     }
 }
 
