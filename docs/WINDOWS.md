@@ -5,6 +5,8 @@ Pull-request CI produces unsigned previews with checksums. They are for
 qualification; public releases and automatic updates require the release
 configuration and checks below.
 
+![OpenMango installed on Windows 11 ARM64](images/windows-desktop.png)
+
 ## Development
 
 Run the toolchain setup once in an **administrator** PowerShell. It installs Git,
