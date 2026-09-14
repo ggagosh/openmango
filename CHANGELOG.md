@@ -127,6 +127,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Per-collection caches are now freed when a tab closes, so memory no longer grows as you browse through many collections
 - Copying a large multi-document selection no longer briefly freezes the UI
 
+## [0.2.1] - 2026-03-05
+
+### Fixed
+- Release builds no longer include a debug-only Keychain override that failed the release lint check
+
 ## [0.2.0] - 2026-03-05
 
 ### Added

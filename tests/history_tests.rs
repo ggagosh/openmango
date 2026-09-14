@@ -30,8 +30,22 @@ async fn replica_set() -> (testcontainers::ContainerAsync<Mongo>, Client) {
     (container, client)
 }
 
+// Generous limits guard against hangs; shared CI runners can be several times slower than local Docker.
+const TIMEOUT: Duration = Duration::from_secs(60);
+
+/// History does not record writes made before its change stream opens, so wait for it instead of sleeping.
+async fn wait_for_recording(service: &HistoryService, connection_id: uuid::Uuid) {
+    tokio::time::timeout(TIMEOUT, async {
+        while !service.recording_started(connection_id) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("History change stream did not open");
+}
+
 async fn wait_for_items(service: &HistoryService, connection_id: uuid::Uuid, minimum: u64) {
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(TIMEOUT, async {
         loop {
             let page = service
                 .list_batches(BatchQuery {
@@ -57,7 +71,7 @@ async fn restore_batches(service: &HistoryService, batches: &[BatchSummary], exp
     for batch in batches {
         service.revert_batch(batch.id).unwrap();
     }
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(TIMEOUT, async {
         loop {
             let progress = batches
                 .iter()
@@ -76,7 +90,7 @@ async fn restore_batches(service: &HistoryService, batches: &[BatchSummary], exp
         }
     })
     .await
-    .expect("2,500-document History restore exceeded ten seconds");
+    .expect("History restore did not finish");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -109,7 +123,7 @@ async fn history_stream_does_not_exhaust_the_mongodb_connection_pool() {
         max_age_days: 30,
         max_bytes: 64 * 1024 * 1024,
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
 
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -157,7 +171,7 @@ async fn replica_set_history_captures_all_clients_groups_and_restores_without_ov
         .unwrap(),
     );
     service.start(connection.clone());
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
 
     let mcp_connection = McpConnection {
         id: connection_id,
@@ -351,7 +365,7 @@ async fn replica_set_history_captures_all_clients_groups_and_restores_without_ov
         .unwrap();
     assert_ne!(restore.is_error, Some(true), "{restore:?}");
     assert_eq!(restore.structured_content.unwrap()["started"], true);
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(TIMEOUT, async {
         loop {
             let result = mcp
                 .call_tool(
@@ -424,7 +438,7 @@ async fn bulk_history_restore_is_bounded_and_complete() {
         max_age_days: 30,
         max_bytes: 64 * 1024 * 1024,
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
     collection.update_many(doc! {}, doc! { "$set": { "value": 1 } }).await.unwrap();
     wait_for_items(&service, connection_id, DOCUMENT_COUNT).await;
     let page = service
@@ -472,7 +486,7 @@ async fn bulk_delete_restore_is_bounded_and_complete() {
         max_age_days: 30,
         max_bytes: 64 * 1024 * 1024,
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
     collection.delete_many(doc! {}).await.unwrap();
     wait_for_items(&service, connection_id, DOCUMENT_COUNT).await;
     let page = service
@@ -520,7 +534,7 @@ async fn repeated_document_updates_restore_newest_first_to_original() {
         max_age_days: 30,
         max_bytes: 64 * 1024 * 1024,
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
     collection.update_one(doc! {}, doc! { "$set": { "value": "B" } }).await.unwrap();
     collection.update_one(doc! {}, doc! { "$set": { "value": "C" } }).await.unwrap();
     wait_for_items(&service, connection_id, 2).await;
@@ -535,7 +549,7 @@ async fn repeated_document_updates_restore_newest_first_to_original() {
         .unwrap();
     let batch = page.items.iter().find(|batch| batch.item_count == 2).unwrap();
     service.revert_batch(batch.id).unwrap();
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(TIMEOUT, async {
         loop {
             if service.restore_progress(batch.id).unwrap().done {
                 break;
@@ -584,7 +598,7 @@ async fn delete_restore_reinserts_only_absent_documents_and_preserves_conflicts(
         max_age_days: 30,
         max_bytes: 64 * 1024 * 1024,
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
 
     collection.delete_many(doc! {}).await.unwrap();
     wait_for_items(&service, connection_id, 2).await;
@@ -605,7 +619,7 @@ async fn delete_restore_reinserts_only_absent_documents_and_preserves_conflicts(
 
     collection.insert_one(doc! { "_id": 2, "value": "concurrent" }).await.unwrap();
     service.revert_batch(batch.id).unwrap();
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(TIMEOUT, async {
         loop {
             let progress = service.restore_progress(batch.id).unwrap();
             if progress.done {
@@ -658,7 +672,7 @@ async fn replica_set_history_resumes_after_restart_without_duplicates() {
     let service =
         HistoryService::open(path.clone(), [19; 32], tokio::runtime::Handle::current()).unwrap();
     service.start(connection.clone());
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&service, connection_id).await;
     collection.update_one(doc! {}, doc! { "$set": { "value": 1 } }).await.unwrap();
     wait_for_items(&service, connection_id, 1).await;
     service.stop(connection_id);
@@ -666,7 +680,7 @@ async fn replica_set_history_resumes_after_restart_without_duplicates() {
 
     let resumed = HistoryService::open(path, [19; 32], tokio::runtime::Handle::current()).unwrap();
     resumed.start(connection);
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recording(&resumed, connection_id).await;
     collection.update_one(doc! {}, doc! { "$set": { "value": 2 } }).await.unwrap();
     wait_for_items(&resumed, connection_id, 2).await;
     let page = resumed
