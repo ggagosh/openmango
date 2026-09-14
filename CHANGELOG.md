@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
 ### Added
 - Windows support: per-user installers for x64 and ARM64 with Start menu integration and an uninstaller, signed in-app updates, no console windows for the app or its bundled tools, and credentials stored in Windows Credential Manager
 - Linux support: AppImage builds for x86_64 and aarch64 with a desktop-entry install action, signed in-app updates, and a combined title bar matching the macOS window chrome
