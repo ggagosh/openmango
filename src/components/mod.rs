@@ -52,6 +52,7 @@ pub use form_field::FormField;
 pub use gpui_kit::component::button::Button;
 pub use query_library::{QueryLibraryDialog, QueryLibraryTarget};
 pub use status_bar::StatusBar;
+pub(crate) use unsaved_guard::finish_app_quit;
 pub use unsaved_guard::{
     request_app_quit, request_disconnect_connection, request_preview_collection,
     request_remove_connection, request_unsaved_action,

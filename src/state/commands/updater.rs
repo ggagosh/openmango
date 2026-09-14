@@ -283,7 +283,10 @@ impl AppCommands {
                                         state.flush_workspace_now();
                                     });
                                     match install::activate_and_restart(prepared) {
-                                        Ok(()) => cx.quit(),
+                                        Ok(()) => crate::components::finish_app_quit(
+                                            state_for_install.clone(),
+                                            cx,
+                                        ),
                                         Err(error) => {
                                             log::error!("Update installation failed: {error:#}");
                                             state_for_install.update(cx, |state, cx| {
