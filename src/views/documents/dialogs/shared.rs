@@ -64,7 +64,9 @@ pub fn status_text(
     cx: &App,
 ) -> (String, Hsla) {
     if let Some(error) = error_message {
-        (error.clone(), cx.theme().danger_foreground)
+        // `danger_foreground` is for text on a danger fill; on the dialog surface it matches
+        // the background.
+        (error.clone(), cx.theme().danger)
     } else if updating {
         (updating_label.to_string(), cx.theme().muted_foreground)
     } else {

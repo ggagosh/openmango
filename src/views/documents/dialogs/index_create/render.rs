@@ -5,156 +5,240 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{Editor, Input};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::components::{Button, cancel_button};
 use crate::state::AppCommands;
-use crate::theme::spacing;
+use crate::theme::{fonts, spacing};
 use crate::views::documents::dialogs::shared::styled_dropdown_button;
 
 use super::IndexCreateDialog;
 use super::support::{IndexKeyKind, IndexMode, SAMPLE_SIZE, SampleStatus};
 
-impl Render for IndexCreateDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = cx.entity();
-        let mut rows = Vec::new();
-        let summary = self.key_summary(cx);
-        let wildcard_selected = summary.has_wildcard;
-        let unique_disabled = summary.has_hashed || summary.has_text || summary.has_wildcard;
-        let ttl_disabled = summary.key_count != 1 || summary.has_special || summary.has_wildcard;
+const KIND_OPTIONS: [IndexKeyKind; 6] = [
+    IndexKeyKind::Asc,
+    IndexKeyKind::Desc,
+    IndexKeyKind::Text,
+    IndexKeyKind::Hashed,
+    IndexKeyKind::TwoDSphere,
+    IndexKeyKind::Wildcard,
+];
 
+pub(super) const SUBMIT_SHORTCUT: &str =
+    if cfg!(target_os = "macos") { "Cmd+Enter" } else { "Ctrl+Enter" };
+
+impl IndexCreateDialog {
+    /// Builds the index from the active mode and creates or replaces it. The primary button and
+    /// Cmd/Ctrl+Enter both land here.
+    pub(super) fn submit(view: Entity<Self>, window: &mut Window, cx: &mut App) {
+        let prepared = view.update(cx, |this, cx| {
+            if this.creating {
+                return None;
+            }
+            let index_doc = match this.mode {
+                IndexMode::Form => this.build_index_from_form(cx),
+                IndexMode::Json => this.build_index_from_json(cx),
+            };
+            let Some(index_doc) = index_doc else {
+                cx.notify();
+                return None;
+            };
+            this.error_message = None;
+            let original_name =
+                this.edit_target.as_ref().map(|target| target.original_name.clone());
+            Some((this.state.clone(), this.session_key.clone(), index_doc, original_name))
+        });
+        let Some((state, session_key, index_doc, original_name)) = prepared else {
+            return;
+        };
+
+        let (action, confirmation) = match &original_name {
+            Some(name) => (
+                "Replace an index",
+                Some(crate::components::WriteConfirmation {
+                    title: "Replace index".into(),
+                    message: format!(
+                        "Replace index \"{name}\"? A temporary copy validates the new definition \
+                         first. Then \"{name}\" is dropped and rebuilt, and queries that use it can \
+                         be slower until the rebuild finishes."
+                    ),
+                    confirm_label: "Replace index".into(),
+                    destructive: true,
+                }),
+            ),
+            None => ("Create an index", None),
+        };
+        let request = crate::components::WriteRequest::new(
+            session_key.connection_id,
+            session_key.namespace(),
+            action,
+            confirmation,
+        );
+        crate::components::request_connection_write(
+            state.clone(),
+            request,
+            window,
+            cx,
+            move |_window, cx| {
+                view.update(cx, |this, cx| {
+                    this.creating = true;
+                    cx.notify();
+                });
+                match original_name {
+                    Some(name) => AppCommands::replace_collection_index(
+                        state,
+                        session_key,
+                        name,
+                        index_doc,
+                        cx,
+                    ),
+                    None => AppCommands::create_collection_index(state, session_key, index_doc, cx),
+                }
+            },
+        );
+    }
+
+    fn render_key_rows(&self, view: &Entity<Self>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let summary = self.key_summary(cx);
+        let mut rows = Vec::new();
         for row in &self.rows {
             let row_id = row.id;
-            let field_state = row.field_state.clone();
-            let kind_label = row.kind.label();
-            let show_remove = self.rows.len() > 1;
+            let can_remove = self.rows.len() > 1;
             let allow_wildcard = summary.key_count <= 1 || row.kind == IndexKeyKind::Wildcard;
 
-            let kind_button = styled_dropdown_button(("index-kind", row_id), kind_label, cx);
-
-            let row_view = div()
-                .flex()
-                .items_center()
-                .gap(spacing::sm())
-                .child(
-                    Input::new(&field_state)
-                        .font_family(crate::theme::fonts::mono())
-                        .w(px(280.0))
-                        .disabled(row.kind == IndexKeyKind::Wildcard),
-                )
-                .child(kind_button.dropdown_menu_with_anchor(Anchor::BottomLeft, {
-                    let view = view.clone();
-                    move |menu, _window, _cx| {
-                        menu.item(PopupMenuItem::new("1").on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_row_kind(row_id, IndexKeyKind::Asc, window, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("-1").on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_row_kind(row_id, IndexKeyKind::Desc, window, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("text").on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_row_kind(row_id, IndexKeyKind::Text, window, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("hashed").on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_row_kind(row_id, IndexKeyKind::Hashed, window, cx);
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("2dsphere").on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.set_row_kind(row_id, IndexKeyKind::TwoDSphere, window, cx);
-                                });
-                            }
-                        }))
-                        .item(
-                            PopupMenuItem::new("wildcard ($**)")
-                                .disabled(!allow_wildcard)
-                                .on_click({
-                                    let view = view.clone();
-                                    move |_, window, cx| {
-                                        view.update(cx, |this, cx| {
-                                            this.set_row_kind(
-                                                row_id,
-                                                IndexKeyKind::Wildcard,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
+            let kind_button =
+                styled_dropdown_button(("index-kind", row_id), row.kind.label(), cx).w(px(168.0));
+            let kind_menu = kind_button.dropdown_menu_with_anchor(Anchor::BottomLeft, {
+                let view = view.clone();
+                move |mut menu, _window, _cx| {
+                    for kind in KIND_OPTIONS {
+                        let view = view.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(kind.label())
+                                .disabled(kind == IndexKeyKind::Wildcard && !allow_wildcard)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.set_row_kind(row_id, kind, window, cx);
+                                    });
                                 }),
-                        )
+                        );
                     }
-                }))
-                .child(
-                    Button::new(("remove-index-row", row_id))
-                        .ghost()
-                        .xsmall()
-                        .icon(Icon::new(IconName::Close).xsmall())
-                        .disabled(!show_remove)
-                        .on_click({
-                            let view = view.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                view.update(cx, |this, cx| {
-                                    this.remove_row(row_id);
-                                    this.enforce_guardrails(window, cx);
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                );
+                    menu
+                }
+            });
 
-            rows.push(row_view.into_any_element());
+            rows.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Input::new(&row.field_state)
+                            .font_family(fonts::mono())
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .disabled(row.kind == IndexKeyKind::Wildcard),
+                    )
+                    .child(kind_menu)
+                    .child(
+                        Button::new(("remove-index-row", row_id))
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(IconName::Close).xsmall())
+                            .tooltip("Remove field")
+                            .accessibility_label("Remove field")
+                            .disabled(!can_remove)
+                            .on_click({
+                                let view = view.clone();
+                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    view.update(cx, |this, cx| {
+                                        this.remove_row(row_id);
+                                        this.enforce_guardrails(window, cx);
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .into_any_element(),
+            );
             if let Some(suggestions) = self.render_suggestions(view.clone(), row_id, cx) {
                 rows.push(suggestions);
             }
         }
+        rows
+    }
+}
+
+fn section(title: &'static str, cx: &App) -> Div {
+    div().flex().flex_col().gap(spacing::sm()).child(
+        div()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(cx.theme().foreground)
+            .child(title),
+    )
+}
+
+/// A visible label above its control, with optional guidance underneath.
+fn field(
+    label: &'static str,
+    control: impl IntoElement,
+    helper: Option<SharedString>,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(spacing::xs())
+        .min_w(px(0.0))
+        .child(div().text_xs().text_color(cx.theme().secondary_foreground).child(label))
+        .child(control)
+        .when_some(helper, |this, helper| {
+            this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(helper))
+        })
+}
+
+impl Render for IndexCreateDialog {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let summary = self.key_summary(cx);
+        let is_edit = self.edit_target.is_some();
+        let unique_blocked = summary.has_hashed || summary.has_text || summary.has_wildcard;
+        let ttl_blocked = summary.key_count != 1 || summary.has_special || summary.has_wildcard;
 
         let sample_label = match &self.sample_status {
-            SampleStatus::Idle => "Sampling fields...".to_string(),
-            SampleStatus::Loading => format!("Sampling {SAMPLE_SIZE} docs..."),
-            SampleStatus::Ready => format!("Sampled {} docs", SAMPLE_SIZE),
-            SampleStatus::Error(message) => format!("Sample failed: {message}"),
+            SampleStatus::Idle | SampleStatus::Loading => {
+                "Sampling documents for field suggestions…".to_string()
+            }
+            SampleStatus::Ready => {
+                format!("Suggestions come from up to {SAMPLE_SIZE} sampled documents")
+            }
+            SampleStatus::Error(message) => format!("Unable to sample documents: {message}"),
         };
 
-        let can_add_row = !wildcard_selected;
-        let form_view = div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Index keys"))
-            .child(div().flex().flex_col().gap(spacing::xs()).children(rows))
+        let keys = section("Keys", cx)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .children(self.render_key_rows(&view, cx)),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(spacing::md())
                     .child(
                         Button::new("add-index-row")
                             .ghost()
-                            .xsmall()
+                            .small()
+                            .icon(Icon::new(IconName::Plus).xsmall())
                             .label("Add field")
-                            .disabled(!can_add_row)
+                            .disabled(summary.has_wildcard)
                             .on_click({
                                 let view = view.clone();
                                 move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -168,332 +252,208 @@ impl Render for IndexCreateDialog {
                     .child(
                         div().text_xs().text_color(cx.theme().muted_foreground).child(sample_label),
                     ),
+            );
+
+        let name_helper: SharedString = if is_edit {
+            "Required when replacing an index.".into()
+        } else {
+            "Leave empty to use the name MongoDB generates, such as status_1.".into()
+        };
+        let ttl_helper: Option<SharedString> =
+            ttl_blocked.then_some("Needs exactly one ascending or descending key.".into());
+
+        let flag = |id: &'static str,
+                    label: &'static str,
+                    checked: bool,
+                    disabled: bool,
+                    set: fn(&mut Self, bool)| {
+            let view = view.clone();
+            Switch::new(id).label(label).small().checked(checked).disabled(disabled).on_click(
+                move |checked, _window, cx| {
+                    let checked = *checked;
+                    view.update(cx, |this, cx| {
+                        set(this, checked);
+                        cx.notify();
+                    });
+                },
             )
-            .child(div().h(px(1.0)).bg(cx.theme().sidebar_border))
-            .child(div().text_sm().text_color(cx.theme().secondary_foreground).child("Options"))
+        };
+
+        let options = section("Options", cx)
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(spacing::sm())
+                    .gap(spacing::md())
                     .child(
-                        Input::new(&self.name_state)
-                            .font_family(crate::theme::fonts::mono())
-                            .w(px(260.0)),
+                        field(
+                            "Name",
+                            Input::new(&self.name_state).font_family(fonts::mono()),
+                            Some(name_helper),
+                            cx,
+                        )
+                        .flex_1(),
                     )
                     .child(
-                        Input::new(&self.ttl_state)
-                            .font_family(crate::theme::fonts::mono())
-                            .w(px(160.0))
-                            .disabled(ttl_disabled),
+                        field(
+                            "Expire documents after (seconds)",
+                            Input::new(&self.ttl_state)
+                                .font_family(fonts::mono())
+                                .disabled(ttl_blocked),
+                            ttl_helper,
+                            cx,
+                        )
+                        .flex_1(),
                     ),
             )
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
-                    .gap(spacing::sm())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(
-                                Switch::new("unique-index")
-                                    .checked(self.unique)
-                                    .small()
-                                    .disabled(unique_disabled)
-                                    .on_click({
-                                        let view = view.clone();
-                                        move |checked, _window, cx| {
-                                            if unique_disabled {
-                                                return;
-                                            }
-                                            view.update(cx, |this, cx| {
-                                                this.unique = *checked;
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().secondary_foreground)
-                                    .child("Unique"),
+                    .gap(spacing::lg())
+                    .child(flag(
+                        "unique-index",
+                        "Unique",
+                        self.unique,
+                        unique_blocked,
+                        |this, on| this.unique = on,
+                    ))
+                    .child(flag("sparse-index", "Sparse", self.sparse, false, |this, on| {
+                        this.sparse = on
+                    }))
+                    .child(flag("hidden-index", "Hidden", self.hidden, false, |this, on| {
+                        this.hidden = on
+                    }))
+                    .when(unique_blocked, |this| {
+                        this.child(
+                            div().text_xs().text_color(cx.theme().muted_foreground).child(
+                                "Unique isn't available for text, hashed, or wildcard keys.",
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(
-                                Switch::new("sparse-index").checked(self.sparse).small().on_click(
-                                    {
-                                        let view = view.clone();
-                                        move |checked, _window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.sparse = *checked;
-                                                cx.notify();
-                                            });
-                                        }
-                                    },
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().secondary_foreground)
-                                    .child("Sparse"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .child(
-                                Switch::new("hidden-index").checked(self.hidden).small().on_click(
-                                    {
-                                        let view = view.clone();
-                                        move |checked, _window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.hidden = *checked;
-                                                cx.notify();
-                                            });
-                                        }
-                                    },
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().secondary_foreground)
-                                    .child("Hidden"),
-                            ),
-                    ),
+                        )
+                    }),
             )
-            .child({
-                let mut notes = Vec::new();
-                if unique_disabled {
-                    notes.push("Unique is unavailable for text/hashed/wildcard indexes.");
-                }
-                if ttl_disabled {
-                    notes.push("TTL requires a single ascending/descending field.");
-                }
-                if notes.is_empty() {
-                    div().into_any_element()
-                } else {
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(notes.join(" "))
-                        .into_any_element()
-                }
-            })
             .child(
                 div()
                     .flex()
-                    .gap(spacing::sm())
+                    .gap(spacing::md())
                     .child(
-                        Editor::new(&self.partial_state)
-                            .font_family(crate::theme::fonts::mono())
-                            .h(px(120.0))
-                            .w_full(),
+                        field(
+                            "Partial filter expression",
+                            Editor::new(&self.partial_state)
+                                .font_family(fonts::mono())
+                                .h(px(112.0)),
+                            None,
+                            cx,
+                        )
+                        .flex_1(),
                     )
                     .child(
-                        Editor::new(&self.collation_state)
-                            .font_family(crate::theme::fonts::mono())
-                            .h(px(120.0))
-                            .w_full(),
+                        field(
+                            "Collation",
+                            Editor::new(&self.collation_state)
+                                .font_family(fonts::mono())
+                                .h(px(112.0)),
+                            None,
+                            cx,
+                        )
+                        .flex_1(),
                     ),
             );
 
-        let json_view = div().flex().flex_col().gap(spacing::sm()).child(
-            Editor::new(&self.json_state)
-                .font_family(crate::theme::fonts::mono())
-                .h(px(360.0))
-                .w_full(),
+        let form_view = div().flex().flex_col().gap(spacing::lg()).child(keys).child(options);
+        let json_view = field(
+            "Index definition",
+            Editor::new(&self.json_state).font_family(fonts::mono()).h(px(360.0)).w_full(),
+            Some("Uses the createIndexes format: key, name, and options such as unique.".into()),
+            cx,
         );
 
-        let form_button = {
-            let base = Button::new("index-mode-form").xsmall().label("Form").on_click({
-                let view = view.clone();
+        let mode_button = |id: &'static str, label: &'static str, mode: IndexMode| {
+            let view = view.clone();
+            Button::new(id).ghost().xsmall().label(label).selected(self.mode == mode).on_click(
                 move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                     view.update(cx, |this, cx| {
-                        this.mode = IndexMode::Form;
+                        this.mode = mode;
                         cx.notify();
                     });
-                }
-            });
-            if self.mode == IndexMode::Form { base.primary() } else { base.ghost() }
-        };
-
-        let json_button = {
-            let base = Button::new("index-mode-json").xsmall().label("JSON").on_click({
-                let view = view.clone();
-                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                    view.update(cx, |this, cx| {
-                        this.mode = IndexMode::Json;
-                        cx.notify();
-                    });
-                }
-            });
-            if self.mode == IndexMode::Json { base.primary() } else { base.ghost() }
-        };
-
-        let tabs = div().flex().gap(spacing::xs()).child(form_button).child(json_button);
-
-        let is_edit = self.edit_target.is_some();
-        let (status_text, status_color) = if let Some(error) = &self.error_message {
-            (error.clone(), cx.theme().danger_foreground)
-        } else if self.creating {
-            (
-                if is_edit {
-                    "Replacing index...".to_string()
-                } else {
-                    "Creating index...".to_string()
                 },
-                cx.theme().muted_foreground,
             )
-        } else if is_edit {
-            ("Save will drop and recreate this index.".to_string(), cx.theme().muted_foreground)
-        } else {
-            ("".to_string(), cx.theme().muted_foreground)
         };
 
-        let action_row = div()
+        let header = div()
             .flex()
             .items_center()
             .justify_between()
-            .pt(spacing::xs())
-            .child(div().min_h(px(18.0)).text_sm().text_color(status_color).child(status_text))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(cancel_button("cancel-index"))
-                    .child({
-                        let label = if is_edit { "Save & Replace" } else { "Create" };
-                        Button::new("create-index")
-                            .primary()
-                            .label(if self.creating {
-                                if is_edit { "Replacing..." } else { "Creating..." }
-                            } else {
-                                label
-                            })
-                            .disabled(self.creating)
-                            .on_click({
-                                let state = self.state.clone();
-                                let session_key = self.session_key.clone();
-                                let view = view.clone();
-                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    let prepared = view.update(cx, |this, cx| {
-                                        if this.creating {
-                                            return None;
-                                        }
-                                        let index_doc = match this.mode {
-                                            IndexMode::Form => this.build_index_from_form(cx),
-                                            IndexMode::Json => this.build_index_from_json(cx),
-                                        };
-                                        let Some(index_doc) = index_doc else {
-                                            cx.notify();
-                                            return None;
-                                        };
-                                        this.error_message = None;
-                                        let original_name = this
-                                            .edit_target
-                                            .as_ref()
-                                            .map(|target| target.original_name.clone());
-                                        Some((index_doc, original_name))
-                                    });
-                                    let Some((index_doc, original_name)) = prepared else {
-                                        return;
-                                    };
-
-                                    if let Some(original_name) = original_name {
-                                        let confirm_view = view.clone();
-                                        let confirm_state = state.clone();
-                                        let confirm_session = session_key.clone();
-                                        crate::components::request_connection_write(
-                                            confirm_state.clone(),
-                                            crate::components::WriteRequest::new(
-                                                confirm_session.connection_id,
-                                                confirm_session.namespace(),
-                                                "Replace an index",
-                                                Some(crate::components::WriteConfirmation {
-                                                title: "Replace index".into(),
-                                                message: format!(
-                                                    "Replace index \"{original_name}\"? The existing index may be dropped during replacement."
-                                                ),
-                                                confirm_label: "Replace".into(),
-                                                destructive: true,
-                                            }),
-                                            ),
-                                            window,
-                                            cx,
-                                            move |_window, cx| {
-                                                confirm_view.update(cx, |this, cx| {
-                                                    this.creating = true;
-                                                    cx.notify();
-                                                    AppCommands::replace_collection_index(
-                                                        confirm_state,
-                                                        confirm_session,
-                                                        original_name,
-                                                        index_doc,
-                                                        cx,
-                                                    );
-                                                });
-                                            },
-                                        );
-                                    } else {
-                                        let confirm_view = view.clone();
-                                        let confirm_state = state.clone();
-                                        let confirm_session = session_key.clone();
-                                        crate::components::request_connection_write(
-                                            state.clone(),
-                                            crate::components::WriteRequest::new(
-                                                session_key.connection_id,
-                                                session_key.namespace(),
-                                                "Create an index",
-                                                None,
-                                            ),
-                                            window,
-                                            cx,
-                                            move |_window, cx| {
-                                                confirm_view.update(cx, |this, cx| {
-                                                    this.creating = true;
-                                                    cx.notify();
-                                                    AppCommands::create_collection_index(
-                                                        confirm_state,
-                                                        confirm_session,
-                                                        index_doc,
-                                                        cx,
-                                                    );
-                                                });
-                                            },
-                                        );
-                                    }
-                                }
-                            })
-                    }),
-            );
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(spacing::sm())
-            .p(spacing::md())
+            .gap(spacing::md())
             .child(crate::components::connection_identity_for(
                 &self.state,
                 self.session_key.connection_id,
                 true,
                 cx,
             ))
-            .child(tabs)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(mode_button("index-mode-form", "Form", IndexMode::Form))
+                    .child(mode_button("index-mode-json", "JSON", IndexMode::Json)),
+            );
+
+        let status: Option<(SharedString, Hsla)> = if let Some(error) = &self.error_message {
+            Some((error.clone().into(), cx.theme().danger))
+        } else if is_edit {
+            Some((
+                "Replacing validates a temporary copy, then drops and rebuilds this index.".into(),
+                cx.theme().muted_foreground,
+            ))
+        } else {
+            None
+        };
+
+        let primary_label = if is_edit { "Replace index" } else { "Create index" };
+        let footer = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(spacing::md())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .when_some(status, |this, (text, color)| this.text_color(color).child(text)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .flex_shrink_0()
+                    .child(cancel_button("cancel-index"))
+                    .child(
+                        Button::new("create-index")
+                            .primary()
+                            .label(primary_label)
+                            .loading(self.creating)
+                            .disabled(self.creating)
+                            .tooltip(format!("{primary_label} ({SUBMIT_SHORTCUT})"))
+                            .on_click({
+                                let view = view.clone();
+                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    Self::submit(view.clone(), window, cx);
+                                }
+                            }),
+                    ),
+            );
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::lg())
+            .p(spacing::md())
+            .child(header)
             .child(if self.mode == IndexMode::Form { form_view } else { json_view })
-            .child(action_row)
+            .child(footer)
     }
 }

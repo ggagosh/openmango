@@ -14,9 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Workspace tabs from a colored connection share an underline in that color
 - Enter opens the selected document: it expands or collapses it in the tree and opens it as JSON from the table, like double-click
 - The edit value dialog submits with Cmd/Ctrl+Enter, and its Array type accepts mongosh syntax like the Document type
+- The Indexes tab lists each index on its own row, with keys as field and direction pairs and properties such as Unique, TTL, or Partial as tags. The built-in `_id_` index no longer shows disabled Edit and Drop buttons
+- The Create Index and Edit Index dialogs label every field, explain unavailable options next to them, describe key types by name, submit with Cmd/Ctrl+Enter, and explain how replacing an index works before you confirm
 
 ### Fixed
 - Number steppers in the filter builder and the index TTL field did nothing; those fields are now plain inputs
+- The Indexes tab laid every index side by side on a single line
+- Error messages on the Indexes tab and in the index, edit value, and bulk update dialogs used a text color that matched the background in most themes
 
 ## [0.3.0] - 2026-09-14
 

@@ -106,23 +106,25 @@ impl IndexCreateDialog {
         }
 
         if keys.is_empty() {
-            self.error_message = Some("Add at least one index field.".to_string());
+            self.error_message = Some("Add at least one key field.".to_string());
             return None;
         }
 
         if has_wildcard && keys.len() > 1 {
-            self.error_message = Some("Wildcard indexes must contain only $**.".to_string());
+            self.error_message = Some(
+                "A wildcard index can only have the $** key. Remove the other fields.".to_string(),
+            );
             return None;
         }
 
         if has_wildcard && wildcard_rows == 0 {
-            self.error_message = Some("Wildcard indexes must use $** as the field.".to_string());
+            self.error_message = Some("Use $** as the field for a wildcard index.".to_string());
             return None;
         }
 
         if (has_hashed || has_text || has_wildcard) && self.unique {
             self.error_message =
-                Some("Unique indexes cannot be hashed, text, or wildcard.".to_string());
+                Some("Turn off Unique, or use ascending or descending keys.".to_string());
             return None;
         }
 
@@ -133,7 +135,7 @@ impl IndexCreateDialog {
         if !name.trim().is_empty() {
             index_doc.insert("name", name.trim());
         } else if self.edit_target.is_some() {
-            self.error_message = Some("Index name is required for replace.".to_string());
+            self.error_message = Some("Enter a name to replace this index.".to_string());
             return None;
         }
 
@@ -150,8 +152,9 @@ impl IndexCreateDialog {
         let ttl_raw = self.ttl_state.read(cx).value().to_string();
         if !ttl_raw.trim().is_empty() {
             if key_count != 1 || has_special || has_wildcard {
-                self.error_message =
-                    Some("TTL requires a single ascending/descending field.".to_string());
+                self.error_message = Some(
+                    "Clear the expiry, or use exactly one ascending or descending key.".to_string(),
+                );
                 return None;
             }
             match ttl_raw.trim().parse::<i64>() {
@@ -159,7 +162,9 @@ impl IndexCreateDialog {
                     index_doc.insert("expireAfterSeconds", value);
                 }
                 _ => {
-                    self.error_message = Some("TTL must be a positive number.".to_string());
+                    self.error_message = Some(
+                        "Enter the expiry as a whole number of seconds greater than 0.".to_string(),
+                    );
                     return None;
                 }
             }
@@ -172,7 +177,7 @@ impl IndexCreateDialog {
                     index_doc.insert("partialFilterExpression", doc);
                 }
                 Err(err) => {
-                    self.error_message = Some(format!("Invalid partial filter JSON: {err}"));
+                    self.error_message = Some(format!("Fix the partial filter expression: {err}"));
                     return None;
                 }
             }
@@ -185,7 +190,7 @@ impl IndexCreateDialog {
                     index_doc.insert("collation", doc);
                 }
                 Err(err) => {
-                    self.error_message = Some(format!("Invalid collation JSON: {err}"));
+                    self.error_message = Some(format!("Fix the collation: {err}"));
                     return None;
                 }
             }
@@ -202,20 +207,23 @@ impl IndexCreateDialog {
             Ok(doc) => match doc.get_document("key") {
                 Ok(keys) if !keys.is_empty() => {
                     if self.edit_target.is_some() && doc.get("name").is_none() {
-                        self.error_message =
-                            Some("Index JSON must include `name` when replacing.".to_string());
+                        self.error_message = Some(
+                            "Add a name to the index definition to replace this index.".to_string(),
+                        );
                         return None;
                     }
                     Some(doc)
                 }
                 _ => {
-                    self.error_message =
-                        Some("Index JSON must include a non-empty `key` document.".to_string());
+                    self.error_message = Some(
+                        "Add a key document to the definition, such as key: { status: 1 }."
+                            .to_string(),
+                    );
                     None
                 }
             },
             Err(err) => {
-                self.error_message = Some(format!("Invalid JSON: {err}"));
+                self.error_message = Some(format!("Fix the index definition: {err}"));
                 None
             }
         }
