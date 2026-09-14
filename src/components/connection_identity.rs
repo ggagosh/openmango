@@ -83,7 +83,6 @@ pub fn connection_identity_badge(
     include_name: bool,
     cx: &App,
 ) -> AnyElement {
-    let environment = identity.environment_label();
     let mut row = div().flex().items_center().gap(spacing::xs()).min_w(px(0.0));
     if let Some(color) = identity.color {
         row = row.child(
@@ -106,7 +105,14 @@ pub fn connection_identity_badge(
                 .child(identity.name.clone()),
         );
     }
-    if let Some(environment) = environment {
+    row.child(connection_identity_tags(identity, cx)).into_any_element()
+}
+
+/// Environment and read-only tags without the color swatch. Use where an icon already
+/// carries the connection color, so the swatch cannot be mistaken for a status dot.
+pub fn connection_identity_tags(identity: &ConnectionIdentity, cx: &App) -> AnyElement {
+    let mut row = div().flex().flex_shrink_0().items_center().gap(spacing::xs());
+    if let Some(environment) = identity.environment_label() {
         row = row.child(
             div()
                 .px(spacing::xs())

@@ -1,5 +1,7 @@
 use gpui_kit::SharedString;
 
+use crate::components::ConnectionIdentity;
+
 /// A single action in the palette.
 #[derive(Clone, Default)]
 pub struct ActionItem {
@@ -12,6 +14,8 @@ pub struct ActionItem {
     pub priority: i32,
     /// Highlighted items render with accent color and sort to the top.
     pub highlighted: bool,
+    /// Connection rows render the connection icon, color and identity tags.
+    pub connection: Option<ConnectionIdentity>,
 }
 
 /// Categories for grouping and ordering actions.
@@ -22,6 +26,8 @@ pub enum ActionCategory {
     Command,
     Tab,
     View,
+    Connected,
+    Saved,
 }
 
 impl ActionCategory {
@@ -31,6 +37,8 @@ impl ActionCategory {
             Self::Command => "Commands",
             Self::Tab => "Tabs",
             Self::View => "View",
+            Self::Connected => "Connected",
+            Self::Saved => "Saved",
         }
     }
 
@@ -40,6 +48,8 @@ impl ActionCategory {
             Self::Command => 1,
             Self::Navigation => 2,
             Self::View => 3,
+            Self::Connected => 4,
+            Self::Saved => 5,
         }
     }
 }

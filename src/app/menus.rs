@@ -26,37 +26,11 @@ use super::sidebar::Sidebar;
 pub(crate) fn build_connection_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
-    sidebar: Entity<Sidebar>,
     connection_id: Uuid,
-    connecting_id: Option<Uuid>,
     _window: &mut Window,
-    cx: &mut Context<PopupMenu>,
+    _cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let is_connected = state.read(cx).is_connected(connection_id);
-    let is_connecting = connecting_id == Some(connection_id);
-
     menu = menu
-        .item(
-            PopupMenuItem::new("Connect")
-                .icon(Icon::new(IconName::Globe))
-                .action(Box::new(OpenSelection))
-                .disabled(is_connected || is_connecting)
-                .on_click({
-                    let state = state.clone();
-                    let sidebar = sidebar.clone();
-                    move |_, _window, cx| {
-                        if state.read(cx).is_connected(connection_id) {
-                            return;
-                        }
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.expand_connection_and_refresh(connection_id, cx);
-                        });
-
-                        AppCommands::connect(state.clone(), connection_id, cx);
-                    }
-                }),
-        )
         .item(
             PopupMenuItem::new("Edit Connection...")
                 .icon(Icon::new(IconName::Settings))

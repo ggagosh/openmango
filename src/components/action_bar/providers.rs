@@ -1,11 +1,13 @@
 use gpui_kit::{Action, SharedString, Window};
 
+use crate::components::ConnectionIdentity;
 use crate::keyboard::{
     CloseTab, CreateCollection, CreateDatabase, CreateIndex, DiscardDocumentChanges, FocusContent,
-    FocusSidebar, InsertDocument, OpenForge, OpenQueryLibrary, OpenSettings, RefreshView,
-    RunAggregation, SaveDocument, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
-    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy,
-    TransferExport, TransferImport,
+    FocusSidebar, InsertDocument, NewConnection, OpenConnectionSwitcher, OpenForge,
+    OpenQueryLibrary, OpenSettings, RefreshView, RunAggregation, SaveDocument,
+    ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview, ShowIndexesSubview,
+    ShowSchemaSubview, ShowStatsSubview, ToggleAiPanel, TransferCopy, TransferExport,
+    TransferImport,
 };
 use crate::state::AppState;
 use crate::state::TabKey;
@@ -384,10 +386,11 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:connect"),
-            label: SharedString::from("Connect"),
-            detail: Some(SharedString::from("Connect to a saved connection")),
+            label: SharedString::from("Switch Connection"),
+            detail: Some(SharedString::from("Open or connect to a saved connection")),
             category: ActionCategory::Command,
-            available: !state.connections.is_empty(),
+            shortcut: registered_shortcut(window, &OpenConnectionSwitcher),
+            available: true,
             priority: 4,
             ..Default::default()
         },
@@ -422,23 +425,50 @@ pub fn theme_actions(state: &AppState) -> Vec<ActionItem> {
     actions
 }
 
-/// Connect: disconnected saved connections available to connect.
-pub fn connection_actions(state: &AppState) -> Vec<ActionItem> {
-    let active = state.active_connections_snapshot();
-    state
-        .connections
-        .iter()
-        .filter(|c| !active.contains_key(&c.id))
-        .map(|c| ActionItem {
-            id: SharedString::from(format!("connect:{}", c.id)),
-            label: SharedString::from(c.name.clone()),
-            detail: Some(SharedString::from("Connect")),
-            category: ActionCategory::Command,
-            available: true,
-            priority: 5,
-            ..Default::default()
+/// Connection switcher: open connections first, then saved ones by recent use.
+pub fn connection_switcher_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
+    let mut connections = state.connections.iter().collect::<Vec<_>>();
+    connections.sort_by(|a, b| a.cmp_recent_use(b));
+
+    let mut actions = connections
+        .into_iter()
+        .enumerate()
+        .map(|(ix, connection)| {
+            let connected = state.is_connected(connection.id);
+            ActionItem {
+                id: SharedString::from(if connected {
+                    format!("nav:conn:{}", connection.id)
+                } else {
+                    format!("connect:{}", connection.id)
+                }),
+                label: SharedString::from(connection.name.clone()),
+                category: if connected { ActionCategory::Connected } else { ActionCategory::Saved },
+                available: true,
+                priority: ix as i32,
+                connection: Some(ConnectionIdentity::from(connection)),
+                ..Default::default()
+            }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    actions.push(ActionItem {
+        id: SharedString::from("cmd:new-connection"),
+        label: SharedString::from("New Connection"),
+        category: ActionCategory::Command,
+        shortcut: registered_shortcut(window, &NewConnection),
+        available: true,
+        priority: 0,
+        ..Default::default()
+    });
+    actions.push(ActionItem {
+        id: SharedString::from("cmd:manage-connections"),
+        label: SharedString::from("Manage Connections"),
+        category: ActionCategory::Command,
+        available: true,
+        priority: 1,
+        ..Default::default()
+    });
+    actions
 }
 
 /// Disconnect: connected connections available to disconnect.

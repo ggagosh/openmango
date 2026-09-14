@@ -42,6 +42,7 @@ pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
 pub use connection_identity::{
     ConnectionIdentity, connection_identity_badge, connection_identity_for,
+    connection_identity_tags,
 };
 pub use connection_manager::ConnectionManager;
 pub use content::ContentArea;

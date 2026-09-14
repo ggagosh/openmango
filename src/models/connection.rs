@@ -250,6 +250,14 @@ fn default_history_max_bytes() -> u64 {
 }
 
 impl SavedConnection {
+    /// Most recently connected first; never-connected entries follow by name.
+    pub fn cmp_recent_use(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .last_connected
+            .cmp(&self.last_connected)
+            .then_with(|| self.name.to_lowercase().cmp(&other.name.to_lowercase()))
+    }
+
     pub fn new(name: String, uri: String) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -307,6 +315,19 @@ pub struct ActiveConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_use_orders_latest_first_then_names() {
+        let mut beta = SavedConnection::new("beta".into(), "mongodb://b".into());
+        let alpha = SavedConnection::new("Alpha".into(), "mongodb://a".into());
+        let mut old = SavedConnection::new("old".into(), "mongodb://o".into());
+        beta.last_connected = Some(Utc::now());
+        old.last_connected = Some(Utc::now() - chrono::Duration::days(3));
+        let mut connections = [&alpha, &old, &beta];
+        connections.sort_by(|a, b| a.cmp_recent_use(b));
+        let names = connections.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["beta", "old", "Alpha"]);
+    }
 
     #[test]
     fn environment_is_explicit_and_legacy_safe() {

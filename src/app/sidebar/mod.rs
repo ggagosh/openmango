@@ -107,7 +107,9 @@ impl Sidebar {
                 }
                 AppEvent::Connecting(connection_id) => {
                     this.model.connecting_connection = Some(*connection_id);
-                    cx.notify();
+                    this.model.expanded_nodes.insert(TreeNodeId::connection(*connection_id));
+                    this.persist_expanded_nodes(cx);
+                    this.refresh_tree(cx);
                 }
                 AppEvent::Connected(connection_id) => {
                     if this.model.connecting_connection == Some(*connection_id) {
@@ -152,7 +154,7 @@ impl Sidebar {
                     }
                     this.model.loading_databases.clear();
                     this.model.clear_selection();
-                    cx.notify();
+                    this.refresh_tree(cx);
                 }
                 AppEvent::DocumentsLoaded { .. }
                 | AppEvent::DocumentsLoadFailed { .. }
@@ -357,14 +359,18 @@ impl Sidebar {
         cx.notify();
     }
 
-    pub(crate) fn expand_connection_and_refresh(
+    /// Selects an open connection's row, scrolls to it and moves focus to the tree.
+    pub(crate) fn reveal_connection(
         &mut self,
         connection_id: Uuid,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.model.expanded_nodes.insert(TreeNodeId::connection(connection_id));
-        self.persist_expanded_nodes(cx);
-        self.refresh_tree(cx);
+        if self.collapsed {
+            self.toggle_collapsed();
+        }
+        self.select_sidebar_node(TreeNodeId::connection(connection_id), false, cx);
+        window.focus(&self.focus_handle, cx);
     }
 
     pub(crate) fn mark_database_loading(&mut self, node_id: TreeNodeId, cx: &mut Context<Self>) {
