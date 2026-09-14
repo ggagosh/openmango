@@ -80,7 +80,7 @@ fn secure_tool_command(program: &Path, connection_string: &str) -> Result<Secure
     writeln!(config, "uri: '{}'", uri.replace('\'', "''"))?;
     config.flush()?;
 
-    let mut command = Command::new(program);
+    let mut command = crate::connection::tools::tool_command(program);
     command.arg("--config").arg(config.path());
     Ok(SecureToolCommand { command, _config: config })
 }

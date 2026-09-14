@@ -12,6 +12,7 @@ parser.add_argument("--version", required=True)
 parser.add_argument("--commit", required=True)
 parser.add_argument("--channel", required=True, choices=["stable", "nightly"])
 parser.add_argument("--arch", required=True, choices=["x86_64", "aarch64"])
+parser.add_argument("--os", default="linux", choices=["linux", "windows"])
 args = parser.parse_args()
 if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", args.commit):
     parser.error("a full Git commit is required")
@@ -19,7 +20,7 @@ with args.artifact.open("rb") as source:
     digest = hashlib.file_digest(source, "sha256").hexdigest()
 metadata = {
     "schema": 1,
-    "os": "linux",
+    "os": args.os,
     "arch": args.arch,
     "channel": args.channel,
     "version": args.version,

@@ -98,7 +98,7 @@ self-update. Root-owned or package-managed installations require manual updates.
 After qualification, maintainers configure:
 
 - Repository variable `LINUX_UPDATE_PUBLIC_KEY`: the base64 Minisign public-key line.
-  It is compiled into release binaries as `OPENMANGO_LINUX_UPDATE_PUBLIC_KEY`.
+  It is compiled into release binaries as `OPENMANGO_UPDATE_PUBLIC_KEY`.
 - Repository secret `LINUX_SIGNING_KEY`: an unencrypted Minisign secret key for
   noninteractive signing. Keep the original key and recovery copy outside the repo.
 - Repository variable `LINUX_RELEASES_ENABLED=true`: enables both architectures in

@@ -52,8 +52,9 @@ Stable builds are signed and notarized. Each release also includes a SHA-256 che
 
 Want current development builds? Use the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly); nightly builds may be unstable.
 
-Linux AppImage support is being qualified on this branch. Build and test instructions,
-desktop installation, and the remaining release checks are in [Linux support](docs/LINUX.md).
+Linux AppImages and Windows installers are being qualified. Build and test instructions,
+installation, and the remaining release checks are in [Linux support](docs/LINUX.md) and
+[Windows support](docs/WINDOWS.md).
 
 ## Document views
 
@@ -78,7 +79,7 @@ For AI features, open **Settings**, enable AI, and choose a provider. Remote-pro
 
 ## Data safety and privacy
 
-- Connection credentials and AI API keys use the operating system's credential store: macOS Keychain or the Linux Secret Service keyring. They are not stored in the JSON configuration files.
+- Connection credentials and AI API keys use the operating system's credential store: macOS Keychain, the Linux Secret Service keyring, or Windows Credential Manager. They are not stored in the JSON configuration files.
 - Per-connection read-only mode blocks app-owned writes, including writes initiated through AI and Forge.
 - Destructive actions use confirmations and revalidate their target before execution.
 - Imports, copies, and exports stage their output so failure or cancellation does not silently replace existing data or files.
@@ -101,7 +102,7 @@ The main data path is deliberately direct: GPUI views dispatch state commands, c
 
 ### Prerequisites
 
-- macOS and the stable Rust toolchain, or the [Linux development environment](docs/LINUX.md#development)
+- macOS and the stable Rust toolchain, or the [Linux](docs/LINUX.md#development) or [Windows](docs/WINDOWS.md#development) development environment
 - Xcode 26 or newer on macOS for app icon compilation, packaging, and `just ci-macos`
 - [just](https://github.com/casey/just)
 - [lld](https://lld.llvm.org/) at `/opt/homebrew/opt/lld/bin/ld64.lld` (the repository linker configuration uses this path)
@@ -148,10 +149,11 @@ Credentials remain in Keychain; development does not fall back to a plaintext fi
 | `just app-icon` | Compile the native macOS app icon and PNG export |
 | `just unit-test` | Run library tests serially |
 | `just test` | Run all Rust tests; integration suites require Docker |
-| `just ci` | Common checks: format, release check, release Clippy, sidecar check, and unit tests |
+| `just ci` | Common checks: format, release Clippy, sidecar check, and unit tests |
 | `just ci-macos` | Common checks plus macOS app icon compilation |
 | `just bootstrap-linux` | Install Ubuntu/Debian build dependencies inside Linux |
 | `just package-linux` | Build the native Linux AppImage and bundled helpers |
+| `just package-windows` | Build the native Windows installer and bundled helpers (Git Bash) |
 | `just precommit` | Run `just ci` followed by the full test suite |
 
 Run one integration suite serially with:

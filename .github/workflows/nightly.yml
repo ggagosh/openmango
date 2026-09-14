@@ -20,6 +20,13 @@ jobs:
       channel: nightly
     secrets: inherit
 
+  windows:
+    if: vars.WINDOWS_RELEASES_ENABLED == 'true'
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      channel: nightly
+    secrets: inherit
+
   macos:
     uses: ./.github/workflows/macos-release.yml
     with:
@@ -27,8 +34,11 @@ jobs:
     secrets: inherit
 
   publish:
-    needs: [macos, linux]
-    if: always() && needs.macos.result == 'success' && (needs.linux.result == 'success' || needs.linux.result == 'skipped')
+    needs: [macos, linux, windows]
+    if: >-
+      always() && needs.macos.result == 'success'
+      && (needs.linux.result == 'success' || needs.linux.result == 'skipped')
+      && (needs.windows.result == 'success' || needs.windows.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

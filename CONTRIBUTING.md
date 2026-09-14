@@ -12,7 +12,8 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 For Linux dependencies, AppImage packaging, and desktop checks, see
 [Linux development](docs/LINUX.md). Keep Linux build output in a separate target
-directory when sharing a checkout with macOS.
+directory when sharing a checkout with macOS. For the Windows toolchain and installer,
+see [Windows development](docs/WINDOWS.md).
 
 ## Getting Started
 
@@ -34,9 +35,10 @@ This compiles and launches the app in development mode.
 | `just lint` | Clippy with `-D warnings` |
 | `just fmt-check` | Check formatting |
 | `just test` | Run all tests |
-| `just ci` | Common CI checks: formatting, release check/Clippy, sidecar bundle, and unit tests |
+| `just ci` | Common CI checks: formatting, release Clippy, sidecar bundle, and unit tests |
 | `just ci-macos` | Common checks plus macOS icon compilation |
 | `just package-linux` | Build the native Linux AppImage and bundled tools |
+| `just package-windows` | Build the native Windows installer and bundled tools |
 
 Always use `just` commands rather than calling `cargo` directly.
 
@@ -106,7 +108,7 @@ Releases are cut from `main` in two steps:
 1. `just prepare-release 0.2.2` bumps `Cargo.toml` and `Cargo.lock`, moves the CHANGELOG `[Unreleased]` entries under `[0.2.2]`, and opens a `release 0.2.2` pull request.
 2. After that pull request merges, `just tag-release 0.2.2` tags `main` and pushes `v0.2.2`.
 
-The tag starts the Release workflow: it checks that the tag matches `Cargo.toml`, builds and signs the macOS and Linux packages, and publishes one GitHub release with the CHANGELOG section as its notes. Nightly builds publish automatically from every push to `main`.
+The tag starts the Release workflow: it checks that the tag matches `Cargo.toml`, builds and signs the macOS, Linux, and Windows packages, and publishes one GitHub release with the CHANGELOG section as its notes. Nightly builds publish automatically from every push to `main`.
 
 ## Reporting Issues
 

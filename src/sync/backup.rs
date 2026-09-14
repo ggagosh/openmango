@@ -175,7 +175,7 @@ fn verify_archive_namespaces(
     }
     let mongorestore = crate::connection::tools::mongorestore_path()
         .ok_or_else(|| "MongoDB restore tool is unavailable".to_string())?;
-    let output = std::process::Command::new(mongorestore)
+    let output = crate::connection::tools::tool_command(mongorestore)
         .arg("-v")
         .arg("--dryRun")
         .arg(format!("--archive={}", archive_path.display()))
@@ -210,7 +210,7 @@ fn verify_dry_run_namespaces(
 
 fn database_tools_version() -> Option<String> {
     let path = crate::connection::tools::mongodump_path()?;
-    let output = std::process::Command::new(path).arg("--version").output().ok()?;
+    let output = crate::connection::tools::tool_command(path).arg("--version").output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     text.lines().next().map(|line| line.chars().take(120).collect())
 }

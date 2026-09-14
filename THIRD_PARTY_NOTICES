@@ -7,6 +7,11 @@ The AppImage and Bun runtimes contain statically linked third-party libraries
 under additional licenses; their upstream inventories and source references are
 preserved in those files. See docs/LINUX.md for the distribution qualification gate.
 
+Windows installers include the same Bun runtime and minisign-verify in the
+licenses folder beside OpenMango.exe, and are built with Inno Setup 7.1.0
+(Copyright (C) 1997-2026 Jordan Russell, Martijn Laan; https://jrsoftware.org).
+See docs/WINDOWS.md.
+
 ================================================================================
 MongoDB Database Tools (mongodump, mongorestore)
 ================================================================================

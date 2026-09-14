@@ -1,3 +1,5 @@
+//! Linux and Windows updates: a Minisign-signed manifest binds each artifact.
+
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
@@ -6,14 +8,33 @@ use minisign_verify::{PublicKey, Signature};
 use serde_json::Value;
 
 use crate::state::app_state::updater::{
-    LinuxUpdateManifest, RELEASES_URL, UpdateChannel, UpdateRelease,
+    RELEASES_URL, SignedUpdateManifest, UpdateChannel, UpdateRelease,
 };
 
+#[cfg(target_os = "linux")]
+const OS: &str = "linux";
+#[cfg(target_os = "linux")]
+const EXTENSION: &str = ".AppImage";
+#[cfg(windows)]
+const OS: &str = "windows";
+#[cfg(windows)]
+const EXTENSION: &str = "-setup.exe";
+
+/// `linux-arm64.AppImage`, `windows-x86_64-setup.exe`, ...
+fn artifact_suffix(architecture: &str) -> Option<String> {
+    let arch = match architecture {
+        "x86_64" => "x86_64",
+        "aarch64" => "arm64",
+        _ => return None,
+    };
+    Some(format!("{OS}-{arch}{EXTENSION}"))
+}
+
 pub(in crate::state::commands::updater) fn public_key() -> Result<PublicKey> {
-    let key = option_env!("OPENMANGO_LINUX_UPDATE_PUBLIC_KEY")
+    let key = option_env!("OPENMANGO_UPDATE_PUBLIC_KEY")
         .filter(|key| !key.trim().is_empty())
-        .context("This build has no Linux update verification key. Install a signed official release to enable automatic updates")?;
-    PublicKey::from_base64(key.trim()).context("The Linux update verification key is invalid")
+        .context("This build has no update verification key. Install a signed official release to enable automatic updates")?;
+    PublicKey::from_base64(key.trim()).context("The update verification key is invalid")
 }
 
 pub(super) async fn candidate(
@@ -23,21 +44,18 @@ pub(super) async fn candidate(
 ) -> Result<UpdateRelease> {
     let key = public_key()?;
     let architecture = std::env::consts::ARCH;
-    let suffix = match architecture {
-        "x86_64" => "linux-x86_64.AppImage",
-        "aarch64" => "linux-arm64.AppImage",
-        _ => anyhow::bail!("Automatic updates are unavailable for this Linux architecture"),
-    };
+    let suffix = artifact_suffix(architecture)
+        .context("Automatic updates are unavailable for this architecture")?;
     let assets = release["assets"].as_array().context("The release contains no assets")?;
     let artifact = assets
         .iter()
         .find(|asset| {
             asset["name"]
                 .as_str()
-                .is_some_and(|name| name.starts_with("OpenMango-") && name.ends_with(suffix))
+                .is_some_and(|name| name.starts_with("OpenMango-") && name.ends_with(&suffix))
         })
-        .context("The release has no AppImage for this Linux architecture")?;
-    let name = artifact["name"].as_str().context("The AppImage has no filename")?;
+        .context("The release has no update for this architecture")?;
+    let name = artifact["name"].as_str().context("The update has no filename")?;
     let metadata_url = asset_url(assets, &format!("{name}.json"))?;
     let signature_url = asset_url(assets, &format!("{name}.json.minisig"))?;
     let client = super::client(Duration::from_secs(30))?;
@@ -53,15 +71,12 @@ pub(super) async fn candidate(
     validate_manifest(&manifest, name, channel, &version, commit, architecture)?;
     ensure!(
         artifact["size"].as_u64() == Some(manifest.size),
-        "The AppImage size does not match its signed metadata"
+        "The update size does not match its signed metadata"
     );
     if let Some(digest) =
         artifact["digest"].as_str().and_then(|digest| digest.strip_prefix("sha256:"))
     {
-        ensure!(
-            digest == manifest.sha256,
-            "The AppImage digest does not match its signed metadata"
-        );
+        ensure!(digest == manifest.sha256, "The update digest does not match its signed metadata");
     }
     Ok(UpdateRelease {
         channel,
@@ -74,7 +89,7 @@ pub(super) async fn candidate(
         checksum_url: None,
         sha256: Some(manifest.sha256.clone()),
         size: manifest.size,
-        linux_manifest: Some(manifest),
+        signed_manifest: Some(manifest),
     })
 }
 
@@ -110,31 +125,31 @@ async fn read_limited(client: &reqwest::Client, url: &str, limit: usize) -> Resu
     Ok(result)
 }
 
-fn decode_manifest(bytes: &[u8], signature: &str, key: &PublicKey) -> Result<LinuxUpdateManifest> {
-    let signature = Signature::decode(signature).context("Invalid Linux update signature")?;
+fn decode_manifest(bytes: &[u8], signature: &str, key: &PublicKey) -> Result<SignedUpdateManifest> {
+    let signature = Signature::decode(signature).context("Invalid update signature")?;
     key.verify(bytes, &signature, false)
-        .context("The Linux update signature does not match the trusted publisher")?;
-    serde_json::from_slice(bytes).context("The signed Linux update metadata is invalid")
+        .context("The update signature does not match the trusted publisher")?;
+    serde_json::from_slice(bytes).context("The signed update metadata is invalid")
 }
 
 fn validate_manifest(
-    manifest: &LinuxUpdateManifest,
+    manifest: &SignedUpdateManifest,
     filename: &str,
     channel: UpdateChannel,
     version: &str,
     commit: &str,
     architecture: &str,
 ) -> Result<()> {
-    ensure!(manifest.schema == 1 && manifest.os == "linux", "Unsupported Linux update metadata");
+    ensure!(manifest.schema == 1 && manifest.os == OS, "Unsupported update metadata");
     ensure!(
         manifest.arch == architecture && manifest.channel == channel,
         "The signed update targets a different platform or channel"
     );
-    let suffix = if architecture == "aarch64" { "arm64" } else { "x86_64" };
-    let expected_name = format!("OpenMango-{}-linux-{suffix}.AppImage", manifest.version);
+    let suffix = artifact_suffix(architecture).context("Unsupported update architecture")?;
+    let expected_name = format!("OpenMango-{}-{suffix}", manifest.version);
     ensure!(
         manifest.filename == filename && filename == expected_name,
-        "The signed AppImage filename does not match the release"
+        "The signed update filename does not match the release"
     );
     let _: semver::Version = manifest.version.parse().context("Invalid signed update version")?;
     ensure!(
@@ -151,10 +166,10 @@ fn validate_manifest(
             "The signed nightly build does not match the release"
         ),
     }
-    ensure!(manifest.size > 0, "The signed AppImage is empty");
+    ensure!(manifest.size > 0, "The signed update is empty");
     ensure!(
         super::parse_checksum(&manifest.sha256)? == manifest.sha256 && manifest.sha256.len() == 64,
-        "Invalid signed AppImage digest"
+        "Invalid signed update digest"
     );
     Ok(())
 }
@@ -227,14 +242,14 @@ mod tests {
 
     #[test]
     fn signed_identity_binds_channel_architecture_and_artifact() {
-        let mut manifest = LinuxUpdateManifest {
+        let mut manifest = SignedUpdateManifest {
             schema: 1,
-            os: "linux".into(),
+            os: OS.into(),
             arch: "aarch64".into(),
             channel: UpdateChannel::Stable,
             version: "0.2.1".into(),
             commit: "a".repeat(40),
-            filename: "OpenMango-0.2.1-linux-arm64.AppImage".into(),
+            filename: format!("OpenMango-0.2.1-{}", artifact_suffix("aarch64").unwrap()),
             size: 123,
             sha256: "b".repeat(64),
         };

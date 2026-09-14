@@ -11,6 +11,7 @@ openmango_platform() {
             Darwin-x86_64) target=x86_64-apple-darwin ;;
             Linux-aarch64|Linux-arm64) target=aarch64-unknown-linux-gnu ;;
             Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
+            MINGW*|MSYS*) target="$(rustc -vV | sed -n 's/^host: //p')" ;;
             *) echo "Unsupported host: $(uname -s) $(uname -m)" >&2; return 1 ;;
         esac
     fi
@@ -20,8 +21,14 @@ openmango_platform() {
         x86_64-apple-darwin) OPENMANGO_ARCH_DIR=macos-x86_64; OPENMANGO_BUN_TARGET=bun-darwin-x64 ;;
         aarch64-unknown-linux-gnu) OPENMANGO_ARCH_DIR=linux-arm64; OPENMANGO_BUN_TARGET=bun-linux-arm64 ;;
         x86_64-unknown-linux-gnu) OPENMANGO_ARCH_DIR=linux-x86_64; OPENMANGO_BUN_TARGET=bun-linux-x64 ;;
+        aarch64-pc-windows-msvc) OPENMANGO_ARCH_DIR=windows-arm64; OPENMANGO_BUN_TARGET=bun-windows-arm64 ;;
+        x86_64-pc-windows-msvc) OPENMANGO_ARCH_DIR=windows-x86_64; OPENMANGO_BUN_TARGET=bun-windows-x64 ;;
         *) echo "Unsupported target: $target" >&2; return 1 ;;
     esac
+    OPENMANGO_EXE=""
+    if [[ "$OPENMANGO_ARCH_DIR" == windows-* ]]; then
+        OPENMANGO_EXE=.exe
+    fi
 }
 
 sha256_file() {

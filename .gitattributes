@@ -1,1 +1,4 @@
-
+# LF on every platform: Git Bash cannot run CRLF scripts, and embedded text must match across builds.
+* text=auto eol=lf
+# Signed test fixtures must keep their exact bytes.
+tests/fixtures/** -text

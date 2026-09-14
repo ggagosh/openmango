@@ -20,7 +20,7 @@ ARTIFACT="$DIST_DIR/OpenMango-$VERSION-$OPENMANGO_ARCH_DIR.AppImage"
 mkdir -p "$DIST_DIR"
 
 if [[ "${REQUIRE_LINUX_SIGNING:-0}" == 1 ]]; then
-    : "${OPENMANGO_LINUX_UPDATE_PUBLIC_KEY:?Set the trusted Linux update public key}"
+    : "${OPENMANGO_UPDATE_PUBLIC_KEY:?Set the trusted update public key}"
     : "${OPENMANGO_LINUX_SIGNING_KEY_FILE:?Set the Minisign secret-key file}"
     command -v minisign >/dev/null
 fi
@@ -73,13 +73,13 @@ chmod +x "$ARTIFACT"
 COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 ARCH=x86_64
 [[ "$OPENMANGO_ARCH_DIR" == linux-arm64 ]] && ARCH=aarch64
-python3 "$ROOT_DIR/scripts/linux_update_metadata.py" "$ARTIFACT" \
+python3 "$ROOT_DIR/scripts/update_metadata.py" "$ARTIFACT" \
     --version "$VERSION" --commit "$COMMIT" \
     --channel "${OPENMANGO_RELEASE_CHANNEL:-stable}" --arch "$ARCH"
 if [[ -n "${OPENMANGO_LINUX_SIGNING_KEY_FILE:-}" ]]; then
-    : "${OPENMANGO_LINUX_UPDATE_PUBLIC_KEY:?Set the public key to verify the release signature}"
+    : "${OPENMANGO_UPDATE_PUBLIC_KEY:?Set the public key to verify the release signature}"
     minisign -Sm "$ARTIFACT.json" -s "$OPENMANGO_LINUX_SIGNING_KEY_FILE"
-    minisign -Vm "$ARTIFACT.json" -P "$OPENMANGO_LINUX_UPDATE_PUBLIC_KEY"
+    minisign -Vm "$ARTIFACT.json" -P "$OPENMANGO_UPDATE_PUBLIC_KEY"
 elif [[ "${REQUIRE_LINUX_SIGNING:-0}" == 1 ]]; then
     echo "Refusing to publish an unsigned Linux update." >&2; exit 1
 else

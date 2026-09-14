@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Windows support: per-user installers for x64 and ARM64 with Start menu integration and an uninstaller, signed in-app updates, no console windows for the app or its bundled tools, and credentials stored in Windows Credential Manager
 - Linux support: AppImage builds for x86_64 and aarch64 with a desktop-entry install action, signed in-app updates, and a combined title bar matching the macOS window chrome
 - Searchable native connection list, visible disconnected connections with row actions, and separate Save and Save & Connect actions
 - Copy ID action for documents, including ID-only copying of a selected collapsed document

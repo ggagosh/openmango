@@ -39,12 +39,12 @@ pub struct UpdateRelease {
     pub checksum_url: Option<String>,
     pub sha256: Option<String>,
     pub size: u64,
-    pub linux_manifest: Option<LinuxUpdateManifest>,
+    pub signed_manifest: Option<SignedUpdateManifest>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LinuxUpdateManifest {
+pub struct SignedUpdateManifest {
     pub schema: u32,
     pub os: String,
     pub arch: String,

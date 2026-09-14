@@ -1,0 +1,117 @@
+name: Windows installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [nightly, stable]
+        default: nightly
+        required: true
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+    secrets:
+      LINUX_SIGNING_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x86_64
+          - runner: windows-11-arm
+            arch: arm64
+    defaults:
+      run:
+        shell: bash
+    env:
+      OPENMANGO_RELEASE_CHANNEL: ${{ inputs.channel }}
+      # One Minisign key signs Linux and Windows updates; the variable predates Windows.
+      OPENMANGO_UPDATE_PUBLIC_KEY: ${{ vars.LINUX_UPDATE_PUBLIC_KEY }}
+      OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+      CARGO_INCREMENTAL: 0
+      CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-release-${{ matrix.arch }}
+      - name: Install Strawberry Perl
+        shell: pwsh
+        run: if (-not (Test-Path C:\Strawberry\perl\bin\perl.exe)) { choco install strawberryperl -y --no-progress }
+      - name: Require the update verification key
+        run: test -n "$OPENMANGO_UPDATE_PUBLIC_KEY"
+      - name: Build installer
+        run: bash scripts/release_windows.sh
+      - name: Check installer, bundled tools, and launch
+        run: bash scripts/check_windows_package.sh dist/OpenMango-*-windows-${{ matrix.arch }}-setup.exe --launch
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          path: dist/OpenMango-*-windows-${{ matrix.arch }}-setup.exe
+
+  sign:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENMANGO_UPDATE_PUBLIC_KEY: ${{ vars.LINUX_UPDATE_PUBLIC_KEY }}
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: unsigned-windows-*
+          merge-multiple: true
+          path: dist
+      - name: Load signing key
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: |
+          test -n "$LINUX_SIGNING_KEY"
+          test -n "$OPENMANGO_UPDATE_PUBLIC_KEY"
+          umask 077
+          printf '%s\n' "$LINUX_SIGNING_KEY" > "$RUNNER_TEMP/signing.key"
+      - name: Write and sign update metadata
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          for arch in x86_64 arm64; do
+            artifact="dist/OpenMango-$version-windows-$arch-setup.exe"
+            rust_arch=x86_64
+            [[ "$arch" == arm64 ]] && rust_arch=aarch64
+            python3 scripts/update_metadata.py "$artifact" --os windows --version "$version" \
+              --commit "$GITHUB_SHA" --channel "$CHANNEL" --arch "$rust_arch"
+            minisign -Sm "$artifact.json" -s "$RUNNER_TEMP/signing.key"
+            minisign -Vm "$artifact.json" -P "$OPENMANGO_UPDATE_PUBLIC_KEY"
+          done
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/signing.key"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: OpenMango-windows
+          if-no-files-found: error
+          path: |
+            dist/OpenMango-*-windows-*-setup.exe
+            dist/OpenMango-*-windows-*-setup.exe.sha256
+            dist/OpenMango-*-windows-*-setup.exe.json
+            dist/OpenMango-*-windows-*-setup.exe.json.minisig

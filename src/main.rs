@@ -1,3 +1,6 @@
+// Release builds are GUI apps; debug builds keep a console for logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -68,7 +71,7 @@ fn main() {
             .map(|state| state.to_bounds())
             .unwrap_or(WindowBounds::Windowed(default_bounds));
 
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 app_id: Some("com.openmango.app".into()),
                 #[cfg(target_os = "linux")]
@@ -100,7 +103,11 @@ fn main() {
 
                 cx.new(|cx| Root::new(app_view, window, cx))
             },
-        )
-        .unwrap();
+        );
+        // Release GUI builds have no console, so the log is the only place this is visible.
+        if let Err(error) = opened {
+            log::error!("Could not open the main window: {error:#}");
+            std::process::exit(1);
+        }
     });
 }

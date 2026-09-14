@@ -14,4 +14,17 @@ fn main() {
     // Re-run only when HEAD changes
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
+
+    // Explorer, the taskbar, and installers read the icon and version from the executable.
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=resources/windows/openmango.ico");
+        let mut resource = winresource::WindowsResource::new();
+        resource
+            .set_icon("resources/windows/openmango.ico")
+            .set("ProductName", "OpenMango")
+            .set("FileDescription", "OpenMango")
+            .set("LegalCopyright", "GPL-3.0");
+        resource.compile().expect("Could not embed the Windows icon and version resources");
+    }
 }
