@@ -121,7 +121,8 @@ pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut A
     });
 }
 
-fn finish_app_quit(state: Entity<AppState>, cx: &mut App) {
+/// Saves the workspace, closes every window, and quits: the same path as Cmd+Q.
+pub(crate) fn finish_app_quit(state: Entity<AppState>, cx: &mut App) {
     state.update(cx, |state, _| {
         state.update_workspace_from_state();
         state.flush_workspace_now();

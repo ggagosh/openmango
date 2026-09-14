@@ -1,5 +1,6 @@
 use gpui_kit::*;
 
+use crate::components::ConnectionIdentity;
 use crate::components::ConnectionManager as ConnectionManagerView;
 use crate::state::{AppEvent, AppState, StatusLevel, View};
 use crate::views::{
@@ -14,7 +15,7 @@ mod tabs;
 #[cfg(test)]
 mod connection_manager_tests;
 
-use empty::render_empty_state;
+use empty::{render_empty_state, render_welcome};
 use shell::render_shell;
 pub(crate) use tabs::OpenTabsBar;
 use tabs::{TabsHost, render_tabs_host};
@@ -30,6 +31,7 @@ pub struct ContentArea {
     agent_activity_view: Option<Entity<AgentActivityView>>,
     connection_manager_view: Option<Entity<ConnectionManagerView>>,
     connection_manager_request_generation: u64,
+    welcome_connecting: Option<uuid::Uuid>,
     settings_view: Option<Entity<SettingsView>>,
     changelog_view: Option<Entity<ChangelogView>>,
     last_inputs: ContentAreaInputs,
@@ -45,7 +47,11 @@ struct ContentAreaInputs {
     current_view: View,
     connection_manager_request_generation: u64,
     error_text: Option<String>,
+    recent_connections: Vec<ConnectionIdentity>,
 }
+
+/// How many saved connections the welcome screen offers.
+const WELCOME_RECENT_LIMIT: usize = 5;
 
 impl ContentAreaInputs {
     fn from_state(state: &AppState) -> Self {
@@ -59,6 +65,17 @@ impl ContentAreaInputs {
             error_text: state.status_message().and_then(|message| {
                 if matches!(message.level, StatusLevel::Error) { Some(message.text) } else { None }
             }),
+            recent_connections: if state.has_active_connections() {
+                Vec::new()
+            } else {
+                let mut connections = state.connections.iter().collect::<Vec<_>>();
+                connections.sort_by(|a, b| a.cmp_recent_use(b));
+                connections
+                    .into_iter()
+                    .take(WELCOME_RECENT_LIMIT)
+                    .map(ConnectionIdentity::from)
+                    .collect()
+            },
         }
     }
 }
@@ -136,6 +153,25 @@ impl ContentArea {
             _ => {}
         }));
 
+        // The welcome screen marks the connection it is opening.
+        subscriptions.push(cx.subscribe(&state, |this, _, event, cx| {
+            let next = match event {
+                AppEvent::Connecting(connection_id) => Some(*connection_id),
+                AppEvent::Connected(connection_id)
+                | AppEvent::Disconnected(connection_id)
+                | AppEvent::ConnectionFailed { connection_id, .. }
+                    if this.welcome_connecting == Some(*connection_id) =>
+                {
+                    None
+                }
+                _ => return,
+            };
+            if this.welcome_connecting != next {
+                this.welcome_connecting = next;
+                cx.notify();
+            }
+        }));
+
         // Check if we should create collection view initially
         let collection_view = if state.read(cx).selected_collection().is_some() {
             Some(cx.new(|cx| CollectionView::new(state.clone(), cx)))
@@ -185,6 +221,7 @@ impl ContentArea {
             agent_activity_view,
             connection_manager_view: None,
             connection_manager_request_generation: 0,
+            welcome_connecting: None,
             settings_view,
             changelog_view,
             last_inputs,
@@ -324,6 +361,7 @@ impl Render for ContentArea {
             current_view,
             connection_manager_request_generation: _,
             error_text,
+            recent_connections,
         } = inputs;
 
         let should_collection_view = matches!(current_view, View::Documents);
@@ -470,9 +508,18 @@ impl Render for ContentArea {
             }
         }
 
-        let hint = if !has_connection {
-            "Add a connection to get started".to_string()
-        } else if selected_db.is_none() {
+        if !has_connection {
+            let welcome = render_welcome(
+                self.state.clone(),
+                recent_connections,
+                self.welcome_connecting,
+                window,
+                cx,
+            );
+            return render_shell(error_text, self.state.clone(), welcome, true, cx);
+        }
+
+        let hint = if selected_db.is_none() {
             "Select a database in the sidebar".to_string()
         } else {
             "Select a collection to view documents".to_string()

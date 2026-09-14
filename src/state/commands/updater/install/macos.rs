@@ -1,7 +1,8 @@
 use super::{replace_path as replace_bundle, restore_path as restore_bundle};
 use std::fs::{self, File, OpenOptions};
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -153,27 +154,41 @@ pub(super) fn activate_and_restart(prepared: PreparedInstall) -> Result<()> {
         }
         return Err(error);
     }
-    let launch = Command::new("/usr/bin/open").arg("-n").arg(&prepared.target).output();
-    let error = match launch {
-        Ok(output) if output.status.success() => None,
-        Ok(output) => Some(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-        Err(error) => Some(error.to_string()),
-    };
-    if let Some(error) = error {
+    if let Err(error) = relaunch_after_exit(std::process::id(), &prepared.target, "/usr/bin/open") {
         if let Err(restore) = restore_bundle(&prepared.target, &prepared.extracted, &backup) {
             let recovery = prepared.staging.keep();
             bail!(
-                "The update could not be opened ({error}) or restored ({restore:#}). The previous application is preserved in {}",
+                "The update could not schedule a relaunch ({error}) or restore ({restore:#}). The previous application is preserved in {}",
                 recovery.display()
             );
         }
-        bail!("The new app could not be opened. The previous app was restored: {error}");
+        bail!("The update could not schedule a relaunch. The previous app was restored: {error}");
     }
     // Only this operation's staging area and backup are removed.
     if let Err(error) = prepared.staging.close() {
         log::warn!("Update installed, but its backup could not be cleaned up: {error}");
     }
     Ok(())
+}
+
+/// Opens `app` once `pid` has exited, waiting at most a minute.
+///
+/// `open -n` beside the still-running app started a second copy that LaunchServices did not
+/// treat as the app, so Dock and Spotlight could open yet another. Launching only after exit
+/// gives one registered instance, and a quit that never finishes cannot leave two running.
+fn relaunch_after_exit(pid: u32, app: &Path, opener: &str) -> std::io::Result<Child> {
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"i=0; while kill -0 "$1" 2>/dev/null; do [ "$i" -ge 600 ] && exit 1; i=$((i + 1)); sleep 0.1; done; exec "$2" "$3""#)
+        .arg("openmango-relaunch")
+        .arg(pid.to_string())
+        .arg(opener)
+        .arg(app)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
 }
 
 #[cfg(test)]
@@ -210,6 +225,20 @@ mod tests {
             .unwrap(),
             Path::new("/Applications/OpenMango.app")
         );
+    }
+
+    #[test]
+    fn relaunch_waits_for_the_quitting_app_to_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let opened = root.path().join("opened");
+        let mut quitting = std::process::Command::new("/bin/sleep").arg("1").spawn().unwrap();
+        let mut relaunch =
+            super::relaunch_after_exit(quitting.id(), &opened, "/usr/bin/touch").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!opened.exists(), "relaunched while the old app was still running");
+        quitting.wait().unwrap();
+        assert!(relaunch.wait().unwrap().success());
+        assert!(opened.exists());
     }
 
     #[test]

@@ -28,12 +28,12 @@ pub enum IndexKeyKind {
 impl IndexKeyKind {
     pub fn label(self) -> &'static str {
         match self {
-            IndexKeyKind::Asc => "1",
-            IndexKeyKind::Desc => "-1",
-            IndexKeyKind::Text => "text",
-            IndexKeyKind::Hashed => "hashed",
-            IndexKeyKind::TwoDSphere => "2dsphere",
-            IndexKeyKind::Wildcard => "wildcard ($**)",
+            IndexKeyKind::Asc => "1 · Ascending",
+            IndexKeyKind::Desc => "-1 · Descending",
+            IndexKeyKind::Text => "text · Full text",
+            IndexKeyKind::Hashed => "hashed · Hashed",
+            IndexKeyKind::TwoDSphere => "2dsphere · Geospatial",
+            IndexKeyKind::Wildcard => "$** · Wildcard",
         }
     }
 

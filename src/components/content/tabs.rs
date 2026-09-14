@@ -13,7 +13,7 @@ use gpui_kit::*;
 use crate::actions::model::ActionStatus;
 use crate::components::{
     Button, ConnectionIdentity, ConnectionManager as ConnectionManagerView,
-    connection_identity_badge, request_unsaved_action,
+    connection_identity_tags, request_unsaved_action,
 };
 use crate::keyboard::{self, FocusContent};
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, UnsavedScope, View};
@@ -261,10 +261,14 @@ impl Render for OpenTabsBar {
                 let tooltip = identity
                     .map(|identity| format!("{title} · {}", identity.display_name()))
                     .unwrap_or(title);
-                let icon_color = identity
+                let accent = identity
                     .and_then(|identity| identity.color)
-                    .map(|color| colors::connection_accent(color, cx))
-                    .unwrap_or(muted);
+                    .map(|color| colors::connection_accent(color, cx));
+                let icon_color = accent.unwrap_or(muted);
+                // Tabs from one colored connection share an underline in that color. An underline,
+                // unlike a background tint, leaves label contrast unchanged in every theme.
+                let tab_selected_border =
+                    accent.map(|accent| accent.opacity(0.5)).unwrap_or(selected_border);
                 let close_state = self.state.clone();
                 let close_tab = tab.clone();
                 let close_button = Button::new(("workspace-tab-close", index))
@@ -296,15 +300,16 @@ impl Render for OpenTabsBar {
                     .gap(spacing::sm())
                     .px(spacing::sm())
                     .rounded(borders::radius_sm())
+                    .relative()
                     .border_1()
                     .border_color(colors::transparent())
                     .bg(colors::transparent())
                     .text_color(muted)
-                    .styles(|styles| {
+                    .styles(move |styles| {
                         styles.selected(|style| {
                             style
                                 .bg(selected_bg)
-                                .border_color(selected_border)
+                                .border_color(tab_selected_border)
                                 .text_color(foreground)
                                 .font_weight(FontWeight::MEDIUM)
                         })
@@ -313,6 +318,18 @@ impl Render for OpenTabsBar {
                         if is_selected { style } else { style.bg(hover_bg).text_color(foreground) }
                     })
                     .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                    .when_some(accent, |tab, accent| {
+                        tab.child(
+                            div()
+                                .absolute()
+                                .bottom(px(2.0))
+                                .left(spacing::sm())
+                                .right(spacing::sm())
+                                .h(px(2.0))
+                                .rounded_full()
+                                .bg(if is_selected { accent } else { accent.opacity(0.6) }),
+                        )
+                    })
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         state.update(cx, |state, cx| {
@@ -357,11 +374,16 @@ impl Render for OpenTabsBar {
                                         || identity.read_only
                                 }),
                                 |row, identity| {
-                                    row.child(connection_identity_badge(
-                                        identity,
-                                        show_connection_names,
-                                        cx,
-                                    ))
+                                    row.when(show_connection_names, |row| {
+                                        row.child(
+                                            div()
+                                                .min_w(px(0.0))
+                                                .truncate()
+                                                .text_color(muted)
+                                                .child(identity.name.clone()),
+                                        )
+                                    })
+                                    .child(connection_identity_tags(identity, cx))
                                 },
                             )
                             .when(

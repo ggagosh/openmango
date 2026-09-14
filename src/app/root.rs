@@ -20,9 +20,9 @@ use crate::keyboard::{
     self, CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase,
     CreateIndex, DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate,
     EditConnection, FocusContent, FocusSidebar, InstallUpdate, NewConnection, NextTab,
-    OpenActionBar, OpenForge, OpenQueryLibrary, OpenSettings, PrevTab, QuitApp, RefreshView,
-    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
-    SelectTab9, ToggleAiPanel,
+    OpenActionBar, OpenConnectionSwitcher, OpenForge, OpenQueryLibrary, OpenSettings, PrevTab,
+    QuitApp, RefreshView, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
+    SelectTab7, SelectTab8, SelectTab9, ToggleAiPanel,
 };
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::app_state::{
@@ -402,8 +402,9 @@ impl AppRoot {
             ActionBar::new(state.clone()).on_execute({
                 let state = state.clone();
                 let content_area = content_area.clone();
+                let sidebar = sidebar.clone();
                 move |execution, window, cx| {
-                    Self::execute_action(&state, &content_area, execution, window, cx);
+                    Self::execute_action(&state, &content_area, &sidebar, execution, window, cx);
                 }
             })
         });
@@ -933,6 +934,11 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &OpenActionBar, window, cx| {
                 this.action_bar.update(cx, |bar, cx| {
                     bar.toggle(window, cx);
+                });
+            }))
+            .on_action(cx.listener(|this, _: &OpenConnectionSwitcher, window, cx| {
+                this.action_bar.update(cx, |bar, cx| {
+                    bar.toggle_connections(window, cx);
                 });
             }))
             .on_action(cx.listener(|this, _: &OpenQueryLibrary, window, cx| {

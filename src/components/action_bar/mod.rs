@@ -5,18 +5,20 @@ pub use types::ActionExecution;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::*;
 
 use crate::app::search::fuzzy_match_score;
+use crate::components::connection_identity_tags;
 use crate::state::AppState;
 use crate::state::settings::AppTheme;
-use crate::theme::{borders, fonts, islands, spacing};
+use crate::theme::{borders, colors, fonts, islands, sizing, spacing};
 
 use providers::{
-    command_actions, connection_actions, disconnect_actions, navigation_actions, tab_actions,
-    theme_actions, view_actions,
+    command_actions, connection_switcher_actions, disconnect_actions, navigation_actions,
+    tab_actions, theme_actions, view_actions,
 };
-use types::{FilteredAction, PaletteMode};
+use types::{ActionCategory, FilteredAction, PaletteMode};
 
 type ExecuteHandler = Box<dyn Fn(ActionExecution, &mut Window, &mut App) + 'static>;
 
@@ -59,6 +61,19 @@ impl ActionBar {
     ) -> Self {
         self.on_execute = Some(Box::new(handler));
         self
+    }
+
+    /// Opens the palette straight into the connection switcher, or closes it when the
+    /// switcher is already showing.
+    pub fn toggle_connections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open && self.mode == PaletteMode::Connect {
+            self.close(window, cx);
+            return;
+        }
+        if !self.open {
+            self.open(window, cx);
+        }
+        self.switch_to_connect(window, cx);
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -155,7 +170,7 @@ impl ActionBar {
         self.scroll_offset = 0;
         if let Some(input) = self.input_state.clone() {
             input.update(cx, |state, cx| {
-                state.set_placeholder("Select Connection...", window, cx);
+                state.set_placeholder("Search connections", window, cx);
                 state.set_value("", window, cx);
             });
         }
@@ -208,13 +223,21 @@ impl ActionBar {
                 actions
             }
             PaletteMode::Theme => theme_actions(state),
-            PaletteMode::Connect => connection_actions(state),
+            PaletteMode::Connect => connection_switcher_actions(state, window),
             PaletteMode::Disconnect => disconnect_actions(state),
         };
     }
 
     fn filter_actions(&mut self, query: &str) {
         let query = query.trim().to_lowercase();
+        // The switcher keeps its groups in place while filtering: connected, saved, then actions.
+        let group = |item: &types::ActionItem, mode: &PaletteMode| match (mode, &item.category) {
+            (PaletteMode::Connect, ActionCategory::Connected) => 0,
+            (PaletteMode::Connect, ActionCategory::Saved) => 1,
+            (PaletteMode::Connect, _) => 2,
+            _ => 0,
+        };
+        let mode = self.mode.clone();
 
         if query.is_empty() {
             let mut filtered: Vec<FilteredAction> = self
@@ -225,9 +248,9 @@ impl ActionBar {
                 .collect();
             filtered.sort_by(|a, b| {
                 // Highlighted items always first
-                b.item
-                    .highlighted
-                    .cmp(&a.item.highlighted)
+                group(&a.item, &mode)
+                    .cmp(&group(&b.item, &mode))
+                    .then_with(|| b.item.highlighted.cmp(&a.item.highlighted))
                     .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
                     .then_with(|| a.item.priority.cmp(&b.item.priority))
             });
@@ -251,9 +274,9 @@ impl ActionBar {
 
         filtered.sort_by(|a, b| {
             // Highlighted items first, then by score
-            b.item
-                .highlighted
-                .cmp(&a.item.highlighted)
+            group(&a.item, &mode)
+                .cmp(&group(&b.item, &mode))
+                .then_with(|| b.item.highlighted.cmp(&a.item.highlighted))
                 .then_with(|| a.score.cmp(&b.score))
                 .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
                 .then_with(|| a.item.priority.cmp(&b.item.priority))
@@ -410,10 +433,13 @@ impl Render for ActionBar {
                                 .px(spacing::md())
                                 .py(spacing::lg())
                                 .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("No matching actions"),
+                                    div().text_sm().text_color(cx.theme().muted_foreground).child(
+                                        if self.mode == PaletteMode::Connect {
+                                            "No matching connections"
+                                        } else {
+                                            "No matching actions"
+                                        },
+                                    ),
                                 )
                                 .into_any_element()
                         } else {
@@ -442,14 +468,29 @@ impl Render for ActionBar {
                                     });
                                 });
 
-                            let show_categories = self.mode == PaletteMode::All;
+                            let switcher = self.mode == PaletteMode::Connect;
+                            let show_categories = self.mode == PaletteMode::All || switcher;
                             let mut last_category = None;
                             for ix in visible_start..visible_end {
                                 let item = &self.filtered[ix].item;
-                                // Category group header (only in All mode)
                                 if show_categories && last_category.as_ref() != Some(&item.category)
                                 {
+                                    let is_first_group = last_category.is_none();
                                     last_category = Some(item.category.clone());
+                                    // Switcher actions sit under a divider rather than a heading.
+                                    if switcher && item.category == ActionCategory::Command {
+                                        if !is_first_group {
+                                            list = list.child(
+                                                div()
+                                                    .mx(spacing::md())
+                                                    .my(spacing::xs())
+                                                    .h(px(1.0))
+                                                    .bg(islands::panel_border(&appearance, cx)),
+                                            );
+                                        }
+                                        list = list.child(render_action_row(self, ix, &entity, cx));
+                                        continue;
+                                    }
                                     list = list.child(
                                         div()
                                             .px(spacing::md())
@@ -502,8 +543,27 @@ fn render_action_row(
     // Left side: label + detail
     let label_color = if item.highlighted { cx.theme().primary } else { cx.theme().foreground };
     let mut left = div().flex().flex_1().items_center().gap(spacing::sm()).overflow_hidden();
-    left = left
-        .child(div().text_sm().text_color(label_color).flex_shrink_0().child(item.label.clone()));
+    if let Some(identity) = &item.connection {
+        let icon_color = identity
+            .color
+            .map(|color| colors::connection_accent(color, cx))
+            .unwrap_or(cx.theme().muted_foreground);
+        left = left
+            .child(Icon::new(IconName::Globe).size(sizing::icon_md()).text_color(icon_color))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .text_color(label_color)
+                    .truncate()
+                    .child(item.label.clone()),
+            )
+            .child(connection_identity_tags(identity, cx));
+    } else {
+        left = left.child(
+            div().text_sm().text_color(label_color).flex_shrink_0().child(item.label.clone()),
+        );
+    }
     if let Some(detail) = &item.detail {
         left = left.child(
             div()

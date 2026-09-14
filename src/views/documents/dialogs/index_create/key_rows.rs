@@ -25,7 +25,7 @@ impl IndexCreateDialog {
     pub(super) fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let row_id = self.next_row_id;
         self.next_row_id += 1;
-        let field_state = cx.new(|cx| InputState::new(window, cx).placeholder("Field"));
+        let field_state = cx.new(|cx| InputState::new(window, cx).placeholder("user.email"));
         let subscription = cx.subscribe_in(
             &field_state,
             window,

@@ -42,6 +42,7 @@ pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
 pub use connection_identity::{
     ConnectionIdentity, connection_identity_badge, connection_identity_for,
+    connection_identity_tags,
 };
 pub use connection_manager::ConnectionManager;
 pub use content::ContentArea;
@@ -52,6 +53,7 @@ pub use form_field::FormField;
 pub use gpui_kit::component::button::Button;
 pub use query_library::{QueryLibraryDialog, QueryLibraryTarget};
 pub use status_bar::StatusBar;
+pub(crate) use unsaved_guard::finish_app_quit;
 pub use unsaved_guard::{
     request_app_quit, request_disconnect_connection, request_preview_collection,
     request_remove_connection, request_unsaved_action,

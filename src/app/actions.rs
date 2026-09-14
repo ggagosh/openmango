@@ -19,6 +19,7 @@ use crate::views::CollectionView;
 
 use super::AppRoot;
 use super::dialogs::{open_create_collection_dialog, open_create_database_dialog};
+use super::sidebar::Sidebar;
 
 impl AppRoot {
     pub(super) fn install_global_shortcuts(cx: &mut Context<Self>) -> Subscription {
@@ -146,6 +147,7 @@ impl AppRoot {
     pub(super) fn execute_action(
         state: &Entity<AppState>,
         content_area: &Entity<ContentArea>,
+        sidebar: &Entity<Sidebar>,
         exec: ActionExecution,
         window: &mut Window,
         cx: &mut App,
@@ -158,6 +160,7 @@ impl AppRoot {
                 state.update(cx, |state, cx| {
                     state.select_connection(Some(conn_id), cx);
                 });
+                sidebar.update(cx, |sidebar, cx| sidebar.reveal_connection(conn_id, window, cx));
             }
             return;
         }
@@ -264,6 +267,9 @@ impl AppRoot {
         match id {
             "cmd:new-connection" => {
                 ConnectionManager::open_new(state.clone(), window, cx);
+            }
+            "cmd:manage-connections" => {
+                ConnectionManager::open(state.clone(), window, cx);
             }
             "cmd:create-database" => {
                 let state_ref = state.read(cx);

@@ -29,7 +29,7 @@ impl SidebarModel {
         connections: Vec<SavedConnection>,
         active: std::collections::HashMap<Uuid, ActiveConnection>,
     ) -> Self {
-        let entries = Self::build_entries(&connections, &active, &HashSet::new());
+        let entries = Self::build_entries(&connections, &active, None, &HashSet::new());
         let entry_index_by_id = Self::build_index(&entries);
         Self {
             connecting_connection: None,
@@ -51,7 +51,12 @@ impl SidebarModel {
         connections: &[SavedConnection],
         active: &std::collections::HashMap<Uuid, ActiveConnection>,
     ) -> Option<usize> {
-        self.entries = Self::build_entries(connections, active, &self.expanded_nodes);
+        self.entries = Self::build_entries(
+            connections,
+            active,
+            self.connecting_connection,
+            &self.expanded_nodes,
+        );
         self.rebuild_index();
         self.sync_selected_index();
         self.selected_index
@@ -122,7 +127,7 @@ impl SidebarModel {
                 Some(TreeNodeId::collection(connection_id, db.to_string(), col.to_string()))
             }
             (Some(db), None) => Some(TreeNodeId::database(connection_id, db.to_string())),
-            _ => None,
+            _ => Some(TreeNodeId::connection(connection_id)),
         };
 
         self.sync_selected_index();
@@ -261,14 +266,20 @@ impl SidebarModel {
         (0..=from).rev().find(|&i| entries[i].depth == 0)
     }
 
+    /// The tree lists open connections only. A connection being opened shows too, so the
+    /// row that will hold its databases appears the moment the user asks for it.
     pub(crate) fn build_entries(
         connections: &[SavedConnection],
         active: &std::collections::HashMap<Uuid, ActiveConnection>,
+        connecting: Option<Uuid>,
         expanded: &HashSet<TreeNodeId>,
     ) -> Vec<SidebarEntry> {
         let mut items = Vec::new();
         for conn in connections {
             let active_conn = active.get(&conn.id);
+            if active_conn.is_none() && connecting != Some(conn.id) {
+                continue;
+            }
             let conn_node_id = TreeNodeId::connection(conn.id);
             let conn_expanded = active_conn.is_some() && expanded.contains(&conn_node_id);
             items.push(SidebarEntry::new(
@@ -334,19 +345,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disconnected_saved_connections_remain_visible() {
-        let connection = SavedConnection::new("Saved".into(), "mongodb://localhost".into());
-        let id = TreeNodeId::connection(connection.id);
-        let expanded = HashSet::from([id.clone()]);
+    fn tree_lists_only_open_and_connecting_connections() {
+        let saved = SavedConnection::new("Saved".into(), "mongodb://localhost".into());
+        let connecting = SavedConnection::new("Connecting".into(), "mongodb://localhost".into());
+        let id = TreeNodeId::connection(connecting.id);
+        let expanded = HashSet::from([id.clone(), TreeNodeId::connection(saved.id)]);
         let entries = SidebarModel::build_entries(
-            &[connection],
+            &[saved, connecting.clone()],
             &std::collections::HashMap::new(),
+            Some(connecting.id),
             &expanded,
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, id);
         assert!(!entries[0].is_folder);
         assert!(!entries[0].is_expanded);
+    }
+
+    #[test]
+    fn selected_connection_without_database_selects_its_row() {
+        let connection_id = Uuid::new_v4();
+        let id = TreeNodeId::connection(connection_id);
+        let mut model =
+            model_with_entries(vec![SidebarEntry::new(id.clone(), "Production", 0, true, false)]);
+
+        assert_eq!(model.ensure_selection_from_state(Some(connection_id), None, None), Some(0));
+        assert_eq!(model.selected_tree_id, Some(id));
     }
 
     fn model_with_entries(entries: Vec<SidebarEntry>) -> SidebarModel {

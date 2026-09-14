@@ -524,44 +524,72 @@ fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String
     out
 }
 
-/// Parse an edited string value back into BSON, matching the original type.
+/// Parse the text of a value input into BSON of the same type as `original`.
+///
+/// Every value input in the app follows this one contract, so a value typed in the tree, a
+/// dialog, or the filter builder means the same thing everywhere:
+/// - Strings are taken as typed, whitespace included.
+/// - Numbers, booleans, ObjectIds and dates accept their plain form (`42`, `true`,
+///   `507f1f77bcf86cd799439011`, `2024-01-31` or an RFC 3339 timestamp).
+/// - Every type also accepts its mongosh or Extended JSON form (`NumberLong(42)`,
+///   `ObjectId("…")`, `ISODate("…")`, `{"$date": …}`) as long as it yields the same type.
+/// - Null accepts `null` or an empty field.
 pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> {
     let trimmed = input.trim();
     let result = match original {
-        Bson::String(_) => Ok(Bson::String(input.to_string())),
-        Bson::Int32(_) => {
-            trimmed.parse::<i32>().map(Bson::Int32).map_err(|_| "Expected int32".to_string())
-        }
+        Bson::String(_) => return Ok(Bson::String(input.to_string())),
+        Bson::Int32(_) => trimmed
+            .parse::<i32>()
+            .map(Bson::Int32)
+            .map_err(|_| "Enter a whole number from -2147483648 to 2147483647".to_string()),
         Bson::Int64(_) => {
-            trimmed.parse::<i64>().map(Bson::Int64).map_err(|_| "Expected int64".to_string())
+            trimmed.parse::<i64>().map(Bson::Int64).map_err(|_| "Enter a whole number".to_string())
         }
         Bson::Double(_) => {
-            trimmed.parse::<f64>().map(Bson::Double).map_err(|_| "Expected number".to_string())
+            trimmed.parse::<f64>().map(Bson::Double).map_err(|_| "Enter a number".to_string())
         }
         Bson::Boolean(_) => match trimmed.to_ascii_lowercase().as_str() {
             "true" => Ok(Bson::Boolean(true)),
             "false" => Ok(Bson::Boolean(false)),
-            _ => Err("Expected true/false".to_string()),
+            _ => Err("Enter true or false".to_string()),
         },
         Bson::Null => {
-            if trimmed.eq_ignore_ascii_case("null") {
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
                 Ok(Bson::Null)
             } else {
-                Err("Expected null".to_string())
+                Err("Enter null or leave the field empty".to_string())
             }
         }
         Bson::ObjectId(_) => ObjectId::parse_str(trimmed)
             .map(Bson::ObjectId)
-            .map_err(|_| "Expected ObjectId hex".to_string()),
-        Bson::DateTime(_) => DateTime::parse_rfc3339_str(trimmed)
+            .map_err(|_| "Enter a 24-character hex ObjectId".to_string()),
+        Bson::DateTime(_) => parse_date_input(trimmed)
             .map(Bson::DateTime)
-            .map_err(|_| "Expected RFC3339 date".to_string()),
-        _ => Err("Expected this field's BSON type in Extended JSON".to_string()),
+            .ok_or_else(|| "Enter a date like 2024-01-31 or 2024-01-31T09:30:00Z".to_string()),
+        _ => Err("Enter a value of this type in Extended JSON".to_string()),
     };
     result.or_else(|error| {
         let value = parse_bson_from_relaxed_json(trimmed).map_err(|_| error.clone())?;
         if value.element_type() == original.element_type() { Ok(value) } else { Err(error) }
     })
+}
+
+/// Parse a date typed as an RFC 3339 timestamp, a bare `YYYY-MM-DD` day, or a timestamp
+/// without an offset (`2024-01-31T09:30`). Dates without an offset are read as UTC.
+pub fn parse_date_input(input: &str) -> Option<DateTime> {
+    let input = input.trim();
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(input) {
+        return Some(DateTime::from_millis(datetime.timestamp_millis()));
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d") {
+        return Some(DateTime::from_millis(
+            date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis(),
+        ));
+    }
+    ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M"]
+        .iter()
+        .find_map(|format| chrono::NaiveDateTime::parse_from_str(input, format).ok())
+        .map(|datetime| DateTime::from_millis(datetime.and_utc().timestamp_millis()))
 }
 
 #[cfg(test)]
@@ -600,6 +628,41 @@ mod field_edit_tests {
             parse_edited_value(&Bson::Array(vec![]), "[1,2]").unwrap(),
             Bson::Array(vec![Bson::Int32(1), Bson::Int32(2)])
         );
+    }
+
+    #[test]
+    fn value_inputs_accept_plain_and_shell_forms_of_the_same_type() {
+        let oid = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
+        for text in ["507f1f77bcf86cd799439011", "ObjectId(\"507f1f77bcf86cd799439011\")"] {
+            assert_eq!(
+                parse_edited_value(&Bson::ObjectId(ObjectId::new()), text).unwrap(),
+                Bson::ObjectId(oid)
+            );
+        }
+
+        let day = DateTime::parse_rfc3339_str("2024-01-31T00:00:00Z").unwrap();
+        let morning = DateTime::parse_rfc3339_str("2024-01-31T09:30:00Z").unwrap();
+        let any_date = Bson::DateTime(DateTime::now());
+        assert_eq!(parse_edited_value(&any_date, "2024-01-31").unwrap(), Bson::DateTime(day));
+        for text in
+            ["2024-01-31T09:30:00Z", "2024-01-31T09:30", "ISODate(\"2024-01-31T09:30:00Z\")"]
+        {
+            assert_eq!(parse_edited_value(&any_date, text).unwrap(), Bson::DateTime(morning));
+        }
+
+        assert_eq!(parse_edited_value(&Bson::Int64(0), "NumberLong(7)").unwrap(), Bson::Int64(7));
+        assert_eq!(
+            parse_edited_value(&Bson::Boolean(false), " TRUE ").unwrap(),
+            Bson::Boolean(true)
+        );
+        assert_eq!(parse_edited_value(&Bson::Null, "").unwrap(), Bson::Null);
+
+        assert_eq!(
+            parse_edited_value(&Bson::Boolean(false), "yes").unwrap_err(),
+            "Enter true or false"
+        );
+        assert!(parse_edited_value(&Bson::Int32(0), "2147483648").is_err());
+        assert!(parse_edited_value(&any_date, "31/01/2024").is_err());
     }
 }
 

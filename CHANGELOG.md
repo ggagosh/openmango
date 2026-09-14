@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
+- Recent connections on the welcome screen, one click each, with progress shown on the one being opened
+
+### Changed
+- The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection
+- Document values are plain text everywhere with one set of rules: numbers, `true`/`false`, ObjectId hex, dates such as `2024-01-31` or RFC 3339 timestamps, `null`, and mongosh forms like `ISODate("…")` or `NumberLong(42)`, replacing the switches and number steppers in inline tree editing, the edit value dialog, and the filter builder
+- Enter opens the selected document, expanding it in the tree or opening it as JSON from the table, like double-click
+- Workspace tabs from a colored connection share an underline in that color
+- The edit value dialog submits with Cmd/Ctrl+Enter, and its Array type accepts mongosh syntax like Document does
+- The Indexes tab shows keys as field and direction pairs and properties such as Unique, TTL, or Partial as tags, without disabled actions on the built-in `_id_` index
+- The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
+
+### Fixed
+- Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
+- The Indexes tab rendered every index side by side on a single line
+- Error messages on the Indexes tab and in the index, edit value, and bulk update dialogs were drawn in a color that matched the background in most themes
+- Number steppers in the filter builder and the index TTL field did nothing, and both are now plain inputs
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

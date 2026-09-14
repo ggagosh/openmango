@@ -126,6 +126,21 @@ impl CollectionView {
         self.view_model.editing_node_id().is_none()
     }
 
+    /// Opens one document in the JSON view. Double-click and Enter on a table row both land here.
+    pub(super) fn open_document_json(
+        &mut self,
+        key: SessionKey,
+        doc_key: crate::bson::DocumentKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.select_single_doc(&key, doc_key.clone(), crate::bson::doc_root_id(&doc_key));
+            cx.notify();
+        });
+        self.change_document_view(key, DocumentViewMode::Json, window, cx);
+    }
+
     pub(super) fn change_document_view(
         &mut self,
         key: SessionKey,

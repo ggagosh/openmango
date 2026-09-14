@@ -7,7 +7,7 @@ use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable as _, WindowExt as _};
 use gpui_kit::*;
-use mongodb::bson::{self, Bson, Document, doc, oid::ObjectId};
+use mongodb::bson::{Bson, Document, doc};
 
 use crate::bson::{DocumentKey, PathSegment, parse_document_from_json};
 use crate::components::{Button, WriteConfirmation, cancel_button, request_connection_write};
@@ -17,7 +17,7 @@ use crate::views::documents::node_meta::NodeMeta;
 
 use super::property_dialog_support::{
     PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
-    format_bson_for_input, parent_path, parse_bool, parse_date, parse_f64, parse_i32, parse_i64,
+    format_bson_for_input, parent_path,
 };
 use super::shared::{escape_key_subscription, status_text, styled_dropdown_button};
 
@@ -335,6 +335,19 @@ impl PropertyActionDialog {
         dialog._subscriptions.push(subscription);
 
         dialog._subscriptions.push(escape_key_subscription(cx));
+        // The value field is multi-line, so Cmd/Ctrl+Enter submits, as in other multi-line
+        // query and value editors.
+        let weak = cx.entity().downgrade();
+        dialog._subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
+            let key = event.keystroke.key.as_str();
+            if matches!(key, "enter" | "return")
+                && event.keystroke.modifiers.secondary()
+                && let Some(dialog) = weak.upgrade()
+            {
+                dialog.update(cx, |dialog, cx| dialog.submit(window, cx));
+                cx.stop_propagation();
+            }
+        }));
 
         dialog
     }
@@ -365,18 +378,10 @@ impl PropertyActionDialog {
         let raw = self.value_state.read(cx).value().to_string();
         let trimmed = raw.trim();
 
+        if let Some(sample) = self.value_type.sample() {
+            return crate::bson::parse_edited_value(&sample, &raw);
+        }
         match self.value_type {
-            ValueType::ExtendedJson => crate::bson::parse_bson_from_relaxed_json(trimmed),
-            ValueType::String => Ok(Bson::String(raw)),
-            ValueType::Bool => parse_bool(trimmed),
-            ValueType::Int32 => parse_i32(trimmed),
-            ValueType::Int64 => parse_i64(trimmed),
-            ValueType::Double => parse_f64(trimmed),
-            ValueType::Null => Ok(Bson::Null),
-            ValueType::ObjectId => ObjectId::parse_str(trimmed)
-                .map(Bson::ObjectId)
-                .map_err(|_| "Expected ObjectId hex".to_string()),
-            ValueType::Date => parse_date(trimmed),
             ValueType::Document => {
                 let raw = if trimmed.is_empty() { "{}" } else { trimmed };
                 parse_document_from_json(raw)
@@ -385,14 +390,14 @@ impl PropertyActionDialog {
             }
             ValueType::Array => {
                 let raw = if trimmed.is_empty() { "[]" } else { trimmed };
-                let value: serde_json::Value =
-                    serde_json::from_str(raw).map_err(|e| e.to_string())?;
-                let bson = bson::Bson::try_from(value).map_err(|e| e.to_string())?;
-                match bson {
-                    Bson::Array(arr) => Ok(Bson::Array(arr)),
-                    _ => Err("Root JSON must be an array".to_string()),
+                match crate::bson::parse_bson_from_relaxed_json(raw)
+                    .map_err(|err| format!("Invalid JSON: {err}"))?
+                {
+                    Bson::Array(values) => Ok(Bson::Array(values)),
+                    _ => Err("Enter an array like [1, 2, 3]".to_string()),
                 }
             }
+            _ => crate::bson::parse_bson_from_relaxed_json(trimmed),
         }
     }
 
