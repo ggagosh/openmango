@@ -1,15 +1,15 @@
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::io::Read as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
-use sha2::{Digest as _, Sha256};
 
+use super::copy_verified;
 use crate::helpers::linux::{UPDATE_READY_SOCKET, appimage_path, validate_appimage};
 use crate::state::app_state::updater::DownloadedUpdate;
 
@@ -22,14 +22,14 @@ pub(super) struct PreparedInstall {
 }
 
 pub(super) fn running_installation() -> Result<PathBuf> {
-    super::super::release::linux::public_key()?;
+    super::super::release::signed::public_key()?;
     appimage_path()
 }
 
 pub(super) fn prepare(download: &DownloadedUpdate) -> Result<PreparedInstall> {
     let manifest = download
         .release
-        .linux_manifest
+        .signed_manifest
         .as_ref()
         .context("The update has no authenticated Linux metadata")?;
     let target = running_installation()?;
@@ -45,31 +45,6 @@ pub(super) fn prepare(download: &DownloadedUpdate) -> Result<PreparedInstall> {
     copy_verified(&download.archive, &replacement, manifest.size, &manifest.sha256)?;
     validate_appimage(&replacement, &manifest.arch)?;
     Ok(PreparedInstall { staging, target, replacement, original, _lock: lock })
-}
-
-fn copy_verified(source: &Path, target: &Path, size: u64, digest: &str) -> Result<()> {
-    let mut input = File::open(source).context("The downloaded update is no longer available")?;
-    let mut output = OpenOptions::new().create_new(true).write(true).mode(0o700).open(target)?;
-    let mut hasher = Sha256::new();
-    let mut copied = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = input.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        copied = copied.saturating_add(count as u64);
-        ensure!(copied <= size, "The staged update is larger than its authenticated size");
-        output.write_all(&buffer[..count])?;
-        hasher.update(&buffer[..count]);
-    }
-    ensure!(
-        copied == size && format!("{:x}", hasher.finalize()) == digest,
-        "The downloaded update changed after verification. Download it again"
-    );
-    output.set_permissions(fs::Permissions::from_mode(0o755))?;
-    output.sync_all()?;
-    Ok(())
 }
 
 pub(super) fn activate_and_restart(prepared: PreparedInstall) -> Result<()> {
@@ -188,7 +163,8 @@ fn wait_for_window(child: &mut Child, listener: &UnixListener, timeout: Duration
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufRead as _;
+    use sha2::{Digest as _, Sha256};
+    use std::io::{BufRead as _, Write as _};
 
     #[test]
     fn failed_startup_stops_the_launcher_and_its_child() {

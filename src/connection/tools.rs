@@ -33,7 +33,9 @@ fn find_bundled_tool(name: &str) -> Option<PathBuf> {
 
     // 2. Check resources/bin (dev mode) with architecture-specific paths
     let arch_dir = dev_tools_arch();
-    let dev_path = PathBuf::from("resources/bin").join(arch_dir).join(name);
+    let dev_path = PathBuf::from("resources/bin")
+        .join(arch_dir)
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     if dev_path.exists() && is_executable(&dev_path) {
         return Some(dev_path);
     }
@@ -43,40 +45,38 @@ fn find_bundled_tool(name: &str) -> Option<PathBuf> {
 }
 
 fn packaged_tool_path(executable: &Path, name: &str, os: &str) -> Option<PathBuf> {
-    let directory = match os {
-        "macos" => "../Resources/bin",
-        "linux" => "../lib/openmango/bin",
+    let (directory, file) = match os {
+        "macos" => ("../Resources/bin", name.to_string()),
+        "linux" => ("../lib/openmango/bin", name.to_string()),
+        "windows" => ("bin", format!("{name}.exe")),
         _ => return None,
     };
-    Some(executable.parent()?.join(directory).join(name))
+    Some(executable.parent()?.join(directory).join(file))
+}
+
+/// A command for a bundled helper. On Windows it runs without opening a console window.
+pub fn tool_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 /// Get the architecture-specific directory name for dev mode tools
 fn dev_tools_arch() -> &'static str {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "macos-arm64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "macos-x86_64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        "linux-x86_64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        "linux-arm64"
-    }
-    #[cfg(not(any(
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "aarch64")
-    )))]
-    {
-        "unknown"
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-arm64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("windows", "x86_64") => "windows-x86_64",
+        ("windows", "aarch64") => "windows-arm64",
+        _ => "unknown",
     }
 }
 
@@ -120,6 +120,15 @@ mod tests {
             )
             .unwrap(),
             Path::new("/Applications/OpenMango.app/Contents/MacOS/../Resources/bin/mongodump")
+        );
+        assert_eq!(
+            packaged_tool_path(
+                Path::new("C:/Apps/OpenMango/OpenMango.exe"),
+                "mongodump",
+                "windows"
+            )
+            .unwrap(),
+            Path::new("C:/Apps/OpenMango").join("bin").join("mongodump.exe")
         );
     }
 }

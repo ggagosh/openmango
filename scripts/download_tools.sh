@@ -20,6 +20,10 @@ case "$OPENMANGO_ARCH_DIR" in
     linux-arm64)
         archive="mongodb-database-tools-ubuntu2204-arm64-${TOOLS_VERSION}.tgz"
         checksum=670727e163df0ce86978f50ebd5dcd75e345e0027889654c1c0cccf6cd4183d9 ;;
+    windows-x86_64|windows-arm64)
+        # MongoDB publishes x64 tools only; Windows 11 on Arm runs them under emulation.
+        archive="mongodb-database-tools-windows-x86_64-${TOOLS_VERSION}.zip"
+        checksum=c8a811e013b2b35da1fa0a09bf2c828e6ecb7ad62aefac0f2e6b8048d7ff043a ;;
 esac
 
 cache="${CARGO_TARGET_DIR:-"$ROOT_DIR/target"}/downloads/$archive"
@@ -30,7 +34,7 @@ destination="$ROOT_DIR/resources/bin/$OPENMANGO_ARCH_DIR"
 mkdir -p "$destination"
 
 if [[ "$archive" == *.zip ]]; then
-    unzip -q -j "$cache" "*/bin/mongodump" "*/bin/mongorestore" \
+    unzip -q -j "$cache" "*/bin/mongodump$OPENMANGO_EXE" "*/bin/mongorestore$OPENMANGO_EXE" \
         "*/LICENSE.md" "*/THIRD-PARTY-NOTICES" -d "$temporary"
 else
     tar -xzf "$cache" -C "$temporary" --strip-components=2 \
@@ -38,7 +42,7 @@ else
     tar -xzf "$cache" -C "$temporary" --strip-components=1 \
         "${archive%.tgz}/LICENSE.md" "${archive%.tgz}/THIRD-PARTY-NOTICES"
 fi
-for tool in mongodump mongorestore; do
+for tool in "mongodump$OPENMANGO_EXE" "mongorestore$OPENMANGO_EXE"; do
     test -s "$temporary/$tool"
     install -m 755 "$temporary/$tool" "$destination/$tool"
 done

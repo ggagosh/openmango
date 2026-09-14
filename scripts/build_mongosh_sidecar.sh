@@ -22,7 +22,7 @@ bun install --frozen-lockfile
 bun build ./src/bun-entry.ts --compile --format=esm \
   --minify --keep-names --sourcemap --bytecode --bytecode-depth=1 \
   --target "$OPENMANGO_BUN_TARGET" \
-  --outfile "$OUT_DIR/mongosh-sidecar" \
+  --outfile "$OUT_DIR/mongosh-sidecar$OPENMANGO_EXE" \
   --external electron \
   --external os-dns-native \
   --external kerberos \
@@ -32,4 +32,4 @@ bun build ./src/bun-entry.ts --compile --format=esm \
   --external pac-proxy-agent \
   --external @babel/preset-typescript/package.json
 
-echo "Built mongosh-sidecar → $OUT_DIR/mongosh-sidecar"
+echo "Built mongosh-sidecar → $OUT_DIR/mongosh-sidecar$OPENMANGO_EXE"

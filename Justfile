@@ -76,6 +76,10 @@ bootstrap-linux:
 package-linux:
     bash ./scripts/release_linux.sh
 
+# Run in Git Bash on Windows.
+package-windows:
+    bash ./scripts/release_windows.sh
+
 # Cut a release: bump version, rotate CHANGELOG, open the release PR
 prepare-release VERSION:
     bash ./scripts/prepare_release.sh {{VERSION}}

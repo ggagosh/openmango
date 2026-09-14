@@ -36,7 +36,7 @@ jobs:
             arch: arm64
     env:
       OPENMANGO_RELEASE_CHANNEL: ${{ inputs.channel }}
-      OPENMANGO_LINUX_UPDATE_PUBLIC_KEY: ${{ vars.LINUX_UPDATE_PUBLIC_KEY }}
+      OPENMANGO_UPDATE_PUBLIC_KEY: ${{ vars.LINUX_UPDATE_PUBLIC_KEY }}
       CARGO_INCREMENTAL: 0
       CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
     steps:
@@ -58,7 +58,7 @@ jobs:
           LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
         run: |
           test -n "$LINUX_SIGNING_KEY"
-          test -n "$OPENMANGO_LINUX_UPDATE_PUBLIC_KEY"
+          test -n "$OPENMANGO_UPDATE_PUBLIC_KEY"
           umask 077
           printf '%s\n' "$LINUX_SIGNING_KEY" > "$RUNNER_TEMP/linux-signing.key"
       - name: Build and sign AppImage

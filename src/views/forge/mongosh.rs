@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -82,7 +82,7 @@ impl MongoshBridge {
             Error::ToolNotFound(guidance.into())
         })?;
 
-        let mut cmd = Command::new(sidecar);
+        let mut cmd = crate::connection::tools::tool_command(sidecar);
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn()?;
