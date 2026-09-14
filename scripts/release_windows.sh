@@ -29,7 +29,7 @@ cp "$BUILD_DIR/release/openmango.exe" "$STAGE/OpenMango.exe"
 for tool in mongodump mongorestore mongosh-sidecar; do
     cp "resources/bin/$OPENMANGO_ARCH_DIR/$tool.exe" "$STAGE/bin/$tool.exe"
 done
-cp THIRD_PARTY_NOTICES LICENSE assets/fonts/JetBrainsMonoNerdFont-LICENSE.txt "$STAGE/licenses/"
+cp THIRD_PARTY_NOTICES LICENSE assets/fonts/JetBrainsMono-OFL.txt "$STAGE/licenses/"
 # Bun and minisign-verify ship on Linux and Windows; their licenses live with the Linux ones.
 cp resources/linux/licenses/bun-LICENSE.md resources/linux/licenses/minisign-verify-LICENSE "$STAGE/licenses/"
 cp "resources/bin/$OPENMANGO_ARCH_DIR/licenses/"* "$STAGE/licenses/mongodb-tools/"

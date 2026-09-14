@@ -91,6 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
+- Smaller app and faster builds: bundles plain JetBrains Mono instead of its Nerd Font build (text looks the same), and syntax highlighting includes only the JavaScript and JSON it uses, so AI answer code blocks in other languages show without colors
 - Stable releases publish every platform from one job with notes taken from this changelog, and the `nightly` tag now points at the commit that was built
 - Migrated the desktop UI to published GPUI Kit 0.6 components and removed the vendored toolkit patches
 - Forge retains editor and result-view state across tabs and uses fuzzy completions with consistent native editing shortcuts

@@ -379,13 +379,13 @@ pub mod fonts {
     use gpui_kit::relative;
 
     pub fn ui() -> &'static str {
-        "JetBrainsMono Nerd Font"
+        "JetBrains Mono"
     }
     pub fn heading() -> &'static str {
-        "JetBrainsMono Nerd Font"
+        "JetBrains Mono"
     }
     pub fn mono() -> &'static str {
-        "JetBrainsMono Nerd Font Mono"
+        "JetBrains Mono"
     }
     pub fn tabs() -> &'static str {
         ui()

@@ -6,8 +6,8 @@
     {
       "name": "Rosé Pine Dawn",
       "mode": "light",
-      "font.family": "JetBrainsMono Nerd Font",
-      "mono_font.family": "JetBrainsMono Nerd Font Mono",
+      "font.family": "JetBrains Mono",
+      "mono_font.family": "JetBrains Mono",
       "shadow": false,
       "colors": {
         "background": "#faf4ed",
