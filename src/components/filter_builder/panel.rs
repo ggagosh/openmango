@@ -6,10 +6,9 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::calendar::{Calendar, CalendarEvent, CalendarState, Date};
 use gpui_kit::component::dialog::Dialog;
-use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, NumberInput};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -1575,9 +1574,6 @@ impl FilterBuilderPanel {
                 .text_color(cx.theme().muted_foreground)
                 .child("No value needed")
                 .into_any_element(),
-            super::types::ValueEditorKind::Toggle => {
-                self.render_boolean_editor(condition, view, cx).into_any_element()
-            }
             super::types::ValueEditorKind::Single => self
                 .render_single_value_editor(condition, inputs, view, window, cx)
                 .into_any_element(),
@@ -1590,43 +1586,6 @@ impl FilterBuilderPanel {
         }
     }
 
-    fn render_boolean_editor(
-        &self,
-        condition: &FilterCondition,
-        view: &Entity<Self>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let current = condition.value.bool().unwrap_or(true);
-        div()
-            .flex()
-            .items_center()
-            .gap(spacing::xs())
-            .child(Switch::new(("condition-bool", condition.id)).checked(current).small().on_click(
-                {
-                    let view = view.clone();
-                    let cid = condition.id;
-                    move |checked, _window, cx| {
-                        view.update(cx, |this, cx| {
-                            if let Some(cond) = this.tree.condition_mut(cid) {
-                                cond.value = ConditionValue::Bool(*checked);
-                            }
-                            cx.notify();
-                        });
-                    }
-                },
-            ))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if current {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().muted_foreground
-                    })
-                    .child(if current { "true" } else { "false" }),
-            )
-    }
-
     fn render_single_value_editor(
         &self,
         condition: &FilterCondition,
@@ -1637,20 +1596,9 @@ impl FilterBuilderPanel {
     ) -> impl IntoElement {
         let mut input_row = div().flex().items_center().gap(spacing::xs());
 
-        if condition.field_type == FieldType::Number || condition.operator == FilterOperator::Size {
-            input_row = input_row.child(NumberInput::new(&inputs.scalar_state).small().flex_1());
-        } else {
-            input_row = input_row.child(
-                Input::new(&inputs.scalar_state)
-                    .small()
-                    .font_family(if condition.field_type == FieldType::ObjectId {
-                        fonts::mono()
-                    } else {
-                        fonts::ui()
-                    })
-                    .w_full(),
-            );
-        }
+        // Values are typed text for every type; see `parse_edited_value` for accepted forms.
+        input_row = input_row
+            .child(Input::new(&inputs.scalar_state).small().font_family(fonts::mono()).w_full());
 
         if condition.field_type == FieldType::DateTime {
             input_row = input_row.child(self.render_calendar_trigger(
@@ -1879,20 +1827,19 @@ impl FilterBuilderPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let use_number = condition.field_type == FieldType::Number;
         let use_calendar = condition.field_type == FieldType::DateTime;
         let cid = condition.id;
 
-        let start = if use_number {
-            NumberInput::new(&inputs.range_start_state).small().flex_1().into_any_element()
-        } else {
-            Input::new(&inputs.range_start_state).small().w_full().into_any_element()
-        };
-        let end = if use_number {
-            NumberInput::new(&inputs.range_end_state).small().flex_1().into_any_element()
-        } else {
-            Input::new(&inputs.range_end_state).small().w_full().into_any_element()
-        };
+        let start = Input::new(&inputs.range_start_state)
+            .small()
+            .font_family(fonts::mono())
+            .w_full()
+            .into_any_element();
+        let end = Input::new(&inputs.range_end_state)
+            .small()
+            .font_family(fonts::mono())
+            .w_full()
+            .into_any_element();
 
         let mut row = div()
             .flex()
@@ -2669,11 +2616,14 @@ fn matching_suggestions(suggestions: &[FieldSuggestion], raw: &str) -> Vec<Field
 }
 
 fn hint_for_condition(condition: &FilterCondition) -> Option<&'static str> {
+    if condition.operator == FilterOperator::Exists {
+        return Some("true or false");
+    }
     match condition.field_type {
-        FieldType::ObjectId => Some("24-character hex string"),
-        FieldType::DateTime => Some("ISO timestamp or yyyy-mm-dd"),
-        FieldType::Number => Some("Arrow keys step numeric inputs"),
-        FieldType::Boolean => Some("Use the toggle"),
+        FieldType::ObjectId => Some("24-character hex, or ObjectId(\"…\")"),
+        FieldType::DateTime => Some("2024-01-31, 2024-01-31T09:30:00Z, or ISODate(\"…\")"),
+        FieldType::Number => Some("42, 4.2, or NumberLong(42)"),
+        FieldType::Boolean => Some("true or false"),
         _ => None,
     }
 }

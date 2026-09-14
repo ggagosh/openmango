@@ -217,7 +217,7 @@ impl CollectionView {
                         && !this.documents_focus.is_focused(window)
                         && !this.view_model.inline_input_focused(window, cx)
                     {
-                        // Done, Cancel, and the boolean switch keep their native Enter action.
+                        // Done and Cancel keep their native Enter action.
                         return;
                     }
                     if this.view_model.inline_state().is_some() {

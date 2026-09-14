@@ -10,8 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The sidebar lists only open connections. The Connections header opens a searchable connection switcher, also on Cmd/Ctrl+Shift+K, with open connections first and saved ones by recent use
 - The welcome screen offers your five most recent connections, one click each, and shows progress on the one being opened
 - Sidebar connection rows show the spinner in place of the icon while connecting, keep the connection color on the icon instead of a separate swatch, and reveal row actions on hover or selection
+- Every document value input is plain text with one set of rules: numbers, `true`/`false`, ObjectId hex, dates such as `2024-01-31` or RFC 3339 timestamps, `null`, and their mongosh forms like `ISODate("…")` or `NumberLong(42)`. This applies to inline tree editing, the edit value dialog, and the filter builder, which no longer use switches or number steppers
 - Workspace tabs from a colored connection share an underline in that color
 - Enter opens the selected document: it expands or collapses it in the tree and opens it as JSON from the table, like double-click
+- The edit value dialog submits with Cmd/Ctrl+Enter, and its Array type accepts mongosh syntax like the Document type
+
+### Fixed
+- Number steppers in the filter builder and the index TTL field did nothing; those fields are now plain inputs
 
 ## [0.3.0] - 2026-09-14
 

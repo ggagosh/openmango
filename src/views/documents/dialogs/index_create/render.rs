@@ -2,7 +2,7 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::input::{Editor, Input, NumberInput};
+use gpui_kit::component::input::{Editor, Input};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _};
@@ -182,7 +182,7 @@ impl Render for IndexCreateDialog {
                             .w(px(260.0)),
                     )
                     .child(
-                        NumberInput::new(&self.ttl_state)
+                        Input::new(&self.ttl_state)
                             .font_family(crate::theme::fonts::mono())
                             .w(px(160.0))
                             .disabled(ttl_disabled),

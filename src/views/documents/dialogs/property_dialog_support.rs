@@ -1,6 +1,8 @@
-use mongodb::bson::{Bson, DateTime};
+use mongodb::bson::{Bson, DateTime, oid::ObjectId};
 
-use crate::bson::{PathSegment, bson_value_for_edit, document_to_json_string};
+use crate::bson::{
+    PathSegment, bson_value_for_edit, document_to_json_string, value_input_placeholder,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PropertyActionKind {
@@ -204,15 +206,24 @@ impl ValueType {
             ValueType::ExtendedJson => "BSON value in Extended JSON",
             ValueType::Document => "{ }",
             ValueType::Array => "[ ]",
-            ValueType::ObjectId => "ObjectId hex",
-            ValueType::String => "Value",
-            ValueType::Bool => "true / false",
-            ValueType::Int32 => "0",
-            ValueType::Int64 => "0",
-            ValueType::Double => "0.0",
-            ValueType::Date => "RFC3339 timestamp",
-            ValueType::Null => "",
+            _ => self.sample().map(|sample| value_input_placeholder(&sample)).unwrap_or_default(),
         }
+    }
+
+    /// A value of this type, for types typed as a single value. Parsing and placeholders use
+    /// it so the dialog follows the same value contract as every other value input.
+    pub(super) fn sample(self) -> Option<Bson> {
+        Some(match self {
+            ValueType::ObjectId => Bson::ObjectId(ObjectId::from_bytes([0; 12])),
+            ValueType::String => Bson::String(String::new()),
+            ValueType::Bool => Bson::Boolean(false),
+            ValueType::Int32 => Bson::Int32(0),
+            ValueType::Int64 => Bson::Int64(0),
+            ValueType::Double => Bson::Double(0.0),
+            ValueType::Date => Bson::DateTime(DateTime::from_millis(0)),
+            ValueType::Null => Bson::Null,
+            ValueType::ExtendedJson | ValueType::Document | ValueType::Array => return None,
+        })
     }
 
     pub(super) fn from_bson(value: &Bson) -> Self {
@@ -297,30 +308,4 @@ pub(super) fn format_bson_for_input(value: &Bson) -> String {
         }
         _ => bson_value_for_edit(value),
     }
-}
-
-pub(super) fn parse_bool(trimmed: &str) -> Result<Bson, String> {
-    match trimmed.to_ascii_lowercase().as_str() {
-        "true" => Ok(Bson::Boolean(true)),
-        "false" => Ok(Bson::Boolean(false)),
-        _ => Err("Expected true/false".to_string()),
-    }
-}
-
-pub(super) fn parse_i32(trimmed: &str) -> Result<Bson, String> {
-    trimmed.parse::<i32>().map(Bson::Int32).map_err(|_| "Expected int32".to_string())
-}
-
-pub(super) fn parse_i64(trimmed: &str) -> Result<Bson, String> {
-    trimmed.parse::<i64>().map(Bson::Int64).map_err(|_| "Expected int64".to_string())
-}
-
-pub(super) fn parse_f64(trimmed: &str) -> Result<Bson, String> {
-    trimmed.parse::<f64>().map(Bson::Double).map_err(|_| "Expected number".to_string())
-}
-
-pub(super) fn parse_date(trimmed: &str) -> Result<Bson, String> {
-    DateTime::parse_rfc3339_str(trimmed)
-        .map(Bson::DateTime)
-        .map_err(|_| "Expected RFC3339 date".to_string())
 }

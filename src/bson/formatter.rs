@@ -63,6 +63,21 @@ pub fn bson_value_preview(value: &Bson, max_len: usize) -> String {
     }
 }
 
+/// Placeholder text for a value input of the same type as `value`, matching the forms
+/// `parse_edited_value` accepts.
+pub fn value_input_placeholder(value: &Bson) -> &'static str {
+    match value {
+        Bson::Boolean(_) => "true or false",
+        Bson::Int32(_) | Bson::Int64(_) => "Whole number",
+        Bson::Double(_) => "Number",
+        Bson::DateTime(_) => "2024-01-31T09:30:00Z",
+        Bson::ObjectId(_) => "507f1f77bcf86cd799439011",
+        Bson::Null => "null",
+        Bson::String(_) => "Value",
+        _ => "Value in Extended JSON",
+    }
+}
+
 /// Get a BSON value formatted for editing in an input field.
 pub fn bson_value_for_edit(value: &Bson) -> String {
     match value {

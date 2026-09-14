@@ -4,14 +4,11 @@ use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui_kit::component::input::{Input, NumberInput};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::ContextMenuExt;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tree::{TreeEntry, TreeState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, Sizable as _,
-};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -24,7 +21,6 @@ use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
 use crate::views::documents::state::SearchMatcher;
-use crate::views::documents::types::InlineEditor;
 
 use super::super::CollectionView;
 use super::tree_menus::{build_document_menu, build_property_menu};
@@ -43,7 +39,7 @@ pub(crate) fn render_tree_row(
     _selected: bool,
     node_meta: &Arc<HashMap<String, NodeMeta>>,
     editing_node_id: &Option<String>,
-    inline_state: &Option<InlineEditor>,
+    inline_state: &Option<Entity<InputState>>,
     inline_error: Option<&str>,
     view: Entity<CollectionView>,
     tree_state: Entity<TreeState>,
@@ -414,7 +410,7 @@ fn render_value_column(
     selected: bool,
     value_label: &str,
     value_color: Hsla,
-    inline_state: &Option<InlineEditor>,
+    inline_state: &Option<Entity<InputState>>,
     inline_error: Option<&str>,
     node_meta: Arc<HashMap<String, NodeMeta>>,
     view: Entity<CollectionView>,
@@ -479,7 +475,7 @@ fn render_value_column(
             }
         })
         .child(if is_editing {
-            render_inline_editor(ix, inline_state, inline_error, view.clone(), cx)
+            render_inline_editor(inline_state, inline_error, view.clone(), cx)
         } else {
             div()
                 .text_sm()
@@ -505,8 +501,7 @@ fn render_value_column(
 }
 
 fn render_inline_editor(
-    ix: usize,
-    inline_state: &Option<InlineEditor>,
+    inline_state: &Option<Entity<InputState>>,
     inline_error: Option<&str>,
     view: Entity<CollectionView>,
     cx: &App,
@@ -516,55 +511,15 @@ fn render_inline_editor(
     };
     let border_color = if inline_error.is_some() { cx.theme().danger } else { cx.theme().ring };
 
-    let editor = match inline_state {
-        InlineEditor::Text(state) => Input::new(state)
-            .font_family(crate::theme::fonts::mono())
-            .xsmall()
-            .text_sm()
-            .focus_bordered(false)
-            .border_color(border_color)
-            .rounded(borders::radius_xs())
-            .flex_1()
-            .min_w(px(0.0))
-            .into_any_element(),
-        InlineEditor::Number(state) => NumberInput::new(state)
-            .font_family(crate::theme::fonts::mono())
-            .xsmall()
-            .text_sm()
-            .focus_ring(false)
-            .border_color(border_color)
-            .rounded(borders::radius_xs())
-            .flex_1()
-            .min_w(px(0.0))
-            .max_w(px(320.0))
-            .into_any_element(),
-        InlineEditor::Bool(current) => {
-            let current = *current;
-            div()
-                .flex()
-                .items_center()
-                .gap(spacing::xs())
-                .child(Switch::new(("inline-bool", ix)).checked(current).xsmall().on_click({
-                    let view = view.clone();
-                    move |checked, _window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.view_model.set_inline_bool(*checked);
-                            let state = this.state.clone();
-                            this.view_model.sync_inline_edit_draft(&state, cx);
-                            cx.notify();
-                        });
-                    }
-                }))
-                .child(
-                    div().text_xs().text_color(cx.theme().secondary_foreground).child(if current {
-                        "true"
-                    } else {
-                        "false"
-                    }),
-                )
-                .into_any_element()
-        }
-    };
+    let editor = Input::new(inline_state)
+        .font_family(crate::theme::fonts::mono())
+        .xsmall()
+        .text_sm()
+        .focus_bordered(false)
+        .border_color(border_color)
+        .rounded(borders::radius_xs())
+        .flex_1()
+        .min_w(px(0.0));
 
     div()
         .flex()

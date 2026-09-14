@@ -16,7 +16,6 @@ mod query_values;
 mod schema_filter;
 mod schema_filter_completion;
 mod state;
-mod types;
 mod view;
 mod view_model;
 mod workflow;
