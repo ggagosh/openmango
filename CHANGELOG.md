@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The sidebar lists only open connections. The Connections header opens a searchable connection switcher, also on Cmd/Ctrl+Shift+K, with open connections first and saved ones by recent use
 - The welcome screen offers your five most recent connections, one click each, and shows progress on the one being opened
 - Sidebar connection rows show the spinner in place of the icon while connecting, keep the connection color on the icon instead of a separate swatch, and reveal row actions on hover or selection
+- Workspace tabs from a colored connection share an underline in that color
 
 ## [0.3.0] - 2026-09-14
 
