@@ -318,20 +318,6 @@ impl HistoryService {
         }
     }
 
-    pub fn set_retention(
-        &self,
-        connection_id: Uuid,
-        max_age_days: u32,
-        max_bytes: u64,
-    ) -> anyhow::Result<Usage> {
-        let usage =
-            self.store.apply_retention(connection_id, max_age_days.max(1), max_bytes.max(1))?;
-        if let Ok(mut cache) = self.usage_cache.lock() {
-            cache.insert(connection_id, usage);
-        }
-        Ok(usage)
-    }
-
     pub fn delete_batch(&self, batch_id: Uuid) -> anyhow::Result<bool> {
         let connection_id = self.store.get_batch(batch_id, 0, 1)?.summary.connection_id;
         let deleted = self.store.delete_batch(batch_id)?;

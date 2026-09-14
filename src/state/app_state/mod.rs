@@ -17,8 +17,7 @@ pub mod updater;
 mod workspace;
 
 pub(crate) use aggregation::{
-    PipelineAnalysis, PipelineStage, PipelineState, StageDocCounts, StageStatsMode,
-    default_stage_body,
+    PipelineStage, PipelineState, StageDocCounts, StageStatsMode, default_stage_body,
 };
 pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,

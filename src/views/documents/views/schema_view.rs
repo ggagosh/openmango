@@ -1016,9 +1016,9 @@ fn render_inspector(
     let danger = cx.theme().danger;
 
     let donut_data: Vec<PresenceSlice> = vec![
-        PresenceSlice { label: "Present", value: present_non_null as f32, color: primary },
-        PresenceSlice { label: "Null", value: field.null_count as f32, color: danger },
-        PresenceSlice { label: "Absent", value: absent as f32, color: muted_fg },
+        PresenceSlice { value: present_non_null as f32, color: primary },
+        PresenceSlice { value: field.null_count as f32, color: danger },
+        PresenceSlice { value: absent as f32, color: muted_fg },
     ];
     let has_donut_data = donut_data.iter().any(|s| s.value > 0.0);
 
@@ -1144,8 +1144,6 @@ fn render_inspector(
 
 #[derive(Clone)]
 struct PresenceSlice {
-    #[allow(dead_code)]
-    label: &'static str,
     value: f32,
     color: Hsla,
 }

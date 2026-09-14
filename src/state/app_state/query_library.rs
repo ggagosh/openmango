@@ -37,10 +37,6 @@ impl AppState {
         Ok(true)
     }
 
-    pub fn save_query(&mut self, definition: QueryDefinition, name: &str) -> Result<Uuid> {
-        self.update_query_library(|library| library.save(definition, name))
-    }
-
     pub fn save_query_input(&mut self, input: SavedQueryInput) -> Result<Uuid> {
         self.update_query_library(|library| library.save_input(input))
     }
@@ -80,10 +76,6 @@ impl AppState {
 
     pub fn update_saved_query(&mut self, id: Uuid, definition: QueryDefinition) -> Result<()> {
         self.update_query_library(|library| library.update_saved(id, definition))
-    }
-
-    pub fn rename_saved_query(&mut self, id: Uuid, name: &str) -> Result<()> {
-        self.update_query_library(|library| library.rename_saved(id, name))
     }
 
     pub fn duplicate_saved_query(&mut self, id: Uuid) -> Result<Uuid> {

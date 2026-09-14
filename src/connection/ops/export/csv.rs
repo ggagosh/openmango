@@ -7,7 +7,7 @@ use std::path::Path;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use mongodb::Client;
-use mongodb::bson::{Document, doc};
+use mongodb::bson::Document;
 
 use crate::connection::ConnectionManager;
 use crate::connection::ops::export::AtomicExportFile;
@@ -29,27 +29,6 @@ fn csv_row(
 }
 
 impl ConnectionManager {
-    /// Export a collection to CSV (runs in Tokio runtime).
-    #[allow(dead_code)]
-    pub fn export_collection_csv(
-        &self,
-        client: &Client,
-        database: &str,
-        collection: &str,
-        path: &Path,
-        gzip: bool,
-    ) -> Result<u64> {
-        self.export_collection_csv_with_query(
-            client,
-            database,
-            collection,
-            path,
-            gzip,
-            ExportQueryOptions::default(),
-            None,
-        )
-    }
-
     /// Export a collection to CSV with query options (runs in Tokio runtime).
     /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
     #[allow(clippy::too_many_arguments)]
@@ -147,7 +126,6 @@ impl ConnectionManager {
     /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
     /// The callback is invoked every ~1000 documents with the current count.
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
     pub fn export_collection_csv_with_query_and_progress<F>(
         &self,
         client: &Client,
@@ -244,184 +222,6 @@ impl ConnectionManager {
             // Final progress report
             on_progress(count);
             Ok(count)
-        })
-    }
-
-    /// Export a collection to CSV with progress callback (runs in Tokio runtime).
-    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
-    /// The callback is invoked every ~1000 documents with the current count.
-    #[allow(dead_code)]
-    pub fn export_collection_csv_with_progress<F>(
-        &self,
-        client: &Client,
-        database: &str,
-        collection: &str,
-        path: &Path,
-        gzip: bool,
-        on_progress: F,
-    ) -> Result<u64>
-    where
-        F: Fn(u64) + Send + 'static,
-    {
-        use futures::TryStreamExt;
-
-        let client = client.clone();
-        let database = database.to_string();
-        let collection = collection.to_string();
-        let path = path.to_path_buf();
-
-        self.runtime.block_on(async move {
-            let coll = client.database(&database).collection::<Document>(&collection);
-
-            let mut discovery_cursor = coll.find(doc! {}).await?;
-            let mut seen_columns = HashSet::new();
-            let mut columns = Vec::new();
-            while let Some(doc) = discovery_cursor.try_next().await? {
-                crate::connection::csv_utils::collect_document_columns(
-                    &doc,
-                    &mut seen_columns,
-                    &mut columns,
-                );
-            }
-
-            let output = AtomicExportFile::new(&path)?;
-            let file = output.reopen()?;
-            if columns.is_empty() {
-                drop(file);
-                output.commit()?;
-                on_progress(0);
-                return Ok(0);
-            }
-            let mut cursor = coll.find(doc! {}).await?;
-
-            // Write CSV
-            let mut csv_writer = if gzip {
-                csv::Writer::from_writer(
-                    Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
-                )
-            } else {
-                csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
-            };
-
-            csv_writer.write_record(&columns)?;
-
-            let mut count = 0u64;
-            const PROGRESS_INTERVAL: u64 = 1000;
-
-            while let Some(doc) = cursor.try_next().await? {
-                let row = csv_row(&doc, &columns, &seen_columns)?;
-                csv_writer.write_record(&row)?;
-                count += 1;
-
-                if count.is_multiple_of(PROGRESS_INTERVAL) {
-                    on_progress(count);
-                }
-            }
-
-            csv_writer.flush()?;
-            drop(csv_writer);
-            output.commit()?;
-            on_progress(count);
-            Ok(count)
-        })
-    }
-
-    /// Export all collections in a database to CSV files (runs in Tokio runtime).
-    /// Creates one file per collection in the specified directory.
-    /// Uses single-pass buffering: buffers first N docs to detect columns, then continues streaming.
-    #[allow(dead_code)]
-    pub fn export_database_csv(
-        &self,
-        client: &Client,
-        database: &str,
-        directory: &Path,
-        gzip: bool,
-        exclude_collections: &[String],
-    ) -> Result<u64> {
-        use futures::TryStreamExt;
-
-        let client = client.clone();
-        let database = database.to_string();
-        let directory = directory.to_path_buf();
-        let exclude_collections = exclude_collections.to_vec();
-
-        self.runtime.block_on(async move {
-            let db = client.database(&database);
-            let collections = db.list_collection_names().await?;
-            let final_directory = directory;
-            let parent = final_directory
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            let staging =
-                tempfile::Builder::new().prefix(".openmango-database-csv-").tempdir_in(parent)?;
-            let directory = staging.path().join("export");
-            std::fs::create_dir(&directory)?;
-
-            let mut total_count = 0u64;
-
-            for coll_name in collections {
-                // Skip system collections
-                if coll_name.starts_with("system.") {
-                    continue;
-                }
-
-                // Skip excluded collections
-                if exclude_collections.contains(&coll_name) {
-                    continue;
-                }
-
-                // Create file path for this collection
-                let file_name = format!("{}_{}.csv", database, coll_name);
-                let file_path = directory.join(&file_name);
-
-                let coll = client.database(&database).collection::<Document>(&coll_name);
-                let mut discovery_cursor = coll.find(doc! {}).await?;
-                let mut seen_columns = HashSet::new();
-                let mut columns = Vec::new();
-                while let Some(doc) = discovery_cursor.try_next().await? {
-                    crate::connection::csv_utils::collect_document_columns(
-                        &doc,
-                        &mut seen_columns,
-                        &mut columns,
-                    );
-                }
-
-                let output = AtomicExportFile::new(&file_path)?;
-                let file = output.reopen()?;
-                if columns.is_empty() {
-                    drop(file);
-                    output.commit()?;
-                    continue;
-                }
-                let mut cursor = coll.find(doc! {}).await?;
-
-                // Write CSV
-                let mut csv_writer = if gzip {
-                    csv::Writer::from_writer(
-                        Box::new(GzEncoder::new(file, Compression::default())) as Box<dyn Write>
-                    )
-                } else {
-                    csv::Writer::from_writer(Box::new(file) as Box<dyn Write>)
-                };
-
-                csv_writer.write_record(&columns)?;
-
-                let mut count = 0u64;
-                while let Some(doc) = cursor.try_next().await? {
-                    let row = csv_row(&doc, &columns, &seen_columns)?;
-                    csv_writer.write_record(&row)?;
-                    count += 1;
-                }
-
-                csv_writer.flush()?;
-                drop(csv_writer);
-                output.commit()?;
-                total_count += count;
-            }
-
-            crate::connection::ops::export::promote_export_directory(&directory, &final_directory)?;
-            Ok(total_count)
         })
     }
 }

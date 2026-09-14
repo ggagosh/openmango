@@ -8,7 +8,6 @@ use crate::state::app_state::CollectionTransferStatus;
 
 /// Events emitted by AppState for UI reactivity
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum AppEvent {
     // Connection lifecycle
     ConnectionAdded,

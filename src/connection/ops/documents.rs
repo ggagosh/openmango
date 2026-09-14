@@ -420,33 +420,6 @@ impl ConnectionManager {
         ))
     }
 
-    /// Return whether an exact-current-state replacement matched its document.
-    pub fn replace_document_if_current_matches(
-        &self,
-        client: &Client,
-        database: &str,
-        collection: &str,
-        id: &mongodb::bson::Bson,
-        expected: &Document,
-        replacement: Document,
-    ) -> Result<bool> {
-        let client = client.clone();
-        let database = database.to_string();
-        let collection = collection.to_string();
-        let id = id.clone();
-        let expected = expected.clone();
-        let filter = doc! {
-            "_id": id,
-            "$expr": { "$eq": ["$$ROOT", { "$literal": expected }] },
-        };
-
-        self.runtime.block_on(async {
-            let coll = client.database(&database).collection::<Document>(&collection);
-            let result = coll.replace_one(filter, replacement).await?;
-            Ok(result.matched_count == 1)
-        })
-    }
-
     /// Find a single document by _id (runs in Tokio runtime)
     pub fn find_document_by_id(
         &self,

@@ -14,16 +14,6 @@ impl AppState {
         self.transfer_tabs.get_mut(&id)
     }
 
-    #[allow(dead_code)]
-    pub fn ensure_transfer_tab(&mut self, id: Uuid) -> &mut TransferTabState {
-        self.transfer_tabs.entry(id).or_default()
-    }
-
-    #[allow(dead_code)]
-    pub fn remove_transfer_tab(&mut self, id: Uuid) -> Option<TransferTabState> {
-        self.transfer_tabs.remove(&id)
-    }
-
     pub fn active_transfer_tab_id(&self) -> Option<Uuid> {
         let ActiveTab::Index(index) = self.tabs.active else {
             return None;
@@ -32,11 +22,6 @@ impl AppState {
             Some(TabKey::Transfer(key)) => Some(key.id),
             _ => None,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn active_transfer_tab(&self) -> Option<&TransferTabState> {
-        self.active_transfer_tab_id().and_then(|id| self.transfer_tabs.get(&id))
     }
 
     pub fn transfer_tab_label(&self, id: Uuid) -> String {

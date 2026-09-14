@@ -337,10 +337,6 @@ impl AppState {
         }
     }
 
-    pub fn aggregation_view_mode(&self, key: &SessionKey) -> super::super::types::DocumentViewMode {
-        self.session(key).map(|s| s.data.aggregation.results_view_mode).unwrap_or_default()
-    }
-
     pub fn session_mut(&mut self, key: &SessionKey) -> Option<&mut SessionState> {
         self.sessions.get_mut(key)
     }

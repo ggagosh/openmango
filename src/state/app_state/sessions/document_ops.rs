@@ -109,14 +109,6 @@ impl AppState {
         }
     }
 
-    /// Select all documents currently loaded in the session.
-    pub fn select_all_docs(&mut self, session_key: &SessionKey) {
-        if let Some(session) = self.session_mut(session_key) {
-            session.view.selected_docs =
-                session.data.items.iter().map(|item| item.key.clone()).collect();
-        }
-    }
-
     /// Replace multi-selection with a range of doc keys and set the primary selection.
     pub fn select_doc_range(
         &mut self,
@@ -129,13 +121,6 @@ impl AppState {
             session.view.selected_docs = doc_keys;
             session.view.selected_doc = Some(primary_doc_key);
             session.view.selected_node_id = Some(primary_node_id);
-        }
-    }
-
-    /// Clear the multi-selection set.
-    pub fn clear_doc_selection(&mut self, session_key: &SessionKey) {
-        if let Some(session) = self.session_mut(session_key) {
-            session.view.selected_docs.clear();
         }
     }
 

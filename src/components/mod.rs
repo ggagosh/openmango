@@ -27,7 +27,6 @@ mod tests {
 pub mod action_bar;
 pub mod ai_blocks;
 pub mod confirm;
-pub mod connection_dialog;
 pub mod connection_identity;
 pub mod connection_manager;
 mod content;
@@ -41,7 +40,6 @@ mod unsaved_guard;
 pub mod updater;
 pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
-pub use connection_dialog::ConnectionDialog;
 pub use connection_identity::{
     ConnectionIdentity, connection_identity_badge, connection_identity_for,
 };

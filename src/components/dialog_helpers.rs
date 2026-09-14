@@ -30,18 +30,3 @@ pub fn primary_button(
         })
         .into_any_element()
 }
-
-/// Creates a standard secondary button for dialogs.
-#[allow(dead_code)]
-pub fn secondary_button(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> AnyElement {
-    Button::new(id)
-        .label(label)
-        .on_click(move |_, window, cx| {
-            on_click(window, cx);
-        })
-        .into_any_element()
-}

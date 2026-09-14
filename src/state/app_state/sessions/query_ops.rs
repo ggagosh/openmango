@@ -74,20 +74,6 @@ impl AppState {
         }
     }
 
-    pub fn set_query_options_open(&mut self, session_key: &SessionKey, open: bool) {
-        self.promote_preview_collection_tab(session_key);
-        let mut changed = false;
-        if let Some(session) = self.session_mut(session_key)
-            && session.view.query_options_open != open
-        {
-            session.view.query_options_open = open;
-            changed = true;
-        }
-        if changed {
-            self.update_workspace_session_view(session_key);
-        }
-    }
-
     pub fn set_filter_builder_open(&mut self, session_key: &SessionKey, open: bool) {
         if let Some(session) = self.session_mut(session_key) {
             session.view.filter_builder_open = open;

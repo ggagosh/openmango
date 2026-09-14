@@ -15,26 +15,6 @@ use crate::connection::types::{
 use crate::error::{Error, Result};
 
 impl ConnectionManager {
-    /// Import a collection from JSON/JSONL (runs in Tokio runtime).
-    #[allow(dead_code)]
-    pub fn import_collection_json(
-        &self,
-        client: &Client,
-        database: &str,
-        collection: &str,
-        format: JsonTransferFormat,
-        path: &Path,
-        batch_size: usize,
-    ) -> Result<u64> {
-        self.import_collection_json_with_options(
-            client,
-            database,
-            collection,
-            path,
-            JsonImportOptions { format, batch_size, ..Default::default() },
-        )
-    }
-
     /// Import a collection from JSON/JSONL with full options (runs in Tokio runtime).
     /// Uses streaming for JSONL format to minimize memory usage on large files.
     pub fn import_collection_json_with_options(

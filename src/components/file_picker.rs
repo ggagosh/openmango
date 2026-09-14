@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 /// File picker mode - determines whether we're opening or saving.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub enum FilePickerMode {
     Open,
     Save,
@@ -48,12 +47,6 @@ impl FileFilter {
     /// Excel filter
     pub fn excel() -> Self {
         Self::new("Excel", vec!["xlsx"])
-    }
-
-    /// All supported import formats
-    #[allow(dead_code)]
-    pub fn all_import() -> Self {
-        Self::new("All Supported", vec!["json", "jsonl", "ndjson", "csv"])
     }
 
     /// OpenMango Connections (.json)
@@ -109,7 +102,6 @@ pub async fn open_file_dialog_async(
 
 /// Open a folder picker dialog asynchronously.
 /// Returns None if the user cancelled.
-#[allow(dead_code)]
 pub async fn open_folder_dialog_async() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf())
 }
@@ -123,78 +115,6 @@ pub fn filters_for_format(format: crate::state::TransferFormat) -> Vec<FileFilte
         TransferFormat::JsonArray => vec![FileFilter::json_array(), FileFilter::all()],
         TransferFormat::Csv => vec![FileFilter::csv(), FileFilter::all()],
         TransferFormat::Bson => vec![FileFilter::bson_archive(), FileFilter::all()],
-    }
-}
-
-/// Generate a default filename for export based on database/collection.
-#[allow(dead_code)]
-pub fn default_export_filename(
-    database: &str,
-    collection: &str,
-    format: crate::state::TransferFormat,
-) -> String {
-    let base = if collection.is_empty() { database.to_string() } else { collection.to_string() };
-
-    format!("{}.{}", base, format.extension())
-}
-
-/// Generate a default filename for export using settings template.
-#[allow(dead_code)]
-pub fn default_export_filename_from_settings(
-    settings: &crate::state::AppSettings,
-    database: &str,
-    collection: &str,
-    format: crate::state::TransferFormat,
-) -> String {
-    let base = crate::state::expand_filename_template(
-        &settings.transfer.export_filename_template,
-        database,
-        collection,
-    );
-    format!("{}.{}", base, format.extension())
-}
-
-/// Generate a default file path for export using settings.
-#[allow(dead_code)]
-pub fn default_export_path_from_settings(
-    settings: &crate::state::AppSettings,
-    database: &str,
-    collection: &str,
-    format: crate::state::TransferFormat,
-) -> String {
-    let filename = default_export_filename_from_settings(settings, database, collection, format);
-    if settings.transfer.default_export_folder.is_empty() {
-        filename
-    } else {
-        let path = std::path::Path::new(&settings.transfer.default_export_folder).join(&filename);
-        path.display().to_string()
-    }
-}
-
-/// Generate export filename from template WITHOUT expanding placeholders.
-/// Used when user browses for folder - shows template with placeholders visible.
-/// For BSON format, use `unexpanded_export_filename_bson` instead to specify output mode.
-#[allow(dead_code)]
-pub fn unexpanded_export_filename(
-    settings: &crate::state::AppSettings,
-    format: crate::state::TransferFormat,
-) -> String {
-    let template = &settings.transfer.export_filename_template;
-    format!("{}.{}", template, format.extension())
-}
-
-/// Generate export filename for BSON format based on output mode.
-/// - Archive mode: uses `.archive` extension
-/// - Folder mode: no extension (template is the folder name)
-#[allow(dead_code)]
-pub fn unexpanded_export_filename_bson(
-    settings: &crate::state::AppSettings,
-    output_mode: crate::state::BsonOutputFormat,
-) -> String {
-    let template = &settings.transfer.export_filename_template;
-    match output_mode {
-        crate::state::BsonOutputFormat::Archive => format!("{}.archive", template),
-        crate::state::BsonOutputFormat::Folder => template.clone(),
     }
 }
 

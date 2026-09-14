@@ -696,22 +696,8 @@ impl AppRoot {
         Some(cancellation)
     }
 
-    pub fn flush_workspace_on_shutdown(&mut self, cx: &mut App) {
-        self.state.update(cx, |state, _cx| {
-            state.update_workspace_from_state();
-            state.flush_workspace_now();
-        });
-    }
-
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         request_app_quit(self.state.clone(), window, cx);
-    }
-
-    pub fn close_all_editor_windows(&self, cx: &mut App) {
-        let sessions = self.state.read(cx).editor_sessions();
-        for handle in sessions.all_window_handles() {
-            handle.update(cx, |_, window, _cx| window.remove_window()).ok();
-        }
     }
 }
 

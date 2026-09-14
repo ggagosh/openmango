@@ -29,7 +29,6 @@ impl AppState {
     }
 
     fn reset_aggregation_stage_stats_state(aggregation: &mut PipelineState) {
-        aggregation.analysis = None;
         aggregation.stage_doc_counts = vec![StageDocCounts::default(); aggregation.stages.len()];
     }
 

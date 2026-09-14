@@ -340,13 +340,6 @@ pub mod sizing {
     pub fn icon_md() -> Pixels {
         px(16.0)
     } // Standard icon size
-    pub fn icon_lg() -> Pixels {
-        px(20.0)
-    }
-
-    pub fn button_height() -> Pixels {
-        px(28.0)
-    }
 
     pub fn status_dot() -> Pixels {
         px(8.0)
@@ -360,9 +353,6 @@ pub mod sizing {
 pub mod typography {
     use gpui_kit::{Pixels, px};
 
-    pub fn text_2xs() -> Pixels {
-        px(9.0)
-    }
     pub fn text_xs() -> Pixels {
         px(10.0)
     }

@@ -449,26 +449,6 @@ impl AiChatState {
         turn_id
     }
 
-    pub fn push_system_message(&mut self, content: impl Into<String>) {
-        self.entries.push(AiChatEntry::SystemMessage(ChatMessage::new(ChatRole::System, content)));
-        self.trim_entries();
-    }
-
-    pub fn set_turn_assistant_message(&mut self, turn_id: Uuid, content: String) {
-        if let Some(turn) = self.find_turn_mut(turn_id) {
-            match &mut turn.assistant_message {
-                Some(msg) => {
-                    msg.content = content;
-                    msg.tone = ChatMessageTone::Normal;
-                    msg.blocks = parse_content_to_blocks(&msg.content);
-                }
-                None => {
-                    turn.assistant_message = Some(ChatMessage::new(ChatRole::Assistant, content));
-                }
-            }
-        }
-    }
-
     pub fn begin_turn_streaming_response(&mut self) -> Option<Uuid> {
         let turn = self.current_turn_mut()?;
         let msg = ChatMessage::new(ChatRole::Assistant, String::new());
@@ -552,13 +532,6 @@ impl AiChatState {
             }
         }
         msgs
-    }
-
-    pub fn last_user_prompt(&self) -> Option<String> {
-        self.entries.iter().rev().find_map(|entry| match entry {
-            AiChatEntry::Turn(turn) => Some(turn.user_message.content.clone()),
-            _ => None,
-        })
     }
 
     pub fn push_tool_start(
