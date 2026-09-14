@@ -10,7 +10,6 @@ pub enum ResultViewMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ResultEmptyState {
     NoDocuments,
     NoMatches,
@@ -18,7 +17,6 @@ pub enum ResultEmptyState {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct ResultViewProps {
     pub documents: Arc<Vec<SessionDocument>>,
     pub expanded_nodes: Arc<std::collections::HashSet<String>>,

@@ -397,9 +397,6 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
             }
             buf.push('\n');
         }
-        if let Some(analysis) = &data.aggregation.analysis {
-            let _ = write!(buf, "Total execution time: {}ms", analysis.total_time_ms);
-        }
         let header = format!("## Aggregation Pipeline ({} stages)", enabled_stages.len());
         w.section(&header, buf.trim_end());
     }

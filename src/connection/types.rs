@@ -17,7 +17,6 @@ impl From<crate::error::Error> for AggregatePipelineError {
 }
 
 /// JSON format for import/export operations
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default)]
 pub enum JsonTransferFormat {
     JsonArray,
@@ -57,15 +56,6 @@ impl InsertMode {
             InsertMode::Insert => "Insert",
             InsertMode::Upsert => "Upsert",
             InsertMode::Replace => "Replace",
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn description(self) -> &'static str {
-        match self {
-            InsertMode::Insert => "Insert new documents (fail on duplicates)",
-            InsertMode::Upsert => "Update existing documents or insert new ones",
-            InsertMode::Replace => "Replace existing documents or insert new ones",
         }
     }
 }
@@ -301,13 +291,7 @@ pub enum BsonToolProgress {
     /// Collection export/import started
     Started { collection: String },
     /// Progress update with current/total counts
-    Progress {
-        collection: String,
-        current: u64,
-        total: u64,
-        #[allow(dead_code)]
-        percent: f32,
-    },
+    Progress { collection: String, current: u64, total: u64, percent: f32 },
     /// Collection export/import completed
     Completed { collection: String, documents: u64 },
 }

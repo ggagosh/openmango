@@ -48,7 +48,7 @@ done
 install -m 644 "$ROOT_DIR/resources/linux/com.openmango.app.desktop" "$APP_DIR/com.openmango.app.desktop"
 install -m 644 "$ROOT_DIR/assets/logo/openmango.png" "$APP_DIR/com.openmango.app.png"
 install -m 644 "$ROOT_DIR/THIRD_PARTY_NOTICES" "$ROOT_DIR/LICENSE" \
-    "$ROOT_DIR/assets/fonts/JetBrainsMonoNerdFont-LICENSE.txt" "$APP_DIR/usr/share/doc/openmango/"
+    "$ROOT_DIR/assets/fonts/JetBrainsMono-OFL.txt" "$APP_DIR/usr/share/doc/openmango/"
 cp -R "$ROOT_DIR/resources/linux/licenses" "$APP_DIR/usr/share/doc/openmango/licenses"
 cp -R "$ROOT_DIR/resources/bin/$OPENMANGO_ARCH_DIR/licenses" \
     "$APP_DIR/usr/share/doc/openmango/licenses/mongodb-tools"

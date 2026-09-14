@@ -69,10 +69,6 @@ impl ActionBroker {
         Ok(action)
     }
 
-    pub fn expire_action_if_needed(&self, id: Uuid) -> Result<ProposedAction> {
-        self.expire_if_needed(self.load_verified_action(id)?)
-    }
-
     pub fn get_for_grant(&self, id: Uuid, grant_id: Uuid) -> Result<ProposedAction> {
         let action = self.load_verified_action(id)?;
         ensure_grant_visibility(&action, grant_id)?;

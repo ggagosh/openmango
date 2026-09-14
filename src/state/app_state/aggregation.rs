@@ -92,9 +92,6 @@ pub struct PipelineState {
     pub selected_stage: Option<usize>,
     pub results: Option<Arc<Vec<Document>>>,
     pub stage_doc_counts: Vec<StageDocCounts>,
-    pub analysis: Option<PipelineAnalysis>,
-    #[allow(dead_code)]
-    pub auto_preview: bool,
     pub loading: bool,
     pub error: Option<String>,
     pub request_id: u64,
@@ -114,8 +111,6 @@ impl Default for PipelineState {
             selected_stage: None,
             results: None,
             stage_doc_counts: Vec::new(),
-            analysis: None,
-            auto_preview: false,
             loading: false,
             error: None,
             request_id: 0,
@@ -135,30 +130,4 @@ pub struct StageDocCounts {
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub time_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct PipelineAnalysis {
-    pub stages: Vec<StageAnalysis>,
-    pub warnings: Vec<AnalysisWarning>,
-    pub total_time_ms: u64,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct StageAnalysis {
-    pub docs_in: u64,
-    pub docs_out: u64,
-    pub strategy: String,
-    pub index_name: Option<String>,
-    pub time_ms: u64,
-    pub memory_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct AnalysisWarning {
-    pub stage_index: Option<usize>,
-    pub message: String,
 }

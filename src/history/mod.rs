@@ -46,6 +46,7 @@ pub struct HistoryService {
     restore_cancellations: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
     stopped_gaps: Arc<Mutex<Vec<HistoryGap>>>,
     usage_cache: Arc<Mutex<HashMap<Uuid, Usage>>>,
+    opened_streams: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl HistoryService {
@@ -63,6 +64,7 @@ impl HistoryService {
             restore_cancellations: Arc::new(Mutex::new(HashMap::new())),
             stopped_gaps: Arc::new(Mutex::new(Vec::new())),
             usage_cache: Arc::new(Mutex::new(HashMap::new())),
+            opened_streams: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -207,7 +209,16 @@ impl HistoryService {
         });
     }
 
+    /// Whether this connection's change stream has opened since `start`.
+    /// Writes made before it opens are not recorded.
+    pub fn recording_started(&self, connection_id: Uuid) -> bool {
+        self.opened_streams.lock().is_ok_and(|opened| opened.contains(&connection_id))
+    }
+
     pub fn stop(&self, connection_id: Uuid) {
+        if let Ok(mut opened) = self.opened_streams.lock() {
+            opened.remove(&connection_id);
+        }
         if let Ok(mut supervisors) = self.supervisors.lock()
             && let Some(cancellation) = supervisors.remove(&connection_id)
         {
@@ -305,20 +316,6 @@ impl HistoryService {
         {
             cache.insert(connection_id, usage);
         }
-    }
-
-    pub fn set_retention(
-        &self,
-        connection_id: Uuid,
-        max_age_days: u32,
-        max_bytes: u64,
-    ) -> anyhow::Result<Usage> {
-        let usage =
-            self.store.apply_retention(connection_id, max_age_days.max(1), max_bytes.max(1))?;
-        if let Ok(mut cache) = self.usage_cache.lock() {
-            cache.insert(connection_id, usage);
-        }
-        Ok(usage)
     }
 
     pub fn delete_batch(&self, batch_id: Uuid) -> anyhow::Result<bool> {
@@ -572,7 +569,14 @@ impl HistoryService {
                 watch.await
             };
             let mut stream = match opened {
-                Ok(stream) => stream.with_type::<Document>(),
+                Ok(stream) => {
+                    if !cancellation.is_cancelled()
+                        && let Ok(mut opened) = self.opened_streams.lock()
+                    {
+                        opened.insert(connection.id);
+                    }
+                    stream.with_type::<Document>()
+                }
                 Err(error) => {
                     if resume.is_some() && resume_history_is_invalid(&error) {
                         if self

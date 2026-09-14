@@ -204,11 +204,6 @@ impl TransferFormat {
             TransferFormat::Bson => "bson",
         }
     }
-
-    #[allow(dead_code)]
-    pub fn available_for_collection(self) -> bool {
-        !matches!(self, TransferFormat::Bson)
-    }
 }
 
 // InsertMode, ExtendedJsonMode, BsonOutputFormat: canonical definitions in crate::connection::types
@@ -255,7 +250,6 @@ pub const DEFAULT_FORGE_CONTENT: &str = "";
 
 /// State for a Forge query shell tab
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ForgeTabState {
     pub content: String,
     pub is_running: bool,
@@ -747,28 +741,6 @@ impl ExplainState {
         } else {
             None
         };
-        self.sync_from_selected_runs();
-    }
-
-    pub fn set_current_run(&mut self, run_id: Option<String>) {
-        if let Some(run_id) = run_id {
-            if self.history.iter().any(|run| run.id == run_id) {
-                self.current_run_id = Some(run_id);
-            }
-        } else {
-            self.current_run_id = None;
-        }
-        self.sync_from_selected_runs();
-    }
-
-    pub fn set_compare_run(&mut self, run_id: Option<String>) {
-        if let Some(run_id) = run_id {
-            if self.history.iter().any(|run| run.id == run_id) {
-                self.compare_run_id = Some(run_id);
-            }
-        } else {
-            self.compare_run_id = None;
-        }
         self.sync_from_selected_runs();
     }
 
@@ -1410,7 +1382,6 @@ pub enum CopiedTreeItem {
 
 /// Status of a single collection transfer
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum CollectionTransferStatus {
     #[default]
     Pending,
@@ -1448,27 +1419,9 @@ pub struct DatabaseTransferProgress {
     pub panel_expanded: bool,
 }
 
-#[allow(dead_code)]
 impl DatabaseTransferProgress {
     pub fn total_documents_processed(&self) -> u64 {
         self.collections.iter().map(|c| c.documents_processed).sum()
-    }
-
-    pub fn total_documents_total(&self) -> Option<u64> {
-        let totals: Vec<u64> = self.collections.iter().filter_map(|c| c.documents_total).collect();
-        if totals.len() == self.collections.len() && !totals.is_empty() {
-            Some(totals.iter().sum())
-        } else {
-            None
-        }
-    }
-
-    pub fn overall_percentage(&self) -> Option<f32> {
-        let total = self.total_documents_total()?;
-        if total == 0 {
-            return Some(100.0);
-        }
-        Some((self.total_documents_processed() as f32 / total as f32) * 100.0)
     }
 
     pub fn completed_count(&self) -> usize {

@@ -236,79 +236,6 @@ fn sanitize_tool_error(message: &str, connection_string: &str) -> String {
 }
 
 impl ConnectionManager {
-    /// Export a database to BSON format using mongodump (runs synchronously).
-    /// Prefer `export_database_bson_with_progress` for progress tracking.
-    #[allow(dead_code)]
-    pub fn export_database_bson(
-        &self,
-        connection_string: &str,
-        database: &str,
-        output_format: BsonOutputFormat,
-        path: &Path,
-        gzip: bool,
-        exclude_collections: &[String],
-    ) -> Result<()> {
-        let mongodump = mongodump_path().ok_or_else(|| {
-            Error::ToolNotFound(
-                "mongodump not found. Run 'just download-tools' or install MongoDB Database Tools."
-                    .into(),
-            )
-        })?;
-
-        let mut secure_command = secure_tool_command(&mongodump, connection_string)?;
-        let cmd = &mut secure_command.command;
-        cmd.arg("--db").arg(database);
-
-        if gzip {
-            cmd.arg("--gzip");
-        }
-
-        // Add exclude collection flags
-        for collection in exclude_collections {
-            cmd.arg("--excludeCollection").arg(collection);
-        }
-
-        let final_path = match output_format {
-            BsonOutputFormat::Archive
-                if path.extension().is_none_or(|extension| extension != "archive") =>
-            {
-                path.with_extension("archive")
-            }
-            _ => path.to_path_buf(),
-        };
-        let parent = final_path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let staging =
-            tempfile::Builder::new().prefix(".openmango-bson-export-").tempdir_in(parent)?;
-        let staged_path = staging.path().join(match output_format {
-            BsonOutputFormat::Archive => "export.archive",
-            BsonOutputFormat::Folder => "export",
-        });
-        match output_format {
-            BsonOutputFormat::Folder => {
-                cmd.arg("--out").arg(&staged_path);
-            }
-            BsonOutputFormat::Archive => {
-                cmd.arg(format!("--archive={}", staged_path.display()));
-            }
-        }
-
-        let output = cmd.output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Parse(format!(
-                "mongodump failed: {}",
-                sanitize_tool_error(&stderr, connection_string)
-            )));
-        }
-
-        crate::connection::ops::export::promote_export_path(&staged_path, &final_path)?;
-        Ok(())
-    }
-
     #[doc(hidden)]
     pub fn export_collection_archive(
         &self,
@@ -421,58 +348,6 @@ impl ConnectionManager {
                 sanitize_tool_error(&stderr, connection_string)
             )));
         }
-        Ok(())
-    }
-
-    /// Import a database from BSON format using mongorestore (runs synchronously).
-    /// Prefer `import_database_bson_with_progress` for progress tracking.
-    #[allow(dead_code)]
-    pub fn import_database_bson(
-        &self,
-        connection_string: &str,
-        database: &str,
-        path: &Path,
-        drop_before: bool,
-    ) -> Result<()> {
-        let mongorestore = mongorestore_path().ok_or_else(|| {
-            Error::ToolNotFound(
-                "mongorestore not found. Run 'just download-tools' or install MongoDB Database Tools."
-                    .into(),
-            )
-        })?;
-
-        let mut secure_command = secure_tool_command(&mongorestore, connection_string)?;
-        let cmd = &mut secure_command.command;
-        cmd.arg("--db").arg(database);
-
-        if drop_before {
-            cmd.arg("--drop");
-        }
-
-        // Detect if path is archive or folder
-        if path.extension().map(|e| e == "archive").unwrap_or(false) {
-            // --archive requires = format: --archive=/path/to/file
-            cmd.arg(format!("--archive={}", path.display()));
-        } else {
-            // mongodump creates a subfolder with the database name
-            let db_path = path.join(database);
-            if db_path.exists() {
-                cmd.arg("--dir").arg(&db_path);
-            } else {
-                cmd.arg("--dir").arg(path);
-            }
-        }
-
-        let output = cmd.output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Parse(format!(
-                "mongorestore failed: {}",
-                sanitize_tool_error(&stderr, connection_string)
-            )));
-        }
-
         Ok(())
     }
 

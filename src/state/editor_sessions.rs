@@ -222,11 +222,6 @@ impl EditorSessionStore {
         self.with_inner(|inner| inner.keys.get(&key).copied()).flatten()
     }
 
-    pub fn find_insert_session(&self, session_key: &SessionKey) -> Option<EditorSessionId> {
-        let key = EditorSessionKey::Insert { session_key: session_key.clone() };
-        self.with_inner(|inner| inner.keys.get(&key).copied()).flatten()
-    }
-
     pub fn find_any_document_session(&self) -> Option<EditorSessionId> {
         self.with_inner(|inner| {
             inner.sessions.iter().find_map(|(id, session)| {
@@ -262,10 +257,6 @@ impl EditorSessionStore {
 
     pub fn window_handle(&self, id: EditorSessionId) -> Option<AnyWindowHandle> {
         self.with_inner(|inner| inner.windows.get(&id).copied()).flatten()
-    }
-
-    pub fn all_window_handles(&self) -> Vec<AnyWindowHandle> {
-        self.with_inner(|inner| inner.windows.values().copied().collect()).unwrap_or_default()
     }
 
     fn with_inner<T>(&self, f: impl FnOnce(&EditorSessionStoreInner) -> T) -> Option<T> {

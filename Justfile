@@ -7,9 +7,6 @@ dev:
 debug:
     RUST_LOG=debug cargo run
 
-watch:
-    bacon run
-
 # Quality
 lint:
     cargo clippy --all-targets -- -D warnings
@@ -26,18 +23,12 @@ fmt-check:
 check:
     cargo check
 
-check-release:
-    cargo check --release
-
 # Build
 build:
     cargo build
 
 release:
     cargo build --release
-
-bundle:
-    cargo bundle --release
 
 # Compile the macOS app icon (requires Xcode 26 or newer)
 app-icon:

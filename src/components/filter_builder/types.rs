@@ -83,11 +83,7 @@ pub enum ValueEditorKind {
     Range,
 }
 
-impl ValueEditorKind {
-    pub fn is_multiline(&self) -> bool {
-        matches!(self, Self::List | Self::Range)
-    }
-}
+impl ValueEditorKind {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterOperator {
@@ -173,13 +169,6 @@ pub enum Combinator {
 
 impl Combinator {
     pub fn label(self) -> &'static str {
-        match self {
-            Self::And => "$and",
-            Self::Or => "$or",
-        }
-    }
-
-    pub fn short_label(self) -> &'static str {
         match self {
             Self::And => "$and",
             Self::Or => "$or",
@@ -774,10 +763,6 @@ impl FilterTree {
         }
     }
 
-    pub fn remove_condition(&mut self, id: u64) {
-        self.remove_node(id);
-    }
-
     pub fn duplicate_node(&mut self, id: u64) -> Option<u64> {
         let source = self.find_node(id)?.clone();
         let location = self.node_location(id)?;
@@ -844,16 +829,6 @@ impl FilterTree {
             child.collect_conditions(&mut out);
         }
         out
-    }
-
-    pub fn flat_conditions(&self) -> Vec<&FilterCondition> {
-        self.children
-            .iter()
-            .filter_map(|node| match node {
-                FilterNode::Condition(condition) => Some(condition),
-                _ => None,
-            })
-            .collect()
     }
 
     pub fn validation_error(&self) -> Option<String> {

@@ -87,8 +87,7 @@ fn bson_value_color(value: &Bson, cx: &App) -> Hsla {
 
 /// Render a single readonly row for aggregation results.
 ///
-/// This is a lightweight version of render_readonly_tree_row that works
-/// with VisibleRow and computes metadata on-demand.
+/// Works with VisibleRow and computes metadata on demand.
 pub fn render_lazy_readonly_row(
     ix: usize,
     row: &VisibleRow,

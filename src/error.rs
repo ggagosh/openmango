@@ -19,7 +19,6 @@ pub enum Error {
     Ssh(#[from] ssh2::Error),
 
     #[error("Parse error: {0}")]
-    #[allow(dead_code)]
     Parse(String),
 
     #[error("Timeout: {0}")]
@@ -51,16 +50,6 @@ impl Error {
                 Self::PartialTransfer { processed, source: Box::new(source) }
             }
             source => source,
-        }
-    }
-
-    pub fn with_total_processed(self, processed: u64) -> Self {
-        match self {
-            Self::PartialTransfer { source, .. } => Self::PartialTransfer { processed, source },
-            Self::ContinuedOperation { failure_count, details, .. } => {
-                Self::ContinuedOperation { processed, failure_count, details }
-            }
-            source => Self::PartialTransfer { processed, source: Box::new(source) },
         }
     }
 

@@ -52,12 +52,10 @@ struct CompletionItem {
 #[derive(Debug, Deserialize)]
 pub struct RuntimeEvaluationResult {
     #[serde(rename = "type")]
-    #[allow(dead_code)]
     pub result_type: Option<String>,
     pub printable: serde_json::Value,
     #[serde(default)]
     pub is_undefined: bool,
-    #[allow(dead_code)]
     pub source: Option<serde_json::Value>,
 }
 

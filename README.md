@@ -5,7 +5,7 @@
 <h1 align="center">OpenMango</h1>
 
 <p align="center">
-  <strong>A native MongoDB workbench for macOS.</strong><br />
+  <strong>A native MongoDB workbench for macOS, Windows, and Linux.</strong><br />
   Browse, query, edit, analyze, and move data without Electron or web views.
 </p>
 
@@ -20,7 +20,7 @@
   <a href="https://github.com/ggagosh/openmango/releases/latest"><img src="https://img.shields.io/github/v/release/ggagosh/openmango?label=release" alt="Latest release" /></a>
   <a href="https://github.com/ggagosh/openmango/actions/workflows/ci.yml"><img src="https://github.com/ggagosh/openmango/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/ggagosh/openmango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="GPL-3.0 license" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="macOS" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="macOS, Windows, and Linux" />
 </p>
 
 <p align="center">
@@ -42,19 +42,44 @@ OpenMango puts the tools used in day-to-day MongoDB work into one fast, keyboard
 
 ## Install
 
+### macOS
+
 1. Open the [latest release](https://github.com/ggagosh/openmango/releases/latest).
 2. Download the ZIP for your Mac:
    - `macos-arm64` for Apple Silicon
    - `macos-x86_64` for Intel
 3. Unzip it and move `OpenMango.app` to `/Applications`.
 
-Stable builds are signed and notarized. Each release also includes a SHA-256 checksum. OpenMango can download the matching update in the background, verifies its checksum, and installs it only after you choose **Restart and install**.
+Stable builds are signed and notarized.
 
-Want current development builds? Use the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly); nightly builds may be unstable.
+### Windows
 
-Linux AppImages and Windows installers are being qualified. Build and test instructions,
-installation, and the remaining release checks are in [Linux support](docs/LINUX.md) and
-[Windows support](docs/WINDOWS.md).
+Download the installer for your PC from the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly):
+`windows-x86_64-setup.exe` for most PCs, or `windows-arm64-setup.exe` for Arm devices.
+It installs for your user without administrator rights and adds OpenMango to the Start menu.
+Installers are not code-signed yet, so Windows SmartScreen asks for confirmation:
+choose **More info → Run anyway**. See [Windows support](docs/WINDOWS.md).
+
+### Linux
+
+Download the AppImage for your machine from the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly):
+`linux-x86_64.AppImage` or `linux-arm64.AppImage`. Make it executable and run it:
+
+```sh
+chmod +x OpenMango-*-linux-*.AppImage
+./OpenMango-*-linux-*.AppImage
+```
+
+In **Settings**, under **Updates**, choose **Install shortcut** to add it to your application menu.
+See [Linux support](docs/LINUX.md).
+
+### Updates
+
+Every download has a SHA-256 checksum, and Windows and Linux updates are additionally
+verified against a signed manifest. OpenMango can download the matching update in the
+background and installs it only after you choose **Restart and install**.
+Windows and Linux packages are published with nightly builds today; stable releases include
+them starting with the next version. Nightly builds include unreleased changes and may be unstable.
 
 ## Document views
 

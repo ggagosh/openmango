@@ -219,11 +219,6 @@ impl ConnectionWriteIdentity {
     pub fn matches(&self, connection: &SavedConnection) -> bool {
         self == &Self::from(connection)
     }
-
-    pub fn requires_production_confirmation(&self) -> bool {
-        self.environment == Some(ConnectionEnvironment::Production)
-            && self.confirm_production_writes
-    }
 }
 
 impl From<&SavedConnection> for ConnectionWriteIdentity {

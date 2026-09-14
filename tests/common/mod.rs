@@ -158,13 +158,3 @@ pub fn test_document(name: &str) -> Document {
         "active": true,
     }
 }
-
-/// Create a test document with an explicit _id field.
-pub fn test_document_with_id(id: &str, name: &str) -> Document {
-    doc! {
-        "_id": id,
-        "name": name,
-        "value": 42,
-        "active": true,
-    }
-}
