@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
 ### Added
 - Windows support: per-user installers for x64 and ARM64 with Start menu integration and an uninstaller, signed in-app updates, no console windows for the app or its bundled tools, and credentials stored in Windows Credential Manager
 - Linux support: AppImage builds for x86_64 and aarch64 with a desktop-entry install action, signed in-app updates, and a combined title bar matching the macOS window chrome
@@ -27,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Settings now show the log location and can export a redacted support bundle with runtime diagnostics
 - AI privacy controls for selected-document and automatic sample sharing, both disabled by default
 - Keyboard-operable app buttons with focus rings and Enter, Return, and Space activation
-- Accessibility QA documentation and focus restoration for searches and confirmation dialogs
+- Focus returns to where you were after closing searches and confirmation dialogs
 - Table view for documents — browse collections in a spreadsheet-style grid with sortable, resizable, and pinnable columns
 - Per-page selector in the pagination bar — choose between 10, 25, 50, or 100 documents per page
 - Islands tab style — choose between Islands, Segmented, or Underline tab appearance in Settings
@@ -50,11 +52,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Forge console output follows new results without stealing focus, pauses while reading older output, and preserves the distinction between printed `undefined` and `null`
 - Long-running Forge queries and idle shell sessions are no longer interrupted by the sidecar's former inactivity timeout
 - Filter Builder shortcuts stay within the builder, invalid drafts are blocked before execution, and collapsing a group preserves its inputs and query
-- Linux CI installs the Fontconfig development files required by GPUI Kit's font backend
 - Opening Forge now targets the highlighted collection, reuses matching find-all queries, and preserves existing query drafts
 - Running Forge queries or selected statements with keyboard shortcuts no longer causes a nested view-update crash
 - Transfer cancellation now blocks reruns and mode changes until the active operation has stopped, preventing stale completion races
-- macOS development runs use a stable Apple Development signature so Keychain access remains trusted across rebuilds
 - Workspace restore no longer crashes by re-entering the sidebar while a connection event is being handled
 - Workspace restore now waits for saved connection credentials to finish loading from Keychain before reconnecting
 - Import and copy Clear/Drop operations now stage changes before atomic promotion, and Replace preserves failed originals while reporting partial progress
@@ -70,7 +70,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Query refresh now cancels actual client/server work rather than relying only on stale request IDs
 - Numbered-tab, content-focus, document, and aggregation shortcuts no longer conflict; palette and menu shortcuts come from registered actions
 - Palette Refresh now follows the same context-sensitive path as Cmd/Ctrl+R, AI opening focuses its input, and Forge preserves the selected collection
-- Unit-test CI now runs the library tests instead of the zero-test binary target
 - Search in JSON editors now wraps correctly in both directions — pressing Enter cycles forward through all matches, Shift+Enter cycles backward
 - Detached editor windows now inherit the vibrancy setting from the main window instead of always appearing opaque
 - Closing the main window now also closes all detached editor windows
@@ -91,8 +90,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Applied fast filters now keep the text you typed instead of rewriting it into MongoDB JSON
 
 ### Changed
-- Smaller app and faster builds: bundles plain JetBrains Mono instead of its Nerd Font build (text looks the same), and syntax highlighting includes only the JavaScript and JSON it uses, so AI answer code blocks in other languages show without colors
-- Stable releases publish every platform from one job with notes taken from this changelog, and the `nightly` tag now points at the commit that was built
+- Smaller downloads: the app bundles plain JetBrains Mono instead of its Nerd Font build (text looks the same), and syntax highlighting includes only JavaScript and JSON, so AI answer code blocks in other languages show without colors
 - Migrated the desktop UI to published GPUI Kit 0.6 components and removed the vendored toolkit patches
 - Forge retains editor and result-view state across tabs and uses fuzzy completions with consistent native editing shortcuts
 - Filter Builder now uses consistent native controls, collapsible borderless groups, and scoped keyboard handling with validation before execution
@@ -101,11 +99,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Connection management now uses a full-content singleton tab with explicit new-connection drafts, cancellation, draft-discard protection, and consistent New Connection entry points
 - History now observes MongoDB changes passively and never pre-reads, authorizes, approves, or blocks originating writes
 - Transfer now uses one compact Export, Import, and Copy workflow with progressive options and consistent aggregate progress across collection, database, JSON/CSV, and BSON operations
-- Updates now require published SHA-256 assets, verify the downloaded archive and macOS code signature, respect the automatic-update preference, and install only after Restart to Update
+- Updates now require published SHA-256 assets, verify the downloaded archive and macOS code signature, respect the automatic-update preference, and install only after you choose Restart and install
 - Update-check failures remain visible with Retry instead of silently returning to idle
 - AI enablement now discloses the workspace metadata sent to the selected provider, and complete system prompts are no longer written to debug logs
 - Transfer jobs that continue after errors retain failure counts, per-collection details, and processed-document totals
-- Release workflows now publish per-archive SHA-256 checksum assets
+- Every download now has a published SHA-256 checksum
 - Document query editors now provide field/value completion, typed ID queries, multiline drafts, and undoable formatting on submission, with sort and projection in Options
 - AI chat panel moved out of the documents view into its own dedicated space
 - Close buttons on tabs now only appear on hover (except the active tab)
