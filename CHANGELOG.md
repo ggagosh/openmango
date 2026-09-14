@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The welcome screen offers your five most recent connections, one click each, and shows progress on the one being opened
 - Sidebar connection rows show the spinner in place of the icon while connecting, keep the connection color on the icon instead of a separate swatch, and reveal row actions on hover or selection
 - Workspace tabs from a colored connection share an underline in that color
+- Enter opens the selected document: it expands or collapses it in the tree and opens it as JSON from the table, like double-click
 
 ## [0.3.0] - 2026-09-14
 

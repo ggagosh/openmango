@@ -232,6 +232,17 @@ impl CollectionView {
                         handled = true;
                     } else if cmd_or_ctrl {
                         handled = save_selected_document(this, window, cx);
+                    } else if let Some(table) = this.view_model.table_state().cloned()
+                        && table.read(cx).focus_handle(cx).contains_focused(window, cx)
+                    {
+                        // Enter opens the selected row, like double-click.
+                        if let Some(session_key) = this.view_model.current_session()
+                            && let Some(doc_key) =
+                                this.state.read(cx).session_selected_doc(&session_key)
+                        {
+                            this.open_document_json(session_key, doc_key, window, cx);
+                            handled = true;
+                        }
                     } else if this.documents_focus.is_focused(window) {
                         let Some(session_key) = this.view_model.current_session() else {
                             return;
@@ -240,17 +251,26 @@ impl CollectionView {
                             this.state.read(cx).session_selected_node_id(&session_key);
                         if let Some(node_id) = selected_node {
                             let node_meta = this.view_model.node_meta();
-                            if let Some(meta) = node_meta.get(&node_id)
-                                && meta.is_editable
-                            {
-                                this.view_model.begin_inline_edit(
-                                    node_id.clone(),
-                                    meta,
-                                    window,
-                                    &this.state,
-                                    cx,
-                                );
-                                handled = true;
+                            if let Some(meta) = node_meta.get(&node_id) {
+                                // Enter does what double-click does: edit a value, or open and
+                                // close a document, object, or array.
+                                if meta.is_editable {
+                                    this.view_model.begin_inline_edit(
+                                        node_id.clone(),
+                                        meta,
+                                        window,
+                                        &this.state,
+                                        cx,
+                                    );
+                                    handled = true;
+                                } else if meta.is_folder {
+                                    this.state.update(cx, |state, cx| {
+                                        state.toggle_expanded_node(&session_key, &node_id);
+                                        cx.notify();
+                                    });
+                                    this.view_model.rebuild_tree(&this.state, cx);
+                                    handled = true;
+                                }
                             }
                         }
                     }

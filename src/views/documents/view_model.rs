@@ -706,16 +706,7 @@ impl DocumentViewModel {
                     let session_key = cv.view_model.current_session();
                     let doc_key = ts.read(cx).delegate().document_key(row_ix);
                     if let (Some(sk), Some(dk)) = (session_key, doc_key) {
-                        cv.state.update(cx, |state, cx| {
-                            state.select_single_doc(&sk, dk.clone(), crate::bson::doc_root_id(&dk));
-                            cx.notify();
-                        });
-                        cv.change_document_view(
-                            sk,
-                            crate::state::DocumentViewMode::Json,
-                            window,
-                            cx,
-                        );
+                        cv.open_document_json(sk, dk, window, cx);
                     }
                 }
                 TableEvent::ColumnWidthsChanged(widths) => {
