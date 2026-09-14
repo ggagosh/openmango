@@ -34,7 +34,8 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Disable lld linker flags for CI
         run: rm -f .cargo/config.toml
       - name: Format check
@@ -72,7 +73,8 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Format check
@@ -137,7 +139,8 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Strawberry Perl
         shell: pwsh
         run: if (-not (Test-Path C:\Strawberry\perl\bin\perl.exe)) { choco install strawberryperl -y --no-progress }
@@ -145,8 +148,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run unit tests
         run: cargo test --locked --lib -- --test-threads=1
-      - name: Verify Forge sidecar bundle
-        run: bash scripts/check_mongosh_sidecar.sh
+      # Packaging compiles the Forge sidecar, so no separate bundle check here.
       - name: Package Windows preview
         run: bash scripts/release_windows.sh
       - name: Check installer, bundled tools, and launch
@@ -172,7 +174,8 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          cache-on-failure: true
+          # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify Docker availability
         run: docker version
       - name: Pull integration test images

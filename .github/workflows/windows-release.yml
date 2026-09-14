@@ -53,7 +53,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-release-${{ matrix.arch }}
-          cache-on-failure: true
       - name: Install Strawberry Perl
         shell: pwsh
         run: if (-not (Test-Path C:\Strawberry\perl\bin\perl.exe)) { choco install strawberryperl -y --no-progress }
