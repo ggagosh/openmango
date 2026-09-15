@@ -435,18 +435,14 @@ fn render_value_column(
         .min_w(px(0.0))
         .when(is_dirty && !selected && !is_editing, {
             let dirty_bg = colors::bg_dirty(cx);
-            move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+            move |s| outset_chrome(s.bg(dirty_bg), px(0.0))
         })
         .when(is_match && !is_dirty && !selected && !is_editing, {
             let dirty_bg = colors::bg_dirty(cx);
-            move |s| s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+            move |s| outset_chrome(s.bg(dirty_bg), px(0.0))
         })
         .when(is_current_match && !selected && !is_editing, |s| {
-            s.border_1()
-                .border_color(cx.theme().primary)
-                .rounded(borders::radius_sm())
-                .px(spacing::xs())
-                .py(px(1.0))
+            outset_chrome(s.border_1().border_color(cx.theme().primary), px(1.0))
         })
         .when(!is_editing, {
             let item_id = item_id.clone();
@@ -477,13 +473,7 @@ fn render_value_column(
         .child(if is_editing {
             render_inline_editor(inline_state, inline_error, view.clone(), cx)
         } else {
-            div()
-                .text_sm()
-                .text_color(value_color)
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(value_label)
-                .into_any_element()
+            value_text(value_label, value_color).into_any_element()
         });
 
     if let Some(value_drag) = value_drag
@@ -500,6 +490,52 @@ fn render_value_column(
     value
 }
 
+/// The value text shares one line box with its inline editor: the kit input's single-line height.
+const VALUE_LINE_HEIGHT: Rems = Rems(1.25);
+
+fn value_text(label: String, color: Hsla) -> Div {
+    div()
+        .text_sm()
+        .line_height(VALUE_LINE_HEIGHT)
+        .text_color(color)
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(label)
+}
+
+/// Draws highlight chrome of the given border width outside the value text's box, growing
+/// left and up/down only (the type column sits to the right), so the text stays anchored.
+fn outset_chrome<E: Styled>(element: E, border: Pixels) -> E {
+    element
+        .rounded(borders::radius_sm())
+        .px(spacing::xs())
+        .py(px(1.0))
+        .ml(-(spacing::xs() + border))
+        .my(-(px(1.0) + border))
+}
+
+/// The inline value editor. Its padding and border sit outside the text box through negative
+/// margins, and it shares the value text's line box, so double-clicking to edit moves neither the
+/// value text nor the row — the in-place editing pattern of spreadsheets and file renames.
+fn inline_value_input(inline_state: &Entity<InputState>, has_error: bool, cx: &App) -> Input {
+    let border = px(1.0);
+    Input::new(inline_state)
+        .font_family(crate::theme::fonts::mono())
+        .xsmall()
+        .text_sm()
+        .line_height(VALUE_LINE_HEIGHT)
+        .h_auto()
+        .px(spacing::xs())
+        .py(px(0.0))
+        .ml(-(spacing::xs() + border))
+        .my(-border)
+        .focus_bordered(false)
+        .border_color(if has_error { cx.theme().danger } else { cx.theme().ring })
+        .rounded(borders::radius_xs())
+        .flex_1()
+        .min_w(px(0.0))
+}
+
 fn render_inline_editor(
     inline_state: &Option<Entity<InputState>>,
     inline_error: Option<&str>,
@@ -509,17 +545,7 @@ fn render_inline_editor(
     let Some(inline_state) = inline_state else {
         return div().into_any_element();
     };
-    let border_color = if inline_error.is_some() { cx.theme().danger } else { cx.theme().ring };
-
-    let editor = Input::new(inline_state)
-        .font_family(crate::theme::fonts::mono())
-        .xsmall()
-        .text_sm()
-        .focus_bordered(false)
-        .border_color(border_color)
-        .rounded(borders::radius_xs())
-        .flex_1()
-        .min_w(px(0.0));
+    let editor = inline_value_input(inline_state, inline_error.is_some(), cx);
 
     div()
         .flex()
@@ -571,4 +597,67 @@ fn render_inline_editor(
                 }),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::Root;
+    use gpui_kit::component::input::InputState;
+    use gpui_kit::{
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, Styled as _, TestAppContext, Window, div, px,
+    };
+
+    use super::{inline_value_input, value_text};
+
+    struct Rows {
+        input: Entity<InputState>,
+    }
+
+    impl Render for Rows {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // Mirrors the app root's line height and the tree row's padding.
+            let row = |name: &'static str| {
+                div().debug_selector(move || name.into()).flex().items_center().py(px(2.0))
+            };
+            div()
+                .w(px(600.0))
+                .line_height(crate::theme::fonts::ui_line_height())
+                .child(
+                    row("resting-row").child(
+                        value_text("value".into(), gpui_kit::black())
+                            .debug_selector(|| "resting-text".into()),
+                    ),
+                )
+                .child(
+                    row("editing-row").child(
+                        div()
+                            .debug_selector(|| "editing-text".into())
+                            .flex()
+                            .flex_1()
+                            .child(inline_value_input(&self.input, false, cx)),
+                    ),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn editing_a_value_keeps_the_row_height(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::apply_design_tokens(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| InputState::new(window, cx).default_value("value"));
+            let rows = cx.new(|_| Rows { input });
+            Root::new(rows, window, cx).bordered(false)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let mut height =
+            |name| cx.debug_bounds(name).unwrap_or_else(|| panic!("{name}")).size.height;
+        // Horizontally the margins equal the input's padding plus border, so text keeps its x.
+        assert_eq!(height("editing-row"), height("resting-row"), "row height while editing");
+    }
 }

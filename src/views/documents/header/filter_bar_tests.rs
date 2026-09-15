@@ -9,7 +9,9 @@ use gpui_kit::{
 };
 
 use super::{query_editor, query_find_button};
-use crate::views::documents::query_editor::{format_query_editor, new_query_editor};
+use crate::views::documents::query_editor::{
+    format_query_editor, new_field_filter_editor, new_query_editor,
+};
 
 struct QueryHarness {
     input: Entity<EditorState>,
@@ -319,6 +321,26 @@ fn header_query_keeps_focus_after_left_and_right_clicks(cx: &mut TestAppContext)
             assert_eq!(input.read_with(cx, |input, _| input.cursor()), 3);
         }
     }
+}
+
+#[gpui_kit::test]
+fn field_filter_text_lines_up_with_the_documents_filter(cx: &mut TestAppContext) {
+    let (view, query, cx) = harness(cx, "address.city");
+    let query_caret = caret_point(&query, 0, cx);
+    let field_filter = cx.update(|window, cx| {
+        cx.new(|cx| {
+            new_field_filter_editor(window, cx, "Filter fields…").default_value("address.city")
+        })
+    });
+    view.update(cx, |view, cx| {
+        view.input = field_filter.clone();
+        cx.notify();
+    });
+    draw(cx);
+    let caret = caret_point(&field_filter, 0, cx);
+    // A fold gutter would push the text right; the schema filter reported this as misaligned.
+    assert_eq!(caret, query_caret, "field filter text starts where the documents filter does");
+    assert!(cx.debug_bounds("editor").unwrap().contains(&caret), "its only line is in view");
 }
 
 #[gpui_kit::test]

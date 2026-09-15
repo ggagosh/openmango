@@ -8,16 +8,18 @@ use std::rc::Rc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::tab::TabBar;
 use gpui_kit::component::theme::{ThemeConfig, ThemeSet};
-use gpui_kit::{App, Hsla, Pixels, Styled as _, px};
+use gpui_kit::{App, Entity, Hsla, Pixels, Styled as _, Window, WindowAppearance, px};
 
-use crate::state::{AppTheme, AppearanceSettings, IslandsTabStyle};
+use crate::state::{AppState, AppTheme, AppearanceSettings, IslandsTabStyle};
 
 // =============================================================================
 // Theme Loading & Switching
 // =============================================================================
 
 const THEME_SOURCES: &[(&str, &str)] = &[
-    ("vercel-dark", include_str!("../themes/openmango-dark.json")),
+    ("mango-dark", include_str!("../themes/mango-dark.json")),
+    ("mango-light", include_str!("../themes/mango-light.json")),
+    ("vercel-dark", include_str!("../themes/vercel-dark.json")),
     ("darcula-dark", include_str!("../themes/darcula-dark.json")),
     ("tokyo-night", include_str!("../themes/tokyo-night.json")),
     ("nord", include_str!("../themes/nord.json")),
@@ -47,42 +49,66 @@ pub fn apply_design_tokens(cx: &mut App) {
     theme.radius_lg = borders::radius_md();
 }
 
-pub fn apply_theme(
-    app_theme: AppTheme,
-    vibrancy: bool,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-) {
+pub fn apply_theme(app_theme: AppTheme, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
         gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
-
         apply_design_tokens(cx);
-
-        if vibrancy {
-            apply_vibrancy(cx);
-        }
-
         window.refresh();
     }
 }
 
-pub fn effective_vibrancy(_app_theme: AppTheme, user_vibrancy: bool) -> bool {
-    cfg!(target_os = "macos") && user_vibrancy
+/// The theme to show: the Mango theme matching the system when following it, else the saved one.
+pub fn resolved_theme(appearance: &AppearanceSettings, system: WindowAppearance) -> AppTheme {
+    if !appearance.follow_system {
+        return appearance.theme;
+    }
+    match system {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => AppTheme::MangoDark,
+        WindowAppearance::Light | WindowAppearance::VibrantLight => AppTheme::MangoLight,
+    }
 }
 
-pub fn requires_vibrancy_restart(
-    startup_vibrancy: bool,
-    target_theme: AppTheme,
-    user_vibrancy: bool,
-) -> bool {
-    startup_vibrancy != effective_vibrancy(target_theme, user_vibrancy)
+/// Saves and applies a theme the user picked, which stops following the system appearance.
+pub fn pick_theme(state: &Entity<AppState>, theme: AppTheme, window: &mut Window, cx: &mut App) {
+    save_and_apply(state, theme, false, window, cx);
 }
 
-/// Reduce alpha on background/sidebar so the macOS blur effect shows through.
-pub fn apply_vibrancy(cx: &mut gpui_kit::App) {
-    let theme = gpui_kit::component::theme::Theme::global_mut(cx);
-    theme.background.a = 0.82;
-    theme.sidebar.a = 0.82;
+/// Turns system appearance following on, applying the matching Mango theme, or off.
+pub fn set_follow_system(
+    state: &Entity<AppState>,
+    follow: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let mut appearance = state.read(cx).settings.appearance.clone();
+    appearance.follow_system = follow;
+    let theme = resolved_theme(&appearance, window.appearance());
+    save_and_apply(state, theme, follow, window, cx);
+}
+
+/// Re-applies the matching Mango theme after the system appearance changes.
+pub fn sync_system_theme(state: &Entity<AppState>, window: &mut Window, cx: &mut App) {
+    let appearance = &state.read(cx).settings.appearance;
+    let theme = resolved_theme(appearance, window.appearance());
+    if appearance.follow_system && theme != appearance.theme {
+        save_and_apply(state, theme, true, window, cx);
+    }
+}
+
+fn save_and_apply(
+    state: &Entity<AppState>,
+    theme: AppTheme,
+    follow_system: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    state.update(cx, |state, cx| {
+        state.settings.appearance.theme = theme;
+        state.settings.appearance.follow_system = follow_system;
+        state.save_settings();
+        cx.notify();
+    });
+    apply_theme(theme, window, cx);
 }
 
 // =============================================================================
@@ -251,7 +277,6 @@ pub mod islands {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_vibrancy, requires_vibrancy_restart};
     use crate::state::AppTheme;
 
     #[gpui_kit::test]
@@ -277,23 +302,95 @@ mod tests {
     }
 
     #[test]
-    fn vibrancy_follows_user_toggle() {
-        assert!(!effective_vibrancy(AppTheme::VercelDark, false));
-        assert_eq!(effective_vibrancy(AppTheme::VercelDark, true), cfg!(target_os = "macos"));
+    fn every_listed_theme_loads_and_mango_leads_each_mode() {
+        let dark = AppTheme::dark_themes();
+        let light = AppTheme::light_themes();
+        assert_eq!(
+            (AppTheme::default(), dark[0], light[0]),
+            (AppTheme::MangoDark, AppTheme::MangoDark, AppTheme::MangoLight)
+        );
+        for (themes, is_dark) in [(dark, true), (light, false)] {
+            for theme in themes {
+                let config = super::load_theme_config(theme.theme_id())
+                    .unwrap_or_else(|| panic!("{} has no bundled theme", theme.theme_id()));
+                assert_eq!(config.mode.is_dark(), is_dark, "{}", theme.theme_id());
+            }
+        }
+    }
+
+    /// The Mango themes are ours, so their text colors must meet WCAG AA on the
+    /// surfaces they render on: content, sidebar and hover.
+    #[gpui_kit::test]
+    fn mango_theme_text_meets_contrast_on_every_surface(cx: &mut gpui_kit::TestAppContext) {
+        fn luminance(color: gpui_kit::Hsla) -> f32 {
+            let rgb = color.to_rgb();
+            let channel = |c: f32| {
+                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+        }
+        fn ratio(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> f32 {
+            let (a, b) = (luminance(a), luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        }
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            for theme_id in [AppTheme::MangoDark.theme_id(), AppTheme::MangoLight.theme_id()] {
+                let config = super::load_theme_config(theme_id).expect("bundled theme");
+                gpui_kit::component::Theme::global_mut(cx).apply_config(&config);
+                let t = gpui_kit::component::Theme::global(cx);
+                let surfaces =
+                    [("background", t.background), ("sidebar", t.sidebar), ("hover", t.accent)];
+                for (surface, bg) in surfaces {
+                    let text = [
+                        ("foreground", t.foreground, 7.0),
+                        ("muted", t.muted_foreground, 4.5),
+                        ("link", t.link, 4.5),
+                        ("red", t.red, 4.5),
+                        ("yellow", t.yellow, 4.5),
+                        ("green", t.green, 4.5),
+                        ("blue", t.blue, 4.5),
+                        ("magenta", t.magenta, 4.5),
+                        ("cyan", t.cyan, 4.5),
+                    ];
+                    for (name, fg, min) in text {
+                        let got = ratio(fg, bg);
+                        assert!(
+                            got >= min,
+                            "{theme_id}: {name} on {surface} is {got:.2}, needs {min}"
+                        );
+                    }
+                }
+                let fills = [
+                    ("primary", t.primary_foreground, t.primary),
+                    ("primary hover", t.primary_foreground, t.primary_hover),
+                    ("danger", t.danger_foreground, t.danger),
+                    ("warning", t.warning_foreground, t.warning),
+                    ("success", t.success_foreground, t.success),
+                    ("info", t.info_foreground, t.info),
+                ];
+                for (name, fg, bg) in fills {
+                    let got = ratio(fg, bg);
+                    assert!(got >= 4.5, "{theme_id}: text on {name} is {got:.2}, needs 4.5");
+                }
+                let ring = ratio(t.ring, t.background);
+                assert!(ring >= 3.0, "{theme_id}: focus ring is {ring:.2}, needs 3");
+            }
+        });
     }
 
     #[test]
-    fn restart_required_when_vibrancy_changes() {
-        assert!(requires_vibrancy_restart(true, AppTheme::VercelDark, false));
-        assert_eq!(
-            requires_vibrancy_restart(false, AppTheme::VercelDark, true),
-            cfg!(target_os = "macos")
-        );
-        assert!(!requires_vibrancy_restart(false, AppTheme::VercelDark, false));
-        assert_eq!(
-            requires_vibrancy_restart(true, AppTheme::VercelDark, true),
-            !cfg!(target_os = "macos")
-        );
+    fn following_the_system_picks_the_matching_mango_theme() {
+        use gpui_kit::WindowAppearance::{Dark, VibrantDark, VibrantLight};
+        let mut appearance =
+            crate::state::AppearanceSettings { theme: AppTheme::Nord, ..Default::default() };
+        assert!(appearance.follow_system, "new installs follow the system");
+        assert_eq!(super::resolved_theme(&appearance, Dark), AppTheme::MangoDark);
+        assert_eq!(super::resolved_theme(&appearance, VibrantDark), AppTheme::MangoDark);
+        assert_eq!(super::resolved_theme(&appearance, VibrantLight), AppTheme::MangoLight);
+        appearance.follow_system = false;
+        assert_eq!(super::resolved_theme(&appearance, Dark), AppTheme::Nord);
     }
 }
 

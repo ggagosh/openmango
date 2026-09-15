@@ -83,8 +83,7 @@ pub struct AppState {
     query_library: QueryLibrary,
     query_library_persistence_blocked: bool,
 
-    /// Window/keymap state from startup. Runtime changes require restart.
-    pub startup_vibrancy: bool,
+    /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
 
     // Connection manager (injected for testability)
@@ -202,10 +201,6 @@ impl AppState {
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
-        let startup_vibrancy = crate::theme::effective_vibrancy(
-            settings.appearance.theme,
-            settings.appearance.vibrancy,
-        );
         let startup_keybindings = settings.keybindings.clone();
         let action_store = Arc::new(crate::actions::ActionStore::new(config.agent_data_dir()));
         if let Err(error) = action_store.reconcile_interrupted() {
@@ -220,7 +215,6 @@ impl AppState {
             settings,
             query_library,
             query_library_persistence_blocked,
-            startup_vibrancy,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),

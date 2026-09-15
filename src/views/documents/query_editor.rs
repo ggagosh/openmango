@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui_kit::component::RopeExt as _;
-use gpui_kit::component::input::{CompletionProvider, EditorState, Rope, TabSize};
+use gpui_kit::component::input::{CompletionProvider, Editor, EditorState, Rope, TabSize};
+use gpui_kit::component::{ActiveTheme as _, Size};
 use gpui_kit::*;
 use lsp_types::{CompletionContext, CompletionResponse};
 
@@ -29,6 +30,27 @@ pub(super) fn new_query_editor(
         .tab_size(TabSize { tab_size: 2, hard_tabs: false })
         .submit_on_enter(true)
         .placeholder(placeholder)
+}
+
+/// A one-line plain-text filter field, such as the schema field filter.
+pub(super) fn new_field_filter_editor(
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+    placeholder: &'static str,
+) -> EditorState {
+    EditorState::new(window, cx)
+        .language("text")
+        .auto_close(false)
+        .smart_indent(false)
+        .line_number(false)
+        // The fold gutter would indent the text inside a single-line field.
+        .folding(false)
+        .soft_wrap(false)
+        .scroll_beyond_last_line(Some(0))
+        .cursor_surrounding_lines(Some(0))
+        .submit_on_enter(true)
+        .placeholder(placeholder)
+        .clean_on_escape()
 }
 
 pub(super) fn format_query_editor(
@@ -281,4 +303,56 @@ impl CollectionView {
         }
         false
     }
+}
+
+const QUERY_FONT_REM: f32 = 0.875;
+const QUERY_LINE_HEIGHT: f32 = 1.5;
+
+/// Height of a query editor showing `rows` lines, including its padding and border.
+pub(super) fn query_editor_height(rows: usize, window: &Window) -> Pixels {
+    // Editor uses Medium input padding internally, even with appearance(false).
+    window.rem_size() * QUERY_FONT_REM * QUERY_LINE_HEIGHT * rows as f32
+        + Size::Medium.input_py() * 2.0
+        + px(2.0)
+}
+
+/// A bordered, unwrapped query editor, shared by the filter bar and the schema field filter.
+pub(super) fn query_editor(
+    input: &Entity<EditorState>,
+    rows: usize,
+    label: &'static str,
+    disabled: bool,
+    invalid: bool,
+    window: &Window,
+    cx: &App,
+) -> impl IntoElement {
+    let focused = input.read(cx).focus_handle(cx).is_focused(window);
+    let editor = Editor::new(input)
+        .font_family(crate::theme::fonts::mono())
+        .text_size(rems(QUERY_FONT_REM))
+        .line_height(relative(QUERY_LINE_HEIGHT))
+        .h(query_editor_height(rows, window))
+        .w_full()
+        .bordered(true)
+        .border_color(if invalid {
+            cx.theme().danger
+        } else if focused {
+            cx.theme().ring
+        } else {
+            cx.theme().input
+        })
+        .aria_label(label)
+        .disabled(disabled);
+    div()
+        .id(("query-pointer", input.entity_id()))
+        .min_w(px(0.0))
+        .capture_any_mouse_down({
+            let input = input.clone();
+            move |event, window, cx| {
+                if !disabled {
+                    correct_query_pointer(&input, event, window, cx);
+                }
+            }
+        })
+        .child(editor)
 }

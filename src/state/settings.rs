@@ -155,10 +155,12 @@ fn default_current_version() -> String {
 pub struct AppearanceSettings {
     #[serde(default)]
     pub theme: AppTheme,
+    /// Switch between Mango Dark and Mango Light with the system appearance. New installs
+    /// start with it on; settings saved before it existed keep their chosen theme.
+    #[serde(default)]
+    pub follow_system: bool,
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
-    #[serde(default)]
-    pub vibrancy: bool,
     #[serde(default)]
     pub islands: IslandsAppearanceSettings,
 }
@@ -167,8 +169,8 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: AppTheme::default(),
+            follow_system: true,
             show_status_bar: true,
-            vibrancy: false,
             islands: IslandsAppearanceSettings::default(),
         }
     }
@@ -239,6 +241,8 @@ impl IslandsCornerSoftness {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum AppTheme {
     #[default]
+    MangoDark,
+    MangoLight,
     VercelDark,
     DarculaDark,
     TokyoNight,
@@ -257,6 +261,8 @@ pub enum AppTheme {
 impl AppTheme {
     pub fn label(self) -> &'static str {
         match self {
+            AppTheme::MangoDark => "Mango Dark",
+            AppTheme::MangoLight => "Mango Light",
             AppTheme::VercelDark => "Vercel Dark",
             AppTheme::DarculaDark => "Darcula Dark",
             AppTheme::TokyoNight => "Tokyo Night",
@@ -275,6 +281,8 @@ impl AppTheme {
 
     pub fn theme_id(self) -> &'static str {
         match self {
+            AppTheme::MangoDark => "mango-dark",
+            AppTheme::MangoLight => "mango-light",
             AppTheme::VercelDark => "vercel-dark",
             AppTheme::DarculaDark => "darcula-dark",
             AppTheme::TokyoNight => "tokyo-night",
@@ -297,6 +305,7 @@ impl AppTheme {
 
     pub fn dark_themes() -> &'static [AppTheme] {
         &[
+            AppTheme::MangoDark,
             AppTheme::VercelDark,
             AppTheme::DarculaDark,
             AppTheme::TokyoNight,
@@ -311,6 +320,7 @@ impl AppTheme {
 
     pub fn light_themes() -> &'static [AppTheme] {
         &[
+            AppTheme::MangoLight,
             AppTheme::CatppuccinLatte,
             AppTheme::SolarizedLight,
             AppTheme::RosePineDawn,
@@ -410,9 +420,9 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = AppSettings::default();
-        assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
+        assert_eq!(settings.appearance.theme, AppTheme::MangoDark);
+        assert!(settings.appearance.follow_system);
         assert!(settings.appearance.show_status_bar);
-        assert!(!settings.appearance.vibrancy);
         assert!(settings.appearance.islands.different_tool_window_background);
         assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
         assert_eq!(settings.appearance.islands.corner_softness, IslandsCornerSoftness::Medium);
@@ -492,6 +502,7 @@ mod tests {
         let raw = r#"{
             "appearance": {
                 "theme": "VercelDark",
+                "vibrancy": true,
                 "islands": {
                     "tab_style": "DataGrip"
                 }
@@ -501,6 +512,10 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(raw).expect("should deserialize");
         assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
         assert_eq!(settings.interactive_query_timeout_ms, 30_000);
+        // Older settings still load: the removed vibrancy flag is ignored, and settings saved
+        // before system following existed keep their chosen theme.
+        assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
+        assert!(!settings.appearance.follow_system);
     }
 
     #[test]

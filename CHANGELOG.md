@@ -12,8 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multiple cursors in Forge and the query editors: Alt-click adds a cursor and Shift-Alt-drag selects a column
 - Backspace between an empty bracket or quote pair removes both, and single quotes close automatically in code editors
 - The command palette also opens with Cmd/Ctrl+Shift+P, lists recently used commands first, finds commands by related words such as "dump" for Export Data, and narrows the search to databases and collections when it starts with `#` or to connections with `@`
+- Mango Dark and Mango Light themes in the openmango.app colors, listed first in each group, with every text color meeting WCAG AA contrast on the surfaces it appears on
+- Match system appearance in Settings and in the command palette's theme list switches between Mango Dark and Mango Light with the system's dark or light mode; choosing a theme turns it off
 
 ### Changed
+- New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
 - The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection
 - Document values are plain text everywhere with one set of rules: numbers, `true`/`false`, ObjectId hex, dates such as `2024-01-31` or RFC 3339 timestamps, `null`, and mongosh forms like `ISODate("…")` or `NumberLong(42)`, replacing the switches and number steppers in inline tree editing, the edit value dialog, and the filter builder
 - Enter opens the selected document, expanding it in the tree or opening it as JSON from the table, like double-click
@@ -23,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
 - The command palette shows shortcuts as keycaps, scrolls its whole list with a scrollbar, follows the mouse with one highlight, checks the current theme, names the open submenu with a back button (Backspace also goes back), and clears the search on the first Escape
 
+### Removed
+- The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
+
 ### Fixed
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line
@@ -30,6 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Number steppers in the filter builder and the index TTL field did nothing, and both are now plain inputs
 - The command palette sat off-center and overflowed small windows, took Enter and arrow keys from other windows while open, and let Tab move focus behind it
 - Shortcut hints in the command palette and sidebar tooltips showed the Ctrl variant on macOS
+- Double-clicking a value in the document tree to edit it shifted the text and the rows below
+- The Schema tab's field filter showed its text low, clipped, and indented behind an empty gutter; it now matches the documents filter
 
 ## [0.3.0] - 2026-09-14
 

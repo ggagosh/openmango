@@ -5,7 +5,7 @@ use gpui_kit::component::Disableable as _;
 use gpui_kit::component::RopeExt as _;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::EditorState;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -16,55 +16,7 @@ use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::spacing;
 use crate::views::documents::CollectionView;
 
-const QUERY_FONT_REM: f32 = 0.875;
-const QUERY_LINE_HEIGHT: f32 = 1.5;
-
-fn query_editor_height(rows: usize, window: &Window) -> Pixels {
-    // Editor uses Medium input padding internally, even with appearance(false).
-    window.rem_size() * QUERY_FONT_REM * QUERY_LINE_HEIGHT * rows as f32
-        + Size::Medium.input_py() * 2.0
-        + px(2.0)
-}
-
-fn query_editor(
-    input: &Entity<EditorState>,
-    rows: usize,
-    label: &'static str,
-    disabled: bool,
-    invalid: bool,
-    window: &Window,
-    cx: &App,
-) -> impl IntoElement {
-    let focused = input.read(cx).focus_handle(cx).is_focused(window);
-    let editor = Editor::new(input)
-        .font_family(crate::theme::fonts::mono())
-        .text_size(rems(QUERY_FONT_REM))
-        .line_height(relative(QUERY_LINE_HEIGHT))
-        .h(query_editor_height(rows, window))
-        .w_full()
-        .bordered(true)
-        .border_color(if invalid {
-            cx.theme().danger
-        } else if focused {
-            cx.theme().ring
-        } else {
-            cx.theme().input
-        })
-        .aria_label(label)
-        .disabled(disabled);
-    div()
-        .id(("query-pointer", input.entity_id()))
-        .min_w(px(0.0))
-        .capture_any_mouse_down({
-            let input = input.clone();
-            move |event, window, cx| {
-                if !disabled {
-                    super::super::query_editor::correct_query_pointer(&input, event, window, cx);
-                }
-            }
-        })
-        .child(editor)
-}
+use super::super::query_editor::{query_editor, query_editor_height};
 
 fn query_find_button(window: &Window) -> Button {
     Button::new("apply-filter")

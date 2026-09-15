@@ -214,34 +214,10 @@ impl AppRoot {
 
         // Theme actions
         if let Some(theme_id) = id.strip_prefix("theme:") {
-            if let Some(theme) = AppTheme::from_theme_id(theme_id) {
-                state.update(cx, |state, cx| {
-                    state.settings.appearance.theme = theme;
-                    state.save_settings();
-                    cx.notify();
-                });
-                let (user_vibrancy, startup_vibrancy) = {
-                    let state_ref = state.read(cx);
-                    (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
-                };
-                let target_vibrancy = crate::theme::effective_vibrancy(theme, user_vibrancy);
-                crate::theme::apply_theme(theme, target_vibrancy, window, cx);
-                if crate::theme::requires_vibrancy_restart(startup_vibrancy, theme, user_vibrancy) {
-                    crate::components::open_confirm_dialog(
-                        window,
-                        cx,
-                        "Restart required",
-                        "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
-                        "Restart now",
-                        false,
-                        {
-                            let state = state.clone();
-                            move |window, cx| {
-                                crate::components::request_app_quit(state.clone(), window, cx);
-                            }
-                        },
-                    );
-                }
+            if theme_id == "system" {
+                crate::theme::set_follow_system(state, true, window, cx);
+            } else if let Some(theme) = AppTheme::from_theme_id(theme_id) {
+                crate::theme::pick_theme(state, theme, window, cx);
             }
             return;
         }

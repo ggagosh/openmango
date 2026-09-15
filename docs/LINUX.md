@@ -35,7 +35,7 @@ Integration suites additionally require Docker and use disposable MongoDB fixtur
 On an ordinary graphical desktop, `cargo run` launches the app. Standard desktop
 services are required: a session D-Bus, a working Secret Service keyring (for
 example GNOME Keyring), file-dialog portals, and working GPU drivers. Credentials
-do not fall back to plaintext when a keyring is unavailable. Vibrancy is macOS-only.
+do not fall back to plaintext when a keyring is unavailable.
 
 ## Build and install an AppImage
 

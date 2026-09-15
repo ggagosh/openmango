@@ -181,13 +181,22 @@ impl ActionBar {
 
     fn revert_theme_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(original) = self.original_theme.take() {
-            apply_theme(&self.state, original, window, cx);
+            crate::theme::apply_theme(original, window, cx);
         }
     }
 
     fn preview(&mut self, item: ActionItem, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(theme) = item.id.strip_prefix("theme:").and_then(AppTheme::from_theme_id) {
-            apply_theme(&self.state, theme, window, cx);
+        let theme = match item.id.strip_prefix("theme:") {
+            Some("system") => {
+                let mut appearance = self.state.read(cx).settings.appearance.clone();
+                appearance.follow_system = true;
+                Some(crate::theme::resolved_theme(&appearance, window.appearance()))
+            }
+            Some(id) => AppTheme::from_theme_id(id),
+            None => None,
+        };
+        if let Some(theme) = theme {
+            crate::theme::apply_theme(theme, window, cx);
         }
     }
 
@@ -224,12 +233,6 @@ impl ActionBar {
         self.recent.insert(0, id.clone());
         self.recent.truncate(MAX_RECENT);
     }
-}
-
-fn apply_theme(state: &Entity<AppState>, theme: AppTheme, window: &mut Window, cx: &mut App) {
-    let vibrancy =
-        crate::theme::effective_vibrancy(theme, state.read(cx).settings.appearance.vibrancy);
-    crate::theme::apply_theme(theme, vibrancy, window, cx);
 }
 
 /// Filters, ranks and groups the actions for one palette view, and returns how many
@@ -293,7 +296,10 @@ fn build_groups(
             .collect();
         let label = match (mode, category) {
             // Switcher actions and disconnect targets sit under a divider, not a heading.
-            (PaletteMode::Connect | PaletteMode::Disconnect, ActionCategory::Command) => None,
+            (
+                PaletteMode::Connect | PaletteMode::Disconnect | PaletteMode::Theme,
+                ActionCategory::Command,
+            ) => None,
             (PaletteMode::Navigate, _) => None,
             _ => Some(category.label()),
         };

@@ -16,7 +16,7 @@ use gpui_kit::*;
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
-use crate::components::{Button, open_confirm_dialog, request_app_quit};
+use crate::components::{Button, open_confirm_dialog};
 use crate::state::settings::CollectionDoubleClickAction;
 use crate::state::{
     AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
@@ -311,7 +311,6 @@ impl Render for SettingsView {
                     .keywords([
                         "theme",
                         "appearance",
-                        "vibrancy",
                         "status bar",
                         "query timeout",
                         "collection",
@@ -488,92 +487,34 @@ fn render_appearance_section(
             .rounded(borders::radius_sm())
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu: PopupMenu, _window, _cx| {
-                let mut m = menu;
-                // Dark themes section
-                m = m.label("Dark");
-                for theme in AppTheme::dark_themes() {
-                    let s = state.clone();
-                    let t = *theme;
-                    m = m.item(PopupMenuItem::new(theme.label()).on_click(move |_, window, cx| {
-                        s.update(cx, |state, cx| {
-                            state.settings.appearance.theme = t;
-                            state.save_settings();
-                            cx.notify();
-                        });
-                        let (user_vibrancy, startup_vibrancy) = {
-                            let state_ref = s.read(cx);
-                            (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
-                        };
-                        let target_vibrancy = crate::theme::effective_vibrancy(t, user_vibrancy);
-                        crate::theme::apply_theme(t, target_vibrancy, window, cx);
-                        if crate::theme::requires_vibrancy_restart(
-                            startup_vibrancy,
-                            t,
-                            user_vibrancy,
-                        ) {
-                            crate::components::open_confirm_dialog(
-                                window,
-                                cx,
-                                "Restart required",
-                                "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
-                                "Restart now",
-                                false,
-                                {
-                                    let state = s.clone();
-                                    move |window, cx| {
-                                        request_app_quit(state.clone(), window, cx);
-                                    }
-                                },
-                            );
-                        }
-                    }));
-                }
-                // Light themes section (when available)
-                let light = AppTheme::light_themes();
-                if !light.is_empty() {
-                    m = m.separator().label("Light");
-                    for theme in light {
-                        let s = state.clone();
-                        let t = *theme;
-                        m = m.item(PopupMenuItem::new(theme.label()).on_click(
+                let mut menu = menu;
+                for (label, themes) in
+                    [("Dark", AppTheme::dark_themes()), ("Light", AppTheme::light_themes())]
+                {
+                    if label == "Light" {
+                        menu = menu.separator();
+                    }
+                    menu = menu.label(label);
+                    for &theme in themes {
+                        let state = state.clone();
+                        menu = menu.item(PopupMenuItem::new(theme.label()).on_click(
                             move |_, window, cx| {
-                                s.update(cx, |state, cx| {
-                                    state.settings.appearance.theme = t;
-                                    state.save_settings();
-                                    cx.notify();
-                                });
-                                let (user_vibrancy, startup_vibrancy) = {
-                                    let state_ref = s.read(cx);
-                                    (state_ref.settings.appearance.vibrancy, state_ref.startup_vibrancy)
-                                };
-                                let target_vibrancy =
-                                    crate::theme::effective_vibrancy(t, user_vibrancy);
-                                crate::theme::apply_theme(t, target_vibrancy, window, cx);
-                                if crate::theme::requires_vibrancy_restart(
-                                    startup_vibrancy,
-                                    t,
-                                    user_vibrancy,
-                                ) {
-                                    crate::components::open_confirm_dialog(
-                                        window,
-                                        cx,
-                                        "Restart required",
-                                        "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
-                                        "Restart now",
-                                        false,
-                                        {
-                                            let state = s.clone();
-                                            move |window, cx| {
-                                                request_app_quit(state.clone(), window, cx);
-                                            }
-                                        },
-                                    );
-                                }
+                                crate::theme::pick_theme(&state, theme, window, cx)
                             },
                         ));
                     }
                 }
-                m
+                menu
+            })
+    };
+
+    let follow_system_checkbox = {
+        let state = state.clone();
+        let checked = settings.appearance.follow_system;
+        gpui_kit::component::checkbox::Checkbox::new("follow-system-appearance")
+            .checked(checked)
+            .on_click(move |_, window, cx| {
+                crate::theme::set_follow_system(&state, !checked, window, cx)
             })
     };
 
@@ -592,34 +533,6 @@ fn render_appearance_section(
         )
     };
 
-    // Vibrancy toggle
-    let vibrancy_checkbox = {
-        let state = state.clone();
-        let checked = settings.appearance.vibrancy;
-        gpui_kit::component::checkbox::Checkbox::new("vibrancy")
-            .checked(checked && cfg!(target_os = "macos"))
-            .disabled(!cfg!(target_os = "macos"))
-            .on_click(move |_, window, cx| {
-                state.update(cx, |state, cx| {
-                    state.settings.appearance.vibrancy = !checked;
-                    state.save_settings();
-                    cx.notify();
-                });
-                crate::components::open_confirm_dialog(
-                    window,
-                    cx,
-                    "Restart required",
-                    "Vibrancy changes require a restart to take effect.",
-                    "Restart now",
-                    false,
-                    {
-                        let state = state.clone();
-                        move |window, cx| request_app_quit(state.clone(), window, cx)
-                    },
-                );
-            })
-    };
-
     section(
         "Appearance",
         div()
@@ -628,19 +541,15 @@ fn render_appearance_section(
             .gap(spacing::md())
             .child(setting_row("Theme", theme_dropdown, cx))
             .child(setting_row_with_description(
-                "Show status bar",
-                "Display the status bar at the bottom of the window",
-                status_bar_checkbox,
+                "Match system appearance",
+                "Use Mango Dark or Mango Light to follow your system's dark or light mode. Choosing a theme turns this off.",
+                follow_system_checkbox,
                 cx,
             ))
             .child(setting_row_with_description(
-                "Vibrancy",
-                if cfg!(target_os = "macos") {
-                    "Blurred transparent window background (restart required)"
-                } else {
-                    "Available on macOS"
-                },
-                vibrancy_checkbox,
+                "Show status bar",
+                "Display the status bar at the bottom of the window",
+                status_bar_checkbox,
                 cx,
             )),
         cx,

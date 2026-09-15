@@ -48,8 +48,7 @@ fn main() {
 
         // Load saved appearance.
 
-        let saved_theme = saved_settings.appearance.theme;
-        let vibrancy = theme::effective_vibrancy(saved_theme, saved_settings.appearance.vibrancy);
+        let saved_theme = theme::resolved_theme(&saved_settings.appearance, cx.window_appearance());
 
         // Load the saved theme (or default)
         {
@@ -59,11 +58,6 @@ fn main() {
         }
 
         theme::apply_design_tokens(cx);
-
-        // Apply vibrancy alpha overrides after theme is fully configured
-        if vibrancy {
-            theme::apply_vibrancy(cx);
-        }
 
         let workspace = ConfigManager::default().load_workspace().unwrap_or_default();
         let default_bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
@@ -79,11 +73,6 @@ fn main() {
                 #[cfg(target_os = "linux")]
                 window_decorations: Some(WindowDecorations::Client),
                 window_bounds: Some(window_bounds),
-                window_background: if vibrancy {
-                    WindowBackgroundAppearance::Blurred
-                } else {
-                    WindowBackgroundAppearance::Opaque
-                },
                 titlebar: Some(TitlebarOptions {
                     title: Some("OpenMango".into()),
                     ..TitleBar::title_bar_options()

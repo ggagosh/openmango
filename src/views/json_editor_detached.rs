@@ -794,7 +794,6 @@ impl Render for DetachedJsonEditorView {
         let sync_issue = self.sync_issue;
         let state_ref = self.state.read(cx);
         let appearance = state_ref.settings.appearance.clone();
-        let vibrancy = state_ref.startup_vibrancy;
         let read_only = state_ref.connection_read_only(session.session_key.connection_id);
         let connection_identity = crate::components::connection_identity_for(
             &self.state,
@@ -823,7 +822,6 @@ impl Render for DetachedJsonEditorView {
             .min_h(px(0.0))
             .min_w(px(0.0))
             .when(self.embedded, |view| view.flex_1())
-            .when(vibrancy && !self.embedded, |s| s.pt(px(28.0)))
             .bg(islands::content_bg(&appearance, cx))
             .text_color(cx.theme().foreground)
             .on_action(cx.listener(|this, _: &CloseEditorWindow, window, cx| {
@@ -1151,22 +1149,11 @@ fn open_detached_json_editor_window(
     let bounds =
         Bounds::centered(None, size(px(DETACHED_WINDOW_WIDTH), px(DETACHED_WINDOW_HEIGHT)), cx);
 
-    let vibrancy = state.read(cx).startup_vibrancy;
-
     cx.open_window(
         WindowOptions {
             app_id: Some("com.openmango.app".into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_background: if vibrancy {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Opaque
-            },
-            titlebar: Some(TitlebarOptions {
-                title: Some(title),
-                appears_transparent: vibrancy,
-                ..Default::default()
-            }),
+            titlebar: Some(TitlebarOptions { title: Some(title), ..Default::default() }),
             ..Default::default()
         },
         move |window, cx| {
