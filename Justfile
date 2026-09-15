@@ -1,11 +1,25 @@
 # OpenMango Development Commands
 
 # Development
-dev:
+dev: _daily-sweep
     cargo run
 
-debug:
+debug: _daily-sweep
     RUST_LOG=debug cargo run
+
+# Cargo auto-cleans only ~/.cargo, not target/ (rust-lang/cargo#13136), so use cargo-sweep:
+# drop artifacts from uninstalled toolchains and anything not rebuilt in 30 days.
+sweep:
+    cargo sweep --installed
+    cargo sweep --time 30
+
+# Like Cargo's own cache cleaning: at most once a day, skipped when cargo-sweep is missing.
+_daily-sweep:
+    #!/usr/bin/env bash
+    command -v cargo-sweep >/dev/null || exit 0
+    [[ -n "$(find target/.last-sweep -mtime -1 2>/dev/null)" ]] && exit 0
+    just sweep >/dev/null 2>&1 || true
+    mkdir -p target && touch target/.last-sweep
 
 # Quality
 lint:

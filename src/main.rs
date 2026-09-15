@@ -14,6 +14,8 @@ use openmango::state::ConfigManager;
 use openmango::theme;
 
 fn main() {
+    // reqwest has no crypto provider of its own and panics without one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if std::env::args_os().any(|argument| argument == "--version") {
         println!("OpenMango {}", env!("CARGO_PKG_VERSION"));
         return;

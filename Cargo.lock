@@ -5784,6 +5784,7 @@ dependencies = [
  "rusqlite",
  "rust-embed",
  "rust_xlsxwriter",
+ "rustls",
  "schemars 1.2.1",
  "semver",
  "serde",
