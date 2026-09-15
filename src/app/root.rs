@@ -496,6 +496,11 @@ impl AppRoot {
 
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
         let mut subscriptions = Vec::new();
+        // Startup already shows the matching theme; this records it and follows later changes.
+        crate::theme::sync_system_theme(&state, window, cx);
+        subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
+            crate::theme::sync_system_theme(&this.state, window, cx);
+        }));
         subscriptions.push(cx.observe(&state, |this, state, cx| {
             let enabled = state.read(cx).settings.mcp.enabled;
             let access_signature = Self::mcp_access_signature(state.read(cx));

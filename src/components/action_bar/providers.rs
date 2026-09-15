@@ -424,23 +424,31 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     ]
 }
 
-/// Theme picker: dark then light themes, the current one checked.
+/// Theme picker: match the system, then dark and light themes, the current choice checked.
 pub fn theme_actions(state: &AppState) -> Vec<ActionItem> {
-    let current = state.settings.appearance.theme;
+    let appearance = &state.settings.appearance;
     let dark = AppTheme::dark_themes().iter().map(|theme| (theme, ActionCategory::DarkTheme));
     let light = AppTheme::light_themes().iter().map(|theme| (theme, ActionCategory::LightTheme));
-    dark.chain(light)
-        .enumerate()
-        .map(|(i, (theme, category))| ActionItem {
-            id: SharedString::from(format!("theme:{}", theme.theme_id())),
-            label: SharedString::from(theme.label()),
-            category,
-            available: true,
-            checked: *theme == current,
-            priority: i as i32,
-            ..Default::default()
-        })
-        .collect()
+    let system = ActionItem {
+        id: SharedString::from("theme:system"),
+        label: SharedString::from("Match System Appearance"),
+        detail: Some(SharedString::from("Mango Dark or Mango Light")),
+        keywords: &["auto", "os", "macos"],
+        category: ActionCategory::Command,
+        available: true,
+        checked: appearance.follow_system,
+        ..Default::default()
+    };
+    let themes = dark.chain(light).enumerate().map(|(i, (theme, category))| ActionItem {
+        id: SharedString::from(format!("theme:{}", theme.theme_id())),
+        label: SharedString::from(theme.label()),
+        category,
+        available: true,
+        checked: !appearance.follow_system && *theme == appearance.theme,
+        priority: i as i32,
+        ..Default::default()
+    });
+    std::iter::once(system).chain(themes).collect()
 }
 
 /// Connection switcher: open connections first, then saved ones by recent use.

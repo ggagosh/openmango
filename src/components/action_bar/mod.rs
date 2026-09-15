@@ -186,7 +186,16 @@ impl ActionBar {
     }
 
     fn preview(&mut self, item: ActionItem, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(theme) = item.id.strip_prefix("theme:").and_then(AppTheme::from_theme_id) {
+        let theme = match item.id.strip_prefix("theme:") {
+            Some("system") => {
+                let mut appearance = self.state.read(cx).settings.appearance.clone();
+                appearance.follow_system = true;
+                Some(crate::theme::resolved_theme(&appearance, window.appearance()))
+            }
+            Some(id) => AppTheme::from_theme_id(id),
+            None => None,
+        };
+        if let Some(theme) = theme {
             apply_theme(&self.state, theme, window, cx);
         }
     }
@@ -293,7 +302,10 @@ fn build_groups(
             .collect();
         let label = match (mode, category) {
             // Switcher actions and disconnect targets sit under a divider, not a heading.
-            (PaletteMode::Connect | PaletteMode::Disconnect, ActionCategory::Command) => None,
+            (
+                PaletteMode::Connect | PaletteMode::Disconnect | PaletteMode::Theme,
+                ActionCategory::Command,
+            ) => None,
             (PaletteMode::Navigate, _) => None,
             _ => Some(category.label()),
         };

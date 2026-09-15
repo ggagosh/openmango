@@ -48,7 +48,7 @@ fn main() {
 
         // Load saved appearance.
 
-        let saved_theme = saved_settings.appearance.theme;
+        let saved_theme = theme::resolved_theme(&saved_settings.appearance, cx.window_appearance());
         let vibrancy = theme::effective_vibrancy(saved_theme, saved_settings.appearance.vibrancy);
 
         // Load the saved theme (or default)
