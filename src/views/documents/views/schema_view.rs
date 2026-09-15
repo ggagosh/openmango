@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::chart::{BarChart, PieChart};
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::EditorState;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
@@ -22,6 +22,7 @@ use crate::state::{
 };
 use crate::theme::spacing;
 use crate::views::documents::CollectionView;
+use crate::views::documents::query_editor::{query_editor, query_editor_height};
 use crate::views::documents::schema_filter::{
     SchemaFilterPlan, SchemaFilterToken, build_schema_filter_input, compile_schema_filter,
 };
@@ -46,6 +47,7 @@ pub fn render_schema_panel(
     schema_filter_state: Option<Entity<EditorState>>,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
+    window: &Window,
     cx: &mut Context<CollectionView>,
 ) -> AnyElement {
     let app = &*cx;
@@ -209,6 +211,7 @@ pub fn render_schema_panel(
         schema_filter_state,
         session_key.clone(),
         state.clone(),
+        window,
         app,
     );
     let tree_header = render_tree_header(app);
@@ -697,6 +700,7 @@ fn render_tree_toolbar(
     schema_filter_state: Option<Entity<EditorState>>,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
+    window: &Window,
     cx: &App,
 ) -> Div {
     let has_filter = filter_plan.parsed.has_active_filter();
@@ -705,19 +709,12 @@ fn render_tree_toolbar(
         Some(filter_state) => div()
             .flex_1()
             .min_w(px(220.0))
-            .child(
-                Editor::new(&filter_state)
-                    .appearance(true)
-                    .bordered(true)
-                    .text_sm()
-                    .h(px(28.0))
-                    .w_full(),
-            )
+            .child(query_editor(&filter_state, 1, "Filter fields", false, false, window, cx))
             .into_any_element(),
         None => div()
             .flex_1()
             .min_w(px(220.0))
-            .h(px(22.0))
+            .h(query_editor_height(1, window))
             .flex()
             .items_center()
             .px(spacing::xs())
@@ -735,7 +732,7 @@ fn render_tree_toolbar(
                     .ml(spacing::xs())
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Filter fields..."),
+                    .child("Filter fields…"),
             )
             .into_any_element(),
     };

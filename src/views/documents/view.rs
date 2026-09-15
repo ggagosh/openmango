@@ -25,7 +25,7 @@ use super::query::{
 use super::query_completion::{
     QueryCompletionProvider, QueryInputKind, is_query_input_in_string_or_comment,
 };
-use super::query_editor::{QueryEditorCompletions, new_query_editor};
+use super::query_editor::{QueryEditorCompletions, new_field_filter_editor, new_query_editor};
 use super::schema_filter_completion::SchemaFilterCompletionProvider;
 use crate::views::editor_completion::{CompletionScope, EditorCompletionMenu};
 
@@ -630,15 +630,7 @@ impl Render for CollectionView {
 
         if self.schema_filter_state.is_none() {
             let schema_filter_state = cx.new(|cx| {
-                let mut state = EditorState::new(window, cx)
-                    .language("text")
-                    .auto_close(false)
-                    .smart_indent(false)
-                    .line_number(false)
-                    .soft_wrap(false)
-                    .submit_on_enter(true)
-                    .placeholder("Filter fields...")
-                    .clean_on_escape();
+                let mut state = new_field_filter_editor(window, cx, "Filter fields…");
                 state.lsp_mut().completion_provider =
                     Some(Rc::new(SchemaFilterCompletionProvider::new(self.state.clone())));
                 state
@@ -927,6 +919,7 @@ impl Render for CollectionView {
                 schema_filter,
                 schema_filter_state,
                 session_key.clone(),
+                window,
                 cx,
             ),
             CollectionSubview::History => super::views::history_view::render_history_view(
@@ -1091,6 +1084,7 @@ impl CollectionView {
         schema_filter: String,
         schema_filter_state: Option<Entity<EditorState>>,
         session_key: Option<SessionKey>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use super::views::schema_view::render_schema_panel;
@@ -1110,6 +1104,7 @@ impl CollectionView {
                 schema_filter_state,
                 session_key,
                 self.state.clone(),
+                window,
                 cx,
             ))
             .into_any_element()

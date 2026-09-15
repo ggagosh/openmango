@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Number steppers in the filter builder and the index TTL field did nothing, and both are now plain inputs
 - The command palette sat off-center and overflowed small windows, took Enter and arrow keys from other windows while open, and let Tab move focus behind it
 - Shortcut hints in the command palette and sidebar tooltips showed the Ctrl variant on macOS
+- Double-clicking a value in the document tree to edit it shifted the text and the rows below
+- The Schema tab's field filter showed its text low, clipped, and indented behind an empty gutter; it now matches the documents filter
 
 ## [0.3.0] - 2026-09-14
 
