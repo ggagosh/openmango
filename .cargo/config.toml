@@ -1,6 +1,12 @@
 # Build optimizations for macOS
 # Requires: brew install lld
 
+# C dependencies built by `cc` otherwise target the installed SDK version, not
+# rustc's minimum, and the linker warns on every object. Keep in sync with
+# LSMinimumSystemVersion in scripts/release_macos.sh.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
+
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
 runner = "./scripts/cargo_runner_macos.sh"
