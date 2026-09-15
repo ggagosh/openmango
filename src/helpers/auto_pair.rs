@@ -4,7 +4,7 @@ use gpui_kit::component::RopeExt;
 use gpui_kit::component::input::EditorState;
 use gpui_kit::*;
 
-use crate::views::forge::editor_behavior::{PairAction, pair_action};
+use crate::views::forge::editor_behavior::wrap_closing;
 
 pub struct AutoPairState {
     previous_text: String,
@@ -16,7 +16,8 @@ impl AutoPairState {
         Self { previous_text: initial_text.to_string(), guard: false }
     }
 
-    /// Call on InputEvent::Change. Returns true if auto-pair was applied.
+    /// Call on InputEvent::Change. Returns true if a typed opener wrapped the
+    /// replaced selection. Plain pairing is left to the editor's `auto_close`.
     pub fn try_auto_pair(
         &mut self,
         state: &Entity<EditorState>,
@@ -30,74 +31,35 @@ impl AutoPairState {
         }
 
         let current = state.read(cx).value().to_string();
-        let cursor = state.read(cx).cursor();
-        if cursor == 0 || cursor > current.len() {
-            return false;
-        }
-
         let Some((prev_range, current_range)) = diff_ranges(&self.previous_text, &current) else {
             return false;
         };
-        let Some(inserted_text) = current.get(current_range.clone()) else {
+        let (Some(selected_text), Some(inserted_text)) =
+            (self.previous_text.get(prev_range.clone()), current.get(current_range.clone()))
+        else {
             return false;
         };
         let mut chars = inserted_text.chars();
-        let inserted_char = match (chars.next(), chars.next()) {
-            (Some(ch), None) => ch,
-            _ => return false,
+        let (Some(open), None) = (chars.next(), chars.next()) else {
+            return false;
+        };
+        if selected_text.is_empty() {
+            return false;
+        }
+        let Some(close) = wrap_closing(open, in_string_or_comment) else {
+            return false;
         };
 
-        let char_after_cursor = current.get(cursor..).and_then(|s| s.chars().next());
-        let has_selection = !prev_range.is_empty() && current_range.len() == 1;
-
-        let action =
-            pair_action(inserted_char, char_after_cursor, in_string_or_comment, has_selection);
-
-        match action {
-            PairAction::Skip => false,
-            PairAction::Overtype => {
-                // Undo the just-inserted char and move cursor past the existing closing char.
-                self.guard = true;
-                state.update(cx, |input, cx| {
-                    let utf16_range = byte_range_to_utf16(input.text(), &current_range);
-                    input.replace_text_in_range(Some(utf16_range), "", window, cx);
-                    let new_cursor = current_range.start + 1;
-                    let position = input.text().offset_to_position(new_cursor);
-                    input.set_cursor_position(position, window, cx);
-                });
-                true
-            }
-            PairAction::WrapSelection(open, close) => {
-                let Some(selected_text) = self.previous_text.get(prev_range.clone()) else {
-                    return false;
-                };
-                let replacement = format!("{}{}{}", open, selected_text, close);
-                let cursor_offset = current_range.start + 1 + selected_text.len();
-                self.guard = true;
-                state.update(cx, |input, cx| {
-                    let utf16_range = byte_range_to_utf16(input.text(), &current_range);
-                    input.replace_text_in_range(Some(utf16_range), &replacement, window, cx);
-                    let position = input.text().offset_to_position(cursor_offset);
-                    input.set_cursor_position(position, window, cx);
-                });
-                true
-            }
-            PairAction::InsertClosing(close) => {
-                if current.len() != self.previous_text.len() + 1 {
-                    return false;
-                }
-                self.guard = true;
-                state.update(cx, |input, cx| {
-                    let utf16_cursor = input.text().offset_to_offset_utf16(cursor);
-                    let range = utf16_cursor..utf16_cursor;
-                    let text = close.to_string();
-                    input.replace_text_in_range(Some(range), &text, window, cx);
-                    let position = input.text().offset_to_position(cursor);
-                    input.set_cursor_position(position, window, cx);
-                });
-                true
-            }
-        }
+        let replacement = format!("{open}{selected_text}{close}");
+        let cursor_offset = current_range.start + 1 + selected_text.len();
+        self.guard = true;
+        state.update(cx, |input, cx| {
+            let utf16_range = byte_range_to_utf16(input.text(), &current_range);
+            input.replace_text_in_range(Some(utf16_range), &replacement, window, cx);
+            let position = input.text().offset_to_position(cursor_offset);
+            input.set_cursor_position(position, window, cx);
+        });
+        true
     }
 
     /// Sync tracked text after external changes (set_value, etc.)
@@ -151,7 +113,72 @@ pub fn diff_ranges(previous: &str, current: &str) -> Option<(Range<usize>, Range
 
 #[cfg(test)]
 mod tests {
-    use super::diff_ranges;
+    use gpui_kit::component::Root;
+    use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+    use gpui_kit::{
+        AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
+        Styled as _, Subscription, TestAppContext, Window, div,
+    };
+
+    use super::{AutoPairState, diff_ranges};
+
+    struct Host {
+        state: Entity<EditorState>,
+        pair: AutoPairState,
+        _subscription: Subscription,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(Editor::new(&self.state))
+        }
+    }
+
+    /// The editor's own pairing and our selection wrapping must not both fire.
+    #[gpui_kit::test]
+    fn editor_pairs_once_and_typed_openers_wrap_selections(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut state = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| {
+                let editor = cx.new(|cx| EditorState::new(window, cx).language("javascript"));
+                let _subscription = cx.subscribe_in(
+                    &editor,
+                    window,
+                    |host: &mut Host, editor, event, window, cx| {
+                        if matches!(event, InputEvent::Change)
+                            && !host.pair.try_auto_pair(editor, false, window, cx)
+                        {
+                            host.pair.sync(&editor.read(cx).value());
+                        }
+                    },
+                );
+                state = Some(editor.clone());
+                Host { state: editor, pair: AutoPairState::new(""), _subscription }
+            });
+            Root::new(host, window, cx)
+        });
+        let state = state.unwrap();
+        cx.update(|window, cx| window.focus(&state.focus_handle(cx), cx));
+        cx.run_until_parked();
+        let value = |cx: &mut gpui_kit::VisualTestContext| {
+            state.read_with(cx, |editor, _| editor.value().to_string())
+        };
+
+        cx.simulate_input("{");
+        cx.run_until_parked();
+        assert_eq!(value(cx), "{}");
+        cx.simulate_input("}");
+        cx.run_until_parked();
+        assert_eq!(value(cx), "{}");
+
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" });
+        cx.simulate_input("a: 1");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" });
+        cx.simulate_input("{");
+        cx.run_until_parked();
+        assert_eq!(value(cx), "{a: 1}");
+    }
 
     #[test]
     fn changed_ranges_replace_complete_unicode_characters() {

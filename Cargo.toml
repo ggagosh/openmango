@@ -15,7 +15,7 @@ mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 # JavaScript covers query editors and Forge; the base tree-sitter feature adds JSON.
-gpui-kit = { version = "0.6.0", features = ["tree-sitter-javascript"] }
+gpui-kit = { version = "0.6.1", features = ["tree-sitter-javascript"] }
 tree-sitter = "0.26"
 tree-sitter-javascript = "0.25"
 lsp-types = "0.97"
@@ -73,7 +73,7 @@ minisign-verify = "=0.2.5"
 winresource = "0.1"
 
 [dev-dependencies]
-gpui-kit = { version = "0.6.0", features = ["test-support"] }
+gpui-kit = { version = "0.6.1", features = ["test-support"] }
 cargo-husky = { version = "1", default-features = false, features = [
     "user-hooks",
 ] }

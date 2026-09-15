@@ -11,7 +11,7 @@ use crate::helpers::auto_pair::AutoPairState;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
-use super::editor_behavior::{INDENT_WIDTH, WordAction, code_word_boundary, newline_after_opening};
+use super::editor_behavior::{INDENT_WIDTH, WordAction, code_word_boundary};
 use super::parser::parse_context;
 use super::state::ForgeEditorBuffer;
 use crate::views::editor_completion::{CompletionScope, EditorCompletionMenu};
@@ -135,27 +135,14 @@ impl ForgeView {
             return;
         }
         let enter = input::Enter { secondary: false, shift: false };
+        // The editor's smart_indent splits `{|}` and indents after openers.
         if let Some(editor) = &self.state.editor.editor_state
             && editor.read(cx).focus_handle(cx).is_focused(window)
-        {
-            if editor.update(cx, |editor, cx| {
+            && editor.update(cx, |editor, cx| {
                 editor.route_overlay_action(Box::new(enter.clone()), window, cx)
-            }) {
-                return;
-            }
-            let source = editor.read(cx).value().to_string();
-            let selection = editor.read(cx).selected_range();
-            if let Some(edit) = newline_after_opening(&source, selection)
-                && !parse_context(&source, edit.range.start.saturating_sub(1)).in_comment
-            {
-                editor.update(cx, |editor, cx| {
-                    let range = editor.text().offset_to_offset_utf16(edit.range.start)
-                        ..editor.text().offset_to_offset_utf16(edit.range.end);
-                    editor.replace_text_in_range(Some(range), &edit.text, window, cx);
-                    editor.set_selected_range(edit.cursor..edit.cursor, cx);
-                });
-                return;
-            }
+            })
+        {
+            return;
         }
         window.dispatch_action(Box::new(enter), cx);
     }

@@ -600,6 +600,8 @@ impl FilterBuilderPanel {
             let input_state = cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("text")
+                    .auto_close(false)
+                    .smart_indent(false)
                     .line_number(true)
                     .searchable(true)
                     .soft_wrap(false)

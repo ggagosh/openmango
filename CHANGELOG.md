@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened
+- Multiple cursors in Forge and the query editors: Alt-click adds a cursor and Shift-Alt-drag selects a column
+- Backspace between an empty bracket or quote pair removes both, and single quotes close automatically in code editors
 
 ### Changed
 - The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection

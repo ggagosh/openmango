@@ -300,6 +300,8 @@ impl AiView {
             let input_state = cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("text")
+                    .auto_close(false)
+                    .smart_indent(false)
                     .soft_wrap(true)
                     .line_number(false)
                     .submit_on_enter(true)
