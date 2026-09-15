@@ -49,10 +49,7 @@ pub(crate) fn render_welcome(
         );
     }
 
-    let switcher_shortcut =
-        window.highest_precedence_binding_for_action(&OpenConnectionSwitcher).map(|binding| {
-            binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
-        });
+    let switcher_shortcut = crate::keyboard::shortcut_label(window, &OpenConnectionSwitcher);
 
     let mut list = div().flex().flex_col().gap(px(2.0)).w(px(WELCOME_LIST_WIDTH)).child(
         div()

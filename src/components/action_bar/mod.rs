@@ -1,57 +1,75 @@
 mod providers;
+#[cfg(test)]
+mod tests;
 mod types;
 
 pub use types::ActionExecution;
 
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, IconName};
+use std::rc::Rc;
+
+use gpui_kit::base::actions::Cancel;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
+use gpui_kit::component::input::Backspace;
+use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::{
+    ActiveTheme as _, FocusTrapElement as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app::search::fuzzy_match_score;
 use crate::components::connection_identity_tags;
 use crate::state::AppState;
 use crate::state::settings::AppTheme;
-use crate::theme::{borders, colors, fonts, islands, sizing, spacing};
+use crate::theme::{colors, fonts, islands, sizing, spacing};
 
 use providers::{
     command_actions, connection_switcher_actions, disconnect_actions, navigation_actions,
     tab_actions, theme_actions, view_actions,
 };
-use types::{ActionCategory, FilteredAction, PaletteMode};
+use types::{ActionCategory, ActionItem, PaletteMode};
 
 type ExecuteHandler = Box<dyn Fn(ActionExecution, &mut Window, &mut App) + 'static>;
 
+/// Rows beyond this stay hidden behind a "keep typing" footer; the list measures every row it gets.
+const MAX_RESULTS: usize = 100;
+const MAX_RECENT: usize = 5;
+
+struct PaletteGroup {
+    label: Option<&'static str>,
+    items: Vec<ActionItem>,
+}
+
 pub struct ActionBar {
     state: Entity<AppState>,
-    open: bool,
     mode: PaletteMode,
+    /// Present while the palette is open; replaced on every mode switch for a fresh query.
+    command: Option<Entity<CommandState>>,
+    trap: FocusHandle,
     original_theme: Option<AppTheme>,
     previous_focus: Option<FocusHandle>,
-    input_state: Option<Entity<InputState>>,
-    all_actions: Vec<types::ActionItem>,
-    filtered: Vec<FilteredAction>,
-    selected_index: usize,
-    scroll_offset: usize,
+    actions: Vec<ActionItem>,
+    groups: Rc<Vec<PaletteGroup>>,
+    hidden: usize,
+    recent: Vec<SharedString>,
     on_execute: Option<ExecuteHandler>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl ActionBar {
-    pub fn new(state: Entity<AppState>) -> Self {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         Self {
             state,
-            open: false,
             mode: PaletteMode::default(),
+            command: None,
+            trap: cx.focus_handle(),
             original_theme: None,
             previous_focus: None,
-            input_state: None,
-            all_actions: Vec::new(),
-            filtered: Vec::new(),
-            selected_index: 0,
-            scroll_offset: 0,
+            actions: Vec::new(),
+            groups: Rc::default(),
+            hidden: 0,
+            recent: Vec::new(),
             on_execute: None,
-            _subscriptions: Vec::new(),
         }
     }
 
@@ -63,160 +81,46 @@ impl ActionBar {
         self
     }
 
+    pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command.is_some() {
+            self.close(window, cx);
+        } else {
+            self.show(PaletteMode::All, "", window, cx);
+        }
+    }
+
     /// Opens the palette straight into the connection switcher, or closes it when the
     /// switcher is already showing.
     pub fn toggle_connections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open && self.mode == PaletteMode::Connect {
-            self.close(window, cx);
-            return;
-        }
-        if !self.open {
-            self.open(window, cx);
-        }
-        self.switch_to_connect(window, cx);
-    }
-
-    pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open {
+        if self.command.is_some() && self.mode == PaletteMode::Connect {
             self.close(window, cx);
         } else {
-            self.open(window, cx);
+            self.show(PaletteMode::Connect, "", window, cx);
         }
     }
 
-    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.previous_focus = window.focused(cx);
-        self.open = true;
-        self.selected_index = 0;
-        self.rebuild_actions(window, cx);
-        self.filter_actions("");
-
-        // Create fresh input state
-        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Type to search..."));
-        let input_sub =
-            cx.subscribe_in(&input_state, window, |this, _state, event, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let query = _state.read(cx).value().to_string();
-                    this.filter_actions(&query);
-                    this.selected_index = 0;
-                    this.scroll_offset = 0;
-                    cx.notify();
-                }
-            });
-        self.input_state = Some(input_state);
-
-        // Intercept keystrokes globally to capture up/down/enter/escape
-        // before the Input component consumes them
-        let weak = cx.entity().downgrade();
-        let key_sub = cx.intercept_keystrokes(move |event, window, cx| {
-            let Some(entity) = weak.upgrade() else {
-                return;
-            };
-            let key = event.keystroke.key.as_str();
-            match key {
-                "escape" => {
-                    entity.update(cx, |bar, cx| bar.close(window, cx));
-                    cx.stop_propagation();
-                }
-                "up" => {
-                    entity.update(cx, |bar, cx| bar.move_selection(-1, window, cx));
-                    cx.stop_propagation();
-                }
-                "down" => {
-                    entity.update(cx, |bar, cx| bar.move_selection(1, window, cx));
-                    cx.stop_propagation();
-                }
-                "enter" | "return" => {
-                    entity.update(cx, |bar, cx| bar.execute_selected(window, cx));
-                    cx.stop_propagation();
-                }
-                _ => {}
-            }
-        });
-
-        self._subscriptions = vec![input_sub, key_sub];
-        cx.notify();
-
-        // Focus the input after a frame so it's rendered
-        let input = self.input_state.clone().unwrap();
-        cx.defer_in(window, move |_this, window, cx| {
-            input.update(cx, |state, cx| {
-                state.focus(window, cx);
-            });
-        });
-    }
-
-    fn switch_to_themes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mode = PaletteMode::Theme;
-        self.original_theme = Some(self.state.read(cx).settings.appearance.theme);
-        self.rebuild_actions(window, cx);
-        self.filter_actions("");
-        self.selected_index = 0;
-        self.scroll_offset = 0;
-        if let Some(input) = self.input_state.clone() {
-            input.update(cx, |state, cx| {
-                state.set_placeholder("Select Theme...", window, cx);
-                state.set_value("", window, cx);
-            });
+    /// Opens the palette in `mode`, or switches the open palette to it, searching for `query`.
+    fn show(
+        &mut self,
+        mode: PaletteMode,
+        query: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command.is_none() {
+            self.previous_focus = window.focused(cx);
         }
-        cx.notify();
-    }
-
-    fn switch_to_connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mode = PaletteMode::Connect;
-        self.rebuild_actions(window, cx);
-        self.filter_actions("");
-        self.selected_index = 0;
-        self.scroll_offset = 0;
-        if let Some(input) = self.input_state.clone() {
-            input.update(cx, |state, cx| {
-                state.set_placeholder("Search connections", window, cx);
-                state.set_value("", window, cx);
-            });
+        if mode != PaletteMode::Theme {
+            self.revert_theme_preview(window, cx);
+        } else if self.original_theme.is_none() {
+            self.original_theme = Some(self.state.read(cx).settings.appearance.theme);
         }
-        cx.notify();
-    }
 
-    fn switch_to_disconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mode = PaletteMode::Disconnect;
-        self.rebuild_actions(window, cx);
-        self.filter_actions("");
-        self.selected_index = 0;
-        self.scroll_offset = 0;
-        if let Some(input) = self.input_state.clone() {
-            input.update(cx, |state, cx| {
-                state.set_placeholder("Select Connection to Disconnect...", window, cx);
-                state.set_value("", window, cx);
-            });
-        }
-        cx.notify();
-    }
-
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Revert to original theme if we were previewing
-        if let Some(original) = self.original_theme.take() {
-            let user_vibrancy = self.state.read(cx).settings.appearance.vibrancy;
-            let target_vibrancy = crate::theme::effective_vibrancy(original, user_vibrancy);
-            crate::theme::apply_theme(original, target_vibrancy, window, cx);
-        }
-        self.open = false;
-        self.mode = PaletteMode::All;
-        self.all_actions.clear();
-        self.filtered.clear();
-        self.input_state = None;
-        self._subscriptions.clear();
-        if let Some(previous_focus) = self.previous_focus.take() {
-            window.focus(&previous_focus, cx);
-        }
-        cx.notify();
-    }
-
-    fn rebuild_actions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.mode = mode;
         let state = self.state.read(cx);
-        self.all_actions = match self.mode {
+        self.actions = match mode {
             PaletteMode::All => {
-                let mut actions = Vec::new();
-                actions.extend(tab_actions(state));
+                let mut actions = tab_actions(state);
                 actions.extend(command_actions(state, window));
                 actions.extend(navigation_actions(state));
                 actions.extend(view_actions(state, window));
@@ -225,183 +129,371 @@ impl ActionBar {
             PaletteMode::Theme => theme_actions(state),
             PaletteMode::Connect => connection_switcher_actions(state, window),
             PaletteMode::Disconnect => disconnect_actions(state),
+            PaletteMode::Navigate => navigation_actions(state),
         };
-    }
+        self.set_query(query);
 
-    fn filter_actions(&mut self, query: &str) {
-        let query = query.trim().to_lowercase();
-        // The switcher keeps its groups in place while filtering: connected, saved, then actions.
-        let group = |item: &types::ActionItem, mode: &PaletteMode| match (mode, &item.category) {
-            (PaletteMode::Connect, ActionCategory::Connected) => 0,
-            (PaletteMode::Connect, ActionCategory::Saved) => 1,
-            (PaletteMode::Connect, _) => 2,
-            _ => 0,
-        };
-        let mode = self.mode.clone();
-
-        if query.is_empty() {
-            let mut filtered: Vec<FilteredAction> = self
-                .all_actions
-                .iter()
-                .filter(|a| a.available)
-                .map(|item| FilteredAction { item: item.clone(), score: 0 })
-                .collect();
-            filtered.sort_by(|a, b| {
-                // Highlighted items always first
-                group(&a.item, &mode)
-                    .cmp(&group(&b.item, &mode))
-                    .then_with(|| b.item.highlighted.cmp(&a.item.highlighted))
-                    .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
-                    .then_with(|| a.item.priority.cmp(&b.item.priority))
-            });
-            self.filtered = filtered;
-            return;
-        }
-
-        let mut filtered: Vec<FilteredAction> = self
-            .all_actions
-            .iter()
-            .filter(|a| a.available)
-            .filter_map(|item| {
-                let label = item.label.to_lowercase();
-                let detail = item.detail.as_ref().map(|d| d.to_lowercase()).unwrap_or_default();
-                let combined = format!("{} {}", label, detail);
-
-                fuzzy_match_score(&query, &combined)
-                    .map(|score| FilteredAction { item: item.clone(), score })
-            })
-            .collect();
-
-        filtered.sort_by(|a, b| {
-            // Highlighted items first, then by score
-            group(&a.item, &mode)
-                .cmp(&group(&b.item, &mode))
-                .then_with(|| b.item.highlighted.cmp(&a.item.highlighted))
-                .then_with(|| a.score.cmp(&b.score))
-                .then_with(|| a.item.category.sort_order().cmp(&b.item.category.sort_order()))
-                .then_with(|| a.item.priority.cmp(&b.item.priority))
+        let command = cx.new(|cx| {
+            let mut command = CommandState::new(window, cx);
+            // "@prod" typed or pasted in one go keeps "prod" in the scoped field.
+            command.set_query(query.to_string(), window, cx);
+            command
         });
-
-        self.filtered = filtered;
+        cx.defer_in(window, {
+            let command = command.clone();
+            move |_, window, cx| command.update(cx, |command, cx| command.focus(window, cx))
+        });
+        self.command = Some(command);
+        cx.notify();
     }
 
-    fn execute_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(action) = self.filtered.get(index) else {
-            return;
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.revert_theme_preview(window, cx);
+        self.command = None;
+        self.mode = PaletteMode::All;
+        self.actions.clear();
+        self.groups = Rc::default();
+        self.hidden = 0;
+        if let Some(previous_focus) = self.previous_focus.take() {
+            window.focus(&previous_focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// A leading `#` or `@` in the command search moves to that scope.
+    fn search(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match PaletteMode::from_prefix(query) {
+            Some((mode, rest)) if self.mode == PaletteMode::All => {
+                self.show(mode, rest, window, cx)
+            }
+            _ => {
+                self.set_query(query);
+                cx.notify();
+            }
+        }
+    }
+
+    fn set_query(&mut self, query: &str) {
+        let (groups, hidden) = build_groups(&self.actions, self.mode, query, &self.recent);
+        self.groups = Rc::new(groups);
+        self.hidden = hidden;
+    }
+
+    fn revert_theme_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(original) = self.original_theme.take() {
+            apply_theme(&self.state, original, window, cx);
+        }
+    }
+
+    fn preview(&mut self, item: ActionItem, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(theme) = item.id.strip_prefix("theme:").and_then(AppTheme::from_theme_id) {
+            apply_theme(&self.state, theme, window, cx);
+        }
+    }
+
+    fn confirm(&mut self, item: ActionItem, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember(&item.id);
+        let submenu = match item.id.as_ref() {
+            "cmd:change-theme" => Some(PaletteMode::Theme),
+            "cmd:connect" => Some(PaletteMode::Connect),
+            "cmd:disconnect" => Some(PaletteMode::Disconnect),
+            _ => None,
         };
-
-        // Intercept "Theme Selector: Toggle" — switch to theme mode instead of closing
-        if action.item.id.as_ref() == "cmd:change-theme" {
-            self.switch_to_themes(window, cx);
+        if let Some(mode) = submenu {
+            self.show(mode, "", window, cx);
             return;
         }
 
-        // Intercept "Connect" — switch to connect mode instead of closing
-        if action.item.id.as_ref() == "cmd:connect" {
-            self.switch_to_connect(window, cx);
-            return;
-        }
-
-        // Intercept "Disconnect" — switch to disconnect mode instead of closing
-        if action.item.id.as_ref() == "cmd:disconnect" {
-            self.switch_to_disconnect(window, cx);
-            return;
-        }
-
-        // Theme confirm: clear original so close doesn't revert, then fire handler
+        // A confirmed theme stays applied.
         if self.mode == PaletteMode::Theme {
             self.original_theme = None;
         }
-
-        let execution = ActionExecution { action_id: action.item.id.clone() };
         self.close(window, cx);
-
         if let Some(handler) = &self.on_execute {
-            handler(execution, window, cx);
+            handler(ActionExecution { action_id: item.id }, window, cx);
         }
     }
 
-    fn execute_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let index = self.selected_index;
-        self.execute_at(index, window, cx);
-    }
-
-    fn move_selection(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
-        if self.filtered.is_empty() {
+    // ponytail: session-only recents; persist them in settings if they should survive restarts.
+    fn remember(&mut self, id: &SharedString) {
+        // Tab ids are positions, which point elsewhere once tabs move.
+        if id.starts_with("tab:") {
             return;
         }
-        let count = self.filtered.len() as i32;
-        let new_index = (self.selected_index as i32 + delta).rem_euclid(count) as usize;
-        self.selected_index = new_index;
-
-        // Keep selection visible in the window
-        let max_visible = 8;
-        if new_index < self.scroll_offset {
-            self.scroll_offset = new_index;
-        } else if new_index >= self.scroll_offset + max_visible {
-            self.scroll_offset = new_index + 1 - max_visible;
-        }
-        // Handle wrap-around
-        if delta > 0 && new_index == 0 {
-            self.scroll_offset = 0;
-        } else if delta < 0 && new_index == self.filtered.len() - 1 {
-            self.scroll_offset = self.filtered.len().saturating_sub(max_visible);
-        }
-
-        // Live-preview theme on selection change
-        if self.mode == PaletteMode::Theme
-            && let Some(item) = self.filtered.get(new_index)
-            && let Some(theme_id) = item.item.id.as_ref().strip_prefix("theme:")
-            && let Some(theme) = AppTheme::from_theme_id(theme_id)
-        {
-            let user_vibrancy = self.state.read(cx).settings.appearance.vibrancy;
-            let target_vibrancy = crate::theme::effective_vibrancy(theme, user_vibrancy);
-            crate::theme::apply_theme(theme, target_vibrancy, window, cx);
-        }
-
-        cx.notify();
+        self.recent.retain(|recent| recent != id);
+        self.recent.insert(0, id.clone());
+        self.recent.truncate(MAX_RECENT);
     }
 }
 
-impl Render for ActionBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.open {
-            return div().into_any_element();
+fn apply_theme(state: &Entity<AppState>, theme: AppTheme, window: &mut Window, cx: &mut App) {
+    let vibrancy =
+        crate::theme::effective_vibrancy(theme, state.read(cx).settings.appearance.vibrancy);
+    crate::theme::apply_theme(theme, vibrancy, window, cx);
+}
+
+/// Filters, ranks and groups the actions for one palette view, and returns how many
+/// matches were left out by [`MAX_RESULTS`].
+fn build_groups(
+    actions: &[ActionItem],
+    mode: PaletteMode,
+    query: &str,
+    recent: &[SharedString],
+) -> (Vec<PaletteGroup>, usize) {
+    let query = query.trim();
+    let mut matches = actions
+        .iter()
+        .filter(|item| item.available)
+        .filter_map(|item| {
+            if query.is_empty() {
+                Some((0, item))
+            } else {
+                fuzzy_match_score(query, &item.search_text()).map(|score| (score, item))
+            }
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|(a_score, a), (b_score, b)| {
+        b.highlighted
+            .cmp(&a.highlighted)
+            .then(a_score.cmp(b_score))
+            .then(a.priority.cmp(&b.priority))
+    });
+
+    let mut groups = Vec::new();
+    if mode == PaletteMode::All && query.is_empty() {
+        let items = recent
+            .iter()
+            .filter_map(|id| matches.iter().find(|(_, item)| &item.id == id))
+            .map(|(_, item)| (*item).clone())
+            .collect::<Vec<_>>();
+        if !items.is_empty() {
+            matches.retain(|(_, item)| !recent.contains(&item.id));
+            groups.push(PaletteGroup { label: Some("Recent"), items });
         }
+    }
+
+    // Groups follow their best match, so the first row is the best result.
+    let mut categories = Vec::<ActionCategory>::new();
+    for (_, item) in &matches {
+        if !categories.contains(&item.category) {
+            categories.push(item.category);
+        }
+    }
+    if query.is_empty() || mode == PaletteMode::Connect {
+        let highlighted = |category: &ActionCategory| {
+            matches.iter().any(|(_, item)| item.highlighted && item.category == *category)
+        };
+        categories.sort_by_key(|category| (!highlighted(category), category.sort_order()));
+    }
+    for category in categories {
+        let items = matches
+            .iter()
+            .filter(|(_, item)| item.category == category)
+            .map(|(_, item)| (*item).clone())
+            .collect();
+        let label = match (mode, category) {
+            // Switcher actions and disconnect targets sit under a divider, not a heading.
+            (PaletteMode::Connect | PaletteMode::Disconnect, ActionCategory::Command) => None,
+            (PaletteMode::Navigate, _) => None,
+            _ => Some(category.label()),
+        };
+        groups.push(PaletteGroup { label, items });
+    }
+
+    let mut remaining = MAX_RESULTS;
+    let mut hidden = 0;
+    for group in &mut groups {
+        hidden += group.items.len().saturating_sub(remaining);
+        group.items.truncate(remaining);
+        remaining -= group.items.len();
+    }
+    groups.retain(|group| !group.items.is_empty());
+    (groups, hidden)
+}
+
+/// Says how many results the cap hid, and teaches the scope prefixes on an empty search.
+fn footer(mode: PaletteMode, hidden: usize, query_empty: bool, cx: &App) -> AnyElement {
+    let hint = mode == PaletteMode::All && query_empty;
+    let mut text = String::new();
+    if hidden > 0 {
+        let noun = if hidden == 1 { "result" } else { "results" };
+        text = format!("{hidden} more {noun}. ");
+        if !hint {
+            text.push_str("Keep typing to narrow the list.");
+        }
+    }
+    if hint {
+        text.push_str("Type # to search databases and collections, or @ for connections.");
+    }
+    if text.is_empty() {
+        return div().into_any_element();
+    }
+    div()
+        .px(spacing::md())
+        .py(spacing::sm())
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+        .into_any_element()
+}
+
+fn item_at(groups: &[PaletteGroup], index: IndexPath) -> Option<ActionItem> {
+    groups.get(index.section)?.items.get(index.row).cloned()
+}
+
+fn command_item(item: &ActionItem) -> CommandItem {
+    let row = item.clone();
+    CommandItem::new()
+        .label(item.label.clone())
+        .checked(item.checked)
+        .child(move |_, cx| row_content(&row, cx))
+}
+
+fn row_content(item: &ActionItem, cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(spacing::sm())
+        .when_some(item.connection.as_ref(), |row, identity| {
+            let color = identity.color.map(|color| colors::connection_accent(color, cx));
+            row.child(
+                Icon::new(IconName::Globe)
+                    .size(sizing::icon_md())
+                    .text_color(color.unwrap_or(muted)),
+            )
+        })
+        .child(
+            div()
+                .flex_none()
+                .max_w(relative(0.7))
+                .truncate()
+                .when(item.highlighted, |label| label.text_color(cx.theme().primary))
+                .child(item.label.clone()),
+        )
+        .when_some(item.connection.as_ref(), |row, identity| {
+            row.child(connection_identity_tags(identity, cx))
+        })
+        .when_some(item.detail.clone(), |row, detail| {
+            row.child(div().min_w_0().truncate().text_xs().text_color(muted).child(detail))
+        })
+        .child(div().flex_1())
+        .when_some(item.shortcut.clone(), |row, keystroke| row.child(Kbd::new(keystroke)))
+}
+
+impl Render for ActionBar {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(command) = self.command.clone() else {
+            return div().into_any_element();
+        };
 
         let appearance = self.state.read(cx).settings.appearance.clone();
-        let entity = cx.entity().clone();
-        let dismiss_entity = entity.clone();
-        let item_count = self.filtered.len();
+        let bar = cx.entity().downgrade();
+        let mode = self.mode;
+        let groups = self.groups.clone();
+        let hidden = self.hidden;
+        // Short windows shrink the list instead of pushing the palette off screen.
+        let list_max_h = (window.viewport_size().height - px(240.0)).max(px(120.0)).min(px(420.0));
+
+        let mut palette = Command::new(&command)
+            .bordered(false)
+            .filterable(false)
+            .placeholder(mode.placeholder())
+            .max_h(list_max_h)
+            .bg(islands::card_bg(&appearance, cx))
+            .on_query({
+                let bar = bar.clone();
+                move |query, window, cx| {
+                    _ = bar.update(cx, |bar, cx| bar.search(query, window, cx));
+                }
+            })
+            // Callbacks read the groups this render installed, which the index paths address.
+            .on_select({
+                let (bar, groups) = (bar.clone(), groups.clone());
+                move |index, window, cx| {
+                    if let Some(item) = item_at(&groups, index) {
+                        _ = bar.update(cx, |bar, cx| bar.preview(item, window, cx));
+                    }
+                }
+            })
+            .on_confirm({
+                let (bar, groups) = (bar.clone(), groups.clone());
+                move |index, window, cx| {
+                    if let Some(item) = item_at(&groups, index) {
+                        _ = bar.update(cx, |bar, cx| bar.confirm(item, window, cx));
+                    }
+                }
+            })
+            .empty(move |state, _, cx| {
+                let query = state.query(cx);
+                let message = if query.is_empty() && mode == PaletteMode::Navigate {
+                    "Open a connection to search its databases and collections.".to_string()
+                } else {
+                    format!("No results for “{query}”")
+                };
+                div()
+                    .py_6()
+                    .px(spacing::md())
+                    .w_full()
+                    .text_center()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(message)
+            });
+
+        if mode != PaletteMode::All {
+            palette = palette.header(move |_, _, _| {
+                let bar = bar.clone();
+                h_flex().px(spacing::sm()).pt(spacing::sm()).child(
+                    Button::new("action-bar-back")
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::new(IconName::ChevronLeft).xsmall())
+                        .label(mode.title())
+                        .tooltip("Back to all commands (Backspace)")
+                        .on_click(move |_, window, cx| {
+                            _ = bar
+                                .update(cx, |bar, cx| bar.show(PaletteMode::All, "", window, cx));
+                        }),
+                )
+            });
+        }
+        if hidden > 0 || mode == PaletteMode::All {
+            palette = palette
+                .footer(move |state, _, cx| footer(mode, hidden, state.query(cx).is_empty(), cx));
+        }
+        for (ix, group) in groups.iter().enumerate() {
+            if ix > 0 && group.label.is_none() {
+                palette = palette.separator();
+            }
+            let entry = CommandGroup::new().items(group.items.iter().map(command_item));
+            palette = palette.group(match group.label {
+                Some(label) => entry.label(label),
+                None => entry,
+            });
+        }
 
         div()
+            .id("action-bar")
             .absolute()
             .inset_0()
-            // Backdrop: click to dismiss
-            .child(
-                div()
-                    .id("action-bar-backdrop")
-                    .size_full()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .on_click(move |_, window, cx| {
-                        dismiss_entity.update(cx, |bar, cx| {
-                            bar.close(window, cx);
-                        });
-                    }),
+            .occlude()
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt(px(60.0))
+            .px(spacing::lg())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|bar, _, window, cx| bar.close(window, cx)),
             )
-            // Palette container (centered at top)
             .child(
                 div()
-                    .absolute()
-                    .top(px(60.0))
-                    .left(px(0.0))
-                    .right(px(0.0))
-                    .mx_auto()
-                    .w(px(620.0))
-                    .flex()
-                    .flex_col()
+                    .debug_selector(|| "action-bar-card".into())
+                    .w_full()
+                    .max_w(px(620.0))
                     .bg(islands::card_bg(&appearance, cx))
                     .border_1()
                     .border_color(islands::panel_border(&appearance, cx))
@@ -410,193 +502,24 @@ impl Render for ActionBar {
                     .overflow_hidden()
                     .text_color(cx.theme().foreground)
                     .font_family(fonts::ui())
-                    // Input row
-                    .child(
-                        div()
-                            .p(spacing::md())
-                            .border_b_1()
-                            .border_color(islands::panel_border(&appearance, cx))
-                            .child(if let Some(input_state) = &self.input_state {
-                                Input::new(input_state)
-                                    .appearance(false)
-                                    .font_family(fonts::mono())
-                                    .text_size(px(14.0))
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }),
-                    )
-                    // Results list
-                    .child({
-                        if item_count == 0 {
-                            div()
-                                .px(spacing::md())
-                                .py(spacing::lg())
-                                .child(
-                                    div().text_sm().text_color(cx.theme().muted_foreground).child(
-                                        if self.mode == PaletteMode::Connect {
-                                            "No matching connections"
-                                        } else {
-                                            "No matching actions"
-                                        },
-                                    ),
-                                )
-                                .into_any_element()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // Command clears a non-empty query on Escape and passes the rest up.
+                    .on_action(cx.listener(|bar, _: &Cancel, window, cx| bar.close(window, cx)))
+                    // The query field passes Backspace up when there is nothing left to delete.
+                    .on_action(cx.listener(|bar, _: &Backspace, window, cx| {
+                        let empty = bar
+                            .command
+                            .as_ref()
+                            .is_some_and(|command| command.read(cx).query(cx).is_empty());
+                        if bar.mode != PaletteMode::All && empty {
+                            bar.show(PaletteMode::All, "", window, cx);
                         } else {
-                            let max_visible: usize = 8;
-                            let visible_end = (self.scroll_offset + max_visible).min(item_count);
-                            let visible_start = self.scroll_offset;
-
-                            let scroll_entity = entity.clone();
-                            let total = item_count;
-                            let mut list = div()
-                                .id("action-bar-results")
-                                .py(spacing::sm())
-                                .flex_col()
-                                .on_scroll_wheel(move |event, _window, cx| {
-                                    let delta = event.delta.pixel_delta(px(1.0));
-                                    let steps = if delta.y < px(0.0) { 1i32 } else { -1i32 };
-                                    scroll_entity.update(cx, |bar, cx| {
-                                        let max_offset = total.saturating_sub(8) as i32;
-                                        let new_offset = (bar.scroll_offset as i32 + steps)
-                                            .clamp(0, max_offset)
-                                            as usize;
-                                        if new_offset != bar.scroll_offset {
-                                            bar.scroll_offset = new_offset;
-                                            cx.notify();
-                                        }
-                                    });
-                                });
-
-                            let switcher = self.mode == PaletteMode::Connect;
-                            let show_categories = self.mode == PaletteMode::All || switcher;
-                            let mut last_category = None;
-                            for ix in visible_start..visible_end {
-                                let item = &self.filtered[ix].item;
-                                if show_categories && last_category.as_ref() != Some(&item.category)
-                                {
-                                    let is_first_group = last_category.is_none();
-                                    last_category = Some(item.category.clone());
-                                    // Switcher actions sit under a divider rather than a heading.
-                                    if switcher && item.category == ActionCategory::Command {
-                                        if !is_first_group {
-                                            list = list.child(
-                                                div()
-                                                    .mx(spacing::md())
-                                                    .my(spacing::xs())
-                                                    .h(px(1.0))
-                                                    .bg(islands::panel_border(&appearance, cx)),
-                                            );
-                                        }
-                                        list = list.child(render_action_row(self, ix, &entity, cx));
-                                        continue;
-                                    }
-                                    list = list.child(
-                                        div()
-                                            .px(spacing::md())
-                                            .pt(spacing::sm())
-                                            .pb(spacing::xs())
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(item.category.label()),
-                                    );
-                                }
-                                list = list.child(render_action_row(self, ix, &entity, cx));
-                            }
-                            list.into_any_element()
+                            cx.propagate();
                         }
-                    }),
+                    }))
+                    .child(palette)
+                    .focus_trap("action-bar-trap", &self.trap),
             )
             .into_any_element()
     }
-}
-
-fn render_action_row(
-    bar: &ActionBar,
-    index: usize,
-    entity: &Entity<ActionBar>,
-    cx: &App,
-) -> AnyElement {
-    let Some(filtered) = bar.filtered.get(index) else {
-        return div().into_any_element();
-    };
-
-    let is_selected = index == bar.selected_index;
-    let item = &filtered.item;
-
-    let mut row = div()
-        .id(ElementId::Name(format!("action-{}", index).into()))
-        .h(px(34.0))
-        .px(spacing::md())
-        .mx(spacing::xs())
-        .rounded(borders::radius_sm())
-        .flex()
-        .items_center()
-        .cursor_pointer();
-
-    if is_selected {
-        row = row.bg(cx.theme().list_active);
-    } else {
-        row = row.hover(|s| s.bg(cx.theme().list_hover));
-    }
-
-    // Left side: label + detail
-    let label_color = if item.highlighted { cx.theme().primary } else { cx.theme().foreground };
-    let mut left = div().flex().flex_1().items_center().gap(spacing::sm()).overflow_hidden();
-    if let Some(identity) = &item.connection {
-        let icon_color = identity
-            .color
-            .map(|color| colors::connection_accent(color, cx))
-            .unwrap_or(cx.theme().muted_foreground);
-        left = left
-            .child(Icon::new(IconName::Globe).size(sizing::icon_md()).text_color(icon_color))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .text_sm()
-                    .text_color(label_color)
-                    .truncate()
-                    .child(item.label.clone()),
-            )
-            .child(connection_identity_tags(identity, cx));
-    } else {
-        left = left.child(
-            div().text_sm().text_color(label_color).flex_shrink_0().child(item.label.clone()),
-        );
-    }
-    if let Some(detail) = &item.detail {
-        left = left.child(
-            div()
-                .text_xs()
-                .text_color(if item.highlighted {
-                    cx.theme().primary
-                } else {
-                    cx.theme().muted_foreground
-                })
-                .overflow_hidden()
-                .child(detail.clone()),
-        );
-    }
-
-    // Right side: shortcut
-    let mut right = div().flex().items_center().flex_shrink_0().ml(spacing::sm());
-    if let Some(shortcut) = &item.shortcut {
-        right = right
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(shortcut.clone()));
-    }
-
-    let click_entity = entity.clone();
-    row = row
-        .child(left)
-        .child(right)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_click(move |_, window, cx| {
-            click_entity.update(cx, |bar, cx| {
-                bar.execute_at(index, window, cx);
-            });
-        });
-
-    row.into_any_element()
 }

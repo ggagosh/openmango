@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, KeyContext,
-    Keystroke, actions,
+    Action, App, AsKeystroke as _, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate,
+    KeyContext, Keystroke, actions,
 };
 
 use crate::state::KeybindingSettings;
@@ -370,6 +370,9 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-c", CopyAs, Some("Documents && !Input && !Aggregation")),
         KeyBinding::new("cmd-shift-c", CopyKey, Some("Documents && !Input")),
         KeyBinding::new("ctrl-shift-c", CopyKey, Some("Documents && !Input")),
+        // VS Code's palette shortcut also works; ⌘K is bound after it, so hints show ⌘K.
+        KeyBinding::new("cmd-shift-p", OpenActionBar, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-p", OpenActionBar, Some("Workspace")),
         KeyBinding::new("cmd-k", OpenActionBar, Some("Workspace")),
         KeyBinding::new("ctrl-k", OpenActionBar, Some("Workspace")),
         KeyBinding::new("cmd-shift-k", OpenConnectionSwitcher, Some("Workspace")),
@@ -608,6 +611,28 @@ pub fn effective_shortcuts_for_action(
     shortcuts.sort();
     shortcuts.dedup();
     shortcuts
+}
+
+/// The keystroke to show for an action. Shortcuts are registered as ⌘ and Ctrl pairs and
+/// GPUI reports the last binding added, so prefer the platform's own modifier.
+pub fn display_keystroke(bindings: &[KeyBinding]) -> Option<Keystroke> {
+    let binding = bindings
+        .iter()
+        .rev()
+        .find(|binding| {
+            binding.keystrokes().first().is_some_and(|key| {
+                let modifiers = key.as_keystroke().modifiers;
+                if cfg!(target_os = "macos") { modifiers.platform } else { modifiers.control }
+            })
+        })
+        .or_else(|| bindings.last())?;
+    Some(binding.keystrokes().first()?.as_keystroke().clone())
+}
+
+/// Platform-formatted shortcut text for an action in the focused context, such as `⇧⌘K`.
+pub fn shortcut_label(window: &gpui_kit::Window, action: &dyn Action) -> Option<String> {
+    display_keystroke(&window.bindings_for_action(action))
+        .map(|keystroke| gpui_kit::component::kbd::Kbd::format(&keystroke))
 }
 
 pub fn format_keystroke(event: &gpui_kit::KeystrokeEvent) -> String {
@@ -1032,6 +1057,19 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(action_bar, vec![normalize_shortcut("cmd-alt-z").unwrap()]);
         assert!(bindings.iter().all(|binding| !binding.action().name().ends_with("OpenSettings")));
+    }
+
+    #[test]
+    fn palette_hint_uses_the_platform_modifier_over_the_alias() {
+        let (bindings, _) = effective_keybindings(&KeybindingSettings::default());
+        let palette = bindings
+            .into_iter()
+            .filter(|binding| binding.action().name().ends_with("OpenActionBar"))
+            .collect::<Vec<_>>();
+        // GPUI's own pick is the last binding added, which is the Ctrl variant.
+        assert_eq!(palette.last().unwrap().keystrokes()[0].inner().unparse(), "ctrl-k");
+        let expected = if cfg!(target_os = "macos") { "cmd-k" } else { "ctrl-k" };
+        assert_eq!(display_keystroke(&palette).unwrap().unparse(), expected);
     }
 
     #[test]

@@ -33,31 +33,14 @@ use super::Sidebar;
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let appearance = self.state.read(cx).settings.appearance.clone();
-        let command_palette_tooltip = window
-            .highest_precedence_binding_for_action(&OpenActionBar)
-            .map(|binding| {
-                let shortcut = binding
-                    .keystrokes()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("Command palette ({shortcut})")
-            })
+        let command_palette_tooltip = crate::keyboard::shortcut_label(window, &OpenActionBar)
+            .map(|shortcut| format!("Command palette ({shortcut})"))
             .unwrap_or_else(|| "Command palette".to_string());
-        let switcher_tooltip: SharedString = window
-            .highest_precedence_binding_for_action(&OpenConnectionSwitcher)
-            .map(|binding| {
-                let shortcut = binding
-                    .keystrokes()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("Switch connection ({shortcut})")
-            })
-            .unwrap_or_else(|| "Switch connection".to_string())
-            .into();
+        let switcher_tooltip: SharedString =
+            crate::keyboard::shortcut_label(window, &OpenConnectionSwitcher)
+                .map(|shortcut| format!("Switch connection ({shortcut})"))
+                .unwrap_or_else(|| "Switch connection".to_string())
+                .into();
 
         let active_connections = self.cached_active.clone();
         let connecting_id = self.model.connecting_connection;
