@@ -9,10 +9,9 @@ use gpui_kit::*;
 use lsp_types::{CompletionContext, CompletionResponse};
 
 use crate::views::editor_completion::EditorCompletionMenu;
-use crate::views::forge::editor_behavior::newline_after_opening;
 
 use super::CollectionView;
-use super::query_completion::{QueryCompletionProvider, is_query_input_in_string_or_comment};
+use super::query_completion::QueryCompletionProvider;
 
 pub(super) fn new_query_editor(
     window: &mut Window,
@@ -241,7 +240,9 @@ impl CollectionView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(editor) = self.filter_state.clone() else { return false };
+        if self.filter_state.is_none() {
+            return false;
+        }
         let command = key.modifiers.secondary() || key.modifiers.control;
         let key_name = key.key.to_ascii_lowercase();
         let newline = key.modifiers.shift && matches!(key_name.as_str(), "enter" | "return");
@@ -265,34 +266,18 @@ impl CollectionView {
             }
             return true;
         }
-        if !command && !key.modifiers.alt {
-            if let Some(menu) = &self.filter_completion_menu {
-                let handled = menu.update(cx, |menu, cx| match key_name.as_str() {
-                    "tab" | "enter" | "return" if !key.modifiers.shift => {
-                        menu.accept_selected(window, cx)
-                    }
-                    "up" if !key.modifiers.shift => menu.navigate(-1, window, cx),
-                    "down" if !key.modifiers.shift => menu.navigate(1, window, cx),
-                    _ => false,
-                });
-                if handled {
-                    return true;
+        if !command
+            && !key.modifiers.alt
+            && let Some(menu) = &self.filter_completion_menu
+        {
+            return menu.update(cx, |menu, cx| match key_name.as_str() {
+                "tab" | "enter" | "return" if !key.modifiers.shift => {
+                    menu.accept_selected(window, cx)
                 }
-            }
-            if matches!(key_name.as_str(), "enter" | "return") && key.modifiers.shift {
-                let text = editor.read(cx).value().to_string();
-                let selection = editor.read(cx).selected_range();
-                if !is_query_input_in_string_or_comment(&text, selection.start)
-                    && let Some(edit) = newline_after_opening(&text, selection)
-                {
-                    editor.update(cx, |editor, cx| {
-                        editor.set_selected_range(edit.range, cx);
-                        editor.replace(edit.text, window, cx);
-                        editor.set_selected_range(edit.cursor..edit.cursor, cx);
-                    });
-                    return true;
-                }
-            }
+                "up" if !key.modifiers.shift => menu.navigate(-1, window, cx),
+                "down" if !key.modifiers.shift => menu.navigate(1, window, cx),
+                _ => false,
+            });
         }
         false
     }

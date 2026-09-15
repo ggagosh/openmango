@@ -398,8 +398,8 @@ impl AppRoot {
         let ai_view = cx.new(|cx| AiView::new(state.clone(), cx));
 
         // Create action bar with execution callback
-        let action_bar = cx.new(|_cx| {
-            ActionBar::new(state.clone()).on_execute({
+        let action_bar = cx.new(|cx| {
+            ActionBar::new(state.clone(), cx).on_execute({
                 let state = state.clone();
                 let content_area = content_area.clone();
                 let sidebar = sidebar.clone();

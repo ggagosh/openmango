@@ -147,17 +147,7 @@ fn tab_shortcut(index: usize, window: &Window) -> Option<Kbd> {
     ];
     let bindings = window
         .bindings_for_action_in_context(*actions.get(index)?, KeyContext::parse("Workspace").ok()?);
-    let binding = bindings
-        .iter()
-        .rev()
-        .find(|binding| {
-            binding.keystrokes().first().is_some_and(|key| {
-                let modifiers = key.as_keystroke().modifiers;
-                if cfg!(target_os = "macos") { modifiers.platform } else { modifiers.control }
-            })
-        })
-        .or_else(|| bindings.last())?;
-    Some(Kbd::new(binding.keystrokes().first()?.as_keystroke().clone()))
+    keyboard::display_keystroke(&bindings).map(Kbd::new)
 }
 
 impl Render for OpenTabsBar {

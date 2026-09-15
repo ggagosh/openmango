@@ -1,14 +1,13 @@
-# Build optimizations for macOS
-# Requires: brew install lld
-
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
-runner = "./scripts/cargo_runner_macos.sh"
+# C dependencies built by `cc` otherwise target the installed SDK version, not
+# rustc's minimum, and the linker warns on every object. Keep in sync with
+# LSMinimumSystemVersion in scripts/release_macos.sh.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
 
 # Link the C runtime statically so the app runs on Windows without the VC++ redistributable.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "target-feature=+crt-static"]
 
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
+# Apple's default linker (ld-prime) links this app faster than lld, so no linker override.
+[target.'cfg(target_os = "macos")']
 runner = "./scripts/cargo_runner_macos.sh"

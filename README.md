@@ -130,7 +130,6 @@ The main data path is deliberately direct: GPUI views dispatch state commands, c
 - macOS and the stable Rust toolchain, or the [Linux](docs/LINUX.md#development) or [Windows](docs/WINDOWS.md#development) development environment
 - Xcode 26 or newer on macOS for app icon compilation, packaging, and `just ci-macos`
 - [just](https://github.com/casey/just)
-- [lld](https://lld.llvm.org/) at `/opt/homebrew/opt/lld/bin/ld64.lld` (the repository linker configuration uses this path)
 - [Bun](https://bun.sh/) when changing or rebuilding Forge
 - Docker for the Testcontainers integration suites
 - A local or remote MongoDB deployment for manual testing

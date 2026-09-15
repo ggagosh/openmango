@@ -36,8 +36,6 @@ jobs:
         with:
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Disable lld linker flags for CI
-        run: rm -f .cargo/config.toml
       - name: Format check
         run: cargo fmt --check
       - name: Compile macOS app icon

@@ -632,6 +632,8 @@ impl Render for CollectionView {
             let schema_filter_state = cx.new(|cx| {
                 let mut state = EditorState::new(window, cx)
                     .language("text")
+                    .auto_close(false)
+                    .smart_indent(false)
                     .line_number(false)
                     .soft_wrap(false)
                     .submit_on_enter(true)

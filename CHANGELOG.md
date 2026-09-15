@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened
+- Multiple cursors in Forge and the query editors: Alt-click adds a cursor and Shift-Alt-drag selects a column
+- Backspace between an empty bracket or quote pair removes both, and single quotes close automatically in code editors
+- The command palette also opens with Cmd/Ctrl+Shift+P, lists recently used commands first, finds commands by related words such as "dump" for Export Data, and narrows the search to databases and collections when it starts with `#` or to connections with `@`
 
 ### Changed
 - The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection
@@ -18,12 +21,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The edit value dialog submits with Cmd/Ctrl+Enter, and its Array type accepts mongosh syntax like Document does
 - The Indexes tab shows keys as field and direction pairs and properties such as Unique, TTL, or Partial as tags, without disabled actions on the built-in `_id_` index
 - The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
+- The command palette shows shortcuts as keycaps, scrolls its whole list with a scrollbar, follows the mouse with one highlight, checks the current theme, names the open submenu with a back button (Backspace also goes back), and clears the search on the first Escape
 
 ### Fixed
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line
 - Error messages on the Indexes tab and in the index, edit value, and bulk update dialogs were drawn in a color that matched the background in most themes
 - Number steppers in the filter builder and the index TTL field did nothing, and both are now plain inputs
+- The command palette sat off-center and overflowed small windows, took Enter and arrow keys from other windows while open, and let Tab move focus behind it
+- Shortcut hints in the command palette and sidebar tooltips showed the Ctrl variant on macOS
 
 ## [0.3.0] - 2026-09-14
 
