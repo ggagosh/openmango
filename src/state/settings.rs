@@ -162,8 +162,6 @@ pub struct AppearanceSettings {
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
     #[serde(default)]
-    pub vibrancy: bool,
-    #[serde(default)]
     pub islands: IslandsAppearanceSettings,
 }
 
@@ -173,7 +171,6 @@ impl Default for AppearanceSettings {
             theme: AppTheme::default(),
             follow_system: true,
             show_status_bar: true,
-            vibrancy: false,
             islands: IslandsAppearanceSettings::default(),
         }
     }
@@ -426,7 +423,6 @@ mod tests {
         assert_eq!(settings.appearance.theme, AppTheme::MangoDark);
         assert!(settings.appearance.follow_system);
         assert!(settings.appearance.show_status_bar);
-        assert!(!settings.appearance.vibrancy);
         assert!(settings.appearance.islands.different_tool_window_background);
         assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
         assert_eq!(settings.appearance.islands.corner_softness, IslandsCornerSoftness::Medium);
@@ -506,6 +502,7 @@ mod tests {
         let raw = r#"{
             "appearance": {
                 "theme": "VercelDark",
+                "vibrancy": true,
                 "islands": {
                     "tab_style": "DataGrip"
                 }
@@ -515,7 +512,8 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(raw).expect("should deserialize");
         assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
         assert_eq!(settings.interactive_query_timeout_ms, 30_000);
-        // Settings saved before system following existed keep their chosen theme.
+        // Older settings still load: the removed vibrancy flag is ignored, and settings saved
+        // before system following existed keep their chosen theme.
         assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
         assert!(!settings.appearance.follow_system);
     }

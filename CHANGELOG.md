@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
 - The command palette shows shortcuts as keycaps, scrolls its whole list with a scrollbar, follows the mouse with one highlight, checks the current theme, names the open submenu with a back button (Backspace also goes back), and clears the search on the first Escape
 
+### Removed
+- The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
+
 ### Fixed
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line

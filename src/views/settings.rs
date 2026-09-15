@@ -16,7 +16,7 @@ use gpui_kit::*;
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
-use crate::components::{Button, open_confirm_dialog, request_app_quit};
+use crate::components::{Button, open_confirm_dialog};
 use crate::state::settings::CollectionDoubleClickAction;
 use crate::state::{
     AiProvider, AppCommands, AppSettings, AppState, AppTheme, DEFAULT_FILENAME_TEMPLATE,
@@ -311,7 +311,6 @@ impl Render for SettingsView {
                     .keywords([
                         "theme",
                         "appearance",
-                        "vibrancy",
                         "status bar",
                         "query timeout",
                         "collection",
@@ -534,34 +533,6 @@ fn render_appearance_section(
         )
     };
 
-    // Vibrancy toggle
-    let vibrancy_checkbox = {
-        let state = state.clone();
-        let checked = settings.appearance.vibrancy;
-        gpui_kit::component::checkbox::Checkbox::new("vibrancy")
-            .checked(checked && cfg!(target_os = "macos"))
-            .disabled(!cfg!(target_os = "macos"))
-            .on_click(move |_, window, cx| {
-                state.update(cx, |state, cx| {
-                    state.settings.appearance.vibrancy = !checked;
-                    state.save_settings();
-                    cx.notify();
-                });
-                crate::components::open_confirm_dialog(
-                    window,
-                    cx,
-                    "Restart required",
-                    "Vibrancy changes require a restart to take effect.",
-                    "Restart now",
-                    false,
-                    {
-                        let state = state.clone();
-                        move |window, cx| request_app_quit(state.clone(), window, cx)
-                    },
-                );
-            })
-    };
-
     section(
         "Appearance",
         div()
@@ -579,16 +550,6 @@ fn render_appearance_section(
                 "Show status bar",
                 "Display the status bar at the bottom of the window",
                 status_bar_checkbox,
-                cx,
-            ))
-            .child(setting_row_with_description(
-                "Vibrancy",
-                if cfg!(target_os = "macos") {
-                    "Blurred transparent window background (restart required)"
-                } else {
-                    "Available on macOS"
-                },
-                vibrancy_checkbox,
                 cx,
             )),
         cx,

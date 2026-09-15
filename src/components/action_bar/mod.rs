@@ -181,7 +181,7 @@ impl ActionBar {
 
     fn revert_theme_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(original) = self.original_theme.take() {
-            apply_theme(&self.state, original, window, cx);
+            crate::theme::apply_theme(original, window, cx);
         }
     }
 
@@ -196,7 +196,7 @@ impl ActionBar {
             None => None,
         };
         if let Some(theme) = theme {
-            apply_theme(&self.state, theme, window, cx);
+            crate::theme::apply_theme(theme, window, cx);
         }
     }
 
@@ -233,12 +233,6 @@ impl ActionBar {
         self.recent.insert(0, id.clone());
         self.recent.truncate(MAX_RECENT);
     }
-}
-
-fn apply_theme(state: &Entity<AppState>, theme: AppTheme, window: &mut Window, cx: &mut App) {
-    let vibrancy =
-        crate::theme::effective_vibrancy(theme, state.read(cx).settings.appearance.vibrancy);
-    crate::theme::apply_theme(theme, vibrancy, window, cx);
 }
 
 /// Filters, ranks and groups the actions for one palette view, and returns how many

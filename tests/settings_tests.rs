@@ -21,9 +21,9 @@ fn test_default_settings() {
     let settings = AppSettings::default();
 
     // Appearance defaults
-    assert_eq!(settings.appearance.theme, AppTheme::VercelDark);
+    assert_eq!(settings.appearance.theme, AppTheme::MangoDark);
+    assert!(settings.appearance.follow_system);
     assert!(settings.appearance.show_status_bar);
-    assert!(!settings.appearance.vibrancy);
     assert!(settings.appearance.islands.different_tool_window_background);
     assert_eq!(settings.appearance.islands.tab_style, IslandsTabStyle::Islands);
     assert_eq!(settings.appearance.islands.corner_softness, IslandsCornerSoftness::Medium);

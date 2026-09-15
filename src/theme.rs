@@ -49,21 +49,10 @@ pub fn apply_design_tokens(cx: &mut App) {
     theme.radius_lg = borders::radius_md();
 }
 
-pub fn apply_theme(
-    app_theme: AppTheme,
-    vibrancy: bool,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-) {
+pub fn apply_theme(app_theme: AppTheme, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
         gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
-
         apply_design_tokens(cx);
-
-        if vibrancy {
-            apply_vibrancy(cx);
-        }
-
         window.refresh();
     }
 }
@@ -113,47 +102,13 @@ fn save_and_apply(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (user_vibrancy, startup_vibrancy) = state.update(cx, |state, cx| {
+    state.update(cx, |state, cx| {
         state.settings.appearance.theme = theme;
         state.settings.appearance.follow_system = follow_system;
         state.save_settings();
         cx.notify();
-        (state.settings.appearance.vibrancy, state.startup_vibrancy)
     });
-    apply_theme(theme, effective_vibrancy(theme, user_vibrancy), window, cx);
-    if requires_vibrancy_restart(startup_vibrancy, theme, user_vibrancy) {
-        crate::components::open_confirm_dialog(
-            window,
-            cx,
-            "Restart required",
-            "Switching this theme changes window vibrancy mode. Restart now to fully apply it.",
-            "Restart now",
-            false,
-            {
-                let state = state.clone();
-                move |window, cx| crate::components::request_app_quit(state.clone(), window, cx)
-            },
-        );
-    }
-}
-
-pub fn effective_vibrancy(_app_theme: AppTheme, user_vibrancy: bool) -> bool {
-    cfg!(target_os = "macos") && user_vibrancy
-}
-
-pub fn requires_vibrancy_restart(
-    startup_vibrancy: bool,
-    target_theme: AppTheme,
-    user_vibrancy: bool,
-) -> bool {
-    startup_vibrancy != effective_vibrancy(target_theme, user_vibrancy)
-}
-
-/// Reduce alpha on background/sidebar so the macOS blur effect shows through.
-pub fn apply_vibrancy(cx: &mut gpui_kit::App) {
-    let theme = gpui_kit::component::theme::Theme::global_mut(cx);
-    theme.background.a = 0.82;
-    theme.sidebar.a = 0.82;
+    apply_theme(theme, window, cx);
 }
 
 // =============================================================================
@@ -322,7 +277,6 @@ pub mod islands {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_vibrancy, requires_vibrancy_restart};
     use crate::state::AppTheme;
 
     #[gpui_kit::test]
@@ -437,26 +391,6 @@ mod tests {
         assert_eq!(super::resolved_theme(&appearance, VibrantLight), AppTheme::MangoLight);
         appearance.follow_system = false;
         assert_eq!(super::resolved_theme(&appearance, Dark), AppTheme::Nord);
-    }
-
-    #[test]
-    fn vibrancy_follows_user_toggle() {
-        assert!(!effective_vibrancy(AppTheme::VercelDark, false));
-        assert_eq!(effective_vibrancy(AppTheme::VercelDark, true), cfg!(target_os = "macos"));
-    }
-
-    #[test]
-    fn restart_required_when_vibrancy_changes() {
-        assert!(requires_vibrancy_restart(true, AppTheme::VercelDark, false));
-        assert_eq!(
-            requires_vibrancy_restart(false, AppTheme::VercelDark, true),
-            cfg!(target_os = "macos")
-        );
-        assert!(!requires_vibrancy_restart(false, AppTheme::VercelDark, false));
-        assert_eq!(
-            requires_vibrancy_restart(true, AppTheme::VercelDark, true),
-            !cfg!(target_os = "macos")
-        );
     }
 }
 
