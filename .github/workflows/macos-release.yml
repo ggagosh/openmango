@@ -50,8 +50,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-${{ matrix.target }}
-      - name: Disable lld linker flags for CI
-        run: rm -f .cargo/config.toml
       - name: Build Forge mongosh sidecar
         run: bash scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
       - name: Download MongoDB Database Tools
@@ -82,8 +80,6 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ""
-          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: ""
           REQUIRE_BUNDLED_TOOLS: "1"
         run: bash scripts/release_macos.sh ${{ matrix.target }}
       - name: Generate SHA-256 checksum
