@@ -1,6 +1,5 @@
 use gpui_kit::component::calendar::CalendarState;
 use gpui_kit::component::input::{EditorState, InputState};
-use gpui_kit::component::tree::TreeState;
 use gpui_kit::*;
 
 use mongodb::bson::{Bson, Document};
@@ -24,13 +23,16 @@ use super::node_meta::NodeMeta;
 use super::tree::document_tree::bson_tree_value_color;
 use super::view_model::DocumentViewModel;
 
+/// Pending automatic aggregation run, keyed by (edit revision, preview target).
+pub(crate) type PendingAggregationRun = ((u64, Option<usize>), Task<()>);
+
 /// View for browsing documents in a collection
 pub struct CollectionView {
     pub(crate) state: Entity<AppState>,
     pub(crate) view_model: DocumentViewModel,
     pub(crate) documents_focus: FocusHandle,
     pub(crate) aggregation_focus: FocusHandle,
-    pub(crate) aggregation_stage_list_scroll: UniformListScrollHandle,
+    pub(crate) aggregation_stage_list_scroll: ScrollHandle,
     pub(crate) filter_state: Option<Entity<EditorState>>,
     pub(crate) filter_completions: Option<std::rc::Rc<super::query_editor::QueryEditorCompletions>>,
     pub(crate) filter_completion_menu:
@@ -87,19 +89,23 @@ pub struct CollectionView {
     pub(crate) schema_filter_subscription: Option<Subscription>,
     pub(crate) search_subscription: Option<Subscription>,
     pub(crate) aggregation_stage_body_state: Option<Entity<EditorState>>,
-    pub(crate) aggregation_results_tree_state: Option<Entity<TreeState>>,
     pub(crate) aggregation_results_scroll: UniformListScrollHandle,
-    pub(crate) aggregation_limit_state: Option<Entity<InputState>>,
     pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
-    pub(crate) aggregation_results_signature: Option<u64>,
+    pub(crate) aggregation_results_signature: Option<usize>,
     /// Cached SessionDocument list for the aggregation results tree, rebuilt
-    /// only when the result set changes (keyed by pipeline request id) instead
+    /// only when the result set changes (keyed by the results `Arc`) instead
     /// of deep-cloning every result document each frame.
     pub(crate) aggregation_results_documents: Option<Arc<Vec<SessionDocument>>>,
     pub(crate) syncing_query_inputs: bool,
-    pub(crate) aggregation_ignore_body_change: bool,
     pub(crate) aggregation_stage_body_subscription: Option<Subscription>,
-    pub(crate) aggregation_limit_subscription: Option<Subscription>,
+    pub(crate) aggregation_text_state: Option<Entity<EditorState>>,
+    pub(crate) aggregation_text_subscription: Option<Subscription>,
+    /// Why the Text mode pipeline can't be applied, if it can't.
+    pub(crate) aggregation_text_error: Option<String>,
+    /// Pipeline revision each editor last showed or produced; a mismatch means resync.
+    pub(crate) aggregation_body_revision: Option<u64>,
+    pub(crate) aggregation_text_revision: Option<u64>,
+    pub(crate) aggregation_auto_run: Option<PendingAggregationRun>,
     pub(crate) filter_builder_panel: Option<Entity<FilterBuilderPanel>>,
     pub(crate) filter_builder_session: Option<SessionKey>,
     pub(crate) _subscriptions: Vec<Subscription>,
@@ -409,8 +415,8 @@ impl CollectionView {
             state,
             view_model,
             documents_focus: cx.focus_handle(),
-            aggregation_focus: cx.focus_handle(),
-            aggregation_stage_list_scroll: UniformListScrollHandle::default(),
+            aggregation_focus: cx.focus_handle().tab_stop(true),
+            aggregation_stage_list_scroll: ScrollHandle::new(),
             filter_state: None,
             filter_completions: None,
             filter_completion_menu: None,
@@ -456,16 +462,18 @@ impl CollectionView {
             schema_filter_subscription: None,
             search_subscription: None,
             aggregation_stage_body_state: None,
-            aggregation_results_tree_state: None,
             aggregation_results_scroll: UniformListScrollHandle::new(),
-            aggregation_limit_state: None,
             aggregation_results_expanded_nodes: HashSet::new(),
             aggregation_results_signature: None,
             aggregation_results_documents: None,
             syncing_query_inputs: false,
-            aggregation_ignore_body_change: false,
             aggregation_stage_body_subscription: None,
-            aggregation_limit_subscription: None,
+            aggregation_text_state: None,
+            aggregation_text_subscription: None,
+            aggregation_text_error: None,
+            aggregation_body_revision: None,
+            aggregation_text_revision: None,
+            aggregation_auto_run: None,
             filter_builder_panel: None,
             filter_builder_session: None,
             _subscriptions: subscriptions,
@@ -473,7 +481,11 @@ impl CollectionView {
     }
 
     pub(crate) fn focus_documents(&self, window: &mut Window, cx: &mut App) {
-        window.focus(&self.documents_focus, cx);
+        let aggregation = self.view_model.current_session().is_some_and(|key| {
+            self.state.read(cx).session_subview(&key) == Some(CollectionSubview::Aggregation)
+        });
+        let focus = if aggregation { &self.aggregation_focus } else { &self.documents_focus };
+        window.focus(focus, cx);
     }
 
     /// Ensure subview-specific data is loaded (indexes/stats) based on current subview.

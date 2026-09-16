@@ -1,21 +1,21 @@
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::Editor;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Disableable as _, Sizable as _, Size};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::bson::{format_relaxed_json_value, parse_value_from_relaxed_json};
 use crate::components::Button;
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
-use crate::state::app_state::{PipelineState, default_stage_body};
-use crate::state::{SessionKey, StatusMessage};
-use crate::theme::{borders, islands, spacing};
-
+use crate::state::SessionKey;
+use crate::state::app_state::PipelineState;
+use crate::theme::{islands, spacing};
 use crate::views::CollectionView;
 
-use super::operators::OPERATOR_GROUPS;
+use super::{OperatorPick, format_stage_body, open_operator_picker};
 
 impl CollectionView {
     pub(in crate::views::documents) fn render_aggregation_stage_editor(
@@ -26,109 +26,63 @@ impl CollectionView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let appearance = self.state.read(cx).settings.appearance.clone();
-        let panel_bg = islands::card_bg(&appearance, cx);
-        let panel_border = islands::panel_border(&appearance, cx).opacity(0.5);
-        let panel_radius = islands::radius_sm(&appearance);
-        let header_bg = cx.theme().transparent;
-        let selected_index = pipeline.selected_stage;
-        let stage = selected_index.and_then(|idx| pipeline.stages.get(idx));
-        let selected_operator = stage.map(|stage| stage.operator.clone()).unwrap_or_default();
+        let muted = cx.theme().muted_foreground;
+        let selected = pipeline
+            .selected_stage
+            .and_then(|index| pipeline.stages.get(index).map(|stage| (index, stage.clone())));
+
+        let Some((index, stage)) = selected else {
+            return panel(&appearance, cx)
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(muted)
+                .child("Select a stage to edit it")
+                .into_any_element();
+        };
+
+        let operator = stage.operator.trim().to_string();
+        let operator_button = Button::new("agg-operator")
+            .outline()
+            .xsmall()
+            .label(if operator.is_empty() { "Choose operator".to_string() } else { operator })
+            .icon(Icon::new(IconName::ChevronsUpDown))
+            .tooltip("Change operator")
+            .disabled(session_key.is_none())
+            .on_click({
+                let state = self.state.clone();
+                let session_key = session_key.clone();
+                move |_, window, cx| {
+                    if let Some(session_key) = session_key.clone() {
+                        open_operator_picker(
+                            window,
+                            cx,
+                            state.clone(),
+                            session_key,
+                            OperatorPick::Replace(index),
+                        );
+                    }
+                }
+            });
 
         let header = div()
             .flex()
             .items_center()
             .justify_between()
+            .gap(spacing::sm())
             .px(spacing::sm())
             .py(spacing::xs())
-            .bg(header_bg)
-            .child(div().flex().items_center().gap(spacing::xs()).child(
-                if let Some(stage) = stage {
-                    let operator_label = if stage.operator.trim().is_empty() {
-                        "Select operator".to_string()
-                    } else {
-                        stage.operator.clone()
-                    };
-                    let session_key_for_menu = session_key.clone();
-                    let state_for_menu = self.state.clone();
-                    let body_state_for_menu = self.aggregation_stage_body_state.clone();
-                    let operator_variant = ButtonCustomVariant::new(cx)
-                        .color(cx.theme().secondary)
-                        .foreground(cx.theme().foreground)
-                        .hover(cx.theme().secondary_hover)
-                        .active(cx.theme().secondary_hover)
-                        .shadow(false);
-                    MenuButton::new("agg-operator")
-                        .xsmall()
-                        .label(operator_label)
-                        .dropdown_caret(true)
-                        .custom(operator_variant)
-                        .rounded(borders::radius_sm())
-                        .with_size(Size::XSmall)
-                        .disabled(session_key.is_none())
-                        .dropdown_menu_with_anchor(Anchor::BottomLeft, {
-                            let selected_operator = selected_operator.clone();
-                            move |menu: PopupMenu, _window, _cx| {
-                                let mut menu = menu;
-                                for (group_idx, group) in OPERATOR_GROUPS.iter().enumerate() {
-                                    menu = menu.item(PopupMenuItem::label(group.label.to_string()));
-                                    for operator in group.operators {
-                                        let operator = operator.to_string();
-                                        let state = state_for_menu.clone();
-                                        let session_key = session_key_for_menu.clone();
-                                        let body_state = body_state_for_menu.clone();
-                                        let checked = selected_operator == operator;
-                                        menu = menu.item(
-                                            PopupMenuItem::new(operator.clone())
-                                                .checked(checked)
-                                                .on_click({
-                                                    move |_, window, cx| {
-                                                        let Some(session_key) = session_key.clone()
-                                                        else {
-                                                            return;
-                                                        };
-                                                        let Some(index) = selected_index else {
-                                                            return;
-                                                        };
-                                                        let template =
-                                                            default_stage_body(&operator)
-                                                                .map(|value| value.to_string());
-                                                        state.update(cx, |state, cx| {
-                                                            state.set_pipeline_stage_operator(
-                                                                &session_key,
-                                                                index,
-                                                                operator.clone(),
-                                                            );
-                                                            cx.notify();
-                                                        });
-                                                        if let (Some(body_state), Some(template)) =
-                                                            (body_state.clone(), template)
-                                                        {
-                                                            body_state.update(cx, |state, cx| {
-                                                                state.set_value(
-                                                                    template, window, cx,
-                                                                );
-                                                            });
-                                                        }
-                                                    }
-                                                }),
-                                        );
-                                    }
-                                    if group_idx + 1 < OPERATOR_GROUPS.len() {
-                                        menu = menu.item(PopupMenuItem::separator());
-                                    }
-                                }
-                                menu
-                            }
-                        })
-                        .into_any_element()
-                } else {
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Select a stage")
-                        .into_any_element()
-                },
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(div().text_sm().child(format!("Stage {}", index + 1)))
+                    .child(operator_button)
+                    .when(!stage.enabled, |row| {
+                        row.child(Tag::secondary().xsmall().child("Skipped"))
+                    }),
+            )
             .child(
                 div()
                     .flex()
@@ -136,119 +90,96 @@ impl CollectionView {
                     .gap(spacing::xs())
                     .child(
                         Button::new("agg-format-stage")
+                            .ghost()
                             .xsmall()
                             .label("Format")
                             .tooltip_with_action(
-                                "Format JSON",
+                                "Format stage",
                                 &FormatAggregationStage,
                                 Some("Documents Aggregation"),
                             )
-                            .disabled(session_key.is_none() || stage.is_none())
                             .on_click({
                                 let body_state = self.aggregation_stage_body_state.clone();
-                                let state = self.state.clone();
-                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                move |_, window, cx| {
                                     let Some(body_state) = body_state.clone() else {
                                         return;
                                     };
                                     let raw = body_state.read(cx).value().to_string();
-                                    match parse_value_from_relaxed_json(&raw) {
-                                        Ok(value) => {
-                                            let formatted = format_relaxed_json_value(&value);
-                                            body_state.update(cx, |state, cx| {
-                                                state.set_value(formatted, window, cx);
-                                            });
-                                        }
-                                        Err(err) => {
-                                            state.update(cx, |state, cx| {
-                                                state.set_status_message(Some(
-                                                    StatusMessage::error(format!(
-                                                        "Invalid JSON: {err}"
-                                                    )),
-                                                ));
-                                                cx.notify();
-                                            });
-                                        }
+                                    match format_stage_body(&raw) {
+                                        Ok(formatted) => body_state.update(cx, |state, cx| {
+                                            state.replace_all(formatted, window, cx);
+                                        }),
+                                        Err(error) => window.push_notification(
+                                            Notification::error(format!(
+                                                "Unable to format this stage. {error}"
+                                            )),
+                                            cx,
+                                        ),
                                     }
                                 }
                             }),
                     )
                     .child(
                         Button::new("agg-clear-stage")
+                            .ghost()
                             .xsmall()
                             .label("Clear")
-                            .tooltip_with_action(
-                                "Clear stage",
-                                &ClearAggregationStage,
-                                Some("Documents Aggregation Editor"),
-                            )
-                            .disabled(session_key.is_none() || stage.is_none())
+                            .tooltip_with_action("Clear stage", &ClearAggregationStage, None)
                             .on_click({
                                 let body_state = self.aggregation_stage_body_state.clone();
-                                let state = self.state.clone();
-                                let session_key = session_key.clone();
-                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    let Some(body_state) = body_state.clone() else {
-                                        return;
-                                    };
-                                    body_state.update(cx, |state, cx| {
-                                        state.set_value("{}".to_string(), window, cx);
-                                    });
-                                    let Some(session_key) = session_key.clone() else {
-                                        return;
-                                    };
-                                    let Some(index) = selected_index else {
-                                        return;
-                                    };
-                                    state.update(cx, |state, cx| {
-                                        state.set_pipeline_stage_body(
-                                            &session_key,
-                                            index,
-                                            "{}".to_string(),
-                                        );
-                                        cx.notify();
-                                    });
+                                move |_, window, cx| {
+                                    if let Some(body_state) = body_state.clone() {
+                                        body_state.update(cx, |state, cx| {
+                                            state.replace_all("{}", window, cx);
+                                        });
+                                    }
                                 }
                             }),
                     ),
             );
 
-        let body = if stage.is_some() {
-            if let Some(body_state) = self.aggregation_stage_body_state.clone() {
-                Editor::new(&body_state)
-                    .font_family(crate::theme::fonts::mono())
-                    .w_full()
-                    .h_full()
-                    .disabled(session_key.is_none())
-                    .into_any_element()
-            } else {
-                div().into_any_element()
-            }
-        } else {
-            div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Select a stage to edit")
-                .into_any_element()
-        };
+        let error = pipeline
+            .error
+            .clone()
+            .filter(|_| pipeline.error_stage == Some(index) && !pipeline.is_stale());
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .min_h(px(0.0))
-            .overflow_hidden()
-            .bg(panel_bg)
-            .border_1()
-            .border_color(panel_border)
-            .rounded(panel_radius)
+        panel(&appearance, cx)
             .child(header)
-            .child(div().flex().flex_1().min_w(px(0.0)).overflow_y_scrollbar().child(body))
+            .child(div().flex().flex_1().min_h(px(0.0)).when_some(
+                self.aggregation_stage_body_state.clone(),
+                |slot, body_state| {
+                    slot.child(
+                        Editor::new(&body_state)
+                            .font_family(crate::theme::fonts::mono())
+                            .aria_label(format!("Stage {} body", index + 1))
+                            .w_full()
+                            .h_full()
+                            .disabled(session_key.is_none()),
+                    )
+                },
+            ))
+            .when_some(error, |panel, message| {
+                panel.child(
+                    div().p(spacing::xs()).child(
+                        Alert::error("agg-stage-error", message)
+                            .title(format!("Stage {} failed. Fix it and run again.", index + 1)),
+                    ),
+                )
+            })
             .into_any_element()
     }
+}
+
+pub(super) fn panel(appearance: &crate::state::settings::AppearanceSettings, cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .overflow_hidden()
+        .bg(islands::card_bg(appearance, cx))
+        .border_1()
+        .border_color(islands::panel_border(appearance, cx).opacity(0.5))
+        .rounded(islands::radius_sm(appearance))
 }

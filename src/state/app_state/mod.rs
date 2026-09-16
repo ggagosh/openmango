@@ -5,6 +5,7 @@ mod connection;
 mod database_sessions;
 mod forge;
 mod keybindings;
+mod pipeline_text;
 mod query_library;
 mod selection;
 mod sessions;
@@ -17,13 +18,15 @@ pub mod updater;
 mod workspace;
 
 pub(crate) use aggregation::{
-    PipelineStage, PipelineState, StageDocCounts, StageStatsMode, default_stage_body,
+    PIPELINE_UNDO_LIMIT, PipelineRun, PipelineSnapshot, PipelineStage, PipelineState,
+    StageDocCounts, StageStatsMode, UndoGroup, default_stage_body,
 };
 pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
 };
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub use keybindings::KeybindingCapture;
+pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,

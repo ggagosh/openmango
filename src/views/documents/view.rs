@@ -807,7 +807,7 @@ impl Render for CollectionView {
                     query_options_open,
                     subview,
                     stats_loading,
-                    aggregation.loading,
+                    aggregation.loading || aggregation.stages.is_empty(),
                     explain.loading,
                     schema_loading,
                     col_visibility_search,

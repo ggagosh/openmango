@@ -47,24 +47,15 @@ pub(crate) fn request_run_aggregation(
             None
         } else {
             state_ref.session(&session_key).and_then(|session| {
-                aggregation_write_impact(
-                    &session.data.aggregation.stages,
-                    session.data.aggregation.selected_stage,
-                    &session_key.database,
-                )
-                .map(|impact| {
-                    (
-                        impact,
-                        session.data.aggregation.stages.clone(),
-                        session.data.aggregation.selected_stage,
-                    )
-                })
+                let aggregation = &session.data.aggregation;
+                let target = aggregation.preview_target();
+                aggregation_write_impact(&aggregation.stages, target, &session_key.database)
+                    .map(|impact| (impact, aggregation.stages.clone(), target))
             })
         }
     };
 
-    let Some(((operator, target), confirmed_stages, confirmed_selected_stage)) = write_confirmation
-    else {
+    let Some(((operator, target), confirmed_stages, confirmed_target)) = write_confirmation else {
         AppCommands::run_aggregation(state, session_key, preview, cx);
         return;
     };
@@ -96,7 +87,7 @@ pub(crate) fn request_run_aggregation(
                 session_key,
                 preview,
                 confirmed_stages,
-                confirmed_selected_stage,
+                confirmed_target,
                 cx,
             );
         },
@@ -198,12 +189,13 @@ pub(crate) fn request_delete_confirmation(
     .detach();
 }
 
-fn aggregation_write_impact(
+/// The first `$out`/`$merge` stage a run through `target` would execute, as (operator, namespace).
+pub(crate) fn aggregation_write_impact(
     stages: &[PipelineStage],
-    selected_stage: Option<usize>,
+    target: Option<usize>,
     default_database: &str,
 ) -> Option<(String, String)> {
-    let target_index = selected_stage.or_else(|| stages.len().checked_sub(1))?;
+    let target_index = target?;
     stages.iter().take(target_index + 1).find_map(|stage| {
         if !stage.enabled {
             return None;
@@ -260,8 +252,9 @@ mod write_impact_tests {
             vec![stage("$match", "{}"), stage("$out", r#"{"db":"archive","coll":"orders"}"#)];
 
         assert!(aggregation_write_impact(&stages, Some(0), "app").is_none());
+        assert!(aggregation_write_impact(&stages, None, "app").is_none());
         assert_eq!(
-            aggregation_write_impact(&stages, None, "app"),
+            aggregation_write_impact(&stages, Some(1), "app"),
             Some(("$out".to_string(), "archive.orders".to_string()))
         );
     }
@@ -270,6 +263,6 @@ mod write_impact_tests {
     fn disabled_write_stage_does_not_require_confirmation() {
         let mut output = stage("$merge", r#"{"into":"orders"}"#);
         output.enabled = false;
-        assert!(aggregation_write_impact(&[output], None, "app").is_none());
+        assert!(aggregation_write_impact(&[output], Some(0), "app").is_none());
     }
 }

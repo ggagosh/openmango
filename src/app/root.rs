@@ -771,6 +771,7 @@ impl Render for AppRoot {
         // Render dialog layer (Context derefs to App)
         use gpui_kit::component::Root;
         let dialog_layer = Root::render_dialog_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
 
         let mut root = div()
             .key_context(key_context.as_str())
@@ -1211,6 +1212,7 @@ impl Render for AppRoot {
                 })
             }))
             .children(dialog_layer)
+            .children(notification_layer)
             .child(self.action_bar.clone());
 
         if self.key_debug {

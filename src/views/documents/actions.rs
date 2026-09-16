@@ -4,19 +4,23 @@ use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 use crate::bson::{
     PathSegment, document_to_json_string, format_bson_for_clipboard, get_bson_at_path,
 };
-use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
+use crate::components::{WriteConfirmation, request_connection_write};
 use crate::keyboard::{
-    AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs, CopyAsCsv, CopyAsJson,
-    CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey, CopyValue, CreateIndex,
-    DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
-    DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
-    FormatAggregationStage, InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp,
-    NextSearchMatch, PasteDocuments, PrevSearchMatch, RemoveMatchingValues, RemoveSelectedField,
-    RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
+    AddAggregationStage, AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs,
+    CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey,
+    CopyValue, CreateIndex, DeleteAggregationStage, DeleteCollection, DeleteDocument,
+    DiscardDocumentChanges, DuplicateAggregationStage, DuplicateDocument, EditDocumentJson,
+    EditValueType, FindInResults, FocusAggregationStageEditor, FormatAggregationStage,
+    InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp, NextSearchMatch,
+    PasteDocuments, PrevSearchMatch, RedoAggregationEdit, RemoveMatchingValues,
+    RemoveSelectedField, RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
     SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
     ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
+    UndoAggregationEdit,
 };
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
 
 use super::export::{CopyFormat, ExportScope, ViewExportSnapshot, render_to_clipboard};
 
@@ -648,7 +652,7 @@ impl CollectionView {
                 AppCommands::load_collection_stats(this.state.clone(), session_key, cx);
             }
         }))
-        .on_action(cx.listener(|this, _: &ShowAggregationSubview, _window, cx| {
+        .on_action(cx.listener(|this, _: &ShowAggregationSubview, window, cx| {
             if !this.finish_document_edit(cx) {
                 return;
             }
@@ -659,6 +663,7 @@ impl CollectionView {
                 state.set_collection_subview(&session_key, CollectionSubview::Aggregation);
                 cx.notify();
             });
+            window.focus(&this.aggregation_focus, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowHistorySubview, _window, cx| {
             if !this.finish_document_edit(cx) {
@@ -712,296 +717,187 @@ impl CollectionView {
             super::request_run_aggregation(this.state.clone(), session_key, false, window, cx);
         }))
         .on_action(cx.listener(|this, _: &FormatAggregationStage, window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
+            if this.aggregation_stage_session(cx).is_none() {
                 return;
             }
             let Some(body_state) = this.aggregation_stage_body_state.clone() else {
                 return;
             };
-            let selected = this
-                .state
-                .read(cx)
-                .session(&session_key)
-                .and_then(|session| session.data.aggregation.selected_stage);
-            if selected.is_none() {
-                return;
-            }
             let raw = body_state.read(cx).value().to_string();
-            match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(value) => {
-                    if let Ok(formatted) = serde_json::to_string_pretty(&value) {
-                        body_state.update(cx, |state, cx| {
-                            state.set_value(formatted, window, cx);
-                        });
-                    }
+            match super::views::aggregation::format_stage_body(&raw) {
+                Ok(formatted) => {
+                    body_state.update(cx, |state, cx| state.replace_all(formatted, window, cx));
                 }
-                Err(err) => {
-                    this.state.update(cx, |state, cx| {
-                        state.set_status_message(Some(StatusMessage::error(format!(
-                            "Invalid JSON: {err}"
-                        ))));
-                        cx.notify();
-                    });
-                }
+                Err(error) => window.push_notification(
+                    Notification::error(format!("Unable to format this stage. {error}")),
+                    cx,
+                ),
             }
         }))
         .on_action(cx.listener(|this, _: &ClearAggregationStage, window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
+            if this.aggregation_stage_session(cx).is_none() {
                 return;
             }
-            let Some(body_state) = this.aggregation_stage_body_state.clone() else {
-                return;
-            };
-            let selected = this
-                .state
-                .read(cx)
-                .session(&session_key)
-                .and_then(|session| session.data.aggregation.selected_stage);
-            let Some(selected) = selected else {
-                return;
-            };
-            body_state.update(cx, |state, cx| {
-                state.set_value("{}".to_string(), window, cx);
-            });
-            this.state.update(cx, |state, cx| {
-                state.set_pipeline_stage_body(&session_key, selected, "{}".to_string());
-                cx.notify();
-            });
+            if let Some(body_state) = this.aggregation_stage_body_state.clone() {
+                body_state.update(cx, |state, cx| state.replace_all("{}", window, cx));
+            }
         }))
         .on_action(cx.listener(|this, _: &SelectPrevAggregationStage, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let pipeline =
-                this.state.read(cx).session_data(&session_key).map(|data| data.aggregation.clone());
-            let Some(pipeline) = pipeline else {
-                return;
-            };
-            let count = pipeline.stages.len();
-            if count == 0 {
-                return;
-            }
-            let current = pipeline.selected_stage.unwrap_or(0);
-            let next = current.saturating_sub(1);
-            this.state.update(cx, |state, cx| {
-                state.set_pipeline_selected_stage(&session_key, Some(next));
-                cx.notify();
-            });
+            this.step_aggregation_selection(false, cx);
         }))
         .on_action(cx.listener(|this, _: &SelectNextAggregationStage, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let pipeline =
-                this.state.read(cx).session_data(&session_key).map(|data| data.aggregation.clone());
-            let Some(pipeline) = pipeline else {
-                return;
-            };
-            let count = pipeline.stages.len();
-            if count == 0 {
-                return;
-            }
-            let current = pipeline.selected_stage.unwrap_or(0);
-            let next = (current + 1).min(count.saturating_sub(1));
-            this.state.update(cx, |state, cx| {
-                state.set_pipeline_selected_stage(&session_key, Some(next));
-                cx.notify();
-            });
+            this.step_aggregation_selection(true, cx);
         }))
         .on_action(cx.listener(|this, _: &MoveAggregationStageUp, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let pipeline =
-                this.state.read(cx).session_data(&session_key).map(|data| data.aggregation.clone());
-            let Some(pipeline) = pipeline else {
-                return;
-            };
-            let Some(selected) = pipeline.selected_stage else {
-                return;
-            };
-            if selected == 0 {
-                return;
-            }
-            let target = selected.saturating_sub(1);
-            this.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(&session_key, selected, target);
-                cx.notify();
-            });
-        }))
-        .on_action(cx.listener(|this, _: &MoveAggregationStageDown, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let pipeline =
-                this.state.read(cx).session_data(&session_key).map(|data| data.aggregation.clone());
-            let Some(pipeline) = pipeline else {
-                return;
-            };
-            let Some(selected) = pipeline.selected_stage else {
-                return;
-            };
-            if selected + 1 >= pipeline.stages.len() {
-                return;
-            }
-            let target = selected + 1;
-            this.state.update(cx, |state, cx| {
-                state.move_pipeline_stage(&session_key, selected, target);
-                cx.notify();
-            });
-        }))
-        .on_action(cx.listener(|this, _: &DuplicateAggregationStage, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let selected = this
-                .state
-                .read(cx)
-                .session(&session_key)
-                .and_then(|session| session.data.aggregation.selected_stage);
-            let Some(selected) = selected else {
-                return;
-            };
-            this.state.update(cx, |state, cx| {
-                state.duplicate_pipeline_stage(&session_key, selected);
-                cx.notify();
-            });
-        }))
-        .on_action(cx.listener(|this, _: &ToggleAggregationStageEnabled, _window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let selected = this
-                .state
-                .read(cx)
-                .session(&session_key)
-                .and_then(|session| session.data.aggregation.selected_stage);
-            let Some(selected) = selected else {
-                return;
-            };
-            this.state.update(cx, |state, cx| {
-                state.toggle_pipeline_stage_enabled(&session_key, selected);
-                let enabled = state
-                    .session(&session_key)
-                    .and_then(|session| session.data.aggregation.stages.get(selected))
-                    .is_some_and(|stage| stage.enabled);
-                let message = if enabled { "Stage enabled" } else { "Stage disabled" };
-                state.set_status_message(Some(StatusMessage::info(message)));
-                cx.notify();
-            });
-        }))
-        .on_action(cx.listener(|this, _: &DeleteAggregationStage, window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Aggregation {
-                return;
-            }
-            let (selected, stage_number, operator_label) = {
-                let state_ref = this.state.read(cx);
-                let Some(session) = state_ref.session(&session_key) else {
-                    return;
-                };
-                let Some(selected) = session.data.aggregation.selected_stage else {
-                    return;
-                };
-                let operator_label = session
-                    .data
-                    .aggregation
-                    .stages
-                    .get(selected)
-                    .map(|stage| stage.operator.trim())
-                    .filter(|label| !label.is_empty())
-                    .unwrap_or("stage")
-                    .to_string();
-                (selected, selected + 1, operator_label)
-            };
-
-            let message = format!(
-                "Delete Stage {} ({}). This cannot be undone.",
-                stage_number, operator_label
-            );
-            let state = this.state.clone();
-            open_confirm_dialog(window, cx, "Delete stage", message, "Delete", true, {
-                let session_key = session_key.clone();
-                move |_window, cx| {
-                    state.update(cx, |state, cx| {
-                        state.remove_pipeline_stage(&session_key, selected);
-                        state.set_status_message(Some(StatusMessage::info("Stage deleted")));
-                        cx.notify();
-                    });
+            this.edit_selected_aggregation_stage(cx, |state, key, selected| {
+                if selected > 0 {
+                    state.move_pipeline_stage(key, selected, selected - 1);
                 }
             });
         }))
+        .on_action(cx.listener(|this, _: &MoveAggregationStageDown, _window, cx| {
+            this.edit_selected_aggregation_stage(cx, |state, key, selected| {
+                state.move_pipeline_stage(key, selected, selected + 1);
+            });
+        }))
+        .on_action(cx.listener(|this, _: &DuplicateAggregationStage, _window, cx| {
+            this.edit_selected_aggregation_stage(cx, |state, key, selected| {
+                state.duplicate_pipeline_stage(key, selected);
+            });
+        }))
+        .on_action(cx.listener(|this, _: &ToggleAggregationStageEnabled, window, cx| {
+            if this.aggregation_control_focused(window, cx) {
+                cx.propagate();
+                return;
+            }
+            this.edit_selected_aggregation_stage(cx, |state, key, selected| {
+                state.toggle_pipeline_stage_enabled(key, selected);
+            });
+        }))
+        .on_action(cx.listener(|this, _: &DeleteAggregationStage, window, cx| {
+            let Some((session_key, selected)) = this.selected_aggregation_stage(cx) else {
+                return;
+            };
+            super::views::aggregation::delete_aggregation_stage(
+                &this.state,
+                &session_key,
+                selected,
+                window,
+                cx,
+            );
+        }))
+        .on_action(cx.listener(|this, _: &AddAggregationStage, window, cx| {
+            let Some(session_key) = this.aggregation_stage_session(cx) else {
+                return;
+            };
+            let at = this
+                .state
+                .read(cx)
+                .session(&session_key)
+                .map(|session| {
+                    let pipeline = &session.data.aggregation;
+                    pipeline.selected_stage.map_or(pipeline.stages.len(), |index| index + 1)
+                })
+                .unwrap_or(0);
+            super::views::aggregation::open_operator_picker(
+                window,
+                cx,
+                this.state.clone(),
+                session_key,
+                super::views::aggregation::OperatorPick::Insert(at),
+            );
+        }))
+        .on_action(cx.listener(|this, _: &UndoAggregationEdit, _window, cx| {
+            if let Some(session_key) = this.aggregation_stage_session(cx) {
+                this.state.update(cx, |state, cx| {
+                    if state.undo_pipeline_edit(&session_key) {
+                        cx.notify();
+                    }
+                });
+            }
+        }))
+        .on_action(cx.listener(|this, _: &RedoAggregationEdit, _window, cx| {
+            if let Some(session_key) = this.aggregation_stage_session(cx) {
+                this.state.update(cx, |state, cx| {
+                    if state.redo_pipeline_edit(&session_key) {
+                        cx.notify();
+                    }
+                });
+            }
+        }))
+        .on_action(cx.listener(|this, _: &FocusAggregationStageEditor, window, cx| {
+            if this.aggregation_control_focused(window, cx) {
+                cx.propagate();
+                return;
+            }
+            if this.selected_aggregation_stage(cx).is_none() {
+                return;
+            }
+            if let Some(body_state) = this.aggregation_stage_body_state.clone() {
+                body_state.update(cx, |state, cx| state.focus(window, cx));
+            }
+        }))
+    }
+
+    /// A button or switch inside the stage list has focus, so Space and Enter belong to it.
+    fn aggregation_control_focused(&self, window: &Window, cx: &App) -> bool {
+        !self.aggregation_focus.is_focused(window)
+            && self.aggregation_focus.contains_focused(window, cx)
+    }
+
+    /// The current session while the Aggregation view shows stages (not Text mode).
+    fn aggregation_stage_session(&self, cx: &App) -> Option<crate::state::SessionKey> {
+        let session_key = self.view_model.current_session()?;
+        let state = self.state.read(cx);
+        (state.session_subview(&session_key) == Some(CollectionSubview::Aggregation)
+            && state
+                .session(&session_key)
+                .is_some_and(|session| !session.data.aggregation.text_mode))
+        .then_some(session_key)
+    }
+
+    fn selected_aggregation_stage(&self, cx: &App) -> Option<(crate::state::SessionKey, usize)> {
+        let session_key = self.aggregation_stage_session(cx)?;
+        let selected = self.state.read(cx).session(&session_key)?.data.aggregation.selected_stage?;
+        Some((session_key, selected))
+    }
+
+    fn edit_selected_aggregation_stage(
+        &mut self,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut crate::state::AppState, &crate::state::SessionKey, usize),
+    ) {
+        let Some((session_key, selected)) = self.selected_aggregation_stage(cx) else {
+            return;
+        };
+        self.state.update(cx, |state, cx| {
+            edit(state, &session_key, selected);
+            cx.notify();
+        });
+    }
+
+    fn step_aggregation_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(session_key) = self.aggregation_stage_session(cx) else {
+            return;
+        };
+        let Some((count, current)) = self.state.read(cx).session(&session_key).map(|session| {
+            let pipeline = &session.data.aggregation;
+            (pipeline.stages.len(), pipeline.selected_stage)
+        }) else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        let next = match (current, forward) {
+            (None, _) => 0,
+            (Some(index), true) => (index + 1).min(count - 1),
+            (Some(index), false) => index.saturating_sub(1),
+        };
+        self.state.update(cx, |state, cx| {
+            state.set_pipeline_selected_stage(&session_key, Some(next));
+            cx.notify();
+        });
     }
 }
 

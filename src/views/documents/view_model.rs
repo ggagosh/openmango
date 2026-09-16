@@ -824,8 +824,13 @@ impl DocumentViewModel {
         let Some(session) = state_ref.session(&session_key) else {
             return;
         };
-        let run_gen =
-            session.data.aggregation.run_generation.load(std::sync::atomic::Ordering::Relaxed);
+        // Keyed by the results allocation: edits bump the run generation but keep results.
+        let run_gen = session
+            .data
+            .aggregation
+            .results
+            .as_ref()
+            .map_or(0, |results| std::sync::Arc::as_ptr(results) as u64);
         let gen_changed =
             self.agg_table_generation != Some(run_gen) || self.agg_table_state.is_none();
 

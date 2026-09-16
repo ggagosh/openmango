@@ -12,8 +12,8 @@ mod stats_panel;
 mod tabs_row;
 
 pub use actions::{
-    clean_toolbar_icon_button, render_aggregation_actions, render_documents_actions,
-    render_indexes_actions, render_schema_actions, render_stats_actions,
+    render_aggregation_actions, render_documents_actions, render_indexes_actions,
+    render_schema_actions, render_stats_actions,
 };
 pub use filter_bar::render_query_options;
 pub use stats_panel::render_stats_row;
