@@ -49,7 +49,8 @@ impl AppCommands {
         editor: Option<EditorSessionId>,
         cx: &mut App,
     ) {
-        let reject = |message: &str, cx: &mut App| {
+        // `announce` is false when the cause was already reported (e.g. a read-only connection).
+        let reject = |message: &str, announce: bool, cx: &mut App| {
             state.update(cx, |state, cx| {
                 let event = AppEvent::DocumentSaveFailed {
                     session: session_key.clone(),
@@ -57,7 +58,9 @@ impl AppCommands {
                     editor,
                     error: message.to_string(),
                 };
-                state.update_status_from_event(&event);
+                if announce {
+                    state.update_status_from_event(&event);
+                }
                 cx.emit(event);
                 cx.notify();
             });
@@ -67,23 +70,23 @@ impl AppCommands {
             .session_view(&session_key)
             .is_some_and(|view| view.saving_documents.contains(&doc_key))
         {
-            reject("A save is already in progress for this document.", cx);
+            reject("A save is already in progress for this document.", true, cx);
             return;
         }
         if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
-            reject("Document could not be saved. Check connection write permissions.", cx);
+            reject("Document could not be saved. Check connection write permissions.", false, cx);
             return;
         }
         let Some(baseline_document) = baseline_document else {
-            reject("Original document is unavailable. Reload before saving.", cx);
+            reject("Original document is unavailable. Reload before saving.", true, cx);
             return;
         };
         if updated.get("_id") != baseline_document.get("_id") {
-            reject("The document _id cannot be changed.", cx);
+            reject("The document _id cannot be changed.", true, cx);
             return;
         }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
-            reject("Connection is no longer active.", cx);
+            reject("Connection is no longer active.", true, cx);
             return;
         };
         let (database, collection, original_id, should_reload_after_save) = {
@@ -99,7 +102,7 @@ impl AppCommands {
                 .or_else(|| parse_bson_from_relaxed_json(doc_key.as_str()).ok());
 
             let Some(original_id) = original_id else {
-                reject("Could not resolve original document ID for save.", cx);
+                reject("Could not resolve original document ID for save.", true, cx);
                 return;
             };
 
@@ -205,7 +208,21 @@ impl AppCommands {
                                 editor,
                                 error: e.to_string(),
                             };
-                            state.update_status_from_event(&event);
+                            let report = crate::error::ErrorReport::from_error(
+                                "Couldn't save the document",
+                                &e,
+                            );
+                            if editor.is_some() {
+                                // The JSON editor window shows this error.
+                                state.record_error(report);
+                            } else if matches!(e, crate::error::Error::Conflict(_)) {
+                                state.report_error_with_action(
+                                    report,
+                                    crate::state::ErrorAction::ReloadDocuments(session_key.clone()),
+                                );
+                            } else {
+                                state.report_error(report);
+                            }
                             cx.emit(event);
                             cx.notify();
                         });

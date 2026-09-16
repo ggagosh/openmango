@@ -6,7 +6,8 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::*;
 
-use crate::components::{Button, request_preview_collection};
+use crate::components::{Button, ErrorCallout, request_preview_collection};
+use crate::error::ErrorReport;
 use crate::helpers::{format_bytes, format_number};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, View,
@@ -224,32 +225,31 @@ impl DatabaseView {
             return section.child(row).into_any_element();
         }
 
-        if let Some(_error) = stats_error {
-            row = row
+        if let Some(error) = stats_error {
+            let retry = Button::new("retry-db-stats")
+                .xsmall()
+                .label("Retry")
+                .disabled(database_key.is_none())
+                .on_click({
+                    let state = state.clone();
+                    let key = database_key.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        let Some(key) = key.clone() else {
+                            return;
+                        };
+                        AppCommands::reload_database(state.clone(), key, cx);
+                    }
+                });
+            return section
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().danger_foreground)
-                        .child("Database stats failed. See banner for details."),
+                    ErrorCallout::new(
+                        "db-stats-error",
+                        ErrorReport::from_message("Couldn't load database stats", &error),
+                    )
+                    .action(retry)
+                    .state(state.clone()),
                 )
-                .child(
-                    Button::new("retry-db-stats")
-                        .ghost()
-                        .xsmall()
-                        .label("Retry")
-                        .disabled(database_key.is_none())
-                        .on_click({
-                            let state = state.clone();
-                            let key = database_key.clone();
-                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                let Some(key) = key.clone() else {
-                                    return;
-                                };
-                                AppCommands::reload_database(state.clone(), key, cx);
-                            }
-                        }),
-                );
-            return section.child(row).into_any_element();
+                .into_any_element();
         }
 
         let Some(stats) = stats else {
@@ -313,35 +313,25 @@ impl DatabaseView {
                 .into_any_element();
         }
 
-        if let Some(_error) = collections_error {
+        if let Some(error) = collections_error {
+            let retry = Button::new("retry-db-collections").xsmall().label("Retry").on_click({
+                let state = state.clone();
+                let database_key = database_key.clone();
+                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                    let Some(key) = database_key.clone() else {
+                        return;
+                    };
+                    AppCommands::reload_database(state.clone(), key, cx);
+                }
+            });
             return section
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(spacing::sm())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().danger_foreground)
-                                .child("Collections failed. See banner for details."),
-                        )
-                        .child(
-                            Button::new("retry-db-collections")
-                                .ghost()
-                                .xsmall()
-                                .label("Retry")
-                                .on_click({
-                                    let state = state.clone();
-                                    let database_key = database_key.clone();
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        let Some(key) = database_key.clone() else {
-                                            return;
-                                        };
-                                        AppCommands::reload_database(state.clone(), key, cx);
-                                    }
-                                }),
-                        ),
+                    ErrorCallout::new(
+                        "db-collections-error",
+                        ErrorReport::from_message("Couldn't load collections", &error),
+                    )
+                    .action(retry)
+                    .state(state.clone()),
                 )
                 .into_any_element();
         }

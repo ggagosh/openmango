@@ -82,7 +82,7 @@ impl ConnectionManager {
                     for line_result in reader.lines() {
                         // Check cancellation
                         if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                            return Err(Error::Parse("Import cancelled".to_string())
+                            return Err(Error::Cancelled("Import cancelled".to_string())
                                 .with_processed(processed));
                         }
 
@@ -165,7 +165,7 @@ impl ConnectionManager {
                     for batch in docs.chunks(options.batch_size) {
                         // Check cancellation
                         if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                            return Err(Error::Parse("Import cancelled".to_string())
+                            return Err(Error::Cancelled("Import cancelled".to_string())
                                 .with_processed(processed));
                         }
 
@@ -264,7 +264,7 @@ impl ConnectionManager {
                 // Check cancellation
                 if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                     return Err(
-                        Error::Parse("Import cancelled".to_string()).with_processed(processed)
+                        Error::Cancelled("Import cancelled".to_string()).with_processed(processed)
                     );
                 }
 
@@ -352,7 +352,7 @@ impl ConnectionManager {
                 client,
                 database,
                 &staging_collection,
-                Error::Parse("Transfer cancelled".to_string()),
+                Error::Cancelled("Transfer cancelled".to_string()),
             ));
         }
 

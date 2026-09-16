@@ -1466,17 +1466,12 @@ impl Render for QueryLibraryDialog {
             .children(edit_panel)
             .children(import_panel)
             .when_some(self.error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .px(spacing::md())
-                        .py(spacing::xs())
-                        .bg(cx.theme().danger.opacity(0.08))
-                        .border_b_1()
-                        .border_color(cx.theme().danger.opacity(0.35))
-                        .text_sm()
-                        .text_color(cx.theme().danger_foreground)
-                        .child(error),
-                )
+                this.child(div().px(spacing::md()).py(spacing::xs()).child(
+                    crate::components::ErrorCallout::new(
+                        "query-library-error",
+                        crate::error::ErrorReport::from_text(&error),
+                    ),
+                ))
             })
             .child(body)
             .when(self.mode == LibraryMode::History && history_count > 0, |this| {

@@ -1,5 +1,4 @@
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::button::ButtonVariants as _;
 use std::rc::Rc;
 
 use crate::state::{AppCommands, CollectionStats, CollectionSubview, SchemaAnalysis, SessionKey};
@@ -199,7 +198,7 @@ impl Render for CollectionView {
                 0,
                 50,
                 false,
-                None::<String>,
+                None::<crate::error::ErrorReport>,
                 None,
                 std::collections::HashSet::new(),
                 0,
@@ -943,64 +942,30 @@ impl Render for CollectionView {
             if let Some(error) = query_error {
                 let retry_state = self.state.clone();
                 let retry_session = session_key.clone();
-                let details = error.clone();
+                let retry = Button::new("retry-document-query")
+                    .xsmall()
+                    .label("Run again")
+                    .disabled(retry_session.is_none())
+                    .on_click(move |_, _, cx| {
+                        if let Some(session) = retry_session.clone() {
+                            AppCommands::load_documents_for_session(
+                                retry_state.clone(),
+                                session,
+                                cx,
+                            );
+                        }
+                    });
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
                     .child(
-                        div()
-                            .mx(spacing::md())
-                            .mt(spacing::sm())
-                            .p(spacing::sm())
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap(spacing::md())
-                            .rounded(crate::theme::borders::radius_sm())
-                            .border_1()
-                            .border_color(cx.theme().danger.opacity(0.4))
-                            .bg(cx.theme().danger.opacity(0.08))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .text_sm()
-                                    .text_color(cx.theme().danger_foreground)
-                                    .child(format!("Query failed: {error}")),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(spacing::xs())
-                                    .child(
-                                        Button::new("retry-document-query")
-                                            .xsmall()
-                                            .label("Retry")
-                                            .disabled(retry_session.is_none())
-                                            .on_click(move |_, _, cx| {
-                                                if let Some(session) = retry_session.clone() {
-                                                    AppCommands::load_documents_for_session(
-                                                        retry_state.clone(),
-                                                        session,
-                                                        cx,
-                                                    );
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("copy-document-query-error")
-                                            .ghost()
-                                            .xsmall()
-                                            .label("Copy Details")
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    details.clone(),
-                                                ));
-                                            }),
-                                    ),
-                            ),
+                        div().mx(spacing::md()).mt(spacing::sm()).child(
+                            crate::components::ErrorCallout::new("document-query-error", error)
+                                .action(retry)
+                                .state(self.state.clone()),
+                        ),
                     )
                     .child(content)
                     .into_any_element()

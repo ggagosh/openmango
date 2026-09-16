@@ -1,26 +1,29 @@
 use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
+use crate::error::ErrorReport;
 use crate::state::{AppEvent, AppState, StatusMessage};
 
 use super::AppCommands;
 
 impl AppCommands {
     /// Create a collection.
+    /// `on_done` gets the outcome, so the dialog that asked can close or show why it failed.
     pub fn create_collection(
         state: Entity<AppState>,
         database: String,
         collection: String,
         cx: &mut App,
+        on_done: impl FnOnce(Result<(), ErrorReport>, &mut App) + 'static,
     ) {
         let connection_id = state.read(cx).selected_connection_id();
-        if !Self::ensure_writable(&state, connection_id, cx) {
-            return;
-        }
-        let Some(conn_id) = connection_id else {
+        let Some(conn_id) =
+            connection_id.filter(|_| Self::ensure_writable(&state, connection_id, cx))
+        else {
+            on_done(Err(not_writable("Couldn't create the collection")), cx);
             return;
         };
-        Self::create_collection_authorized(state, conn_id, database, collection, cx);
+        Self::create_collection_authorized(state, conn_id, database, collection, cx, on_done);
     }
 
     pub(super) fn create_collection_authorized(
@@ -29,9 +32,11 @@ impl AppCommands {
         database: String,
         collection: String,
         cx: &mut App,
+        on_done: impl FnOnce(Result<(), ErrorReport>, &mut App) + 'static,
     ) {
         let connection_id = Some(conn_id);
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
+            on_done(Err(not_connected("Couldn't create the collection")), cx);
             return;
         };
         let manager = state.read(cx).connection_manager();
@@ -79,15 +84,17 @@ impl AppCommands {
                             }
                             cx.notify();
                         });
+                        on_done(Ok(()), cx);
                     }
                     Err(e) => {
-                        log::error!("Failed to create collection: {}", e);
+                        log::error!("Failed to create collection: {e:?}");
+                        let report = ErrorReport::from_error("Couldn't create the collection", &e);
                         state.update(cx, |state, cx| {
-                            state.set_status_message(Some(StatusMessage::error(format!(
-                                "Create collection failed: {e}"
-                            ))));
+                            // The create dialog stays open and shows this.
+                            state.record_error(report.clone());
                             cx.notify();
                         });
+                        on_done(Err(report), cx);
                     }
                 });
             }
@@ -102,19 +109,21 @@ impl AppCommands {
         from: String,
         to: String,
         cx: &mut App,
+        on_done: impl FnOnce(Result<(), ErrorReport>, &mut App) + 'static,
     ) {
         let connection_id = state.read(cx).selected_connection_id();
-        if !Self::ensure_writable(&state, connection_id, cx) {
-            return;
-        }
-        if from == to {
-            return;
-        }
-
-        let Some(conn_id) = connection_id else {
+        let Some(conn_id) =
+            connection_id.filter(|_| Self::ensure_writable(&state, connection_id, cx))
+        else {
+            on_done(Err(not_writable("Couldn't rename the collection")), cx);
             return;
         };
+        if from == to {
+            on_done(Ok(()), cx);
+            return;
+        }
         let Some(client) = Self::active_client(&state, conn_id, cx) else {
+            on_done(Err(not_connected("Couldn't rename the collection")), cx);
             return;
         };
         let connection_id = conn_id;
@@ -178,15 +187,17 @@ impl AppCommands {
                             ))));
                             cx.notify();
                         });
+                        on_done(Ok(()), cx);
                     }
                     Err(e) => {
-                        log::error!("Failed to rename collection: {}", e);
+                        log::error!("Failed to rename collection: {e:?}");
+                        let report = ErrorReport::from_error("Couldn't rename the collection", &e);
                         state.update(cx, |state, cx| {
-                            state.set_status_message(Some(StatusMessage::error(format!(
-                                "Rename collection failed: {e}"
-                            ))));
+                            // The rename dialog stays open and shows this.
+                            state.record_error(report.clone());
                             cx.notify();
                         });
+                        on_done(Err(report), cx);
                     }
                 });
             }
@@ -320,4 +331,13 @@ impl AppCommands {
         })
         .detach();
     }
+}
+
+fn not_writable(title: &str) -> ErrorReport {
+    ErrorReport::new(title, "This connection doesn't allow writes right now.")
+}
+
+fn not_connected(title: &str) -> ErrorReport {
+    ErrorReport::new(title, "The connection isn't active. Connect and try again.")
+        .kind(crate::error::ErrorKind::Connection)
 }

@@ -51,7 +51,7 @@ impl ConnectionManager {
             let mut detected_columns = Vec::new();
             while let Some(doc) = discovery_cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 collect_document_columns(&doc, &mut seen_columns, &mut detected_columns);
             }
@@ -85,7 +85,7 @@ impl ConnectionManager {
 
             while let Some(doc) = cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
 
                 let row = count as u32 + 1;
@@ -110,14 +110,14 @@ impl ConnectionManager {
             }
 
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             let output = AtomicExportFile::new(&path)?;
             workbook
                 .save(output.temporary_path())
                 .map_err(|e| crate::error::Error::Parse(e.to_string()))?;
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             output.commit()?;
             on_progress(count);

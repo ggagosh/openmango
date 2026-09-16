@@ -71,30 +71,39 @@ pub fn render_schema_panel(
 
     // Error state
     if let Some(error) = schema_error {
+        let retry = Button::new("retry-schema")
+            .xsmall()
+            .label("Retry")
+            .disabled(session_key.is_none())
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                    let Some(session_key) = session_key.clone() else {
+                        return;
+                    };
+                    AppCommands::analyze_collection_schema(state.clone(), session_key, cx);
+                }
+            });
         return div()
             .flex()
             .flex_1()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(spacing::sm())
-            .child(div().text_sm().text_color(app.theme().danger_foreground).child(error))
+            .p(spacing::lg())
             .child(
-                Button::new("retry-schema")
-                    .ghost()
-                    .xsmall()
-                    .label("Retry")
-                    .disabled(session_key.is_none())
-                    .on_click({
-                        let state = state.clone();
-                        let session_key = session_key.clone();
-                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                            let Some(session_key) = session_key.clone() else {
-                                return;
-                            };
-                            AppCommands::analyze_collection_schema(state.clone(), session_key, cx);
-                        }
-                    }),
+                div().w_full().max_w(px(640.0)).child(
+                    crate::components::ErrorCallout::new(
+                        "schema-error",
+                        crate::error::ErrorReport::from_message(
+                            "Couldn't analyze the schema",
+                            &error,
+                        ),
+                    )
+                    .action(retry)
+                    .state(state.clone()),
+                ),
             )
             .into_any_element();
     }

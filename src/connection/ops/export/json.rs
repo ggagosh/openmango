@@ -85,7 +85,7 @@ impl ConnectionManager {
             while let Some(doc) = cursor.try_next().await? {
                 // Check cancellation
                 if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
 
                 let json_value = match options.json_mode {
@@ -128,7 +128,7 @@ impl ConnectionManager {
             writer.flush()?;
             drop(writer);
             if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             output.commit()?;
             Ok(count)
@@ -191,7 +191,7 @@ impl ConnectionManager {
             while let Some(doc) = cursor.try_next().await? {
                 // Check cancellation
                 if options.cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
 
                 let json_value = match options.json_mode {
@@ -239,7 +239,7 @@ impl ConnectionManager {
             writer.flush()?;
             drop(writer);
             if options.cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             output.commit()?;
             // Final progress report

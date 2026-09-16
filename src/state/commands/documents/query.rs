@@ -53,14 +53,37 @@ fn record_document_query_success(
     true
 }
 
-fn record_document_query_failure(data: &mut SessionData, request_id: u64, details: String) -> bool {
+fn record_document_query_failure(
+    data: &mut SessionData,
+    request_id: u64,
+    report: crate::error::ErrorReport,
+) -> bool {
     if data.request_id != request_id {
         return false;
     }
     data.is_loading = false;
-    data.query_error = Some(details);
+    data.query_error = Some(report);
     data.query_cancellation = None;
     true
+}
+
+/// The query as run, for Copy and Ask AI.
+fn query_context(definition: &QueryDefinition) -> String {
+    let QueryContent::Documents(query) = &definition.content else {
+        return String::new();
+    };
+    let mut context = format!(
+        "Collection: {}.{}\nFilter: {}",
+        definition.database,
+        definition.collection.clone().unwrap_or_default(),
+        query.filter_raw
+    );
+    for (label, raw) in [("Sort", &query.sort_raw), ("Projection", &query.projection_raw)] {
+        if !raw.is_empty() && raw != "{}" {
+            context.push_str(&format!("\n{label}: {raw}"));
+        }
+    }
+    context
 }
 
 fn format_query_document(document: &Option<Document>) -> String {
@@ -235,20 +258,24 @@ impl AppCommands {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
                             };
-                            let details = error.to_string();
+                            let report = crate::error::ErrorReport::from_error(
+                                "Couldn't run the query",
+                                &error,
+                            )
+                            .context(query_context(&query_definition));
                             if !record_document_query_failure(
                                 &mut session.data,
                                 request_id,
-                                details.clone(),
+                                report.clone(),
                             ) {
                                 return;
                             }
-                            let event = AppEvent::DocumentsLoadFailed {
+                            // The documents panel shows this error, so it's only recorded.
+                            state.record_error(report.clone());
+                            cx.emit(AppEvent::DocumentsLoadFailed {
                                 session: session_key.clone(),
-                                error: details,
-                            };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
+                                error: report.one_line(),
+                            });
                             cx.notify();
                         });
                         log::error!("Failed to load documents: {}", error);
@@ -272,7 +299,7 @@ mod tests {
         let current = crate::connection::types::CancellationToken::new();
         let mut data = SessionData::default();
         data.query_cancellation = Some(previous.clone());
-        data.query_error = Some("old failure".to_string());
+        data.query_error = Some(crate::error::ErrorReport::new("", "old failure"));
 
         begin_document_query(&mut data, 2, current.clone());
 
@@ -297,14 +324,16 @@ mod tests {
         data.request_id = 7;
         data.query_cancellation = Some(crate::connection::types::CancellationToken::new());
 
-        assert!(record_document_query_failure(&mut data, 7, "server rejected query".to_string(),));
+        let report =
+            crate::error::ErrorReport::new("Couldn't run the query", "Server rejected it.");
+        assert!(record_document_query_failure(&mut data, 7, report.clone()));
 
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].doc, document);
         assert_eq!(data.total, 1);
         assert!(data.loaded);
         assert!(!data.is_loading);
-        assert_eq!(data.query_error.as_deref(), Some("server rejected query"));
+        assert_eq!(data.query_error, Some(report));
         assert!(data.query_cancellation.is_none());
     }
 
@@ -342,7 +371,11 @@ mod tests {
         data.request_id = 9;
         data.query_cancellation = Some(current.clone());
 
-        assert!(!record_document_query_failure(&mut data, 8, "stale failure".to_string(),));
+        assert!(!record_document_query_failure(
+            &mut data,
+            8,
+            crate::error::ErrorReport::new("", "stale failure"),
+        ));
 
         assert_eq!(data.total, 3);
         assert!(data.is_loading);

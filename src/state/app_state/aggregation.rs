@@ -121,7 +121,7 @@ pub struct PipelineState {
     pub results: Option<Arc<Vec<Document>>>,
     pub stage_doc_counts: Vec<StageDocCounts>,
     pub loading: bool,
-    pub error: Option<String>,
+    pub error: Option<crate::error::ErrorReport>,
     /// Stage the error belongs to, when the run could tell.
     pub error_stage: Option<usize>,
     pub request_id: u64,

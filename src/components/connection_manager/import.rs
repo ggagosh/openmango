@@ -33,10 +33,11 @@ pub fn open_import_flow(state: Entity<AppState>, window: &mut Window, cx: &mut A
             Ok(j) => j,
             Err(e) => {
                 cx.update(|cx| {
-                    state_clone.update(cx, |state, _cx| {
+                    state_clone.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(format!(
                             "Failed to read file: {e}"
                         ))));
+                        cx.notify();
                     });
                 });
                 return;
@@ -47,10 +48,11 @@ pub fn open_import_flow(state: Entity<AppState>, window: &mut Window, cx: &mut A
             Ok(f) => f,
             Err(e) => {
                 cx.update(|cx| {
-                    state_clone.update(cx, |state, _cx| {
+                    state_clone.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(format!(
                             "Invalid export file: {e}"
                         ))));
+                        cx.notify();
                     });
                 });
                 return;
@@ -128,10 +130,11 @@ fn open_passphrase_dialog(
                                         &passphrase,
                                     ) {
                                         drop(file_mut);
-                                        state.update(cx, |state, _cx| {
+                                        state.update(cx, |state, cx| {
                                             state.set_status_message(Some(StatusMessage::error(
                                                 format!("Decryption failed: {e}"),
                                             )));
+                                            cx.notify();
                                         });
                                         window.close_dialog(cx);
                                         return;

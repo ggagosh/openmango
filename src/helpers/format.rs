@@ -33,3 +33,22 @@ pub fn format_bytes(value: u64) -> String {
 
     format!("{formatted} {}", UNITS[unit])
 }
+
+/// Shorten `text` to at most `max` characters, ending with "…" when cut. Safe for any UTF-8.
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    #[test]
+    fn truncate_chars_never_splits_a_character() {
+        assert_eq!(super::truncate_chars("héllo wörld", 6), "héllo…");
+        assert_eq!(super::truncate_chars("short", 60), "short");
+    }
+}

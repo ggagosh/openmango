@@ -7,6 +7,7 @@ use gpui_kit::component::button::{Button as MenuButton, ButtonGroup, ButtonVaria
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
@@ -45,7 +46,13 @@ impl CollectionView {
             .px(spacing::sm())
             .py(spacing::xs())
             .child(div().text_sm().child("Pipeline"))
-            .child(pipeline_header_controls(pipeline, session_key.clone(), self.state.clone(), cx));
+            .child(pipeline_header_controls(
+                pipeline,
+                self.aggregation_text_error.is_some(),
+                session_key.clone(),
+                self.state.clone(),
+                cx,
+            ));
 
         let add_at = pipeline.selected_stage.map_or(pipeline.stages.len(), |index| index + 1);
         let add_stage = Button::new("agg-add-stage")
@@ -118,19 +125,23 @@ impl CollectionView {
 /// Stages/Text switch and the pipeline options menu, shared by both modes.
 pub(super) fn pipeline_header_controls(
     pipeline: &PipelineState,
+    text_error: bool,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
     cx: &mut Context<CollectionView>,
 ) -> Div {
     let view = cx.entity();
     let text_mode = pipeline.text_mode;
+    // The Text editor can't be read back into stages yet.
+    let text_blocked = text_mode && text_error;
     let disabled = session_key.is_none();
     let mode = ButtonGroup::new("agg-mode").xsmall().children([
         Button::new("agg-mode-stages")
             .label("Stages")
             .selected(!text_mode)
             .toggled(!text_mode)
-            .disabled(disabled)
+            .when(text_blocked, |button| button.tooltip("Fix the pipeline text to switch back"))
+            .disabled(disabled || text_blocked)
             .on_click({
                 let view = view.clone();
                 move |_, window, cx| {

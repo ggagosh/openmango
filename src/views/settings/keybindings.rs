@@ -467,18 +467,11 @@ impl Render for KeybindingsView {
                 )
             })
             .when_some(self.error.clone(), |content, error| {
-                content.child(
-                    div()
-                        .px(spacing::md())
-                        .py(spacing::sm())
-                        .rounded(borders::radius_sm())
-                        .border_1()
-                        .border_color(cx.theme().danger.opacity(0.45))
-                        .bg(cx.theme().danger.opacity(0.08))
-                        .text_sm()
-                        .text_color(cx.theme().danger_foreground)
-                        .child(error),
-                )
+                content.child(crate::components::ErrorCallout::new(
+                    "keybinding-error",
+                    crate::error::ErrorReport::from_text(&error)
+                        .kind(crate::error::ErrorKind::Validation),
+                ))
             })
             .child(
                 div()

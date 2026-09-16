@@ -10,6 +10,7 @@ use gpui_kit::{App, AppContext as _, Entity};
 
 use crate::bson::parse_bson_from_relaxed_json;
 use crate::connection::{AggregatePipelineError, ConnectionManager};
+use crate::error::{ErrorKind, ErrorReport};
 use crate::state::app_state::{PipelineRun, PipelineStage, StageDocCounts, StageStatsMode};
 use crate::state::{
     AppCommands, AppEvent, AppState, QueryContent, QueryDefinition, SessionKey, StatusMessage,
@@ -120,23 +121,7 @@ impl AppCommands {
         };
 
         if stages.is_empty() {
-            state.update(cx, |state, cx| {
-                if let Some(session) = state.session_mut(&session_key) {
-                    session.data.aggregation.error = Some("Pipeline is empty".to_string());
-                    session.data.aggregation.results = None;
-                    session.data.aggregation.last_run_time_ms = None;
-                }
-                cx.notify();
-            });
-            let event = AppEvent::AggregationFailed {
-                session: session_key,
-                error: "Pipeline is empty".to_string(),
-            };
-            state.update(cx, |state, cx| {
-                state.update_status_from_event(&event);
-                cx.emit(event);
-                cx.notify();
-            });
+            reject_aggregation_run(&state, session_key, "Add a stage to run the pipeline.", cx);
             return;
         }
 
@@ -294,8 +279,8 @@ impl AppCommands {
                     }
                     Err(AggregationRunError::Cancelled) => {}
                     Err(error) => {
-                        let error_message = error.to_string();
                         let error_stage = error.stage();
+                        let report = error.report(&stages);
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
@@ -304,17 +289,20 @@ impl AppCommands {
                                 return;
                             }
                             session.data.aggregation.loading = false;
-                            session.data.aggregation.error = Some(error_message.clone());
+                            session.data.aggregation.error = Some(report.clone());
                             session.data.aggregation.error_stage = error_stage;
                             session.data.aggregation.last_run =
                                 Some(PipelineRun { target, revision, page: results_page });
                             session.data.aggregation.last_run_time_ms = None;
-                            let event = AppEvent::AggregationFailed {
+                            // Shown in the results panel. Automatic previews fail on every
+                            // half-typed stage, so only runs the user asked for are recorded.
+                            if !preview {
+                                state.record_error(report.clone());
+                            }
+                            cx.emit(AppEvent::AggregationFailed {
                                 session: session_key.clone(),
-                                error: error_message,
-                            };
-                            state.update_status_from_event(&event);
-                            cx.emit(event);
+                                error: report.one_line(),
+                            });
                             cx.notify();
                         });
                     }
@@ -331,16 +319,15 @@ fn reject_aggregation_run(
     message: &str,
     cx: &mut App,
 ) {
-    let message = message.to_string();
+    let report = ErrorReport::new("Couldn't run the pipeline", message).kind(ErrorKind::Validation);
     state.update(cx, |state, cx| {
         if let Some(session) = state.session_mut(&session_key) {
-            session.data.aggregation.error = Some(message.clone());
+            session.data.aggregation.error = Some(report.clone());
             session.data.aggregation.error_stage = None;
             session.data.aggregation.loading = false;
         }
-        let event = AppEvent::AggregationFailed { session: session_key, error: message };
-        state.update_status_from_event(&event);
-        cx.emit(event);
+        state.record_error(report.clone());
+        cx.emit(AppEvent::AggregationFailed { session: session_key, error: report.one_line() });
         cx.notify();
     });
 }
@@ -419,6 +406,27 @@ enum AggregationRunError {
 }
 
 impl AggregationRunError {
+    /// What the results panel shows, with the pipeline attached for Copy and Ask AI.
+    fn report(&self, stages: &[PipelineStage]) -> ErrorReport {
+        let title = match self.stage() {
+            Some(index) => format!("Stage {} failed", index + 1),
+            None => "The pipeline failed".to_string(),
+        };
+        let report = match self {
+            Self::Pipeline { message, .. } => {
+                // "Stage 2 ($match): <parser message>" → the parser message.
+                let detail = message
+                    .strip_prefix("Stage ")
+                    .and_then(|_| message.split_once("): "))
+                    .map_or(message.as_str(), |(_, rest)| rest);
+                ErrorReport::new(title, crate::error::sentence(detail)).kind(ErrorKind::Validation)
+            }
+            Self::Mongo { error, .. } => ErrorReport::from_error(title, error),
+            Self::Cancelled => ErrorReport::new(title, "The run was cancelled."),
+        };
+        report.context(format!("Pipeline:\n{}", crate::state::app_state::pipeline_to_text(stages)))
+    }
+
     fn stage(&self) -> Option<usize> {
         match self {
             Self::Pipeline { stage, .. } | Self::Mongo { stage, .. } => *stage,

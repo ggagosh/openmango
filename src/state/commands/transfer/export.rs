@@ -49,6 +49,7 @@ impl AppCommands {
                 Err(error) => {
                     state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(error.to_string())));
+                        cx.notify();
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                             tab.runtime.is_running = false;
                             tab.runtime.error_message = Some(error.to_string());
@@ -114,6 +115,7 @@ impl AppCommands {
                 tab.runtime.is_running = true;
                 tab.runtime.has_started = true;
                 tab.runtime.cancellation_requested = false;
+                tab.runtime.cancellation_unconfirmed = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new export
@@ -505,11 +507,9 @@ impl AppCommands {
                                         tab.runtime.error_message = failure_summary;
                                     }
                                     if had_error {
-                                        state.set_status_message(Some(StatusMessage::error(
-                                            format!(
+                                        state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                                 "Export completed with errors: {failed_count} collection(s) failed; {total_count} documents processed"
-                                            ),
-                                        )));
+                                            )));
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
                                             format!("Exported {total_count} documents"),
@@ -535,9 +535,9 @@ impl AppCommands {
                                         tab.runtime.is_running = false;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                    state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                         "Export failed: {error}"
-                                    ))));
+                                    )));
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }
@@ -760,6 +760,7 @@ impl AppCommands {
                                         state.set_status_message(Some(StatusMessage::error(
                                             "BSON export completed with errors".to_string(),
                                         )));
+                                        cx.notify();
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
                                             "BSON export completed".to_string(),
@@ -779,13 +780,17 @@ impl AppCommands {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.cancellation_token = None;
+                                        tab.runtime.cancellation_unconfirmed = !termination_succeeded;
                                         tab.runtime.error_message = Some(message.to_string());
                                     }
-                                    state.set_status_message(Some(if termination_succeeded {
-                                        StatusMessage::info(message)
+                                    if termination_succeeded {
+                                        state.set_status_message(Some(StatusMessage::info(message)));
                                     } else {
-                                        StatusMessage::error(message)
-                                    }));
+                                        state.report_transfer_error(
+                                            transfer_id,
+                                            crate::error::ErrorReport::from_text(message),
+                                        );
+                                    }
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -793,9 +798,9 @@ impl AppCommands {
                                         tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                    state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                         "BSON export failed: {error}"
-                                    ))));
+                                    )));
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }
@@ -856,7 +861,10 @@ impl AppCommands {
                         tab.runtime.is_running = false;
                         tab.runtime.error_message = Some(error.clone());
                     }
-                    state.set_status_message(Some(StatusMessage::error(error.clone())));
+                    state.report_transfer_error(
+                        transfer_id,
+                        crate::error::ErrorReport::from_text(&error),
+                    );
                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                     cx.notify();
                 });
@@ -1003,9 +1011,12 @@ impl AppCommands {
                                             tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
-                                        "Export failed: {error}"
-                                    ))));
+                                    state.report_transfer_error(
+                                        transfer_id,
+                                        crate::error::ErrorReport::from_text(&format!(
+                                            "Export failed: {error}"
+                                        )),
+                                    );
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }

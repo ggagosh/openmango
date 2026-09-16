@@ -523,17 +523,14 @@ impl ConnectionManager {
             .flex_col()
             // Mutual-exclusion warning
             .when(both_enabled, |this| {
-                this.child(
-                    div()
-                        .mb(spacing::md())
-                        .rounded(crate::theme::borders::radius_sm())
-                        .bg(cx.theme().danger.opacity(0.08))
-                        .px(spacing::sm())
-                        .py(spacing::xs())
-                        .text_xs()
-                        .text_color(cx.theme().danger_foreground)
-                        .child("SSH tunnel and SOCKS5 proxy cannot be enabled together."),
-                )
+                this.child(div().mb(spacing::md()).child(crate::components::ErrorCallout::new(
+                    "ssh-proxy-conflict",
+                    crate::error::ErrorReport::new(
+                        "",
+                        "An SSH tunnel and a SOCKS5 proxy can't be used together. Turn one off.",
+                    )
+                    .kind(crate::error::ErrorKind::Validation),
+                )))
             })
             // SSH Tunnel section
             .child(

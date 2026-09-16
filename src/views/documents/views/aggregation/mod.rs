@@ -137,6 +137,7 @@ impl CollectionView {
                                 return;
                             };
                             let raw = state.read(cx).value().to_string();
+                            view.aggregation_format_error = None;
                             view.aggregation_body_revision = view.state.update(cx, |state, cx| {
                                 state.set_pipeline_stage_body(&session_key, index, raw);
                                 cx.notify();
@@ -239,6 +240,7 @@ impl CollectionView {
             || self.aggregation_stage_count != pipeline.stages.len();
         if stage_changed {
             self.aggregation_selected_stage = pipeline.selected_stage;
+            self.aggregation_format_error = None;
             if !session_changed && let Some(selected) = pipeline.selected_stage {
                 // The preview divider sits before `selected` when it previews the stage input.
                 let divider_before = pipeline.preview_target().map_or(0, |target| target + 1);
@@ -347,11 +349,8 @@ impl CollectionView {
         if current == Some(text_mode) {
             return;
         }
-        if !text_mode && let Some(error) = self.aggregation_text_error.clone() {
-            window.push_notification(
-                Notification::error(format!("Fix the pipeline text first. {error}")),
-                cx,
-            );
+        // The text panel already shows why; the Stages button is disabled until it's fixed.
+        if !text_mode && self.aggregation_text_error.is_some() {
             return;
         }
         if text_mode {

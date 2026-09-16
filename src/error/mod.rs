@@ -1,30 +1,46 @@
 use thiserror::Error;
 
-/// Application-wide error type
+mod report;
+
+pub use report::{ErrorKind, ErrorReport, sentence};
+
+/// Application-wide error type.
+///
+/// `Display` is what people read, so it carries no internal prefixes; [`ErrorReport`] keeps the
+/// technical parts.
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("MongoDB error: {0}")]
+    #[error("{}", ErrorReport::from_mongo("", .0).display_text())]
     Mongo(#[from] mongodb::error::Error),
 
-    #[error("IO error: {0}")]
+    #[error("{0}")]
     Io(#[from] std::io::Error),
 
-    #[error("JSON error: {0}")]
+    #[error("Invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("CSV error: {0}")]
+    #[error("Invalid CSV: {0}")]
     Csv(#[from] csv::Error),
 
-    #[error("SSH error: {0}")]
+    #[error("SSH: {0}")]
     Ssh(#[from] ssh2::Error),
 
-    #[error("Parse error: {0}")]
+    /// Input that couldn't be used, or a plain message with no better variant.
+    #[error("{0}")]
     Parse(String),
 
-    #[error("Timeout: {0}")]
+    /// The data changed underneath the operation, e.g. a document edited elsewhere.
+    #[error("{0}")]
+    Conflict(String),
+
+    /// The user stopped the operation.
+    #[error("{0}")]
+    Cancelled(String),
+
+    #[error("{0}")]
     Timeout(String),
 
-    #[error("Tool not found: {0}")]
+    #[error("{0}")]
     ToolNotFound(String),
 
     #[error("Transfer failed after {processed} document(s): {source}")]
@@ -50,6 +66,15 @@ impl Error {
                 Self::PartialTransfer { processed, source: Box::new(source) }
             }
             source => source,
+        }
+    }
+
+    /// Whether the user stopped this, including after some documents were processed.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled(_) => true,
+            Self::PartialTransfer { source, .. } => source.is_cancelled(),
+            _ => false,
         }
     }
 

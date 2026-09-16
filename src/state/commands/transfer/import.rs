@@ -45,6 +45,7 @@ impl AppCommands {
                 Err(error) => {
                     state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(error.to_string())));
+                        cx.notify();
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                             tab.runtime.is_running = false;
                             tab.runtime.error_message = Some(error.to_string());
@@ -125,6 +126,7 @@ impl AppCommands {
                 tab.runtime.is_running = true;
                 tab.runtime.has_started = true;
                 tab.runtime.cancellation_requested = false;
+                tab.runtime.cancellation_unconfirmed = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.cancellation_token = Some(cancellation_token.clone());
@@ -171,6 +173,7 @@ impl AppCommands {
                         state.set_status_message(Some(StatusMessage::error(
                             "Connection URI not available",
                         )));
+                        cx.notify();
                         if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                             tab.runtime.is_running = false;
                         }
@@ -363,6 +366,7 @@ impl AppCommands {
                                         state.set_status_message(Some(StatusMessage::error(
                                             "BSON import completed with errors".to_string(),
                                         )));
+                                        cx.notify();
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
                                             "BSON import completed".to_string(),
@@ -382,13 +386,17 @@ impl AppCommands {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                                         tab.runtime.is_running = false;
                                         tab.runtime.cancellation_token = None;
+                                        tab.runtime.cancellation_unconfirmed = !termination_succeeded;
                                         tab.runtime.error_message = Some(message.to_string());
                                     }
-                                    state.set_status_message(Some(if termination_succeeded {
-                                        StatusMessage::info(message)
+                                    if termination_succeeded {
+                                        state.set_status_message(Some(StatusMessage::info(message)));
                                     } else {
-                                        StatusMessage::error(message)
-                                    }));
+                                        state.report_transfer_error(
+                                            transfer_id,
+                                            crate::error::ErrorReport::from_text(message),
+                                        );
+                                    }
                                 }
                                 TransferProgressMessage::Failed { error } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
@@ -396,9 +404,9 @@ impl AppCommands {
                                         tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                    state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                         "BSON import failed: {error}"
-                                    ))));
+                                    )));
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }
@@ -558,9 +566,12 @@ impl AppCommands {
                                             tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
-                                        "Import failed: {error}"
-                                    ))));
+                                    state.report_transfer_error(
+                                        transfer_id,
+                                        crate::error::ErrorReport::from_text(&format!(
+                                            "Import failed: {error}"
+                                        )),
+                                    );
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }

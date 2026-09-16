@@ -400,8 +400,14 @@ impl Render for IndexCreateDialog {
                     .child(mode_button("index-mode-json", "JSON", IndexMode::Json)),
             );
 
-        let status: Option<(SharedString, Hsla)> = if let Some(error) = &self.error_message {
-            Some((error.clone().into(), cx.theme().danger))
+        let error = self.error_message.as_ref().map(|error| {
+            crate::components::ErrorCallout::new(
+                "index-create-error",
+                crate::error::ErrorReport::from_text(error),
+            )
+        });
+        let status: Option<(SharedString, Hsla)> = if self.error_message.is_some() {
+            None
         } else if is_edit {
             Some((
                 "Replacing validates a temporary copy, then drops and rebuilds this index.".into(),
@@ -454,6 +460,7 @@ impl Render for IndexCreateDialog {
             .p(spacing::md())
             .child(header)
             .child(if self.mode == IndexMode::Form { form_view } else { json_view })
+            .children(error)
             .child(footer)
     }
 }

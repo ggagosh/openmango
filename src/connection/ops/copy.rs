@@ -136,7 +136,9 @@ impl ConnectionManager {
 
                 // Check cancellation
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(Error::Parse("Copy cancelled".to_string()).with_processed(copied));
+                    return Err(
+                        Error::Cancelled("Copy cancelled".to_string()).with_processed(copied)
+                    );
                 }
 
                 batch.push(doc);
