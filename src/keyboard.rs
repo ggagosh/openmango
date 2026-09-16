@@ -84,6 +84,10 @@ actions!(
         DuplicateAggregationStage,
         DeleteAggregationStage,
         ToggleAggregationStageEnabled,
+        AddAggregationStage,
+        UndoAggregationEdit,
+        RedoAggregationEdit,
+        FocusAggregationStageEditor,
         FindInSidebar,
         CloseSidebarSearch,
         OpenActionBar,
@@ -126,6 +130,8 @@ actions!(
 );
 
 const DOCUMENT_EDIT_CONTEXT: &str = "Documents && !Input && !Aggregation";
+/// Set on the aggregation stage list, so list keys never fire while results or editors have focus.
+pub const AGGREGATION_STAGES_CONTEXT: &str = "AggregationStages";
 const FOCUS_CONTENT_KEYS: [&str; 2] = ["cmd-shift-1", "ctrl-shift-1"];
 
 pub fn bind_keymap(cx: &mut App, settings: &KeybindingSettings) {
@@ -410,36 +416,20 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("cmd-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
-        KeyBinding::new(
-            "cmd-alt-k",
-            ClearAggregationStage,
-            Some("Documents && Aggregation && Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-alt-k",
-            ClearAggregationStage,
-            Some("Documents && Aggregation && Input"),
-        ),
-        KeyBinding::new(
-            "cmd-shift-backspace",
-            ClearAggregationStage,
-            Some("Documents && Aggregation && Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-shift-backspace",
-            ClearAggregationStage,
-            Some("Documents && Aggregation && Input"),
-        ),
-        KeyBinding::new(
-            "up",
-            SelectPrevAggregationStage,
-            Some("Documents && Aggregation && !Input"),
-        ),
-        KeyBinding::new(
-            "down",
-            SelectNextAggregationStage,
-            Some("Documents && Aggregation && !Input"),
-        ),
+        KeyBinding::new("cmd-alt-k", ClearAggregationStage, Some("Aggregation > Input")),
+        KeyBinding::new("ctrl-alt-k", ClearAggregationStage, Some("Aggregation > Input")),
+        KeyBinding::new("cmd-shift-backspace", ClearAggregationStage, Some("Aggregation > Input")),
+        KeyBinding::new("ctrl-shift-backspace", ClearAggregationStage, Some("Aggregation > Input")),
+        KeyBinding::new("up", SelectPrevAggregationStage, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("down", SelectNextAggregationStage, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("space", ToggleAggregationStageEnabled, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("enter", FocusAggregationStageEditor, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("cmd-z", UndoAggregationEdit, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("ctrl-z", UndoAggregationEdit, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("cmd-shift-z", RedoAggregationEdit, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("ctrl-shift-z", RedoAggregationEdit, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("cmd-shift-n", AddAggregationStage, Some("Documents && Aggregation")),
+        KeyBinding::new("ctrl-shift-n", AddAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new("cmd-d", DuplicateAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-d", DuplicateAggregationStage, Some("Documents && Aggregation")),
         KeyBinding::new(
@@ -452,16 +442,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
             ToggleAggregationStageEnabled,
             Some("Documents && Aggregation && !Input"),
         ),
-        KeyBinding::new(
-            "delete",
-            DeleteAggregationStage,
-            Some("Documents && Aggregation && !Input"),
-        ),
-        KeyBinding::new(
-            "backspace",
-            DeleteAggregationStage,
-            Some("Documents && Aggregation && !Input"),
-        ),
+        KeyBinding::new("delete", DeleteAggregationStage, Some(AGGREGATION_STAGES_CONTEXT)),
+        KeyBinding::new("backspace", DeleteAggregationStage, Some(AGGREGATION_STAGES_CONTEXT)),
         KeyBinding::new("cmd-shift-up", MoveAggregationStageUp, Some("Documents && Aggregation")),
         KeyBinding::new(
             "cmd-shift-down",
@@ -884,6 +866,8 @@ fn context_samples() -> Vec<Vec<KeyContext>> {
         single("Workspace Documents Schema"),
         single("Workspace Documents Aggregation"),
         single("Workspace Documents Aggregation Input"),
+        path("Workspace Documents Aggregation", "AggregationStages"),
+        path("Workspace Documents Aggregation", "Input"),
         single("Workspace ForgeView"),
         path("Workspace ForgeView", "Input"),
         single("Workspace Transfer"),
@@ -932,12 +916,15 @@ mod tests {
     #[test]
     fn document_duplicate_and_delete_do_not_match_aggregation() {
         let document = KeyBindingContextPredicate::parse(DOCUMENT_EDIT_CONTEXT).unwrap();
-        let aggregation =
-            KeyBindingContextPredicate::parse("Documents && Aggregation && !Input").unwrap();
-        let contexts = [KeyContext::parse("Documents Aggregation").unwrap()];
+        let aggregation = KeyBindingContextPredicate::parse(AGGREGATION_STAGES_CONTEXT).unwrap();
+        let contexts = [
+            KeyContext::parse("Documents Aggregation").unwrap(),
+            KeyContext::parse(AGGREGATION_STAGES_CONTEXT).unwrap(),
+        ];
 
         assert!(document.depth_of(&contexts).is_none());
         assert!(aggregation.depth_of(&contexts).is_some());
+        assert!(aggregation.depth_of(&contexts[..1]).is_none());
     }
 
     #[test]

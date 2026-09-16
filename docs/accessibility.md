@@ -34,6 +34,15 @@ Run this checklist on every release candidate with VoiceOver enabled (`Command-F
 3. Open the detached JSON editor, use search, save, and close it from the keyboard.
 4. Verify query and save errors remain visible and focus does not disappear after closing overlays.
 
+### Aggregation
+
+1. Open the Aggregation tab with `Command-Option-4`; focus lands in the stage list and shows a focus ring.
+2. Move between stages with the arrow keys, skip or include one with Space, and open its editor with Return. Escape returns to the stage list.
+3. Add a stage with `Command-Shift-N`, pick an operator by typing its name, and confirm with Return.
+4. Delete a stage with Backspace, then undo it from the notification or with `Command-Z` in the stage list.
+5. Switch between Stages and Text; verify a text error stays visible and blocks switching back until fixed.
+6. Verify each stage row announces its number, operator, and skipped or failed state.
+
 ## Framework limitation
 
-The current GPUI release does not expose macOS accessibility-role/name/live-region APIs for custom elements. OpenMango therefore cannot yet publish full native VoiceOver semantics for every custom control. Keyboard behavior, visible labels, tooltips, focus order, and focus restoration are covered in-app; native semantic announcements must be completed when GPUI exposes that API.
+GPUI exposes accessibility roles, names, and selected or toggled state on any element with an id (`.role()`, `.aria_label()`, `.aria_selected()`), and gpui-kit controls accept `accessibility_label` or `aria_label`. It does not yet offer live regions, so status changes such as "Stage deleted" are not announced; they stay visible on screen instead.

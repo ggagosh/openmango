@@ -1190,7 +1190,7 @@ pub fn render_schema_actions(
 pub fn render_aggregation_actions(
     state: Entity<AppState>,
     session_key: Option<SessionKey>,
-    aggregation_loading: bool,
+    run_disabled: bool,
     explain_loading: bool,
 ) -> Div {
     div()
@@ -1207,7 +1207,7 @@ pub fn render_aggregation_actions(
                     &RunAggregation,
                     Some("Documents Aggregation"),
                 )
-                .disabled(session_key.is_none() || aggregation_loading)
+                .disabled(session_key.is_none() || run_disabled)
                 .on_click({
                     let session_key = session_key.clone();
                     let state = state.clone();
@@ -1229,7 +1229,7 @@ pub fn render_aggregation_actions(
             Button::new("agg-explain")
                 .xsmall()
                 .label("Explain")
-                .disabled(session_key.is_none() || explain_loading)
+                .disabled(session_key.is_none() || explain_loading || run_disabled)
                 .on_click({
                     let session_key = session_key.clone();
                     let state = state.clone();
