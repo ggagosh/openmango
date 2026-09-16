@@ -77,6 +77,16 @@ impl CollectionView {
                 }),
             );
 
+        // The explain run failed; say so instead of showing an empty or older plan.
+        let error_callout = explain.error.clone().filter(|_| !explain.loading).map(|error| {
+            div().px(spacing::md()).pt(spacing::sm()).child(
+                crate::components::ErrorCallout::new(
+                    "explain-error",
+                    crate::error::ErrorReport::from_message("Couldn't explain this", &error),
+                )
+                .state(self.state.clone()),
+            )
+        });
         let tab_hint = if explain.view_mode == ExplainViewMode::Tree {
             "Select a stage to inspect index usage, costs, and timings."
         } else {
@@ -260,6 +270,7 @@ impl CollectionView {
                                         .child(tab_hint),
                                 ),
                         )
+                        .children(error_callout)
                         .child(
                             div()
                                 .flex()

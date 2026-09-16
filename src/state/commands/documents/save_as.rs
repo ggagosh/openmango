@@ -220,11 +220,11 @@ impl AppCommands {
                                     ))));
                                 }
                                 Err(e) => {
-                                    let msg = e.to_string();
-                                    if !msg.contains("cancelled") {
-                                        state.set_status_message(Some(StatusMessage::error(
-                                            format!("Export failed: {}", msg),
-                                        )));
+                                    if !e.is_cancelled() {
+                                        state.report_error(crate::error::ErrorReport::from_error(
+                                            "Couldn't export",
+                                            &e,
+                                        ));
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
                                             "Export cancelled",

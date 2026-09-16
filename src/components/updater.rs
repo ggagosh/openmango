@@ -1,4 +1,3 @@
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -7,6 +6,8 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+use crate::components::ErrorCallout;
 
 use crate::state::app_state::updater::{RELEASES_URL, UpdateChannel, UpdateStage, UpdateStatus};
 use crate::state::{AppCommands, AppState};
@@ -166,7 +167,10 @@ impl Render for UpdatePanel {
                 body = body.child(div().text_sm().child("Preparing and verifying the application. Your installed copy has not been replaced."));
             }
             UpdateStatus::Failed { message, .. } => {
-                body = body.child(Alert::error("update-error", message.clone()));
+                body = body.child(ErrorCallout::new(
+                    "update-error",
+                    crate::error::ErrorReport::from_message("Update failed", message),
+                ));
             }
             UpdateStatus::Unavailable(message) => {
                 body = body.child(div().text_sm().child(message.clone()))

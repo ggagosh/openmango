@@ -19,7 +19,7 @@ use super::property_dialog_support::{
     PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
     format_bson_for_input, parent_path,
 };
-use super::shared::{escape_key_subscription, status_text, styled_dropdown_button};
+use super::shared::{dialog_error, escape_key_subscription, status_text, styled_dropdown_button};
 
 pub struct PropertyActionDialog {
     state: Entity<AppState>,
@@ -882,6 +882,7 @@ impl Render for PropertyActionDialog {
             .child(field_input)
             .child(scope_row)
             .child(value_row)
+            .children(dialog_error("property-update-error", self.error_message.as_ref()))
             .child(
                 div()
                     .flex()

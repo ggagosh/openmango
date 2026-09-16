@@ -1,6 +1,7 @@
 use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
+use crate::error::ErrorReport;
 use crate::state::{
     AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, StatusMessage, View,
 };
@@ -14,14 +15,22 @@ impl AppCommands {
         database: String,
         collection: String,
         cx: &mut App,
+        on_done: impl FnOnce(Result<(), ErrorReport>, &mut App) + 'static,
     ) {
-        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+        let connection_id = state.read(cx).selected_connection_id();
+        let Some(connection_id) =
+            connection_id.filter(|id| Self::ensure_writable(&state, Some(*id), cx))
+        else {
+            on_done(
+                Err(ErrorReport::new(
+                    "Couldn't create the database",
+                    "This connection doesn't allow writes right now.",
+                )),
+                cx,
+            );
             return;
         };
-        if !Self::ensure_writable(&state, Some(connection_id), cx) {
-            return;
-        }
-        Self::create_collection_authorized(state, connection_id, database, collection, cx);
+        Self::create_collection_authorized(state, connection_id, database, collection, cx, on_done);
     }
 
     /// Drop a database.
@@ -163,7 +172,7 @@ impl AppCommands {
 
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
-                        let mut status_message = None;
+                        let mut errors: Vec<ErrorReport> = Vec::new();
                         let mut loaded_collections = None;
                         {
                             let session = state.ensure_database_session(database_key.clone());
@@ -177,7 +186,10 @@ impl AppCommands {
                                 }
                                 Err(err) => {
                                     session.data.stats_error = Some(err.to_string());
-                                    status_message = Some(format!("Database stats failed: {err}"));
+                                    errors.push(ErrorReport::from_error(
+                                        "Couldn't load database stats",
+                                        &err,
+                                    ));
                                 }
                             }
 
@@ -194,8 +206,10 @@ impl AppCommands {
                                 }
                                 Err(err) => {
                                     session.data.collections_error = Some(err.to_string());
-                                    status_message =
-                                        Some(format!("Database collections failed: {err}"));
+                                    errors.push(ErrorReport::from_error(
+                                        "Couldn't load collections",
+                                        &err,
+                                    ));
                                 }
                             }
                         }
@@ -206,8 +220,9 @@ impl AppCommands {
                             cx.emit(event);
                         }
 
-                        if let Some(message) = status_message {
-                            state.set_status_message(Some(StatusMessage::error(message)));
+                        // The database overview shows both errors in place.
+                        for report in errors {
+                            state.record_error(report);
                         }
 
                         cx.notify();

@@ -55,7 +55,17 @@ pub fn escape_key_subscription<V: 'static>(cx: &mut Context<V>) -> Subscription 
     })
 }
 
-/// Returns the status text and color for dialog status display.
+/// The dialog's own error, shown above its buttons.
+pub fn dialog_error(
+    id: &'static str,
+    error_message: Option<&String>,
+) -> Option<crate::components::ErrorCallout> {
+    error_message.map(|error| {
+        crate::components::ErrorCallout::new(id, crate::error::ErrorReport::from_text(error))
+    })
+}
+
+/// Returns the status text and color for dialog status display. Errors use [`dialog_error`].
 pub fn status_text(
     error_message: Option<&String>,
     updating: bool,
@@ -63,10 +73,8 @@ pub fn status_text(
     default_label: &str,
     cx: &App,
 ) -> (String, Hsla) {
-    if let Some(error) = error_message {
-        // `danger_foreground` is for text on a danger fill; on the dialog surface it matches
-        // the background.
-        (error.clone(), cx.theme().danger)
+    if error_message.is_some() {
+        (String::new(), cx.theme().muted_foreground)
     } else if updating {
         (updating_label.to_string(), cx.theme().muted_foreground)
     } else {

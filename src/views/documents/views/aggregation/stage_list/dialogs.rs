@@ -3,7 +3,6 @@
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::component::dialog::Dialog;
@@ -11,7 +10,8 @@ use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::{Button, cancel_button};
+use crate::components::{Button, ErrorCallout, cancel_button};
+use crate::error::{ErrorKind, ErrorReport, sentence};
 use crate::state::app_state::{SessionKey, parse_pipeline_text};
 use crate::state::{AppState, StatusMessage};
 use crate::theme::spacing;
@@ -213,7 +213,10 @@ pub(in crate::views::documents) fn open_import_pipeline_dialog(
                 )
                 .child(Editor::new(&editor).font_family(crate::theme::fonts::mono()).h(px(320.0)))
                 .when_some(error_text, |this, message| {
-                    this.child(Alert::error("agg-import-error", message).title("Unable to import"))
+                    let report =
+                        ErrorReport::new("Couldn't import the pipeline", sentence(&message))
+                            .kind(ErrorKind::Validation);
+                    this.child(ErrorCallout::new("agg-import-error", report))
                 })
                 .child(
                     div()

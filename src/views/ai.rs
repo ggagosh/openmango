@@ -286,6 +286,35 @@ impl AiView {
         cx.notify();
     }
 
+    /// Send a question queued with `AppState::ask_ai`, or leave it in the input when it can't be
+    /// sent yet (no collection selected, or a reply still streaming).
+    fn send_pending_prompt(
+        &mut self,
+        input: &Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(prompt) = self.state.update(cx, |state, _| state.ai_chat.pending_prompt.take())
+        else {
+            return;
+        };
+        let can_submit = {
+            let state = self.state.read(cx);
+            state.settings.ai.enabled
+                && !state.ai_chat.is_loading
+                && state.current_ai_session_key().is_some()
+        };
+        if can_submit {
+            self.send_message_with_mentions(prompt, Vec::new(), cx);
+        } else {
+            self.state.update(cx, |state, _| state.ai_chat.draft_input = prompt.clone());
+            input.update(cx, |input, cx| {
+                input.set_value(prompt, window, cx);
+                input.focus(window, cx);
+            });
+        }
+    }
+
     pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.ensure_input_state(window, cx);
         input.update(cx, |state, cx| state.focus(window, cx));
@@ -666,6 +695,7 @@ impl AiView {
 impl Render for AiView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let input_state = self.ensure_input_state(window, cx);
+        self.send_pending_prompt(&input_state, window, cx);
 
         let state = self.state.clone();
         let app_state = self.state.read(cx);
@@ -1116,11 +1146,7 @@ impl Render for AiView {
                                     );
                                 }
                                 ModelCache::Error(msg) => {
-                                    let hint = if msg.len() > 60 {
-                                        format!("{}...", &msg[..57])
-                                    } else {
-                                        msg.clone()
-                                    };
+                                    let hint = crate::helpers::truncate_chars(msg, 60);
                                     menu = menu.item(PopupMenuItem::new(hint).disabled(true));
                                 }
                                 ModelCache::NotFetched => {
@@ -2267,14 +2293,14 @@ fn render_tool_row(
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(cx.theme().danger)
-                                        .child(format!("{display_name} blocked")),
+                                        .child(format!("{display_name} failed")),
                                 ),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(reason.clone()),
+                                .text_color(cx.theme().foreground)
+                                .child(crate::error::sentence(reason)),
                         )
                         .into_any_element();
                 }
@@ -2314,6 +2340,10 @@ fn handle_stream_event(
         }
         StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
             state.ai_chat.complete_tool(&name, result_preview, result_json);
+            None
+        }
+        StreamEvent::ToolCallFailed { name, reason } => {
+            state.ai_chat.fail_tool(&name, reason);
             None
         }
         StreamEvent::DocumentsChanged { connection_id, database, collection } => {

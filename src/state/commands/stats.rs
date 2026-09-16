@@ -50,9 +50,11 @@ impl AppCommands {
                                 session.data.stats_loading = false;
                                 session.data.stats_error = Some(e.to_string());
                             }
-                            state.set_status_message(Some(StatusMessage::error(format!(
-                                "Stats failed: {e}"
-                            ))));
+                            // The stats panel shows this error.
+                            state.record_error(crate::error::ErrorReport::from_error(
+                                "Couldn't load stats",
+                                &e,
+                            ));
                             cx.notify();
                         });
                     }

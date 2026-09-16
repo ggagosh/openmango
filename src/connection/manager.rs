@@ -620,13 +620,25 @@ fn annotate_connection_error(
     steps: &[String],
     runtime_meta: Option<&ConnectionRuntimeMeta>,
 ) -> Error {
-    let mut message = err.to_string();
+    // First line stays human; driver text, hints, and the trace follow as details.
+    let report = crate::error::ErrorReport::from_error("", &err);
+    let mut message = report.message.clone();
+    let driver_text = [report.server_message.clone(), report.details.clone()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if let Some(meta) = runtime_meta
-        && let Some(hint) = connection_hint(&message, meta)
+        && let Some(hint) = connection_hint(&format!("{message}\n{driver_text}"), meta)
     {
         message.push_str("\n\nHint:\n");
         message.push_str(hint);
+    }
+
+    if !driver_text.is_empty() {
+        message.push_str("\n\nServer said:\n");
+        message.push_str(&driver_text);
     }
 
     if !steps.is_empty() {

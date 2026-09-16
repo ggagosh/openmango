@@ -42,11 +42,33 @@ pub(crate) fn render_status_right(
     let ai_icon_color =
         if ai_panel_open { cx.theme().primary } else { cx.theme().muted_foreground };
 
+    let (error_count, unseen_errors) = {
+        let state = state_for_ai.read(cx);
+        (state.error_count(), state.unseen_error_count())
+    };
+    let errors = (error_count > 0).then(|| {
+        let state = state_for_ai.clone();
+        let label =
+            if error_count == 1 { "1 error".to_string() } else { format!("{error_count} errors") };
+        crate::components::Button::new("status-error-history")
+            .ghost()
+            .xsmall()
+            .icon(Icon::new(IconName::CircleX))
+            .label(label)
+            .tooltip("Errors this session")
+            .when(unseen_errors > 0, |button| button.text_color(cx.theme().danger))
+            .when(unseen_errors == 0, |button| button.text_color(cx.theme().muted_foreground))
+            .on_click(move |_, window, cx| {
+                crate::components::error_history::open_error_history(state.clone(), window, cx)
+            })
+    });
+
     div()
         .flex_shrink_0()
         .flex()
         .items_center()
         .gap(px(8.0))
+        .children(errors)
         .child(inner)
         .when(ai_available, |this: Div| {
             this.child(

@@ -2,7 +2,7 @@ use gpui_kit::*;
 
 use crate::components::ConnectionIdentity;
 use crate::components::ConnectionManager as ConnectionManagerView;
-use crate::state::{AppEvent, AppState, StatusLevel, View};
+use crate::state::{AppEvent, AppState, View};
 use crate::views::{
     AgentActivityView, AiView, ChangelogView, CollectionView, DatabaseView, ForgeView,
     SettingsView, TransferView,
@@ -46,7 +46,6 @@ struct ContentAreaInputs {
     has_tabs: bool,
     current_view: View,
     connection_manager_request_generation: u64,
-    error_text: Option<String>,
     recent_connections: Vec<ConnectionIdentity>,
 }
 
@@ -62,9 +61,6 @@ impl ContentAreaInputs {
             has_tabs: !state.open_tabs().is_empty() || state.preview_tab().is_some(),
             current_view: state.current_view,
             connection_manager_request_generation: state.connection_manager_request().generation,
-            error_text: state.status_message().and_then(|message| {
-                if matches!(message.level, StatusLevel::Error) { Some(message.text) } else { None }
-            }),
             recent_connections: if state.has_active_connections() {
                 Vec::new()
             } else {
@@ -360,7 +356,6 @@ impl Render for ContentArea {
             has_tabs,
             current_view,
             connection_manager_request_generation: _,
-            error_text,
             recent_connections,
         } = inputs;
 
@@ -403,7 +398,7 @@ impl Render for ContentArea {
                 changelog_view: self.changelog_view.as_ref(),
             };
             let content = render_tabs_host(host, cx);
-            return render_shell(error_text, self.state.clone(), content, false, cx);
+            return render_shell(self.state.clone(), content, false, cx);
         }
 
         if matches!(current_view, View::Settings) {
@@ -419,7 +414,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.settings_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -436,7 +431,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.changelog_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -453,7 +448,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.database_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -470,7 +465,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.transfer_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -487,7 +482,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.forge_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -504,7 +499,7 @@ impl Render for ContentArea {
                 cx,
             );
             if let Some(view) = &self.collection_view {
-                return render_shell(error_text, self.state.clone(), view.clone(), false, cx);
+                return render_shell(self.state.clone(), view.clone(), false, cx);
             }
         }
 
@@ -516,7 +511,7 @@ impl Render for ContentArea {
                 window,
                 cx,
             );
-            return render_shell(error_text, self.state.clone(), welcome, true, cx);
+            return render_shell(self.state.clone(), welcome, true, cx);
         }
 
         let hint = if selected_db.is_none() {
@@ -526,6 +521,6 @@ impl Render for ContentArea {
         };
 
         let empty = render_empty_state(hint, cx);
-        render_shell(error_text, self.state.clone(), empty, true, cx)
+        render_shell(self.state.clone(), empty, true, cx)
     }
 }

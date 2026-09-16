@@ -28,11 +28,15 @@ impl AppCommands {
         };
 
         let Some(saved) = saved else {
-            state.update(cx, |_, cx| {
-                cx.emit(AppEvent::ConnectionFailed {
+            state.update(cx, |state, cx| {
+                let event = AppEvent::ConnectionFailed {
                     connection_id,
-                    error: "Connection not found".to_string(),
-                });
+                    error: "This connection no longer exists. It may have been removed."
+                        .to_string(),
+                };
+                state.update_status_from_event(&event);
+                cx.emit(event);
+                cx.notify();
             });
             return;
         };

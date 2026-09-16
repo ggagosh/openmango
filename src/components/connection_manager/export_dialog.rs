@@ -306,18 +306,20 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
                 let pw = ds.passphrase_state.read(cx).value().to_string();
                 let confirm = ds.confirm_state.read(cx).value().to_string();
                 if pw.is_empty() {
-                    app_state.update(cx, |state, _cx| {
+                    app_state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(
                             "Passphrase is required for encrypted export",
                         )));
+                        cx.notify();
                     });
                     return;
                 }
                 if pw != confirm {
-                    app_state.update(cx, |state, _cx| {
+                    app_state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(
                             "Passphrases do not match",
                         )));
+                        cx.notify();
                     });
                     return;
                 }
@@ -330,10 +332,11 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
                 match connection_io::build_export(&chosen, current_mode, passphrase.as_deref()) {
                     Ok(f) => f,
                     Err(e) => {
-                        app_state.update(cx, |state, _cx| {
+                        app_state.update(cx, |state, cx| {
                             state.set_status_message(Some(StatusMessage::error(format!(
                                 "Export failed: {e}"
                             ))));
+                            cx.notify();
                         });
                         return;
                     }
@@ -342,10 +345,11 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
             let json = match serde_json::to_string_pretty(&export_file) {
                 Ok(j) => j,
                 Err(e) => {
-                    app_state.update(cx, |state, _cx| {
+                    app_state.update(cx, |state, cx| {
                         state.set_status_message(Some(StatusMessage::error(format!(
                             "Serialization failed: {e}"
                         ))));
+                        cx.notify();
                     });
                     return;
                 }
@@ -365,10 +369,11 @@ fn render_export_button(dialog_state: Entity<ExportDialogState>) -> AnyElement {
                 if let Some(path) = path {
                     if let Err(e) = std::fs::write(&path, &json) {
                         cx.update(|cx| {
-                            app_state.update(cx, |state, _cx| {
+                            app_state.update(cx, |state, cx| {
                                 state.set_status_message(Some(StatusMessage::error(format!(
                                     "Failed to write file: {e}"
                                 ))));
+                                cx.notify();
                             });
                         });
                         return;

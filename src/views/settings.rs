@@ -2262,8 +2262,7 @@ fn render_ai_section(
             match cached {
                 ModelCache::Loading => Some("Loading models...".to_string()),
                 ModelCache::Error(msg) => {
-                    let hint =
-                        if msg.len() > 60 { format!("{}...", &msg[..57]) } else { msg.clone() };
+                    let hint = crate::helpers::truncate_chars(msg, 60);
                     Some(hint)
                 }
                 ModelCache::NotFetched => Some("Fetching models...".to_string()),
@@ -2373,7 +2372,7 @@ fn render_ai_section(
             (format!("Provider test succeeded: {}", message.trim()), cx.theme().primary)
         }
         AiTestResult::Error(message) => {
-            (format!("Provider test failed: {}", message.trim()), cx.theme().danger_foreground)
+            (format!("Provider test failed: {}", message.trim()), cx.theme().danger)
         }
     });
 

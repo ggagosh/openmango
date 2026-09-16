@@ -44,6 +44,15 @@ impl Render for Sidebar {
 
         let active_connections = self.cached_active.clone();
         let connecting_id = self.model.connecting_connection;
+        let connection_failures: Rc<HashMap<uuid::Uuid, String>> = Rc::new(
+            self.cached_connections
+                .iter()
+                .filter_map(|connection| {
+                    let failure = self.state.read(cx).connection_failure(connection.id)?;
+                    Some((connection.id, failure.to_string()))
+                })
+                .collect(),
+        );
         let connection_accents = Rc::new(
             self.cached_connections
                 .iter()
@@ -547,6 +556,7 @@ impl Render for Sidebar {
                             let sidebar_entity = sidebar_entity.clone();
                             let connection_accents = connection_accents.clone();
                             let connection_identities = connection_identities.clone();
+                            let connection_failures = connection_failures.clone();
                             cx.processor(
                                 move |sidebar,
                                       visible_range: std::ops::Range<usize>,
@@ -771,6 +781,26 @@ impl Render for Sidebar {
                                                             Spinner::new()
                                                                 .with_size(sizing::icon_sm())
                                                                 .color(theme_muted_foreground)
+                                                                .into_any_element()
+                                                        } else if let Some(failure) = connection_failures
+                                                            .get(&connection_id)
+                                                            .filter(|_| !is_connected)
+                                                        {
+                                                            // The last attempt failed; say why on hover.
+                                                            let tooltip = SharedString::from(format!(
+                                                                "Couldn't connect. {failure}"
+                                                            ));
+                                                            div()
+                                                                .id(("connection-failure", ix))
+                                                                .child(
+                                                                    Icon::new(IconName::TriangleAlert)
+                                                                        .size(sizing::icon_md())
+                                                                        .text_color(cx.theme().danger),
+                                                                )
+                                                                .tooltip(move |window, cx| {
+                                                                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                                                        .build(window, cx)
+                                                                })
                                                                 .into_any_element()
                                                         } else {
                                                             Icon::new(IconName::Globe)

@@ -65,7 +65,7 @@ impl ConnectionManager {
             let mut columns = Vec::new();
             while let Some(doc) = discovery_cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 crate::connection::csv_utils::collect_document_columns(
                     &doc,
@@ -79,7 +79,7 @@ impl ConnectionManager {
             if columns.is_empty() {
                 drop(file);
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 output.commit()?;
                 return Ok(0);
@@ -104,7 +104,7 @@ impl ConnectionManager {
             while let Some(doc) = cursor.try_next().await? {
                 // Check cancellation
                 if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
 
                 let row = csv_row(&doc, &columns, &seen_columns)?;
@@ -115,7 +115,7 @@ impl ConnectionManager {
             csv_writer.flush()?;
             drop(csv_writer);
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             output.commit()?;
             Ok(count)
@@ -162,7 +162,7 @@ impl ConnectionManager {
             let mut columns = Vec::new();
             while let Some(doc) = discovery_cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 crate::connection::csv_utils::collect_document_columns(
                     &doc,
@@ -176,7 +176,7 @@ impl ConnectionManager {
             if columns.is_empty() {
                 drop(file);
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 output.commit()?;
                 on_progress(0);
@@ -201,7 +201,7 @@ impl ConnectionManager {
 
             while let Some(doc) = cursor.try_next().await? {
                 if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                    return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                    return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
                 }
                 let row = csv_row(&doc, &columns, &seen_columns)?;
                 csv_writer.write_record(&row)?;
@@ -216,7 +216,7 @@ impl ConnectionManager {
             csv_writer.flush()?;
             drop(csv_writer);
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
-                return Err(crate::error::Error::Parse("Export cancelled".to_string()));
+                return Err(crate::error::Error::Cancelled("Export cancelled".to_string()));
             }
             output.commit()?;
             // Final progress report

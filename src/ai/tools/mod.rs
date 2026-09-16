@@ -32,7 +32,7 @@ pub struct MongoContext {
 /// Errors that tools can return — rig converts these into text for the LLM.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
-    #[error("MongoDB error: {0}")]
+    #[error("{}", crate::error::ErrorReport::from_mongo("", .0).display_text())]
     Mongo(#[from] mongodb::error::Error),
     #[error("{0}")]
     InvalidInput(String),
@@ -55,6 +55,11 @@ pub enum StreamEvent {
         name: String,
         result_preview: String,
         result_json: Option<String>,
+    },
+    /// The tool returned an error instead of a result.
+    ToolCallFailed {
+        name: String,
+        reason: String,
     },
     DocumentsChanged {
         connection_id: uuid::Uuid,

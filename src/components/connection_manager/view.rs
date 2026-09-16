@@ -1,8 +1,7 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -146,8 +145,8 @@ impl ConnectionManager {
             "Saving connection…".to_string()
         } else if connecting {
             "Connecting…".to_string()
-        } else if let Some(error) = &self.parse_error {
-            error.clone()
+        } else if self.parse_error.is_some() {
+            String::new()
         } else {
             match &self.status {
                 TestStatus::Idle => if needs_reconnect {
@@ -164,7 +163,7 @@ impl ConnectionManager {
                     self.testing_step.clone().unwrap_or_else(|| "Testing connection…".into())
                 }
                 TestStatus::Success => "Test succeeded".into(),
-                TestStatus::Error(error) => error.clone(),
+                TestStatus::Error(_) => String::new(),
                 TestStatus::Saved => if needs_reconnect {
                     "Connection saved. Reconnect to apply changes."
                 } else {
@@ -173,8 +172,19 @@ impl ConnectionManager {
                 .into(),
             }
         };
-        let error = matches!(self.status, TestStatus::Error(_)) || self.parse_error.is_some();
-        let mut actions = div()
+        // Invalid settings come first: they're why a test or save can't go ahead.
+        let failure = match (&self.parse_error, &self.status, saving || connecting) {
+            (Some(error), _, _) => Some(
+                crate::error::ErrorReport::from_text(error)
+                    .kind(crate::error::ErrorKind::Validation),
+            ),
+            (None, TestStatus::Error(error), false) => Some(
+                crate::error::ErrorReport::from_text(error)
+                    .kind(crate::error::ErrorKind::Connection),
+            ),
+            _ => None,
+        };
+        let actions = div()
             .flex()
             .flex_wrap()
             .items_center()
@@ -233,25 +243,11 @@ impl ConnectionManager {
                         move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
                     }),
             );
-        if let TestStatus::Error(details) = &self.status {
-            let details = details.clone();
-            actions = actions.child(
-                Button::new("connection-error-details").small().ghost().label("Details").on_click(
-                    move |_, window, cx| {
-                        let details = details.clone();
-                        window.open_dialog(cx, move |dialog: Dialog, _, _| {
-                            dialog.title("Connection details").child(
-                                div()
-                                    .max_h(px(360.))
-                                    .overflow_y_scrollbar()
-                                    .text_sm()
-                                    .child(details.clone()),
-                            )
-                        });
-                    },
-                ),
-            );
-        }
+        // Hints and the test trace sit behind Details, with Copy for support.
+        let failure = failure.map(|report| {
+            crate::components::ErrorCallout::new("connection-manager-error", report)
+                .state(self.state.clone())
+        });
         div()
             .flex()
             .flex_col()
@@ -260,12 +256,10 @@ impl ConnectionManager {
             .py(spacing::sm())
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if error { cx.theme().danger } else { cx.theme().muted_foreground })
-                    .child(message),
-            )
+            .children(failure)
+            .when(!message.is_empty(), |footer| {
+                footer.child(div().text_xs().text_color(cx.theme().muted_foreground).child(message))
+            })
             .child(actions)
             .into_any_element()
     }

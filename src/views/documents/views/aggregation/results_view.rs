@@ -14,7 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::bson::DocumentKey;
-use crate::components::Button;
+use crate::components::{Button, ErrorCallout};
 use crate::helpers::format_number;
 use crate::keyboard::RunAggregation;
 use crate::state::app_state::PipelineState;
@@ -230,10 +230,17 @@ impl CollectionView {
         };
 
         if let Some(error) = pipeline.error.clone() {
-            let title = match pipeline.error_stage {
-                Some(index) => format!("Stage {} failed. Fix it and run again.", index + 1),
-                None => "The pipeline failed. Fix it and run again.".to_string(),
-            };
+            let retry = error.is_retryable().then(|| {
+                let state = self.state.clone();
+                let session_key = session_key.clone();
+                Button::new("agg-error-retry").xsmall().label("Run again").on_click(
+                    move |_, window, cx| {
+                        if let Some(session_key) = session_key.clone() {
+                            request_run_aggregation(state.clone(), session_key, false, window, cx);
+                        }
+                    },
+                )
+            });
             let go_to = pipeline
                 .error_stage
                 .filter(|index| !pipeline.text_mode && pipeline.selected_stage != Some(*index))
@@ -252,15 +259,21 @@ impl CollectionView {
                             }
                         })
                 });
+            let mut callout =
+                ErrorCallout::new("agg-results-error", error).state(self.state.clone());
+            if let Some(go_to) = go_to {
+                callout = callout.action(go_to);
+            }
+            if let Some(retry) = retry {
+                callout = callout.action(retry);
+            }
             return div()
                 .flex()
                 .flex_col()
                 .flex_1()
-                .gap(spacing::sm())
                 .p(spacing::sm())
                 .when(stale, |body| body.opacity(0.6))
-                .child(Alert::error("agg-results-error", error).title(title))
-                .children(go_to.map(|button| div().child(button)))
+                .child(callout)
                 .into_any_element();
         }
 

@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::components::{WriteConfirmation, open_confirm_dialog, request_connection_write};
 use crate::keyboard::{CancelTransfer, CloseTransferQueryModal, RunTransfer, SaveTransferQuery};
 use crate::state::{
-    AppCommands, AppState, InsertMode, StatusMessage, TargetWriteMode, TransferMode, TransferScope,
+    AppCommands, AppState, InsertMode, TargetWriteMode, TransferMode, TransferScope,
     TransferTabState, coerce_transfer_format, resolved_export_destination,
     transfer_write_connection, validate_transfer,
 };
@@ -212,7 +212,7 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
                 if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                     tab.runtime.error_message = Some(message.to_string());
                 }
-                state.set_status_message(Some(StatusMessage::error(message)));
+                state.record_error(crate::error::ErrorReport::from_text(message));
                 cx.notify();
             });
             return;

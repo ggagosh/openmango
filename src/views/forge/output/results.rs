@@ -66,23 +66,21 @@ impl ForgeView {
         let mut body =
             div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden();
 
-        if let Some(err) = &self.state.runtime.mongosh_error {
+        let error = match (&self.state.runtime.mongosh_error, &self.state.output.last_error) {
+            (Some(err), _) => {
+                Some(crate::error::ErrorReport::from_message("Forge couldn't start", err))
+            }
+            (None, Some(err)) => {
+                Some(crate::error::ErrorReport::from_message("The script failed", err))
+            }
+            (None, None) => None,
+        };
+        if let Some(report) = error {
             body = body.child(
                 div()
                     .px(spacing::sm())
                     .py(spacing::xs())
-                    .text_sm()
-                    .text_color(cx.theme().danger_foreground)
-                    .child(format!("Forge runtime error: {err}")),
-            );
-        } else if let Some(err) = &self.state.output.last_error {
-            body = body.child(
-                div()
-                    .px(spacing::sm())
-                    .py(spacing::xs())
-                    .text_sm()
-                    .text_color(cx.theme().danger_foreground)
-                    .child(err.clone()),
+                    .child(crate::components::ErrorCallout::new("forge-error", report)),
             );
         }
 

@@ -92,12 +92,6 @@ impl AppState {
         matches!(self.tabs.active, ActiveTab::Preview)
     }
 
-    fn clear_error_status(&mut self) {
-        if matches!(self.status_message().as_ref().map(|m| &m.level), Some(StatusLevel::Error)) {
-            self.clear_status_message();
-        }
-    }
-
     fn apply_tab_selection(&mut self, tab: TabKey) {
         let start = Instant::now();
         let tab_kind = tab_kind_label(&tab);
@@ -266,7 +260,6 @@ impl AppState {
         }
 
         if selection_changed || tab_changed {
-            self.clear_error_status();
             cx.emit(AppEvent::ViewChanged);
         }
         cx.notify();
@@ -336,7 +329,6 @@ impl AppState {
         self.update_workspace_from_state_debounced();
 
         if selection_changed || tab_changed {
-            self.clear_error_status();
             cx.emit(AppEvent::ViewChanged);
         }
         cx.notify();
@@ -466,7 +458,6 @@ impl AppState {
         self.conn.selected_collection = selected_collection;
         self.current_view = View::Transfer;
         self.update_workspace_from_state_debounced();
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -479,7 +470,6 @@ impl AppState {
             if self.active_index() != Some(index) {
                 self.set_active_index(index);
                 self.current_view = View::AgentActivity;
-                self.clear_error_status();
                 cx.emit(AppEvent::ViewChanged);
                 cx.notify();
             }
@@ -489,7 +479,6 @@ impl AppState {
         self.tabs.open.push(TabKey::AgentActivity);
         self.set_active_index(self.tabs.open.len() - 1);
         self.current_view = View::AgentActivity;
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -517,7 +506,6 @@ impl AppState {
         }
 
         self.current_view = View::Connections;
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -534,7 +522,6 @@ impl AppState {
             if self.active_index() != Some(index) {
                 self.set_active_index(index);
                 self.current_view = View::Settings;
-                self.clear_error_status();
                 cx.emit(AppEvent::ViewChanged);
                 cx.notify();
             }
@@ -545,7 +532,6 @@ impl AppState {
         self.tabs.open.push(TabKey::Settings);
         self.set_active_index(self.tabs.open.len() - 1);
         self.current_view = View::Settings;
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -571,7 +557,6 @@ impl AppState {
             if self.active_index() != Some(index) {
                 self.set_active_index(index);
                 self.current_view = View::Changelog;
-                self.clear_error_status();
                 cx.emit(AppEvent::ViewChanged);
                 cx.notify();
             }
@@ -581,7 +566,6 @@ impl AppState {
         self.tabs.open.push(TabKey::Changelog);
         self.set_active_index(self.tabs.open.len() - 1);
         self.current_view = View::Changelog;
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -621,7 +605,6 @@ impl AppState {
         self.conn.selected_collection = selected_collection;
         self.current_view = View::Forge;
         self.update_workspace_from_state_debounced();
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -660,7 +643,6 @@ impl AppState {
         self.conn.selected_collection = None;
         self.current_view = View::Forge;
         self.update_workspace_from_state_debounced();
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -695,7 +677,6 @@ impl AppState {
         self.conn.selected_collection = Some(tab.collection.clone());
         self.current_view = View::Documents;
         self.ensure_session_loaded(tab);
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
     }
@@ -717,7 +698,6 @@ impl AppState {
         self.set_active_index(index);
         self.apply_tab_selection(tab);
         self.update_workspace_from_state_debounced();
-        self.clear_error_status();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
         log_tabs_duration("select_tab", start, || format!("index={index} kind={tab_kind}"));

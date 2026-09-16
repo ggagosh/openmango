@@ -473,8 +473,11 @@ async fn consume_stream<R: Clone + Unpin>(
                     "[ai-stream] tool_result #{turn_count}: {name} preview={}",
                     truncate_str(&result_preview, 100)
                 );
-                let _ =
-                    event_tx.send(StreamEvent::ToolCallEnd { name, result_preview, result_json });
+                let event = match tool_failure_reason(result_json.as_deref().unwrap_or_default()) {
+                    Some(reason) => StreamEvent::ToolCallFailed { name, reason },
+                    None => StreamEvent::ToolCallEnd { name, result_preview, result_json },
+                };
+                let _ = event_tx.send(event);
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.response().to_string();
@@ -516,6 +519,19 @@ async fn consume_stream<R: Clone + Unpin>(
         full_text = final_text;
     }
     Ok(full_text)
+}
+
+/// rig reports a failed tool call as its result text, tagged with the error variant.
+fn tool_failure_reason(result: &str) -> Option<String> {
+    const TAGS: [&str; 3] = ["ToolCallError: ", "ToolNotFoundError: ", "JsonError: "];
+    let mut text = result.trim_start();
+    let mut tagged = false;
+    // Agents used as tools can nest the tag.
+    while let Some(rest) = TAGS.iter().find_map(|tag| text.strip_prefix(tag)) {
+        text = rest;
+        tagged = true;
+    }
+    tagged.then(|| text.trim().to_string())
 }
 
 /// Extract both a truncated preview and the full text from a tool result.
@@ -637,5 +653,14 @@ mod tests {
         ];
         let converted = to_rig_history(&history);
         assert_eq!(converted.len(), 2);
+    }
+
+    #[test]
+    fn tool_failures_are_recognized_by_rigs_tag() {
+        assert_eq!(
+            super::tool_failure_reason("ToolCallError: ToolCallError: Collection name is required"),
+            Some("Collection name is required".to_string())
+        );
+        assert_eq!(super::tool_failure_reason("{\"documents\": []}"), None);
     }
 }

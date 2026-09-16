@@ -63,7 +63,7 @@ pub async fn find_documents_page_async(
     };
 
     let total = tokio::select! {
-        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        _ = cancelled() => return Err(crate::error::Error::Cancelled("Query cancelled".to_string())),
         result = coll.count_documents(filter.clone()).max_time(max_time) => result?,
     };
     let options = mongodb::options::FindOptions::builder()
@@ -74,11 +74,11 @@ pub async fn find_documents_page_async(
         .max_time(max_time)
         .build();
     let cursor = tokio::select! {
-        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        _ = cancelled() => return Err(crate::error::Error::Cancelled("Query cancelled".to_string())),
         result = coll.find(filter).with_options(options) => result?,
     };
     let documents = tokio::select! {
-        _ = cancelled() => return Err(crate::error::Error::Parse("Query cancelled".to_string())),
+        _ = cancelled() => return Err(crate::error::Error::Cancelled("Query cancelled".to_string())),
         result = cursor.try_collect() => result?,
     };
     Ok((documents, total))
@@ -121,8 +121,9 @@ pub async fn replace_document_if_current_async(
     if result.matched_count == 1 {
         Ok(())
     } else {
-        Err(crate::error::Error::Parse(
-            "Document changed on the server; reload before saving.".to_string(),
+        Err(crate::error::Error::Conflict(
+            "The document changed on the server since you opened it. Reload it, then save again."
+                .to_string(),
         ))
     }
 }

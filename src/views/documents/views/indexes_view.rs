@@ -3,7 +3,6 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::IndexModel;
 use mongodb::bson::Document;
@@ -52,38 +51,29 @@ impl CollectionView {
 
         if let Some(error) = indexes_error {
             let state = self.state.clone();
-            return content
-                .child(
-                    centered_state(cx)
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child("Unable to load indexes"),
-                        )
-                        .child(
-                            div()
-                                .max_w(px(560.0))
-                                .text_sm()
-                                .text_center()
-                                .text_color(cx.theme().danger)
-                                .child(error),
-                        )
-                        .when_some(session_key, |this, session_key| {
-                            this.child(
-                                Button::new("retry-indexes").small().label("Retry").on_click(
-                                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        AppCommands::load_collection_indexes(
-                                            state.clone(),
-                                            session_key.clone(),
-                                            true,
-                                            cx,
-                                        );
-                                    },
-                                ),
-                            )
-                        }),
+            let retry = session_key.map(|session_key| {
+                let state = state.clone();
+                Button::new("retry-indexes").xsmall().label("Retry").on_click(
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        AppCommands::load_collection_indexes(
+                            state.clone(),
+                            session_key.clone(),
+                            true,
+                            cx,
+                        );
+                    },
                 )
+            });
+            let mut callout = crate::components::ErrorCallout::new(
+                "indexes-error",
+                crate::error::ErrorReport::from_message("Couldn't load indexes", &error),
+            )
+            .state(state);
+            if let Some(retry) = retry {
+                callout = callout.action(retry);
+            }
+            return content
+                .child(div().p(spacing::md()).max_w(px(640.0)).child(callout))
                 .into_any_element();
         }
 

@@ -80,9 +80,11 @@ impl AppCommands {
                                 session: session_key.clone(),
                                 error: error.clone(),
                             });
-                            state.set_status_message(Some(StatusMessage::error(format!(
-                                "Schema failed: {error}"
-                            ))));
+                            // The Schema view shows this error.
+                            state.record_error(crate::error::ErrorReport::from_message(
+                                "Couldn't analyze the schema",
+                                &error,
+                            ));
                             cx.notify();
                         });
                     }

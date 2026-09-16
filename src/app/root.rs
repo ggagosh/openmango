@@ -57,6 +57,10 @@ pub struct AppRoot {
     ai_drag_start_x: Pixels,
     ai_drag_start_width: f32,
     ai_drag_current_width: Option<f32>,
+    /// Newest error already shown as a notification.
+    notified_error_id: u64,
+    /// Connections with a Reconnect notification on screen.
+    reconnect_toasts: std::collections::HashSet<Uuid>,
     _subscriptions: Vec<Subscription>,
     mcp_shutdown: Option<tokio_util::sync::CancellationToken>,
     mcp_enabled: bool,
@@ -498,6 +502,19 @@ impl AppRoot {
         let mut subscriptions = Vec::new();
         // Startup already shows the matching theme; this records it and follows later changes.
         crate::theme::sync_system_theme(&state, window, cx);
+        subscriptions.push(cx.observe_in(&state, window, |this, _, window, cx| {
+            this.notify_new_errors(window, cx);
+        }));
+        // Many failure paths emit an event without notifying, so check on events too.
+        subscriptions.push(cx.subscribe_in(
+            &state,
+            window,
+            |this, _, _: &crate::state::AppEvent, window, cx| {
+                this.notify_new_errors(window, cx);
+            },
+        ));
+        // Errors from startup (unreadable connection or library files) predate the observer.
+        cx.defer_in(window, |this, window, cx| this.notify_new_errors(window, cx));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             crate::theme::sync_system_theme(&this.state, window, cx);
         }));
@@ -561,10 +578,58 @@ impl AppRoot {
             ai_drag_start_x: px(0.0),
             ai_drag_start_width: AI_ISLAND_DEFAULT_WIDTH,
             ai_drag_current_width: None,
+            notified_error_id: 0,
+            reconnect_toasts: Default::default(),
             _subscriptions: subscriptions,
             mcp_shutdown,
             mcp_enabled,
             mcp_access_signature,
+        }
+    }
+
+    fn notify_new_errors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::components::error_history::ErrorToast;
+        use gpui_kit::component::WindowExt as _;
+
+        // A Reconnect notification is moot once the connection is back.
+        let reconnected: Vec<_> = self
+            .reconnect_toasts
+            .iter()
+            .copied()
+            .filter(|id| self.state.read(cx).is_connected(*id))
+            .collect();
+        for connection_id in reconnected {
+            self.reconnect_toasts.remove(&connection_id);
+            window.remove_notification1::<ErrorToast>(
+                SharedString::from(format!("reconnect-{connection_id}")),
+                cx,
+            );
+        }
+
+        let state = self.state.read(cx);
+        if state.last_error_id() == self.notified_error_id {
+            return;
+        }
+        let notifications: Vec<_> = state
+            .errors_after(self.notified_error_id)
+            .filter(|entry| entry.notify)
+            .map(|entry| {
+                let reconnect = match &entry.action {
+                    Some(crate::state::ErrorAction::Reconnect(id)) => Some(*id),
+                    _ => None,
+                };
+                (
+                    reconnect,
+                    crate::components::error_history::error_notification(entry, self.state.clone()),
+                )
+            })
+            .collect();
+        self.notified_error_id = state.last_error_id();
+        for (reconnect, notification) in notifications {
+            if let Some(connection_id) = reconnect {
+                self.reconnect_toasts.insert(connection_id);
+            }
+            window.push_notification(notification, cx);
         }
     }
 

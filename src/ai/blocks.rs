@@ -432,6 +432,9 @@ pub struct AiChatState {
     /// Collections @-mentioned for additional context in the next message.
     #[serde(skip)]
     pub mentioned_collections: Vec<String>,
+    /// A question queued from elsewhere in the app, sent when the panel next renders.
+    #[serde(skip)]
+    pub pending_prompt: Option<String>,
 }
 
 impl AiChatState {
@@ -557,6 +560,18 @@ impl AiChatState {
         }));
         self.trim_entries();
         id
+    }
+
+    pub fn fail_tool(&mut self, name: &str, reason: String) {
+        for entry in self.entries.iter_mut().rev() {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && activity.tool_name == name
+                && matches!(activity.status, ToolActivityStatus::Running)
+            {
+                activity.status = ToolActivityStatus::Failed(reason);
+                return;
+            }
+        }
     }
 
     pub fn complete_tool(

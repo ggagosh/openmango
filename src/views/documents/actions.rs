@@ -19,8 +19,6 @@ use crate::keyboard::{
     UndoAggregationEdit,
 };
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::notification::Notification;
 
 use super::export::{CopyFormat, ExportScope, ViewExportSnapshot, render_to_clipboard};
 
@@ -728,10 +726,10 @@ impl CollectionView {
                 Ok(formatted) => {
                     body_state.update(cx, |state, cx| state.replace_all(formatted, window, cx));
                 }
-                Err(error) => window.push_notification(
-                    Notification::error(format!("Unable to format this stage. {error}")),
-                    cx,
-                ),
+                Err(error) => {
+                    this.aggregation_format_error = Some(error);
+                    cx.notify();
+                }
             }
         }))
         .on_action(cx.listener(|this, _: &ClearAggregationStage, window, cx| {

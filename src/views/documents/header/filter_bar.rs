@@ -303,7 +303,7 @@ impl CollectionView {
             .child(primary)
             .child(tools);
         let feedback = if let Some(error) = &self.filter_error_message {
-            Some((error.clone(), cx.theme().danger_foreground))
+            Some((error.clone(), cx.theme().warning))
         } else if !valid && !text.trim().is_empty() {
             Some(("Complete the filter · Enter shows details".into(), cx.theme().muted_foreground))
         } else if is_loading {
@@ -315,15 +315,11 @@ impl CollectionView {
                 ),
                 cx.theme().muted_foreground,
             ))
-        } else if failed && !self.filter_dirty {
+        } else if failed && !self.filter_dirty && has_results {
+            // The error itself is shown below the filter; say what the rows are.
             Some((
-                if has_results {
-                    "Query failed. Showing previous results."
-                } else {
-                    "Query failed. See details below."
-                }
-                .into(),
-                cx.theme().danger_foreground,
+                "Showing results from the last successful query.".into(),
+                cx.theme().muted_foreground,
             ))
         } else if let Some(id) = id {
             Some((

@@ -3,7 +3,6 @@
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::*;
 
@@ -39,25 +38,27 @@ pub fn render_stats_row(
     }
 
     if let Some(error) = stats_error {
-        row =
-            row.child(div().text_sm().text_color(cx.theme().danger_foreground).child(error)).child(
-                Button::new("retry-stats")
-                    .ghost()
-                    .xsmall()
-                    .label("Retry")
-                    .disabled(session_key.is_none())
-                    .on_click({
-                        let state = state.clone();
-                        let session_key = session_key.clone();
-                        move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                            let Some(session_key) = session_key.clone() else {
-                                return;
-                            };
-                            AppCommands::load_collection_stats(state.clone(), session_key, cx);
-                        }
-                    }),
-            );
-        return row.into_any_element();
+        let retry = Button::new("retry-stats")
+            .xsmall()
+            .label("Retry")
+            .disabled(session_key.is_none())
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                    let Some(session_key) = session_key.clone() else {
+                        return;
+                    };
+                    AppCommands::load_collection_stats(state.clone(), session_key, cx);
+                }
+            });
+        return crate::components::ErrorCallout::new(
+            "stats-error",
+            crate::error::ErrorReport::from_message("Couldn't load stats", &error),
+        )
+        .action(retry)
+        .state(state.clone())
+        .into_any_element();
     }
 
     let Some(stats) = stats else {

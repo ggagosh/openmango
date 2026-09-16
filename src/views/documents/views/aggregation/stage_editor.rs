@@ -1,14 +1,12 @@
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::Editor;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::Button;
+use crate::components::{Button, ErrorCallout};
+use crate::error::{ErrorKind, ErrorReport, sentence};
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
 use crate::state::SessionKey;
 use crate::state::app_state::PipelineState;
@@ -98,26 +96,22 @@ impl CollectionView {
                                 &FormatAggregationStage,
                                 Some("Documents Aggregation"),
                             )
-                            .on_click({
-                                let body_state = self.aggregation_stage_body_state.clone();
-                                move |_, window, cx| {
-                                    let Some(body_state) = body_state.clone() else {
-                                        return;
-                                    };
-                                    let raw = body_state.read(cx).value().to_string();
-                                    match format_stage_body(&raw) {
-                                        Ok(formatted) => body_state.update(cx, |state, cx| {
-                                            state.replace_all(formatted, window, cx);
-                                        }),
-                                        Err(error) => window.push_notification(
-                                            Notification::error(format!(
-                                                "Unable to format this stage. {error}"
-                                            )),
-                                            cx,
-                                        ),
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                let Some(body_state) = view.aggregation_stage_body_state.clone()
+                                else {
+                                    return;
+                                };
+                                let raw = body_state.read(cx).value().to_string();
+                                match format_stage_body(&raw) {
+                                    Ok(formatted) => body_state.update(cx, |state, cx| {
+                                        state.replace_all(formatted, window, cx);
+                                    }),
+                                    Err(error) => {
+                                        view.aggregation_format_error = Some(error);
+                                        cx.notify();
                                     }
                                 }
-                            }),
+                            })),
                     )
                     .child(
                         Button::new("agg-clear-stage")
@@ -138,14 +132,22 @@ impl CollectionView {
                     ),
             );
 
-        let error = pipeline
-            .error
-            .clone()
-            .filter(|_| pipeline.error_stage == Some(index) && !pipeline.is_stale());
+        // A Format problem is about the text in front of you, so it wins over the last run's error.
+        let error = match self.aggregation_format_error.clone() {
+            Some(message) => Some(
+                ErrorReport::new("Couldn't format this stage", sentence(&message))
+                    .kind(ErrorKind::Validation),
+            ),
+            None => pipeline
+                .error
+                .clone()
+                .filter(|_| pipeline.error_stage == Some(index) && !pipeline.is_stale()),
+        };
 
         panel(&appearance, cx)
             .child(header)
-            .child(div().flex().flex_1().min_h(px(0.0)).when_some(
+            // The editor keeps room even when an error is expanded below it.
+            .child(div().flex().flex_1().min_h(px(96.0)).when_some(
                 self.aggregation_stage_body_state.clone(),
                 |slot, body_state| {
                     slot.child(
@@ -158,11 +160,12 @@ impl CollectionView {
                     )
                 },
             ))
-            .when_some(error, |panel, message| {
+            .when_some(error, |panel, report| {
                 panel.child(
-                    div().p(spacing::xs()).child(
-                        Alert::error("agg-stage-error", message)
-                            .title(format!("Stage {} failed. Fix it and run again.", index + 1)),
+                    div().p(spacing::xs()).flex_shrink_0().child(
+                        ErrorCallout::new("agg-stage-error", report)
+                            .compact()
+                            .state(self.state.clone()),
                     ),
                 )
             })

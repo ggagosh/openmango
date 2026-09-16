@@ -265,7 +265,7 @@ impl AppCommands {
                 if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                     tab.runtime.error_message = Some(message.to_string());
                 }
-                state.set_status_message(Some(StatusMessage::error(message)));
+                state.record_error(crate::error::ErrorReport::from_text(message));
                 cx.notify();
             });
             return;
@@ -281,7 +281,7 @@ impl AppCommands {
                 if let Some(tab) = state.transfer_tab_mut(transfer_id) {
                     tab.runtime.error_message = Some(message.clone());
                 }
-                state.set_status_message(Some(StatusMessage::error(message)));
+                state.record_error(crate::error::ErrorReport::from_text(&message));
                 cx.notify();
             });
             return;

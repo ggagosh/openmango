@@ -535,11 +535,14 @@ impl DocumentViewModel {
                 if let Some(session_key) = self.current_session.clone() {
                     state.update(cx, |state, cx| {
                         state.set_invalid_inline_edit(session_key, true);
-                        state.set_status_message(Some(crate::state::StatusMessage::error(
-                            format!(
-                                "Invalid field value: {err}. Correct it or press Escape to cancel."
-                            ),
-                        )));
+                        // The row shows this under the field being edited.
+                        state.record_error(
+                            crate::error::ErrorReport::new(
+                                "Invalid field value",
+                                crate::error::sentence(&err.to_string()),
+                            )
+                            .kind(crate::error::ErrorKind::Validation),
+                        );
                         cx.notify();
                     });
                 }

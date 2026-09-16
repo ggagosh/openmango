@@ -90,6 +90,7 @@ impl AppCommands {
                 tab.runtime.is_running = true;
                 tab.runtime.has_started = true;
                 tab.runtime.cancellation_requested = false;
+                tab.runtime.cancellation_unconfirmed = false;
                 tab.runtime.progress_count = 0;
                 tab.runtime.error_message = None;
                 tab.runtime.database_progress = None; // Reset on new copy
@@ -403,11 +404,9 @@ impl AppCommands {
                                         tab.runtime.error_message = failure_summary;
                                     }
                                     if had_error {
-                                        state.set_status_message(Some(StatusMessage::error(
-                                            format!(
+                                        state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                                 "Copy completed with errors: {failed_count} collection(s) failed; {total_count} documents processed"
-                                            ),
-                                        )));
+                                            )));
                                     } else {
                                         state.set_status_message(Some(StatusMessage::info(
                                             format!(
@@ -428,9 +427,9 @@ impl AppCommands {
                                         tab.runtime.is_running = false;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
+                                    state.report_transfer_error(transfer_id, crate::error::ErrorReport::from_text(&format!(
                                         "Copy failed: {error}"
-                                    ))));
+                                    )));
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }
@@ -568,9 +567,12 @@ impl AppCommands {
                                             tab.runtime.progress_count.max(processed);
                                         tab.runtime.error_message = Some(error.clone());
                                     }
-                                    state.set_status_message(Some(StatusMessage::error(format!(
-                                        "Copy failed: {error}"
-                                    ))));
+                                    state.report_transfer_error(
+                                        transfer_id,
+                                        crate::error::ErrorReport::from_text(&format!(
+                                            "Copy failed: {error}"
+                                        )),
+                                    );
                                     cx.emit(AppEvent::TransferFailed { transfer_id, error });
                                 }
                             }

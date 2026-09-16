@@ -1,9 +1,10 @@
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::input::Editor;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::components::ErrorCallout;
+use crate::error::{ErrorKind, ErrorReport, sentence};
 use crate::state::SessionKey;
 use crate::state::app_state::PipelineState;
 use crate::theme::spacing;
@@ -50,7 +51,13 @@ impl CollectionView {
                             .child(hint),
                     ),
             )
-            .child(pipeline_header_controls(pipeline, session_key.clone(), self.state.clone(), cx));
+            .child(pipeline_header_controls(
+                pipeline,
+                self.aggregation_text_error.is_some(),
+                session_key.clone(),
+                self.state.clone(),
+                cx,
+            ));
 
         panel(&appearance, cx)
             .child(header)
@@ -68,11 +75,14 @@ impl CollectionView {
                 },
             ))
             .when_some(self.aggregation_text_error.clone(), |panel, error| {
+                let report = ErrorReport::new("Can't read the pipeline text", sentence(&error))
+                    .details("The stages keep the last version that could be read.")
+                    .kind(ErrorKind::Validation);
                 panel.child(
-                    div().p(spacing::xs()).child(
-                        Alert::error("agg-text-error", error)
-                            .title("The stages still show the last valid version"),
-                    ),
+                    div()
+                        .p(spacing::xs())
+                        .flex_shrink_0()
+                        .child(ErrorCallout::new("agg-text-error", report).compact()),
                 )
             })
             .into_any_element()

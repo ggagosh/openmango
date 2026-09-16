@@ -3,6 +3,7 @@
 mod aggregation;
 mod connection;
 mod database_sessions;
+mod errors;
 mod forge;
 mod keybindings;
 mod pipeline_text;
@@ -25,6 +26,7 @@ pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
 };
 pub(crate) use database_sessions::DatabaseSessionStore;
+pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
 pub(crate) use sessions::SessionStore;
@@ -52,11 +54,11 @@ use uuid::Uuid;
 use crate::ai::AiChatState;
 use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
-use crate::state::StatusMessage;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
 use crate::state::settings::{AppSettings, migrate_islands_tab_style_to_islands};
 use crate::state::{ConfigManager, QueryLibrary, WorkspaceState};
+use crate::state::{StatusLevel, StatusMessage};
 
 use updater::UpdateStatus;
 
@@ -109,6 +111,7 @@ pub struct AppState {
     pub current_view: View,
     connection_manager_request: ConnectionManagerRequest,
     status_message: Option<StatusMessage>,
+    error_log: errors::ErrorLog,
     keybinding_capture: Option<KeybindingCapture>,
     unsaved_guard_active: bool,
     invalid_inline_edits: HashSet<SessionKey>,
@@ -213,7 +216,7 @@ impl AppState {
         let sync_executor =
             Arc::new(crate::sync::SyncExecutor::new(connection_manager.clone(), action_store));
 
-        Self {
+        let mut state = Self {
             connections,
             settings,
             query_library,
@@ -233,10 +236,8 @@ impl AppState {
             ai_chat: AiChatState::default(),
             current_view: View::Welcome,
             connection_manager_request: ConnectionManagerRequest::default(),
-            status_message: connection_load_error
-                .clone()
-                .or(query_library_load_error)
-                .map(StatusMessage::error),
+            status_message: None,
+            error_log: errors::ErrorLog::default(),
             keybinding_capture: None,
             unsaved_guard_active: false,
             invalid_inline_edits: HashSet::new(),
@@ -261,7 +262,17 @@ impl AppState {
             update_task: None,
             export_progress: None,
             editor_sessions: EditorSessionStore::default(),
+        };
+        // Both load failures are reported; neither file is overwritten.
+        for (title, message) in [
+            ("Couldn't load connections", connection_load_error),
+            ("Couldn't load the query library", query_library_load_error),
+        ] {
+            if let Some(message) = message {
+                state.report_sticky_error(crate::error::ErrorReport::new(title, message));
+            }
         }
+        state
     }
 
     /// Get the connection manager
@@ -346,8 +357,15 @@ impl AppState {
         self.editor_sessions.clone()
     }
 
+    /// Info goes to the status bar. Errors go to the error history and raise a notification;
+    /// errors already shown in place should use [`Self::record_error`] instead.
     pub fn set_status_message(&mut self, message: Option<StatusMessage>) {
-        self.status_message = message;
+        match message {
+            Some(StatusMessage { level: StatusLevel::Error, text }) => {
+                self.report_error(crate::error::ErrorReport::from_text(&text));
+            }
+            info => self.status_message = info,
+        }
     }
 
     pub fn clear_status_message(&mut self) {
@@ -371,6 +389,17 @@ impl AppState {
 
     pub fn ai_assistant_available(&self) -> bool {
         self.settings.ai.assistant_available()
+    }
+
+    /// Open the AI panel and ask `prompt`. Returns false when the assistant isn't set up.
+    pub fn ask_ai(&mut self, prompt: String) -> bool {
+        if !self.ai_assistant_available() {
+            return false;
+        }
+        self.ai_chat.panel_open = true;
+        self.ai_chat.pending_prompt = Some(prompt);
+        self.update_workspace_from_state_debounced();
+        true
     }
 
     /// Save settings to disk

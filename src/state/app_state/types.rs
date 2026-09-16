@@ -384,6 +384,8 @@ pub struct TransferRuntime {
     pub is_running: bool,
     pub has_started: bool,
     pub cancellation_requested: bool,
+    /// A BSON tool was asked to stop but its exit couldn't be confirmed, so it isn't a clean cancel.
+    pub cancellation_unconfirmed: bool,
     pub progress_count: u64,
     pub error_message: Option<String>,
     pub transfer_generation: Arc<AtomicU64>,
@@ -404,6 +406,7 @@ impl Clone for TransferRuntime {
             is_running: self.is_running,
             has_started: self.has_started,
             cancellation_requested: self.cancellation_requested,
+            cancellation_unconfirmed: self.cancellation_unconfirmed,
             progress_count: self.progress_count,
             error_message: self.error_message.clone(),
             transfer_generation: Arc::new(AtomicU64::new(
@@ -422,6 +425,7 @@ impl std::fmt::Debug for TransferRuntime {
             .field("is_running", &self.is_running)
             .field("has_started", &self.has_started)
             .field("cancellation_requested", &self.cancellation_requested)
+            .field("cancellation_unconfirmed", &self.cancellation_unconfirmed)
             .field("progress_count", &self.progress_count)
             .field("error_message", &self.error_message)
             .field("database_progress", &self.database_progress)
@@ -1074,7 +1078,7 @@ pub struct SessionData {
     pub is_loading: bool,
     pub loaded: bool,
     pub request_id: u64,
-    pub query_error: Option<String>,
+    pub query_error: Option<crate::error::ErrorReport>,
     pub query_cancellation: Option<crate::connection::types::CancellationToken>,
     pub filter_raw: String,
     pub filter: Option<Document>,
@@ -1205,7 +1209,7 @@ pub struct SessionSnapshot {
     pub page: u64,
     pub per_page: i64,
     pub is_loading: bool,
-    pub query_error: Option<String>,
+    pub query_error: Option<crate::error::ErrorReport>,
     pub selected_doc: Option<DocumentKey>,
     pub selected_docs: HashSet<DocumentKey>,
     pub selected_count: usize,

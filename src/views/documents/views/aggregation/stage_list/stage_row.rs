@@ -83,6 +83,10 @@ pub(super) fn render_stage_rows(
             counts: pipeline.stage_doc_counts.get(idx).cloned().unwrap_or_default(),
             counts_enabled: pipeline.stage_stats_mode.counts_enabled(),
             failed: pipeline.error.is_some() && pipeline.error_stage == Some(idx) && !stale,
+            blocked_by: pipeline
+                .error_stage
+                .filter(|failed| pipeline.error.is_some() && !stale && idx > *failed)
+                .filter(|_| pipeline.preview_target().is_some_and(|target| idx <= target)),
             selected: pipeline.selected_stage == Some(idx),
             focused,
             stale,
@@ -122,6 +126,8 @@ struct StageRow {
     counts: StageDocCounts,
     counts_enabled: bool,
     failed: bool,
+    /// An earlier stage failed, so this one never ran.
+    blocked_by: Option<usize>,
     selected: bool,
     focused: bool,
     stale: bool,
@@ -146,7 +152,12 @@ fn render_stage_row(
     let has_session = session_key.is_some();
 
     let status: Option<(SharedString, Hsla)> = if failed {
-        Some(("Failed · see the editor".into(), theme.danger))
+        Some(("Failed".into(), theme.danger))
+    } else if let Some(failed_stage) = row.blocked_by.filter(|_| enabled) {
+        Some((
+            format!("Didn't run · stage {} failed", failed_stage + 1).into(),
+            theme.muted_foreground,
+        ))
     } else if !enabled {
         Some(("Skipped".into(), theme.muted_foreground))
     } else if row.counts_enabled {
@@ -217,7 +228,7 @@ fn render_stage_row(
             Button::new(("agg-stage-remove", idx))
                 .ghost()
                 .xsmall()
-                .icon(Icon::new(IconName::Delete))
+                .icon(Icon::new(AppIcon::Trash))
                 .accessibility_label(format!("Delete stage {number}"))
                 .tooltip_with_action(
                     "Delete stage",

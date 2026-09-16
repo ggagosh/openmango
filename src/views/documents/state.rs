@@ -102,6 +102,8 @@ pub struct CollectionView {
     pub(crate) aggregation_text_subscription: Option<Subscription>,
     /// Why the Text mode pipeline can't be applied, if it can't.
     pub(crate) aggregation_text_error: Option<String>,
+    /// Why Format couldn't format the selected stage; cleared by the next edit.
+    pub(crate) aggregation_format_error: Option<String>,
     /// Pipeline revision each editor last showed or produced; a mismatch means resync.
     pub(crate) aggregation_body_revision: Option<u64>,
     pub(crate) aggregation_text_revision: Option<u64>,
@@ -471,6 +473,7 @@ impl CollectionView {
             aggregation_text_state: None,
             aggregation_text_subscription: None,
             aggregation_text_error: None,
+            aggregation_format_error: None,
             aggregation_body_revision: None,
             aggregation_text_revision: None,
             aggregation_auto_run: None,
