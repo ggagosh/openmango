@@ -11,9 +11,8 @@ use crate::bson::{
 use crate::components::request_connection_write;
 use crate::keyboard::{
     AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
-    CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DiscardDocumentChanges,
-    DuplicateDocument, EditDocumentJson, EditValueType, PasteDocuments, RemoveMatchingValues,
-    RemoveSelectedField, RenameField,
+    CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument, EditDocumentJson,
+    EditValueType, PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField,
 };
 use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
@@ -26,7 +25,7 @@ use super::super::CollectionView;
 pub(in crate::views::documents) fn build_document_menu(
     mut menu: PopupMenu,
     state: Entity<AppState>,
-    _view: Entity<CollectionView>,
+    view: Entity<CollectionView>,
     session_key: SessionKey,
     doc_key: DocumentKey,
     is_dirty: bool,
@@ -105,10 +104,13 @@ pub(in crate::views::documents) fn build_document_menu(
         )
         .item(PopupMenuItem::new("Paste as new documents…").action(Box::new(PasteDocuments)))
         .item(
+            // The shortcut discards the whole tab; this item only touches the selection.
             PopupMenuItem::new("Discard selected changes…")
                 .icon(Icon::new(IconName::Undo))
-                .action(Box::new(DiscardDocumentChanges))
-                .disabled(!is_dirty),
+                .disabled(!is_dirty)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |this, cx| this.discard_documents(true, window, cx));
+                }),
         );
 
     menu

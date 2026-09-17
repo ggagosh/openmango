@@ -13,7 +13,7 @@ mod tabs_row;
 
 pub use actions::{
     render_aggregation_actions, render_documents_actions, render_indexes_actions,
-    render_schema_actions, render_stats_actions,
+    render_pending_changes, render_schema_actions, render_stats_actions,
 };
 pub use filter_bar::render_query_options;
 pub use stats_panel::render_stats_row;
@@ -47,7 +47,7 @@ impl CollectionView {
         session_key: Option<SessionKey>,
         selected_doc: Option<DocumentKey>,
         selected_count: usize,
-        any_selected_dirty: bool,
+        dirty_count: usize,
         is_loading: bool,
         sort_state: Option<Entity<EditorState>>,
         projection_state: Option<Entity<EditorState>>,
@@ -104,7 +104,6 @@ impl CollectionView {
                 session_key.clone(),
                 selected_doc,
                 selected_count,
-                any_selected_dirty,
                 is_loading,
                 filter_active,
                 table_column_keys,
@@ -112,7 +111,14 @@ impl CollectionView {
                 cx,
             );
             documents_toolbar_row = Some(docs_actions);
-            div().flex().items_center()
+            render_pending_changes(
+                cx.entity(),
+                self.state.clone(),
+                session_key.clone(),
+                dirty_count,
+                window,
+                cx,
+            )
         } else if is_indexes {
             render_indexes_actions(self.state.clone(), session_key.clone())
         } else if is_stats {

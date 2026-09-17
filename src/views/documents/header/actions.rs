@@ -6,6 +6,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -15,8 +16,8 @@ use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
-use crate::components::{Button, WriteConfirmation, request_connection_write};
-use crate::keyboard::RunAggregation;
+use crate::components::{Button, WriteConfirmation, busy_label, request_connection_write};
+use crate::keyboard::{DiscardDocumentChanges, RunAggregation, SaveDocument};
 use crate::state::{
     AppCommands, AppState, DocumentViewMode, SessionKey, TransferMode, TransferScope,
 };
@@ -33,7 +34,6 @@ pub fn render_documents_actions(
     session_key: Option<SessionKey>,
     selected_doc: Option<DocumentKey>,
     selected_count: usize,
-    any_selected_dirty: bool,
     is_loading: bool,
     filter_active: bool,
     table_column_keys: Vec<String>,
@@ -55,7 +55,6 @@ pub fn render_documents_actions(
         session_key,
         selected_doc,
         selected_count,
-        any_selected_dirty,
         is_loading,
         filter_active,
         ai_available,
@@ -65,6 +64,69 @@ pub fn render_documents_actions(
         col_visibility_search,
         cx,
     )
+}
+
+/// Save and Discard for the tab's unsaved documents, with their shortcuts. They live in the title
+/// row, where other subviews keep their primary actions, so appearing never reflows the toolbar.
+/// The group is right-aligned and only the note left of the buttons changes while saving, so the
+/// buttons never move.
+pub fn render_pending_changes(
+    view: Entity<CollectionView>,
+    state: Entity<AppState>,
+    session_key: Option<SessionKey>,
+    dirty_count: usize,
+    window: &Window,
+    cx: &App,
+) -> Div {
+    let row = div().flex().items_center().gap(spacing::sm());
+    let saving = session_key
+        .as_ref()
+        .and_then(|key| state.read(cx).session_view(key))
+        .is_some_and(|view| !view.saving_documents.is_empty());
+    if dirty_count == 0 && !saving {
+        return row;
+    }
+    let shortcut = |action: &dyn Action| {
+        let context = KeyContext::parse("Documents").ok()?;
+        let keystroke = crate::keyboard::display_keystroke(
+            &window.bindings_for_action_in_context(action, context),
+        )?;
+        Some(div().opacity(0.7).child(Kbd::format(&keystroke)))
+    };
+    let note = if saving {
+        div().child("Saving…")
+    } else if dirty_count == 1 {
+        div().child("1 unsaved document")
+    } else {
+        div().child(format!("{dirty_count} unsaved documents"))
+    };
+
+    row.child(note.text_xs().text_color(cx.theme().muted_foreground))
+        .child(
+            Button::new("discard-changes")
+                .ghost()
+                .xsmall()
+                .label("Discard")
+                .children(shortcut(&DiscardDocumentChanges))
+                .tooltip("Discard unsaved edits in this tab")
+                .disabled(saving)
+                .on_click({
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        view.update(cx, |this, cx| this.discard_documents(false, window, cx));
+                    }
+                }),
+        )
+        .child(
+            busy_label(Button::new("save-changes").primary(), Size::XSmall, "Save", saving)
+                .children(shortcut(&SaveDocument))
+                .tooltip("Save unsaved documents in this tab")
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.save_documents(window, cx);
+                    });
+                }),
+        )
 }
 
 /// Render the delete dropdown menu with options.
@@ -361,7 +423,6 @@ fn render_documents_actions_clean(
     session_key: Option<SessionKey>,
     selected_doc: Option<DocumentKey>,
     selected_count: usize,
-    any_selected_dirty: bool,
     is_loading: bool,
     filter_active: bool,
     ai_available: bool,
@@ -436,31 +497,6 @@ fn render_documents_actions_clean(
         .as_ref()
         .and_then(|key| state.read(cx).session_view(key))
         .is_some_and(|view| !view.saving_documents.is_empty());
-    let discard_button = Button::new("discard-clean")
-        .ghost()
-        .xsmall()
-        .label("Discard")
-        .disabled(!any_selected_dirty || saving)
-        .on_click({
-            let view = view.clone();
-            move |_, window, cx| {
-                view.update(cx, |this, cx| this.discard_selected_documents(window, cx));
-            }
-        });
-    let apply_button = Button::new("apply-clean")
-        .primary()
-        .xsmall()
-        .label(if saving { "Saving…" } else { "Save" })
-        .disabled(!any_selected_dirty || saving)
-        .on_click({
-            let view = view.clone();
-            move |_, window, cx| {
-                view.update(cx, |this, cx| {
-                    this.save_selected_documents(window, cx);
-                });
-            }
-        });
-
     let delete_menu = render_delete_menu(
         state_for_delete.clone(),
         session_key.clone(),
@@ -774,7 +810,6 @@ fn render_documents_actions_clean(
     row.child(toolbar_separator(cx))
         .child(insert_button)
         .when(view_mode != DocumentViewMode::Json, |row| row.child(edit_button))
-        .when(any_selected_dirty, |row| row.child(discard_button).child(apply_button))
         .child(delete_menu)
         .when(selected_count > 0, |row| {
             row.child(

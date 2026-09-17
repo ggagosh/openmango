@@ -8,11 +8,8 @@ use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, UnsavedS
 use super::CollectionView;
 
 impl CollectionView {
-    pub(super) fn save_selected_documents(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    /// Saves every unsaved document in this tab, the ones the title row counts.
+    pub(super) fn save_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.finish_document_edit(cx) {
             return false;
         }
@@ -20,20 +17,13 @@ impl CollectionView {
         let documents = self
             .state
             .read(cx)
-            .session(&key)
-            .map(|session| {
-                session
-                    .data
-                    .items
+            .session_view(&key)
+            .map(|view| {
+                view.dirty
                     .iter()
-                    .filter(|item| session.view.selected_docs.contains(&item.key))
-                    .filter_map(|item| {
-                        session
-                            .view
-                            .drafts
-                            .get(&item.key)
-                            .cloned()
-                            .map(|doc| (item.key.clone(), doc))
+                    .filter(|doc| !view.saving_documents.contains(*doc))
+                    .filter_map(|doc| {
+                        view.drafts.get(doc).map(|draft| (doc.clone(), draft.clone()))
                     })
                     .collect::<Vec<_>>()
             })
@@ -48,7 +38,7 @@ impl CollectionView {
             crate::components::WriteRequest::new(
                 key.connection_id,
                 key.namespace(),
-                format!("Save {count} selected document(s)"),
+                format!("Save {count} document(s)"),
                 None,
             )
             .for_writes(count),
@@ -63,35 +53,28 @@ impl CollectionView {
         true
     }
 
-    pub(super) fn discard_selected_documents(
+    /// Discards unsaved edits in this tab, or only in the selected documents.
+    pub(super) fn discard_documents(
         &mut self,
+        selected_only: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(key) = self.view_model.current_session() else { return };
-        if self
+        let documents = self
             .state
             .read(cx)
             .session_view(&key)
-            .is_some_and(|view| !view.saving_documents.is_empty())
-        {
-            return;
-        }
-        let selected = self
-            .state
-            .read(cx)
-            .session(&key)
-            .map(|session| {
-                session
-                    .view
-                    .selected_docs
+            .filter(|view| view.saving_documents.is_empty())
+            .map(|view| {
+                view.dirty
                     .iter()
-                    .filter(|doc| session.view.dirty.contains(*doc))
+                    .filter(|doc| !selected_only || view.selected_docs.contains(*doc))
                     .cloned()
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        if selected.is_empty() {
+        if documents.is_empty() {
             return;
         }
         let view = cx.entity();
@@ -99,14 +82,14 @@ impl CollectionView {
             window,
             cx,
             "Discard document changes",
-            format!("Discard local edits to {} selected document(s)?", selected.len()),
+            format!("Discard local edits to {} document(s)?", documents.len()),
             "Discard",
             true,
             move |_, cx| {
                 view.update(cx, |this, cx| {
                     this.view_model.clear_inline_edit();
                     this.state.update(cx, |state, cx| {
-                        for document in selected {
+                        for document in documents {
                             state.clear_draft(&key, &document);
                         }
                         state.set_invalid_inline_edit(key, false);

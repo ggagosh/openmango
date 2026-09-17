@@ -180,9 +180,9 @@ impl CollectionView {
                 }
                 let mut handled = false;
 
-                let save_selected_document =
+                let save_documents =
                     |this: &mut CollectionView, window: &mut Window, cx: &mut Context<Self>| {
-                        this.save_selected_documents(window, cx)
+                        this.save_documents(window, cx)
                     };
                 let is_aggregation = this
                     .view_model
@@ -234,12 +234,12 @@ impl CollectionView {
                         if committed {
                             window.focus(&this.documents_focus, cx);
                             if cmd_or_ctrl {
-                                save_selected_document(this, window, cx);
+                                save_documents(this, window, cx);
                             }
                         }
                         handled = true;
                     } else if cmd_or_ctrl {
-                        handled = save_selected_document(this, window, cx);
+                        handled = save_documents(this, window, cx);
                     } else if let Some(table) = this.view_model.table_state().cloned()
                         && table.read(cx).focus_handle(cx).contains_focused(window, cx)
                     {

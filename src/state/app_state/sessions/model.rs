@@ -114,7 +114,7 @@ impl AppState {
         let selected_doc = session.view.selected_doc.clone();
         let selected_docs = session.view.selected_docs.clone();
         let selected_count = selected_docs.len();
-        let any_selected_dirty = selected_docs.iter().any(|k| session.view.dirty.contains(k));
+        let dirty_count = session.view.dirty.len();
         let subview = session.view.subview;
         let explain_active = session.data.explain.loading
             || !matches!(session.data.explain.open_mode, ExplainOpenMode::Closed);
@@ -132,7 +132,7 @@ impl AppState {
             selected_doc,
             selected_docs,
             selected_count,
-            any_selected_dirty,
+            dirty_count,
             filter_raw: session.data.filter_raw.clone(),
             filter_compiled_raw: session
                 .data

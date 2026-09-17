@@ -352,7 +352,7 @@ impl CollectionView {
             }
         }))
         .on_action(cx.listener(|this, _: &SaveDocument, window, cx| {
-            this.save_selected_documents(window, cx);
+            this.save_documents(window, cx);
         }))
         .on_action(cx.listener(|this, _: &EditValueType, window, cx| {
             let Some((session_key, meta)) = this.selected_property_context(cx) else {
@@ -606,7 +606,7 @@ impl CollectionView {
             cx.write_to_clipboard(ClipboardItem::new_string(meta.key_label));
         }))
         .on_action(cx.listener(|this, _: &DiscardDocumentChanges, window, cx| {
-            this.discard_selected_documents(window, cx);
+            this.discard_documents(false, window, cx);
         }))
         .on_action(cx.listener(|this, _: &ShowDocumentsSubview, _window, cx| {
             if !this.finish_document_edit(cx) {
