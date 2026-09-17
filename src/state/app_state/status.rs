@@ -59,9 +59,9 @@ impl AppState {
             AppEvent::CollectionsFailed(error) => {
                 self.report_error(ErrorReport::from_message("Couldn't load collections", error));
             }
-            AppEvent::DocumentsLoaded { total, .. } => {
-                self.set_status_message(Some(StatusMessage::info(format!(
-                    "Loaded {total} documents"
+            AppEvent::DocumentsLoaded { shown, total, elapsed, .. } => {
+                self.set_status_message(Some(StatusMessage::info(documents_loaded_message(
+                    *shown, *total, *elapsed,
                 ))));
             }
             AppEvent::DocumentsLoadFailed { error, .. } => {
@@ -273,5 +273,35 @@ impl AppState {
             }
             _ => {}
         }
+    }
+}
+
+/// "Loaded 50 of 1,234 documents in 42 ms": the page, the query's matches, and the round trip.
+fn documents_loaded_message(shown: usize, total: u64, elapsed: std::time::Duration) -> String {
+    use crate::helpers::format_number;
+    let noun = if total == 1 { "document" } else { "documents" };
+    let count = if shown as u64 == total {
+        format!("{} {noun}", format_number(total))
+    } else {
+        format!("{} of {} {noun}", format_number(shown as u64), format_number(total))
+    };
+    format!("Loaded {count} in {} ms", format_number(elapsed.as_millis() as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::documents_loaded_message;
+
+    #[test]
+    fn documents_loaded_message_names_page_matches_and_time() {
+        let ms = Duration::from_millis;
+        assert_eq!(
+            documents_loaded_message(50, 1234, ms(42)),
+            "Loaded 50 of 1,234 documents in 42 ms"
+        );
+        assert_eq!(documents_loaded_message(1, 1, ms(1500)), "Loaded 1 document in 1,500 ms");
+        assert_eq!(documents_loaded_message(0, 0, ms(3)), "Loaded 0 documents in 3 ms");
     }
 }

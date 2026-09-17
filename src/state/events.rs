@@ -33,7 +33,11 @@ pub enum AppEvent {
     CollectionsFailed(String),
     DocumentsLoaded {
         session: SessionKey,
+        /// Documents on the loaded page.
+        shown: usize,
+        /// Documents matching the query.
         total: u64,
+        elapsed: std::time::Duration,
     },
     DocumentsLoadFailed {
         session: SessionKey,

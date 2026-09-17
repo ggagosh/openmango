@@ -191,7 +191,8 @@ impl AppCommands {
             let database_for_task = database.clone();
             let collection_for_task = collection.clone();
             async move {
-                find_documents_page_async(
+                let started = std::time::Instant::now();
+                let result = find_documents_page_async(
                     &client,
                     &database_for_task,
                     &collection_for_task,
@@ -205,7 +206,8 @@ impl AppCommands {
                         cancellation,
                     },
                 )
-                .await
+                .await;
+                (result, started.elapsed())
             }
         });
 
@@ -214,15 +216,20 @@ impl AppCommands {
             let state = state.clone();
             let session_key = session_key.clone();
             async move |cx: &mut gpui_kit::AsyncApp| {
-                let result: Result<(Vec<Document>, u64), crate::error::Error> = match task.await {
-                    Ok(result) => result,
-                    Err(error) => Err(crate::error::Error::Parse(format!(
-                        "Document query task failed: {error}"
-                    ))),
-                };
+                let (result, elapsed): (Result<(Vec<Document>, u64), crate::error::Error>, _) =
+                    match task.await {
+                        Ok(outcome) => outcome,
+                        Err(error) => (
+                            Err(crate::error::Error::Parse(format!(
+                                "Document query task failed: {error}"
+                            ))),
+                            std::time::Duration::ZERO,
+                        ),
+                    };
 
                 cx.update(|cx| match result {
                     Ok((documents, total)) => {
+                        let shown = documents.len();
                         state.update(cx, |state, cx| {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
@@ -241,8 +248,12 @@ impl AppCommands {
                             session.view.selected_node_id = None;
 
                             session.generation = session.generation.wrapping_add(1);
-                            let event =
-                                AppEvent::DocumentsLoaded { session: session_key.clone(), total };
+                            let event = AppEvent::DocumentsLoaded {
+                                session: session_key.clone(),
+                                shown,
+                                total,
+                                elapsed,
+                            };
                             state.update_status_from_event(&event);
                             if let Err(error) = state.record_query(query_definition.clone()) {
                                 state.set_status_message(Some(StatusMessage::error(format!(
