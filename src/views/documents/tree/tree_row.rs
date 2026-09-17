@@ -370,13 +370,17 @@ fn render_key_column(
                 .text_color(key_color)
                 .overflow_hidden()
                 .text_ellipsis()
-                .when(is_root && is_dirty, |s: Div| {
-                    s.child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary))
-                })
+                // Highlights pad outward through matching negative margins, so the key keeps its
+                // place and size.
                 .when(is_key_match && !is_dirty, {
                     let dirty_bg = colors::bg_dirty(cx);
                     move |s: Div| {
-                        s.bg(dirty_bg).rounded(borders::radius_sm()).px(spacing::xs()).py(px(1.0))
+                        s.bg(dirty_bg)
+                            .rounded(borders::radius_sm())
+                            .px(spacing::xs())
+                            .mx(-spacing::xs())
+                            .py(px(1.0))
+                            .my(px(-1.0))
                     }
                 })
                 .when(is_current_match && is_key_match, |s: Div| {
@@ -384,9 +388,17 @@ fn render_key_column(
                         .border_color(cx.theme().primary)
                         .rounded(borders::radius_sm())
                         .px(spacing::xs())
+                        .mx(-(spacing::xs() + px(1.0)))
                         .py(px(1.0))
+                        .my(px(-2.0))
                 })
-                .child(key_label),
+                .child(key_label)
+                // Trailing, so marking a document unsaved never pushes its key sideways.
+                .when(is_root && is_dirty, |s: Div| {
+                    s.child(
+                        div().flex_shrink_0().size(px(6.0)).rounded_full().bg(cx.theme().primary),
+                    )
+                }),
         );
 
     if let Some(key_drag) = key_drag {
@@ -432,18 +444,15 @@ fn render_value_column(
         .items_center()
         .gap(spacing::xs())
         .flex_1()
-        .min_w(px(0.0))
-        .when(is_dirty && !selected && !is_editing, {
-            let dirty_bg = colors::bg_dirty(cx);
-            move |s| outset_chrome(s.bg(dirty_bg), px(0.0))
-        })
-        .when(is_match && !is_dirty && !selected && !is_editing, {
-            let dirty_bg = colors::bg_dirty(cx);
-            move |s| outset_chrome(s.bg(dirty_bg), px(0.0))
-        })
-        .when(is_current_match && !selected && !is_editing, |s| {
-            outset_chrome(s.border_1().border_color(cx.theme().primary), px(1.0))
-        })
+        .min_w(px(0.0));
+    if !selected && !is_editing {
+        value = with_value_chrome(
+            value,
+            (is_dirty || is_match).then(|| colors::bg_dirty(cx)),
+            is_current_match.then(|| cx.theme().primary),
+        );
+    }
+    value = value
         .when(!is_editing, {
             let item_id = item_id.clone();
             let node_meta = node_meta.clone();
@@ -503,15 +512,32 @@ fn value_text(label: String, color: Hsla) -> Div {
         .child(label)
 }
 
-/// Draws highlight chrome of the given border width outside the value text's box, growing
-/// left and up/down only (the type column sits to the right), so the text stays anchored.
-fn outset_chrome<E: Styled>(element: E, border: Pixels) -> E {
-    element
-        .rounded(borders::radius_sm())
-        .px(spacing::xs())
-        .py(px(1.0))
-        .ml(-(spacing::xs() + border))
-        .my(-(px(1.0) + border))
+/// Paints the dirty/match highlight and the current-match ring on a layer behind the value text,
+/// growing left and up/down only (the type column sits to the right). The layer takes no layout
+/// space, so marking or selecting a value never moves its text. Call before adding the text.
+fn with_value_chrome<E: Styled + ParentElement>(
+    value: E,
+    bg: Option<Hsla>,
+    border: Option<Hsla>,
+) -> E {
+    if bg.is_none() && border.is_none() {
+        return value;
+    }
+    let border_width = if border.is_some() { px(1.0) } else { px(0.0) };
+    let mut layer = div()
+        .absolute()
+        .top(-(px(1.0) + border_width))
+        .bottom(-(px(1.0) + border_width))
+        .left(-(spacing::xs() + border_width))
+        .right(px(0.0))
+        .rounded(borders::radius_sm());
+    if let Some(bg) = bg {
+        layer = layer.bg(bg);
+    }
+    if let Some(color) = border {
+        layer = layer.border_1().border_color(color);
+    }
+    value.relative().child(layer)
 }
 
 /// The inline value editor. Its padding and border sit outside the text box through negative
@@ -604,11 +630,11 @@ mod tests {
     use gpui_kit::component::Root;
     use gpui_kit::component::input::InputState;
     use gpui_kit::{
-        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-        Render, Styled as _, TestAppContext, Window, div, px,
+        AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, Styled as _, TestAppContext, Window, div, px,
     };
 
-    use super::{inline_value_input, value_text};
+    use super::{inline_value_input, value_text, with_value_chrome};
 
     struct Rows {
         input: Entity<InputState>,
@@ -659,5 +685,68 @@ mod tests {
             |name| cx.debug_bounds(name).unwrap_or_else(|| panic!("{name}")).size.height;
         // Horizontally the margins equal the input's padding plus border, so text keeps its x.
         assert_eq!(height("editing-row"), height("resting-row"), "row height while editing");
+    }
+
+    struct MarkedRows;
+
+    impl Render for MarkedRows {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Mirrors the tree row: flexible key and value columns, then the fixed type column.
+            let row = |name: &'static str, chrome: Option<(Option<Hsla>, Option<Hsla>)>| {
+                let value = div().flex().flex_1().min_w(px(0.0));
+                let value = match chrome {
+                    Some((bg, border)) => with_value_chrome(value, bg, border),
+                    None => value,
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(crate::theme::spacing::xs())
+                    .py(px(2.0))
+                    .child(div().flex_1().min_w(px(0.0)).child("key"))
+                    .child(
+                        value.child(
+                            value_text("value".into(), gpui_kit::black())
+                                .debug_selector(move || format!("{name}-text")),
+                        ),
+                    )
+                    .child(div().w(px(120.0)).child("String"))
+            };
+            let tint = Some(gpui_kit::red());
+            div()
+                .w(px(600.0))
+                .line_height(crate::theme::fonts::ui_line_height())
+                .child(row("resting", None))
+                .child(row("dirty", Some((tint, None))))
+                .child(row("current-match", Some((tint, tint))))
+                .child(row("after", None))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn marking_a_value_keeps_its_text_in_place(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::apply_design_tokens(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let rows = cx.new(|_| MarkedRows);
+            Root::new(rows, window, cx).bordered(false)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let resting = cx.debug_bounds("resting-text").expect("resting");
+        let dirty = cx.debug_bounds("dirty-text").expect("dirty");
+        let current = cx.debug_bounds("current-match-text").expect("current match");
+        let after = cx.debug_bounds("after-text").expect("after");
+        for (name, marked) in [("dirty", dirty), ("current match", current)] {
+            assert_eq!(marked.origin.x, resting.origin.x, "{name} text x");
+            assert_eq!(marked.size, resting.size, "{name} text size");
+        }
+        // Rows stack, so an equal pitch means marking changed neither row height nor text y.
+        let pitch = dirty.origin.y - resting.origin.y;
+        assert_eq!(current.origin.y - dirty.origin.y, pitch, "dirty row pitch");
+        assert_eq!(after.origin.y - current.origin.y, pitch, "current match row pitch");
     }
 }
