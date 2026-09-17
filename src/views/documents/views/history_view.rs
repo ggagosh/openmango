@@ -1,14 +1,15 @@
-use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::{Button, WriteConfirmation, WriteRequest, request_connection_write};
+use crate::components::{
+    Button, WriteConfirmation, WriteRequest, busy_label, request_connection_write,
+};
 use crate::history::{BatchStatus, BatchSummary, HistoryGap};
 use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{fonts, spacing};
@@ -105,18 +106,19 @@ pub(crate) fn render_history_view(
                     let state = state.clone();
                     let session_key = session_key.clone();
                     div().flex().justify_center().p(spacing::lg()).child(
-                        Button::new("load-more-collection-history")
-                            .ghost()
-                            .xsmall()
-                            .label(if loading { "Loading…" } else { "Load more" })
-                            .disabled(loading)
-                            .on_click(move |_, _, cx| {
-                                AppCommands::load_more_collection_history(
-                                    state.clone(),
-                                    session_key.clone(),
-                                    cx,
-                                );
-                            }),
+                        busy_label(
+                            Button::new("load-more-collection-history").ghost(),
+                            Size::XSmall,
+                            "Load more",
+                            loading,
+                        )
+                        .on_click(move |_, _, cx| {
+                            AppCommands::load_more_collection_history(
+                                state.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }),
                     )
                 })),
         )
@@ -381,17 +383,12 @@ fn batch_row(
                 .justify_end()
                 .gap(spacing::xs())
                 .child(
-                    Button::new(("history-batch-details", batch_id.as_u128() as u64))
-                        .ghost()
-                        .xsmall()
-                        .label(if detail_loading {
-                            "Loading…"
-                        } else if details_loaded {
-                            "Hide"
-                        } else {
-                            "Details"
-                        })
-                        .disabled(detail_loading)
+                    busy_label(
+                        Button::new(("history-batch-details", batch_id.as_u128() as u64)).ghost(),
+                        Size::XSmall,
+                        if details_loaded { "Hide" } else { "Details" },
+                        detail_loading,
+                    )
                         .on_click({
                             let state = state.clone();
                             let session_key = session_key.clone();

@@ -15,7 +15,7 @@ use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::file_picker::{FileFilter, FilePickerMode, open_file_dialog_async};
-use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
+use crate::components::{Button, ConnectionIdentity, busy_label, connection_identity_badge};
 use crate::helpers::query_library_io;
 use crate::keyboard::RunForgeAll;
 use crate::state::{
@@ -1410,16 +1410,18 @@ impl Render for QueryLibraryDialog {
                     )
                     .when(self.mode == LibraryMode::Saved, |row| {
                         row.child(
-                            Button::new("query-library-import")
-                                .xsmall()
-                                .label(if self.file_busy { "Working…" } else { "Import…" })
-                                .disabled(self.file_busy)
-                                .on_click({
-                                    let view = view.clone();
-                                    move |_, window, cx| {
-                                        view.update(cx, |this, cx| this.start_import(window, cx));
-                                    }
-                                }),
+                            busy_label(
+                                Button::new("query-library-import"),
+                                gpui_kit::component::Size::XSmall,
+                                "Import…",
+                                self.file_busy,
+                            )
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| this.start_import(window, cx));
+                                }
+                            }),
                         )
                         .child(
                             Button::new("query-library-export")

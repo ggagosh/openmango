@@ -1,3 +1,4 @@
+use gpui_kit::component::Size;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
@@ -6,7 +7,7 @@ use gpui_kit::*;
 
 use crate::components::ErrorCallout;
 use crate::components::{
-    Button, ConnectionIdentity, FormField, cancel_button, connection_identity_badge,
+    Button, ConnectionIdentity, FormField, busy_label, cancel_button, connection_identity_badge,
     request_connection_write,
 };
 use crate::error::ErrorReport;
@@ -111,10 +112,7 @@ pub(crate) fn open_create_database_dialog(
                 let run = run.clone();
                 gpui_kit::component::dialog::DialogFooter::new().children(vec![
                     cancel_button("cancel-db"),
-                    Button::new("create-db")
-                        .primary()
-                        .label("Create")
-                        .loading(busy)
+                    busy_label(Button::new("create-db").primary(), Size::Medium, "Create", busy)
                         .on_click(move |_, window, cx| {
                             if run.read(cx).busy {
                                 return;
@@ -197,51 +195,52 @@ pub(crate) fn open_create_collection_dialog(
                 let run = run.clone();
                 gpui_kit::component::dialog::DialogFooter::new().children(vec![
                     cancel_button("cancel-collection"),
-                    Button::new("create-collection")
-                        .primary()
-                        .label("Create")
-                        .loading(busy)
-                        .on_click(move |_, window, cx| {
-                            if run.read(cx).busy {
-                                return;
-                            }
-                            let col = col_state.read(cx).value().to_string();
-                            if col.trim().is_empty() {
-                                return;
-                            }
-                            let Some(connection_id) = state.read(cx).selected_connection_id()
-                            else {
-                                return;
-                            };
-                            let collection = col.trim().to_string();
-                            let state_for_write = state.clone();
-                            let database_for_write = database.clone();
-                            let run = run.clone();
-                            let target = format!("{database}.{collection}");
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    connection_id,
-                                    target,
-                                    "Create a collection",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |window, cx| {
-                                    begin(&run, cx);
-                                    let done = finish(run.downgrade(), window.window_handle());
-                                    AppCommands::create_collection(
-                                        state_for_write,
-                                        database_for_write,
-                                        collection,
-                                        cx,
-                                        done,
-                                    );
-                                },
-                            );
-                        })
-                        .into_any_element(),
+                    busy_label(
+                        Button::new("create-collection").primary(),
+                        Size::Medium,
+                        "Create",
+                        busy,
+                    )
+                    .on_click(move |_, window, cx| {
+                        if run.read(cx).busy {
+                            return;
+                        }
+                        let col = col_state.read(cx).value().to_string();
+                        if col.trim().is_empty() {
+                            return;
+                        }
+                        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+                            return;
+                        };
+                        let collection = col.trim().to_string();
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        let run = run.clone();
+                        let target = format!("{database}.{collection}");
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                target,
+                                "Create a collection",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |window, cx| {
+                                begin(&run, cx);
+                                let done = finish(run.downgrade(), window.window_handle());
+                                AppCommands::create_collection(
+                                    state_for_write,
+                                    database_for_write,
+                                    collection,
+                                    cx,
+                                    done,
+                                );
+                            },
+                        );
+                    })
+                    .into_any_element(),
                 ])
             })
     });
@@ -287,54 +286,55 @@ pub(crate) fn open_rename_collection_dialog(
                 let run = run.clone();
                 gpui_kit::component::dialog::DialogFooter::new().children(vec![
                     cancel_button("cancel-rename-collection"),
-                    Button::new("rename-collection")
-                        .primary()
-                        .label("Rename")
-                        .loading(busy)
-                        .on_click(move |_, window, cx| {
-                            if run.read(cx).busy {
-                                return;
-                            }
-                            let new_name = name_state.read(cx).value().to_string();
-                            let new_name = new_name.trim();
-                            if new_name.is_empty() || new_name == collection.as_str() {
-                                return;
-                            }
-                            let Some(connection_id) = state.read(cx).selected_connection_id()
-                            else {
-                                return;
-                            };
-                            let new_name = new_name.to_string();
-                            let state_for_write = state.clone();
-                            let database_for_write = database.clone();
-                            let collection_for_write = collection.clone();
-                            let run = run.clone();
-                            let target = format!("{database}.{collection} → {database}.{new_name}");
-                            request_connection_write(
-                                state.clone(),
-                                crate::components::WriteRequest::new(
-                                    connection_id,
-                                    target,
-                                    "Rename a collection",
-                                    None,
-                                ),
-                                window,
-                                cx,
-                                move |window, cx| {
-                                    begin(&run, cx);
-                                    let done = finish(run.downgrade(), window.window_handle());
-                                    AppCommands::rename_collection(
-                                        state_for_write,
-                                        database_for_write,
-                                        collection_for_write,
-                                        new_name,
-                                        cx,
-                                        done,
-                                    );
-                                },
-                            );
-                        })
-                        .into_any_element(),
+                    busy_label(
+                        Button::new("rename-collection").primary(),
+                        Size::Medium,
+                        "Rename",
+                        busy,
+                    )
+                    .on_click(move |_, window, cx| {
+                        if run.read(cx).busy {
+                            return;
+                        }
+                        let new_name = name_state.read(cx).value().to_string();
+                        let new_name = new_name.trim();
+                        if new_name.is_empty() || new_name == collection.as_str() {
+                            return;
+                        }
+                        let Some(connection_id) = state.read(cx).selected_connection_id() else {
+                            return;
+                        };
+                        let new_name = new_name.to_string();
+                        let state_for_write = state.clone();
+                        let database_for_write = database.clone();
+                        let collection_for_write = collection.clone();
+                        let run = run.clone();
+                        let target = format!("{database}.{collection} → {database}.{new_name}");
+                        request_connection_write(
+                            state.clone(),
+                            crate::components::WriteRequest::new(
+                                connection_id,
+                                target,
+                                "Rename a collection",
+                                None,
+                            ),
+                            window,
+                            cx,
+                            move |window, cx| {
+                                begin(&run, cx);
+                                let done = finish(run.downgrade(), window.window_handle());
+                                AppCommands::rename_collection(
+                                    state_for_write,
+                                    database_for_write,
+                                    collection_for_write,
+                                    new_name,
+                                    cx,
+                                    done,
+                                );
+                            },
+                        );
+                    })
+                    .into_any_element(),
                 ])
             })
     });
