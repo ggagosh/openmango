@@ -152,27 +152,19 @@ impl CollectionView {
                 }),
         );
 
-        let find = query_find_button(window).disabled(disabled || !valid).on_click({
-            let state = state.clone();
-            let session = session_key.clone();
-            let input = filter_state.clone();
-            move |_, window, cx| {
-                if let (Some(session), Some(input)) = (session.clone(), input.clone()) {
-                    CollectionView::apply_filter(state.clone(), session, input, window, cx);
+        // The search icon turns into the spinner, so loading never resizes or shifts the row.
+        let find =
+            query_find_button(window).loading(is_loading).disabled(disabled || !valid).on_click({
+                let state = state.clone();
+                let session = session_key.clone();
+                let input = filter_state.clone();
+                move |_, window, cx| {
+                    if let (Some(session), Some(input)) = (session.clone(), input.clone()) {
+                        CollectionView::apply_filter(state.clone(), session, input, window, cx);
+                    }
                 }
-            }
-        });
-        let mut primary =
-            div().flex().items_start().gap(spacing::sm()).child(input_row).child(find);
-        if is_loading {
-            primary = primary.child(
-                div()
-                    .h(control_height)
-                    .flex()
-                    .items_center()
-                    .child(gpui_kit::component::spinner::Spinner::new().small()),
-            );
-        }
+            });
+        let primary = div().flex().items_start().gap(spacing::sm()).child(input_row).child(find);
 
         let mut tools = div()
             .flex()
