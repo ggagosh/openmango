@@ -303,6 +303,13 @@ impl Render for CollectionView {
                             if view.syncing_query_inputs {
                                 return;
                             }
+                            // Prose is not JSON: no auto-pairing, no validation, no date picker,
+                            // and no field-name menu over the top of what is being typed.
+                            if view.ask_mode {
+                                view.dismiss_filter_completions(cx);
+                                cx.notify();
+                                return;
+                            }
                             let typed = view
                                 .filter_completions
                                 .as_ref()
@@ -379,6 +386,10 @@ impl Render for CollectionView {
                         InputEvent::PressEnter { shift: false, .. } => {
                             if let Some(provider) = &view.filter_completions {
                                 provider.dismiss(cx);
+                            }
+                            if view.ask_mode {
+                                view.submit_ask_ai(window, cx);
+                                return;
                             }
                             let raw = state.read(cx).value().to_string();
                             if let Some(err) = strict_filter_query_validation_error(&raw) {

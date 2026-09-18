@@ -5,7 +5,7 @@ use gpui_kit::component::Disableable as _;
 use gpui_kit::component::RopeExt as _;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::input::{EditorState, Input};
+use gpui_kit::component::input::EditorState;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -18,102 +18,18 @@ use crate::views::documents::CollectionView;
 
 use super::super::query_editor::{query_editor, query_editor_height};
 
-impl CollectionView {
-    /// The sparkle beside Find, and the panel it opens.
-    ///
-    /// It floats rather than taking a row of its own: a second full-width input under the filter
-    /// read as a second filter, and its own Find-sized button competed with Find itself.
-    fn render_ask_ai(
-        &self,
-        control_height: Pixels,
-        disabled: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let view = cx.entity();
-        let input = self.ask_ai_state.clone();
-        let busy = self.ask_ai_busy;
-        let error = self.ask_ai_error.clone();
-        let focus = input.as_ref().map(|input| input.read(cx).focus_handle(cx));
-
-        let mut popover = Popover::new("ask-ai-filter")
-            .open(self.ask_ai_open)
-            .on_open_change({
-                let view = view.clone();
-                move |open, window, cx| {
-                    let open = *open;
-                    view.update(cx, |view, cx| view.set_ask_ai_open(open, window, cx));
-                }
-            })
-            .trigger(
-                Button::new("ask-ai-trigger")
-                    .ghost()
-                    .with_size(Size::Medium)
-                    .h(control_height)
-                    .icon(Icon::new(crate::assets::AppIcon::Sparkles).small())
-                    .tooltip("Describe the filter in words")
-                    .disabled(disabled),
-            );
-        if let Some(focus) = &focus {
-            popover = popover.track_focus(focus);
-        }
-
-        popover.content(move |_, window, cx| {
-            let view = view.clone();
-            let note = match (&error, busy) {
-                (Some(error), _) => (error.clone(), cx.theme().warning),
-                (None, true) => ("Writing…".to_string(), cx.theme().muted_foreground),
-                (None, false) => {
-                    ("⏎ writes it into the filter".to_string(), cx.theme().muted_foreground)
-                }
-            };
-            div()
-                .flex()
-                .flex_col()
-                .w(rems(26.0))
-                .max_w(window.viewport_size().width - px(48.0))
-                .gap(spacing::sm())
-                .font_family(crate::theme::fonts::ui())
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Describe the filter"))
-                .children(input.clone().map(|input| {
-                    Input::new(&input)
-                        .with_size(Size::Medium)
-                        .disabled(busy)
-                        .font_family(crate::theme::fonts::ui())
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(spacing::sm())
-                        .child(div().text_xs().min_w(px(0.0)).text_color(note.1).child(note.0))
-                        .child(
-                            crate::components::busy_label(
-                                Button::new("ask-ai-write").primary().small(),
-                                Size::Small,
-                                "Write",
-                                busy,
-                            )
-                            .on_click(move |_, window, cx| {
-                                view.update(cx, |view, cx| view.submit_ask_ai(window, cx));
-                            }),
-                        ),
-                )
-        })
-    }
-}
-
 /// One line of 12px text at the app's line height, reserved whether or not there is a message.
 const FEEDBACK_LINE_HEIGHT: Pixels = px(18.0);
 
-fn query_find_button(window: &Window) -> Button {
+/// The one button at the end of the filter row, in whichever of its two jobs it is doing. Both
+/// are the same size and in the same place, so switching between them moves nothing.
+fn query_action_button(window: &Window, label: &'static str, icon: impl Into<Icon>) -> Button {
     Button::new("apply-filter")
         .primary()
         .with_size(Size::Medium)
         .h(query_editor_height(1, window))
-        .label("Find")
-        .icon(Icon::new(IconName::Search).small())
-        .tooltip("Find matching documents · Enter")
+        .label(label)
+        .icon(icon.into().small())
 }
 
 fn set_query_object_default(
@@ -240,30 +156,61 @@ impl CollectionView {
                 }),
         );
 
-        // The search icon turns into the spinner, so loading never resizes or shifts the row.
-        let find =
-            query_find_button(window).loading(is_loading).disabled(disabled || !valid).on_click({
-                let state = state.clone();
-                let session = session_key.clone();
-                let input = filter_state.clone();
-                move |_, window, cx| {
+        // The icon turns into the spinner, so working never resizes or shifts the row.
+        let find = if self.ask_mode {
+            let view = view.clone();
+            query_action_button(window, "Generate", crate::assets::AppIcon::Sparkles)
+                .loading(self.ask_ai_busy)
+                .disabled(disabled || text.trim().is_empty())
+                .tooltip("Write this as a filter · Enter")
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| view.submit_ask_ai(window, cx));
+                })
+        } else {
+            let state = state.clone();
+            let session = session_key.clone();
+            let input = filter_state.clone();
+            query_action_button(window, "Find", IconName::Search)
+                .loading(is_loading)
+                .disabled(disabled || !valid)
+                .tooltip("Find matching documents · Enter")
+                .on_click(move |_, window, cx| {
                     if let (Some(session), Some(input)) = (session.clone(), input.clone()) {
                         CollectionView::apply_filter(state.clone(), session, input, window, cx);
                     }
-                }
-            });
-        // Describing a filter is occasional, so it gets an icon beside Find and a small panel
-        // that floats over the header — the same shape the sort and projection editors use, and
-        // nothing in the header moves when it opens.
+                })
+        };
+        // Asking turns this bar into the ask bar rather than opening one of its own: same row,
+        // same input, same button, so nothing moves and there is only ever one thing to press.
         let ai_available = self.state.read(cx).ai_assistant_available();
-        let ask_button = ai_available.then(|| self.render_ask_ai(control_height, disabled, cx));
+        let ask_mode = ai_available && self.ask_mode;
+        let ask_toggle = ai_available.then(|| {
+            let view = view.clone();
+            Button::new("ask-ai-toggle")
+                .ghost()
+                .with_size(Size::Medium)
+                .h(control_height)
+                .icon(Icon::new(crate::assets::AppIcon::Sparkles).small())
+                .selected(ask_mode)
+                .tooltip(match ask_mode {
+                    true => "Back to writing the filter",
+                    false => "Describe the filter in words",
+                })
+                .disabled(disabled || self.ask_ai_busy)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| {
+                        let on = !view.ask_mode;
+                        view.set_ask_mode(on, window, cx);
+                    });
+                })
+        });
 
         let primary = div()
             .flex()
             .items_start()
             .gap(spacing::sm())
             .child(input_row)
-            .children(ask_button)
+            .children(ask_toggle)
             .child(find);
 
         let mut tools = div()
@@ -394,7 +341,18 @@ impl CollectionView {
             .font_family(crate::theme::fonts::ui())
             .child(primary)
             .child(tools);
-        let feedback = if let Some(error) = &self.filter_error_message {
+        let feedback = if ask_mode {
+            // The line the bar already keeps says what this mode is, so the mode needs no chrome.
+            Some(match (&self.ask_ai_error, self.ask_ai_busy) {
+                (Some(error), _) => (error.clone(), cx.theme().warning),
+                (None, true) => ("Writing the filter…".to_string(), cx.theme().muted_foreground),
+                (None, false) => (
+                    "Describe what to find · Enter writes the filter · Escape goes back"
+                        .to_string(),
+                    cx.theme().muted_foreground,
+                ),
+            })
+        } else if let Some(error) = &self.filter_error_message {
             Some((error.clone(), cx.theme().warning))
         } else if !valid && !text.trim().is_empty() {
             Some(("Complete the filter · Enter shows details".into(), cx.theme().muted_foreground))
