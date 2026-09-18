@@ -361,9 +361,10 @@ impl CollectionView {
                 this.view_model.invalidate_table();
                 this.view_model.sync_dirty_state(&state, cx);
                 this.update_search_results(cx);
-                // Force re-sync of filter/sort/projection inputs from session data.
-                // This handles external changes (e.g. AI "Open Collection" clearing filters).
-                this.input_session = None;
+                // The query inputs are deliberately left alone. They already follow the session
+                // on every render, writing only what actually differs; forcing the whole
+                // session-changed path here rewrote all three editors and shut the options row
+                // on every Find, which is what made the view blink.
                 cx.notify();
             }
             AppEvent::DocumentDraftChanged { session } => {

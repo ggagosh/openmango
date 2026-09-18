@@ -46,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- Running a query no longer rewrites the filter, sort and projection inputs or closes the options row, which made the view blink on every Find
 - The @collection list in the chat answers to the arrow keys, and Enter takes the highlighted collection instead of sending the half-typed name as a message
 - Switching themes now reaches the layer that draws the chat's markdown, so a dark theme no longer renders answers with light tables and washed-out text
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one

@@ -217,6 +217,12 @@ mod tests {
         assert!(super::query_drafts_equal("  {} ", " "));
         assert!(super::query_drafts_equal("{\n  age: 30\n}", "{\n  age: 30\n}"));
         assert!(!super::query_drafts_equal("{ age: 30 }", "{ age: 40 }"));
+
+        // This is what lets a finished query leave the editors alone: a filter changed from
+        // outside — the assistant clearing one — still reads as different and is written back,
+        // so a load does not have to rewrite all three inputs on the chance that one moved.
+        assert!(!super::query_drafts_equal("{ status: 'open' }", ""));
+        assert!(super::query_drafts_equal("{ status: 'open' }", "{ status: 'open' }"));
     }
 
     #[test]
