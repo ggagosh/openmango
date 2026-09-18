@@ -270,7 +270,8 @@ impl SettingsView {
                     system_prompt: "You are a health-check assistant. Respond briefly.".to_string(),
                     history: Vec::new(),
                     user_prompt: "Return exactly: AI test passed.".to_string(),
-                    transcript: Vec::new(),
+                    conversation_id: "provider-test".to_string(),
+                    memory: None,
                     context_tokens: None,
                 };
                 generate_text(&settings, request).await

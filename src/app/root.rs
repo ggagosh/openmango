@@ -316,6 +316,20 @@ impl AppRoot {
         .detach();
     }
 
+    /// Open the store the assistant remembers conversations in. If it cannot be opened the app
+    /// carries on with memory that lasts only as long as this run.
+    fn open_ai_memory(state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let path = state.read(cx).config.ai_memory_path();
+        let memory = match crate::ai::memory::ChatMemory::open(path) {
+            Ok(memory) => Some(memory),
+            Err(error) => {
+                log::error!("Could not open the assistant's memory: {error}");
+                crate::ai::memory::ChatMemory::in_memory().ok()
+            }
+        };
+        state.update(cx, |state, _| state.ai_chat.memory = memory);
+    }
+
     fn start_history(state: Entity<AppState>, cx: &mut Context<Self>) {
         let key_read = KeyStore::read_history_key(cx);
         let path = state.read(cx).config.history_path();
@@ -388,6 +402,7 @@ impl AppRoot {
         let state = cx.new(|_| AppState::new());
 
         Self::hydrate_connection_secrets(state.clone(), cx);
+        Self::open_ai_memory(&state, cx);
         Self::start_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;
         let mcp_access_signature = Self::mcp_access_signature(state.read(cx));

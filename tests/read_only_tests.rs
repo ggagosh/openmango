@@ -33,6 +33,8 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
 
     let tool = ReplaceDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_update".to_string()),
         write_identity: write_identity(true),
@@ -64,6 +66,8 @@ async fn read_only_ai_index_creation_is_rejected() {
     collection.insert_one(doc! { "email": "ada@example.com" }).await.unwrap();
     let tool = CreateIndexTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_index".to_string()),
         write_identity: write_identity(true),
@@ -95,6 +99,8 @@ async fn ai_insert_refuses_more_documents_than_it_promises() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = InsertDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_insert_cap".to_string()),
         write_identity: write_identity(false),
@@ -124,6 +130,8 @@ async fn ai_write_requires_confirmation_but_not_history() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = InsertDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_confirmed_insert".to_string()),
         write_identity: write_identity(false),
@@ -157,6 +165,8 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
 
     let tool = AggregateTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_aggregate".to_string()),
         write_identity: write_identity(true),
@@ -191,6 +201,8 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = AggregateTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_confirmed_aggregate".to_string()),
         write_identity: write_identity(false),

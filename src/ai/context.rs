@@ -54,6 +54,11 @@ const TOOL_GUIDE_HEAD: &str = "Choose the minimal set of tools needed — prefer
          - **list_indexes**: List all indexes with key definitions. Use for performance analysis.\n\
          - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
          - **list_collections**: List all collections in the database.\n\n\
+         ### Memory\n\
+         - **recall_conversations**: Search what was said in earlier conversations with this user. \
+         Use it when the question refers to earlier work (\"like last time\", \"the query we \
+         wrote\") instead of asking the user to repeat themselves. The conversation in progress is \
+         already in front of you and is not searched.\n\n\
          ### Reports\n\
          - **generate_report**: Build a downloadable Excel report. Use when the user asks for a \
          report, an export, or a spreadsheet. Each sheet runs its own aggregation pipeline, so one \

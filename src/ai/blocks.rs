@@ -459,10 +459,13 @@ pub struct AiChatState {
     pub cancel_flag: Option<Arc<AtomicBool>>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
-    /// The model's own transcript of this session — tool calls and their results included.
-    /// Not persisted: it is provider-shaped, and a restart can start the model fresh.
+    /// Names this conversation in the memory store, so reopening the app continues it rather
+    /// than starting over.
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
+    /// The store itself, opened once per run.
     #[serde(skip)]
-    pub transcript: Vec<rig::completion::Message>,
+    pub memory: Option<crate::ai::memory::ChatMemory>,
     /// The catalogue from the last refresh; the bundled snapshot stands in until then.
     #[serde(skip)]
     pub refreshed_catalog: Option<Arc<crate::ai::catalog::ModelCatalog>>,
@@ -478,6 +481,11 @@ pub struct AiChatState {
 
 impl AiChatState {
     const TIMELINE_LIMIT: usize = 200;
+
+    /// The id this conversation is stored under, minted on first use.
+    pub fn conversation_id(&mut self) -> Uuid {
+        *self.conversation_id.get_or_insert_with(Uuid::new_v4)
+    }
 
     /// The model catalogue in force: the last refresh, or the bundled snapshot.
     pub fn catalog(&self) -> Arc<crate::ai::catalog::ModelCatalog> {
@@ -562,9 +570,14 @@ impl AiChatState {
         self.current_turn_id = None;
         self.last_error = None;
         self.mentioned_collections.clear();
-        // A cleared chat starts the model over too, or it would answer from a conversation
-        // the user can no longer see.
-        self.transcript.clear();
+        // A cleared chat starts the model over too, or it would answer from a conversation the
+        // user can no longer see. The stored conversation goes with it.
+        if let (Some(memory), Some(id)) = (&self.memory, self.conversation_id)
+            && let Err(error) = memory.forget(&id.to_string())
+        {
+            log::warn!("Could not clear the stored conversation: {error}");
+        }
+        self.conversation_id = None;
     }
 
     pub fn find_turn_mut(&mut self, turn_id: Uuid) -> Option<&mut AiTurn> {

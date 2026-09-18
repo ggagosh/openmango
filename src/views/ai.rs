@@ -544,29 +544,7 @@ impl AiView {
             history.len()
         );
 
-        let tool_ctx = {
-            let s = self.state.read(cx);
-            s.selected_connection_id().and_then(|id| {
-                let client = s.active_connection_client(id)?;
-                let db = s.selected_database_name()?;
-                let col = s.selected_collection_name();
-                let write_identity =
-                    crate::models::ConnectionWriteIdentity::from(s.connection_by_id(id)?);
-                Some(MongoContext {
-                    client,
-                    database: db,
-                    collection: col,
-                    write_identity,
-                    read_only: s.connection_read_only(id),
-                    event_tx: None,
-                })
-            })
-        };
-
-        // What rig sent and received last turn, so tool results survive into this one, and how
-        // much of it the chosen model can actually hold.
-        let (transcript, context_tokens) = {
-            let state = self.state.read(cx);
+        let (conversation_id, memory, context_tokens) = self.state.update(cx, |state, _| {
             let settings = &state.settings.ai;
             let context = state
                 .ai_chat
@@ -577,13 +555,39 @@ impl AiView {
                 // Ollama serves whatever is installed and the catalogue does not list it, so
                 // assume the small end rather than overrun a local model's window.
                 .or((settings.provider == AiProvider::Ollama).then_some(32_000));
-            (state.ai_chat.transcript.clone(), context)
+            let id = state.ai_chat.conversation_id();
+            (id, state.ai_chat.memory.clone(), context)
+        });
+
+        let tool_ctx = {
+            let s = self.state.read(cx);
+            s.selected_connection_id().and_then(|id| {
+                let client = s.active_connection_client(id)?;
+                let db = s.selected_database_name()?;
+                let col = s.selected_collection_name();
+                let write_identity =
+                    crate::models::ConnectionWriteIdentity::from(s.connection_by_id(id)?);
+                Some(MongoContext {
+                    client,
+                    memory: s.ai_chat.memory.clone(),
+                    conversation_id: conversation_id.to_string(),
+                    database: db,
+                    collection: col,
+                    write_identity,
+                    read_only: s.connection_read_only(id),
+                    event_tx: None,
+                })
+            })
         };
+
+        // rig loads this conversation from the store and appends the turn to it, so tool results
+        // survive both the next question and a restart.
         let request = AiGenerationRequest {
             system_prompt,
             history,
             user_prompt: prompt,
-            transcript,
+            conversation_id: conversation_id.to_string(),
+            memory,
             context_tokens,
         };
 
@@ -721,7 +725,6 @@ impl AiView {
                 state.update(cx, |s, cx| {
                     match result {
                         Ok(outcome) => {
-                            s.ai_chat.transcript = outcome.transcript;
                             s.ai_chat.set_turn_usage(turn_id, outcome.usage);
                             s.ai_chat.finalize_turn_response(message_id, outcome.text.clone());
                             span.finish_ok(outcome.text.len());

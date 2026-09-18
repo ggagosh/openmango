@@ -22,6 +22,15 @@ use crate::ai::settings::{AiProvider, AiSettings};
 use crate::ai::tools::{MongoContext, StreamEvent, build_agent, truncate_str};
 
 const MAX_OUTPUT_TOKENS: u32 = 4096;
+/// Used when the catalogue does not say how much the model can hold.
+const DEFAULT_CONTEXT_TOKENS: usize = 100_000;
+/// However tight the budget looks, the conversation keeps at least this much room.
+const MIN_MEMORY_TOKENS: usize = 4_000;
+
+fn estimate_tokens(chars: usize) -> usize {
+    (chars as f64 * 0.3) as usize
+}
+
 /// Model calls in one run. A step is cheap; being cut off mid-investigation is not.
 const MAX_TURNS: usize = 30;
 /// Tool calls in one run — the backstop against a model looping on the database.
@@ -113,9 +122,10 @@ pub struct AiGenerationRequest {
     pub system_prompt: String,
     pub history: Vec<ChatMessage>,
     pub user_prompt: String,
-    /// What rig sent and received last turn, tool calls and results included. Empty on the first
-    /// turn of a session, when `history` (the visible chat) stands in.
-    pub transcript: Vec<RigMessage>,
+    /// Names the conversation in the memory store.
+    pub conversation_id: String,
+    /// Where the conversation is kept. Without one the turn still runs, it is just not remembered.
+    pub memory: Option<crate::ai::memory::ChatMemory>,
     /// The chosen model's context window, from the catalogue. `None` falls back to a safe default.
     pub context_tokens: Option<usize>,
 }
@@ -130,20 +140,35 @@ pub struct TurnOutcome {
     pub transcript: Vec<RigMessage>,
 }
 
-/// The exact transcript rig produced last turn beats a reconstruction from visible chat text:
-/// it carries the tool calls and their results, so a follow-up builds on what was already found.
+/// What the model is shown of the conversation when there is no memory to load it from — the
+/// visible chat, replayed. With memory, rig loads the real transcript instead.
 fn conversation_history(request: &AiGenerationRequest) -> Vec<RigMessage> {
-    let mut history = if request.transcript.is_empty() {
-        to_rig_history(&request.history)
-    } else {
-        request.transcript.clone()
-    };
+    let mut history = to_rig_history(&request.history);
     crate::ai::budget::trim_transcript(
         &mut history,
         request.system_prompt.chars().count(),
         request.context_tokens,
     );
     history
+}
+
+/// How much of the stored conversation rig may load: what the model can hold, minus the room the
+/// system prompt and the answer need. rig drops whole turns to fit, keeping tool calls with their
+/// results.
+fn memory_policy(request: &AiGenerationRequest) -> rig_memory::TokenWindowMemory {
+    rig_memory::TokenWindowMemory::new(
+        memory_budget(request),
+        rig_memory::HeuristicTokenCounter::anthropic(),
+    )
+}
+
+/// Tokens the stored conversation may use: the model's window, less the room the system prompt
+/// and the answer need, and never so little that the last exchange cannot be loaded.
+fn memory_budget(request: &AiGenerationRequest) -> usize {
+    let context = request.context_tokens.unwrap_or(DEFAULT_CONTEXT_TOKENS);
+    let reserved =
+        estimate_tokens(request.system_prompt.chars().count()) + MAX_OUTPUT_TOKENS as usize;
+    context.saturating_sub(reserved).max(MIN_MEMORY_TOKENS)
 }
 
 pub async fn generate_text(
@@ -345,6 +370,18 @@ async fn call_ollama(
     response.map_err(|error| map_rig_error(AiProvider::Ollama, error))
 }
 
+/// Give the agent the conversation store, wrapped in the window policy that decides how much of
+/// it fits. Without a store the agent simply has no memory of earlier runs.
+fn with_memory(
+    builder: rig::agent::AgentBuilder<rig::agent::NoToolConfig>,
+    request: &AiGenerationRequest,
+) -> rig::agent::AgentBuilder<rig::agent::NoToolConfig> {
+    let Some(memory) = request.memory.clone() else {
+        return builder;
+    };
+    builder.memory(rig_memory::PolicyMemory::new(memory, memory_policy(request)))
+}
+
 // ---------------------------------------------------------------------------
 // Streaming providers
 // ---------------------------------------------------------------------------
@@ -372,16 +409,25 @@ async fn call_gemini_streaming(
             AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
         })?;
     let agent = build_agent(
-        client
-            .agent(model)
-            .preamble(&request.system_prompt)
-            .max_tokens(MAX_OUTPUT_TOKENS as u64)
-            .add_hook(policy),
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy),
+            &request,
+        ),
         tool_ctx,
     );
 
-    let history = conversation_history(&request);
-    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
     consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
 }
@@ -409,16 +455,25 @@ async fn call_openai_streaming(
             AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
         })?;
     let agent = build_agent(
-        client
-            .agent(model)
-            .preamble(&request.system_prompt)
-            .max_tokens(MAX_OUTPUT_TOKENS as u64)
-            .add_hook(policy),
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy),
+            &request,
+        ),
         tool_ctx,
     );
 
-    let history = conversation_history(&request);
-    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
     consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
 }
@@ -446,16 +501,25 @@ async fn call_anthropic_streaming(
             AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
         })?;
     let agent = build_agent(
-        client
-            .agent(model)
-            .preamble(&request.system_prompt)
-            .max_tokens(MAX_OUTPUT_TOKENS as u64)
-            .add_hook(policy),
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy),
+            &request,
+        ),
         tool_ctx,
     );
 
-    let history = conversation_history(&request);
-    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
     consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
 }
@@ -500,16 +564,25 @@ async fn call_ollama_streaming(
             AiError::Runtime(format!("failed to initialize Ollama client: {error}"))
         })?;
     let agent = build_agent(
-        client
-            .agent(model)
-            .preamble(&request.system_prompt)
-            .max_tokens(MAX_OUTPUT_TOKENS as u64)
-            .add_hook(policy),
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy),
+            &request,
+        ),
         tool_ctx,
     );
 
-    let history = conversation_history(&request);
-    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
     consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
 }
@@ -758,26 +831,47 @@ pub async fn detect_ollama_models(base_url: &str) -> Result<Vec<String>, AiError
 mod tests {
     use super::*;
 
-    fn request(transcript: Vec<RigMessage>) -> AiGenerationRequest {
+    fn request(history: Vec<ChatMessage>) -> AiGenerationRequest {
         AiGenerationRequest {
             system_prompt: String::new(),
-            history: vec![ChatMessage::new(ChatRole::User, "what collections are there?")],
+            history,
             user_prompt: "and how big is orders?".to_string(),
-            transcript,
+            conversation_id: "chat-1".to_string(),
+            memory: None,
             context_tokens: None,
         }
     }
 
+    /// Without a store, the visible chat is what the model gets — and it still has to fit.
     #[test]
-    fn the_previous_transcript_wins_over_replayed_chat_text() {
-        let visible_only = conversation_history(&request(Vec::new()));
-        assert_eq!(visible_only.len(), 1, "falls back to the visible chat on a first turn");
+    fn the_replayed_chat_is_trimmed_to_the_window() {
+        let short = conversation_history(&request(vec![ChatMessage::new(
+            ChatRole::User,
+            "what collections are there?",
+        )]));
+        assert_eq!(short.len(), 1);
 
-        let with_tools = conversation_history(&request(vec![
-            RigMessage::user("what collections are there?"),
-            RigMessage::assistant("orders, customers"),
-        ]));
-        assert_eq!(with_tools.len(), 2, "rig's own transcript is used as-is");
+        let long: Vec<ChatMessage> = (0..40)
+            .map(|index| ChatMessage::new(ChatRole::User, format!("{index} {}", "x".repeat(4_000))))
+            .collect();
+        let mut request = request(long);
+        request.context_tokens = Some(20_000);
+        assert!(conversation_history(&request).len() < 40, "an over-long chat is cut down");
+    }
+
+    /// The window rig is given has to leave room for the prompt and the answer.
+    #[test]
+    fn the_memory_window_reserves_room_for_the_prompt_and_the_answer() {
+        let mut request = request(Vec::new());
+        request.context_tokens = Some(200_000);
+        request.system_prompt = "x".repeat(20_000);
+        let budget = memory_budget(&request);
+        assert!(budget < 200_000 - MAX_OUTPUT_TOKENS as usize, "the prompt is paid for");
+        assert!(budget > 100_000, "a large window is still mostly conversation");
+
+        // A small window must not be reserved down to nothing.
+        request.context_tokens = Some(8_000);
+        assert_eq!(memory_budget(&request), MIN_MEMORY_TOKENS);
     }
 
     #[test]

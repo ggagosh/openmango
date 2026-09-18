@@ -72,6 +72,7 @@ const AUTO_EXECUTE_TOOLS: &[&str] = &[
     "explain_query",
     "sample_field_values",
     "generate_report",
+    "recall_conversations",
 ];
 
 const CONFIRM_FIRST_TOOLS: &[&str] = &["insert_documents", "create_index"];

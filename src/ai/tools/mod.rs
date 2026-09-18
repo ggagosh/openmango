@@ -10,6 +10,7 @@ pub mod generate_report;
 pub mod indexes;
 pub mod insert;
 pub mod list_collections;
+pub mod recall;
 pub mod replace;
 pub mod sample_values;
 pub mod schema;
@@ -24,6 +25,10 @@ use crate::models::ConnectionWriteIdentity;
 #[derive(Clone)]
 pub struct MongoContext {
     pub client: mongodb::Client,
+    /// Where earlier conversations are kept, for the recall tool.
+    pub memory: Option<crate::ai::memory::ChatMemory>,
+    /// The conversation in progress, so recall can leave it out of its own results.
+    pub conversation_id: String,
     pub database: String,
     pub collection: Option<String>,
     pub write_identity: ConnectionWriteIdentity,
@@ -101,6 +106,7 @@ pub const TOOL_NAMES: &[&str] = &[
     explain::ExplainQueryTool::NAME,
     sample_values::SampleFieldValuesTool::NAME,
     generate_report::GenerateReportTool::NAME,
+    recall::RecallConversationsTool::NAME,
     insert::InsertDocumentsTool::NAME,
     replace::ReplaceDocumentsTool::NAME,
     delete::DeleteDocumentsTool::NAME,
@@ -127,7 +133,8 @@ pub fn build_agent(builder: AgentBuilder<NoToolConfig>, ctx: Option<MongoContext
         .tool(indexes::ListIndexesTool::new(ctx.clone()))
         .tool(explain::ExplainQueryTool::new(ctx.clone()))
         .tool(sample_values::SampleFieldValuesTool::new(ctx.clone()))
-        .tool(generate_report::GenerateReportTool::new(ctx.clone()));
+        .tool(generate_report::GenerateReportTool::new(ctx.clone()))
+        .tool(recall::RecallConversationsTool::new(ctx.clone()));
     if read_only {
         return builder.build();
     }
