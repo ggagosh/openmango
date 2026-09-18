@@ -65,7 +65,7 @@ impl SelectItem for ModelItem {
 /// The picker's two lists: the presets, and every other model for this provider.
 fn model_items(state: &AppState) -> (Vec<ModelItem>, Vec<ModelItem>) {
     let provider = state.settings.ai.provider;
-    let current = state.settings.ai.model.clone();
+    let current = state.settings.ai.resolved_model();
 
     if provider == AiProvider::Ollama {
         let mut ids = match &state.ai_chat.cached_models {
@@ -146,12 +146,15 @@ fn groups_key(state: &AppState) -> String {
         },
         _ => state.ai_chat.catalog().models(provider).len(),
     };
-    format!("{}:{count}:{}", provider.label(), state.settings.ai.model)
+    format!("{}:{count}:{}", provider.label(), state.settings.ai.resolved_model())
 }
 
 /// The model picker's state, held by the view that shows it.
 pub struct ModelSelector {
     select: Entity<ModelSelectState>,
+    /// Kept so a caller — and the tests — can resync after settings change.
+    #[allow(dead_code)]
+    app_state: Entity<AppState>,
     key: String,
 }
 
@@ -164,13 +167,13 @@ impl ModelSelector {
         let app_state = state.read(cx);
         let groups = SearchableVec::new(model_groups(app_state));
         let key = groups_key(app_state);
-        let current = SharedString::from(app_state.settings.ai.model.clone());
+        let current = SharedString::from(app_state.settings.ai.resolved_model());
 
-        let select = cx.new(|cx| {
-            let mut select = ModelSelectState::new(groups, None, window, cx).searchable(true);
-            select.set_selected_value(&current, window, cx);
-            select
-        });
+        let select = cx.new(|cx| ModelSelectState::new(groups, None, window, cx).searchable(true));
+        // Selecting has to happen after the entity exists: the select defers work onto it, and
+        // during construction that work is dropped — which is what left the trigger reading
+        // "Please select" while a model was configured.
+        select.update(cx, |select, cx| select.set_selected_value(&current, window, cx));
 
         let app_state = state.clone();
         cx.subscribe(&select, move |_view, _select, event: &SelectEvent<_>, cx| {
@@ -187,7 +190,7 @@ impl ModelSelector {
         })
         .detach();
 
-        Self { select, key }
+        Self { select, app_state: state.clone(), key }
     }
 
     /// Reload the list when the provider, the catalogue or the chosen model changed.
@@ -199,7 +202,7 @@ impl ModelSelector {
         }
         self.key = key;
         let groups = SearchableVec::new(model_groups(app_state));
-        let current = SharedString::from(app_state.settings.ai.model.clone());
+        let current = SharedString::from(app_state.settings.ai.resolved_model());
         self.select.update(cx, |select, cx| {
             select.set_items(groups, window, cx);
             select.set_selected_value(&current, window, cx);
@@ -267,5 +270,74 @@ mod tests {
         assert!(item.matches("sonnet 1m"), "every word has to match somewhere");
         assert!(item.matches(""));
         assert!(!item.matches("opus"));
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use gpui_kit::component::Root;
+    use gpui_kit::{
+        AppContext as _, Context, IntoElement, ParentElement as _, Render, TestAppContext, Window,
+        div,
+    };
+
+    use super::{ModelSelector, model_select};
+    use crate::ai::settings::{AiProvider, ModelPreset};
+    use crate::state::AppState;
+    use gpui_kit::component::Size;
+    use gpui_kit::px;
+
+    struct Panel {
+        selector: ModelSelector,
+    }
+
+    impl Render for Panel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().child(model_select(&self.selector.entity(), Size::Small, px(190.0)))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_picker_opens_on_the_model_in_settings(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::apply_design_tokens(cx);
+        });
+        let balanced = AiProvider::Anthropic.preset_model(ModelPreset::Balanced).unwrap();
+
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.settings.ai.provider = AiProvider::Anthropic;
+                state.settings.ai.model = balanced.to_string();
+                state
+            });
+            let selector = ModelSelector::new(&state, window, cx);
+            let panel = cx.new(|_| Panel { selector });
+            Root::new(panel, window, cx).bordered(false)
+        });
+        cx.run_until_parked();
+
+        // The panel builds the picker, then a catalogue refresh or a provider change rebuilds
+        // its items: the trigger still has to name the model in use, not fall back to
+        // "Please select".
+        cx.update(|window, cx| {
+            let view = panel.read(cx).view().clone().downcast::<Panel>().expect("panel");
+            view.update(cx, |view, cx| {
+                let state = view.selector.app_state.clone();
+                state.update(cx, |state, _| {
+                    state.ai_chat.refreshed_catalog =
+                        Some(crate::ai::catalog::ModelCatalog::bundled());
+                });
+                view.selector.sync(&state, window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        let selected = panel.read_with(cx, |root, cx| {
+            let panel = root.view().clone().downcast::<Panel>().expect("panel");
+            panel.read(cx).selector.entity().read(cx).selected_value().map(ToString::to_string)
+        });
+        assert_eq!(selected, Some(balanced.to_string()), "the trigger must name the model in use");
     }
 }

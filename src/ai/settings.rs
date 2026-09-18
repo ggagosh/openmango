@@ -164,6 +164,16 @@ impl AiSettings {
         self.model = value;
     }
 
+    /// The model to actually use. Settings written by an older version — or by hand — can leave
+    /// this empty, and "no model" is not a state worth showing anyone.
+    pub fn resolved_model(&self) -> String {
+        if self.model.trim().is_empty() {
+            self.provider.default_model().to_string()
+        } else {
+            self.model.clone()
+        }
+    }
+
     pub fn set_api_key(&mut self, value: String, cx: &App) {
         let provider = self.provider.keystore_id();
         if value.trim().is_empty() {

@@ -117,17 +117,30 @@ impl AiView {
 
     /// Rebuild the rows when the conversation changed, and tell the scroller what moved:
     /// new rows to follow, or the last row growing as tokens arrive.
-    fn sync_timeline(&mut self, entries: &[AiChatEntry], window: &mut Window, cx: &mut App) {
-        let revision = timeline_revision(entries);
+    fn sync_timeline(
+        &mut self,
+        entries: &[AiChatEntry],
+        turn_working: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // Expanding a group changes no entry, so the overrides belong in the key too — without
+        // them a click rebuilt nothing and the group looked dead.
+        let mut revision =
+            timeline_revision(entries).wrapping_mul(131).wrapping_add(u64::from(turn_working));
+        for (key, expanded) in &self.tool_group_overrides {
+            revision = revision.wrapping_add(key.as_u128() as u64).wrapping_mul(if *expanded {
+                3
+            } else {
+                5
+            });
+        }
         if revision == self.timeline_revision && !self.timeline.is_empty() {
             return;
         }
         self.timeline_revision = revision;
         let previous = self.timeline.len();
-        let (rows, expired) = build_timeline(entries, &self.tool_group_overrides);
-        for key in expired {
-            self.tool_group_overrides.remove(&key);
-        }
+        let rows = build_timeline(entries, &self.tool_group_overrides, turn_working);
         let count = rows.len();
         self.timeline = Rc::new(rows);
 
@@ -354,7 +367,7 @@ impl AiView {
                     .line_number(false)
                     .submit_on_enter(true)
                     .clean_on_escape()
-                    .placeholder("Ask AI Assistant...")
+                    .placeholder("Ask about your data…")
             });
 
             self.mention_decorations = Some(
@@ -852,7 +865,7 @@ impl Render for AiView {
 
         let entries = ai_chat.entries.clone();
         let scroller = self.ensure_scroller(entries.len(), window, cx);
-        self.sync_timeline(&entries, window, cx);
+        self.sync_timeline(&entries, is_loading, window, cx);
 
         let view_entity = cx.entity();
         let empty_title =
@@ -955,7 +968,7 @@ impl Render for AiView {
 
         // Model selector — presets first, then every model, searchable
         let model_selector =
-            crate::components::model_select::model_select(&model_select, Size::Small, px(190.0))
+            crate::components::model_select::model_select(&model_select, Size::Small, px(168.0))
                 .disabled(is_loading);
 
         // Send/Stop icon button
@@ -1182,36 +1195,41 @@ impl Render for AiView {
 
         input_area = input_area.children(mention_pills);
 
-        input_area =
-            input_area
-                .child(div().px(px(2.0)).py(px(2.0)).child(
-                    Editor::new(&input_state).text_xs().appearance(false).w_full().h(px(64.0)),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(spacing::sm())
-                        .pt(px(2.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .min_w(px(0.0))
-                                .gap(spacing::xs())
-                                .child(model_selector)
-                                .child(info_chip(
-                                    &context_chip_label,
-                                    if session_ready {
-                                        cx.theme().muted_foreground
-                                    } else {
-                                        cx.theme().warning
-                                    },
-                                )),
-                        )
-                        .child(send_or_stop_button),
-                );
+        // The box grows with what is typed instead of opening as a block of dead space.
+        let composer_rows = input_state.read(cx).value().lines().count().max(1).clamp(2, 8);
+        input_area = input_area
+            .child(div().px(px(2.0)).py(px(2.0)).child(
+                Editor::new(&input_state).text_xs().appearance(false).w_full().h(window.rem_size()
+                    * 0.75
+                    * 1.55
+                    * composer_rows as f32
+                    + px(4.0)),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(spacing::sm())
+                    .pt(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .min_w(px(0.0))
+                            .gap(spacing::xs())
+                            .child(model_selector)
+                            .child(info_chip(
+                                &context_chip_label,
+                                if session_ready {
+                                    cx.theme().muted_foreground
+                                } else {
+                                    cx.theme().warning
+                                },
+                            )),
+                    )
+                    .child(send_or_stop_button),
+            );
 
         div()
             .flex()
@@ -1317,40 +1335,35 @@ struct RowContext {
     streaming_turn_id: Option<Uuid>,
 }
 
-/// Whether a tool group shows its detail: running groups open themselves, and the user's own
-/// toggle wins until the group starts running again.
+/// Whether a tool group shows its detail.
+///
+/// The user's own toggle always wins — reopening a group they just closed is what made it feel
+/// unclickable. Left alone, a group stays open for as long as the turn is working, rather than
+/// opening and closing as each tool starts and finishes.
 fn group_expanded(
     tools: &[ToolActivity],
     overrides: &HashMap<Uuid, bool>,
-    expired: &mut Vec<Uuid>,
+    turn_working: bool,
 ) -> bool {
-    let key = tools[0].id;
-    let any_running = tools.iter().any(|tool| {
-        matches!(
-            tool.status,
-            ToolActivityStatus::Running | ToolActivityStatus::AwaitingConfirmation { .. }
-        )
-    });
-    match overrides.get(&key) {
-        Some(&expanded) => {
-            if any_running && !expanded {
-                expired.push(key);
-                true
-            } else {
-                expanded
-            }
-        }
-        None => any_running,
+    if let Some(&expanded) = overrides.get(&tools[0].id) {
+        return expanded;
     }
+    turn_working
+        || tools.iter().any(|tool| {
+            matches!(
+                tool.status,
+                ToolActivityStatus::Running | ToolActivityStatus::AwaitingConfirmation { .. }
+            )
+        })
 }
 
 /// Group the flat entry list into rows. Tool activity folds into the turn it belongs to.
 fn build_timeline(
     entries: &[AiChatEntry],
     overrides: &HashMap<Uuid, bool>,
-) -> (Vec<TimelineRow>, Vec<Uuid>) {
+    turn_working: bool,
+) -> Vec<TimelineRow> {
     let mut rows: Vec<TimelineRow> = Vec::new();
-    let mut expired = Vec::new();
     let mut pending: Vec<ToolActivity> = Vec::new();
 
     let flush = |pending: &mut Vec<ToolActivity>, rows: &mut Vec<TimelineRow>| {
@@ -1386,15 +1399,15 @@ fn build_timeline(
     for row in &mut rows {
         match row {
             TimelineRow::Turn { tools, expanded, .. } if !tools.is_empty() => {
-                *expanded = group_expanded(tools, overrides, &mut expired);
+                *expanded = group_expanded(tools, overrides, turn_working);
             }
             TimelineRow::ToolGroup { tools, expanded } => {
-                *expanded = group_expanded(tools, overrides, &mut expired);
+                *expanded = group_expanded(tools, overrides, turn_working);
             }
             _ => {}
         }
     }
-    (rows, expired)
+    rows
 }
 
 fn render_timeline_row(
@@ -2755,7 +2768,7 @@ mod tests {
     fn tool_activity_folds_into_the_turn_that_caused_it() {
         let entries =
             vec![turn(), tool(ToolActivityStatus::Completed), tool(ToolActivityStatus::Completed)];
-        let (rows, _) = build_timeline(&entries, &HashMap::new());
+        let rows = build_timeline(&entries, &HashMap::new(), false);
 
         assert_eq!(rows.len(), 1, "one turn, not three rows");
         match &rows[0] {
@@ -2768,27 +2781,46 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn a_running_group_opens_itself_and_overrides_the_users_collapse() {
+    fn a_running_group_opens_itself_but_the_user_can_close_it() {
         let entries = vec![turn(), tool(ToolActivityStatus::Running)];
         let key = match &entries[1] {
             AiChatEntry::ToolActivity(activity) => activity.id,
             _ => unreachable!(),
         };
-        let mut overrides = HashMap::new();
-        overrides.insert(key, false);
 
-        let (rows, expired) = build_timeline(&entries, &overrides);
+        let rows = build_timeline(&entries, &HashMap::new(), true);
         match &rows[0] {
-            TimelineRow::Turn { expanded, .. } => assert!(*expanded, "running work stays visible"),
+            TimelineRow::Turn { expanded, .. } => assert!(*expanded, "running work opens itself"),
             _ => panic!("expected a turn row"),
         }
-        assert_eq!(expired, vec![key], "the stale collapse is dropped");
+
+        // Closing it has to stick, even while the turn keeps working.
+        let mut overrides = HashMap::new();
+        overrides.insert(key, false);
+        let rows = build_timeline(&entries, &overrides, true);
+        match &rows[0] {
+            TimelineRow::Turn { expanded, .. } => assert!(!*expanded, "the user's choice wins"),
+            _ => panic!("expected a turn row"),
+        }
+    }
+
+    /// Tools finish one at a time; the group must not blink shut between them.
+    #[::core::prelude::v1::test]
+    fn a_group_stays_open_between_two_tool_calls() {
+        let entries = vec![turn(), tool(ToolActivityStatus::Completed)];
+        let rows = build_timeline(&entries, &HashMap::new(), true);
+        match &rows[0] {
+            TimelineRow::Turn { expanded, .. } => {
+                assert!(*expanded, "the turn is still working, so its tools stay visible")
+            }
+            _ => panic!("expected a turn row"),
+        }
     }
 
     #[::core::prelude::v1::test]
     fn tools_without_a_turn_stand_on_their_own() {
         let entries = vec![tool(ToolActivityStatus::Completed)];
-        let (rows, _) = build_timeline(&entries, &HashMap::new());
+        let rows = build_timeline(&entries, &HashMap::new(), false);
         assert!(matches!(rows.as_slice(), [TimelineRow::ToolGroup { .. }]));
     }
 
