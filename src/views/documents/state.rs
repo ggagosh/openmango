@@ -170,6 +170,15 @@ impl CollectionView {
                     .flatten()
                     .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
                 if filter_focused || option_focused {
+                    // The kit's editors are not searchable by default, and a non-searchable one
+                    // deliberately lets Cmd+F bubble to the app — which is how the document
+                    // search kept opening from inside the filter box. Turning searchable on
+                    // would only trade it for a find panel inside a one-line editor, so the key
+                    // stops here instead.
+                    if cmd_or_ctrl && key == "f" {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if filter_focused && this.handle_query_editor_key(&event.keystroke, window, cx)
                     {
                         cx.stop_propagation();

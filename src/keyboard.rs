@@ -931,6 +931,35 @@ mod tests {
         }
     }
 
+    /// Cmd+F inside a query editor is the editor's own find. Taking it for the document search
+    /// meant typing a filter and having a search bar open over the results.
+    #[test]
+    fn nothing_view_level_fires_while_a_query_editor_has_focus() {
+        let typing = [
+            KeyContext::parse("Workspace").unwrap(),
+            KeyContext::parse("Documents").unwrap(),
+            KeyContext::parse("Input").unwrap(),
+        ];
+        let not_typing = &typing[..2];
+
+        for binding in default_keybindings() {
+            let Some(predicate) = binding.predicate() else { continue };
+            let keys: String =
+                binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
+            if keys != "cmd-f" && keys != "ctrl-f" {
+                continue;
+            }
+            assert!(
+                predicate.depth_of(&typing).is_none(),
+                "{keys} still reaches {} while typing",
+                binding.action().name()
+            );
+        }
+
+        let search = KeyBindingContextPredicate::parse("Documents && !Input").unwrap();
+        assert!(search.depth_of(not_typing).is_some(), "and still works outside an input");
+    }
+
     #[test]
     fn document_duplicate_and_delete_do_not_match_aggregation() {
         let document = KeyBindingContextPredicate::parse(DOCUMENT_EDIT_CONTEXT).unwrap();

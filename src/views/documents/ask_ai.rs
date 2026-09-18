@@ -163,24 +163,28 @@ fn filter_placeholder(ask_mode: bool) -> &'static str {
 
 /// What the model is told about the collection: its name, the fields it has, and — for the
 /// fields that only ever hold a handful of strings — which strings those are.
+///
+/// The documents on screen are the source, not the sampled schema: the schema is only there
+/// once something has asked for it, and a model told nothing about the collection writes
+/// `"create"` against a field whose values are `CREATE`.
 fn ask_ai_context(
     state: &Entity<AppState>,
     session_key: &SessionKey,
     cx: &gpui_kit::App,
 ) -> QueryContext {
     let state = state.read(cx);
-    let values =
-        state.session_data(session_key).map(|data| sample_values(&data.items)).unwrap_or_default();
+    let mut fields =
+        state.session_data(session_key).map(|data| field_lines(&data.items)).unwrap_or_default();
 
-    let mut fields = Vec::new();
-    if let Some(meta) = state.collection_meta(session_key) {
-        collect_field_lines(&meta.schema.fields, &values, &mut fields);
-    }
-    if fields.is_empty()
-        && let Some(session) = state.session(session_key)
-        && let Some(schema) = session.data.schema.as_ref()
-    {
-        collect_field_lines(&schema.fields, &values, &mut fields);
+    // An empty page still has a shape, if anything has sampled it.
+    if fields.is_empty() {
+        let schema = state
+            .collection_meta(session_key)
+            .map(|meta| meta.schema.fields.clone())
+            .or_else(|| state.session(session_key)?.data.schema.as_ref().map(|s| s.fields.clone()));
+        if let Some(schema) = schema {
+            collect_schema_lines(&schema, &mut fields);
+        }
     }
     fields.truncate(MAX_FIELDS);
 
@@ -194,91 +198,128 @@ fn ask_ai_context(
 /// Values a field is worth listing. Past this it is free text, not a set of choices, and the
 /// list would only cost tokens.
 const MAX_VALUES: usize = 8;
-
-/// "action: string (CREATE, UPDATE, DELETE)" — parents before children, as the schema sampled
-/// them, with the values the loaded page shows where the field looks like a set of choices.
-fn collect_field_lines(
-    fields: &[crate::state::SchemaField],
-    values: &HashMap<String, BTreeSet<String>>,
-    out: &mut Vec<String>,
-) {
-    for field in fields {
-        if out.len() >= MAX_FIELDS {
-            return;
-        }
-        let types: Vec<&str> =
-            field.types.iter().map(|kind| kind.bson_type.as_str()).take(3).collect();
-        let mut line = match types.is_empty() {
-            true => field.path.clone(),
-            false => format!("{}: {}", field.path, types.join(" | ")),
-        };
-        if let Some(choices) = values.get(&field.path)
-            && choices.len() <= MAX_VALUES
-        {
-            line.push_str(&format!(
-                " ({})",
-                choices.iter().cloned().collect::<Vec<_>>().join(", ")
-            ));
-        }
-        out.push(line);
-        collect_field_lines(&field.children, values, out);
-    }
-}
-
-/// The distinct strings each field holds across the loaded page.
-///
-/// This is what stops "create and update documents" becoming `$in: ["create", "update"]` against
-/// a collection whose values are `CREATE` and `UPDATE`. A field is given up on once it passes
-/// the cap: it is prose, and no list of examples would help.
-fn sample_values(documents: &[crate::state::SessionDocument]) -> HashMap<String, BTreeSet<String>> {
-    let mut values: HashMap<String, BTreeSet<String>> = HashMap::new();
-    for document in documents {
-        collect_values(&document.doc, "", 0, &mut values);
-    }
-    values.retain(|_, seen| seen.len() <= MAX_VALUES);
-    values
-}
-
 /// Strings only, and only short ones: a message body is not a choice.
 const MAX_VALUE_CHARS: usize = 40;
 const MAX_VALUE_DEPTH: usize = 2;
 
-fn collect_values(
+/// What one field looked like across the page.
+#[derive(Default)]
+struct FieldFacts {
+    /// Where it first appeared, so parents come before children and the order reads like a
+    /// document rather than an alphabet.
+    order: usize,
+    types: BTreeSet<&'static str>,
+    values: BTreeSet<String>,
+    /// More distinct values than anyone would call a choice.
+    open_ended: bool,
+}
+
+/// "action: string (CREATE, UPDATE, DELETE)" for every field the loaded page shows.
+fn field_lines(documents: &[crate::state::SessionDocument]) -> Vec<String> {
+    let mut facts: HashMap<String, FieldFacts> = HashMap::new();
+    for document in documents {
+        collect_facts(&document.doc, "", 0, &mut facts);
+    }
+
+    let mut ordered: Vec<(String, FieldFacts)> = facts.into_iter().collect();
+    ordered.sort_by_key(|(_, facts)| facts.order);
+    ordered
+        .into_iter()
+        .map(|(path, facts)| {
+            let mut line = match facts.types.is_empty() {
+                true => path,
+                false => {
+                    format!(
+                        "{path}: {}",
+                        facts.types.iter().copied().collect::<Vec<_>>().join(" | ")
+                    )
+                }
+            };
+            if !facts.open_ended && !facts.values.is_empty() {
+                line.push_str(&format!(
+                    " ({})",
+                    facts.values.iter().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            line
+        })
+        .collect()
+}
+
+fn collect_facts(
     document: &Document,
     prefix: &str,
     depth: usize,
-    out: &mut HashMap<String, BTreeSet<String>>,
+    out: &mut HashMap<String, FieldFacts>,
 ) {
     for (key, value) in document {
         let path = match prefix.is_empty() {
             true => key.clone(),
             false => format!("{prefix}.{key}"),
         };
+        let next = out.len();
+        let facts = out
+            .entry(path.clone())
+            .or_insert_with(|| FieldFacts { order: next, ..FieldFacts::default() });
+        facts.types.insert(type_name(value));
+
         match value {
             Bson::String(text) if text.chars().count() <= MAX_VALUE_CHARS => {
-                let seen = out.entry(path).or_default();
-                // Once it is over the cap it stays over it: one more value cannot make it a set.
-                if seen.len() <= MAX_VALUES {
-                    seen.insert(text.clone());
+                if !facts.open_ended {
+                    facts.values.insert(text.clone());
+                    if facts.values.len() > MAX_VALUES {
+                        // Once it is over the cap it stays over it: no later value makes it a set.
+                        facts.open_ended = true;
+                        facts.values.clear();
+                    }
                 }
             }
+            Bson::String(_) => facts.open_ended = true,
             Bson::Document(nested) if depth < MAX_VALUE_DEPTH => {
-                collect_values(nested, &path, depth + 1, out);
+                collect_facts(nested, &path, depth + 1, out);
             }
             _ => {}
         }
     }
 }
 
+fn type_name(value: &Bson) -> &'static str {
+    match value {
+        Bson::Double(_) | Bson::Int32(_) | Bson::Int64(_) | Bson::Decimal128(_) => "number",
+        Bson::String(_) => "string",
+        Bson::Boolean(_) => "boolean",
+        Bson::DateTime(_) => "date",
+        Bson::ObjectId(_) => "objectId",
+        Bson::Array(_) => "array",
+        Bson::Document(_) => "object",
+        Bson::Null => "null",
+        _ => "value",
+    }
+}
+
+/// The same lines from a sampled schema, for when the page itself is empty.
+fn collect_schema_lines(fields: &[crate::state::SchemaField], out: &mut Vec<String>) {
+    for field in fields {
+        if out.len() >= MAX_FIELDS {
+            return;
+        }
+        let types: Vec<&str> =
+            field.types.iter().map(|kind| kind.bson_type.as_str()).take(3).collect();
+        out.push(match types.is_empty() {
+            true => field.path.clone(),
+            false => format!("{}: {}", field.path, types.join(" | ")),
+        });
+        collect_schema_lines(&field.children, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use super::{collect_field_lines, filter_placeholder};
     use mongodb::bson::Document;
 
+    use super::{field_lines, filter_placeholder};
     use crate::bson::DocumentKey;
-    use crate::state::{SchemaField, SchemaFieldType, SessionDocument};
+    use crate::state::SessionDocument;
 
     fn document(pairs: &[(&str, &str)]) -> SessionDocument {
         let mut doc = Document::new();
@@ -286,34 +327,6 @@ mod tests {
             doc.insert(*key, *value);
         }
         SessionDocument { key: DocumentKey::from_document(&doc, 0), doc }
-    }
-
-    fn field(path: &str, kind: &str, children: Vec<SchemaField>) -> SchemaField {
-        SchemaField {
-            path: path.to_string(),
-            name: path.rsplit('.').next().unwrap_or(path).to_string(),
-            depth: path.matches('.').count(),
-            types: vec![SchemaFieldType {
-                bson_type: kind.to_string(),
-                count: 1,
-                percentage: 100.0,
-            }],
-            presence: 1,
-            null_count: 0,
-            is_polymorphic: false,
-            children,
-        }
-    }
-
-    #[test]
-    fn the_model_is_told_the_nested_fields_too() {
-        let schema = vec![
-            field("action", "string", Vec::new()),
-            field("diff", "object", vec![field("diff.before", "object", Vec::new())]),
-        ];
-        let mut lines = Vec::new();
-        collect_field_lines(&schema, &HashMap::new(), &mut lines);
-        assert_eq!(lines, ["action: string", "diff: object", "diff.before: object"]);
     }
 
     /// "create and update documents" became `$in: ["create", "update"]` against a collection
@@ -327,47 +340,49 @@ mod tests {
                 document(&[("action", action), ("message", &format!("line number {index}"))])
             })
             .collect();
-        let values = super::sample_values(&documents);
 
-        let mut lines = Vec::new();
-        collect_field_lines(
-            &[field("action", "string", Vec::new()), field("message", "string", Vec::new())],
-            &values,
-            &mut lines,
-        );
         assert_eq!(
-            lines,
+            field_lines(&documents),
             ["action: string (CREATE, UPDATE)", "message: string"],
-            "the choices are named; the prose is not, and its three values are not choices"
+            "the choices are named; the prose is not"
+        );
+    }
+
+    /// The schema is only sampled once something asks for it. The page is always there, and
+    /// without this the model was told nothing at all about the collection.
+    #[test]
+    fn the_fields_come_from_the_page_without_any_schema() {
+        let mut doc = Document::new();
+        doc.insert("logId", "DOC-C-1");
+        doc.insert("version", 3i32);
+        let mut diff = Document::new();
+        diff.insert("before", "x");
+        doc.insert("diff", diff);
+        let page = [SessionDocument { key: DocumentKey::from_document(&doc, 0), doc }];
+
+        assert_eq!(
+            field_lines(&page),
+            [
+                "logId: string (DOC-C-1)",
+                "version: number",
+                "diff: object",
+                "diff.before: string (x)",
+            ],
+            "parents before children, in the order the document lists them"
         );
     }
 
     #[test]
-    fn a_field_with_too_many_values_is_left_alone() {
-        let documents: Vec<_> = (0..super::MAX_VALUES + 2)
-            .map(|index| {
-                let mut doc = Document::new();
-                doc.insert("id", format!("id-{index}"));
-                SessionDocument { key: DocumentKey::from_document(&doc, index), doc }
-            })
-            .collect();
-        assert!(
-            !super::sample_values(&documents).contains_key("id"),
-            "past the cap it is an identifier, not a set of choices"
-        );
-    }
-
-    #[test]
-    fn a_polymorphic_field_names_what_it_holds() {
-        let mut polymorphic = field("value", "string", Vec::new());
-        polymorphic.types.push(SchemaFieldType {
-            bson_type: "int".to_string(),
-            count: 1,
-            percentage: 50.0,
-        });
-        let mut lines = Vec::new();
-        collect_field_lines(&[polymorphic], &HashMap::new(), &mut lines);
-        assert_eq!(lines, ["value: string | int"]);
+    fn a_field_that_holds_two_kinds_names_both() {
+        let mut first = Document::new();
+        first.insert("value", "text");
+        let mut second = Document::new();
+        second.insert("value", 7i32);
+        let page = [
+            SessionDocument { key: DocumentKey::from_document(&first, 0), doc: first },
+            SessionDocument { key: DocumentKey::from_document(&second, 1), doc: second },
+        ];
+        assert_eq!(field_lines(&page), ["value: number | string (text)"]);
     }
 
     #[test]
