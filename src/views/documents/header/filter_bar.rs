@@ -18,6 +18,9 @@ use crate::views::documents::CollectionView;
 
 use super::super::query_editor::{query_editor, query_editor_height};
 
+/// One line of 12px text at the app's line height, reserved whether or not there is a message.
+const FEEDBACK_LINE_HEIGHT: Pixels = px(18.0);
+
 fn query_find_button(window: &Window) -> Button {
     Button::new("apply-filter")
         .primary()
@@ -286,7 +289,7 @@ impl CollectionView {
             );
         }
 
-        let mut bar = div()
+        let bar = div()
             .flex()
             .flex_col()
             .min_w(px(0.0))
@@ -333,10 +336,11 @@ impl CollectionView {
         } else {
             None
         };
-        if let Some((text, color)) = feedback {
-            bar = bar.child(div().text_xs().text_color(color).child(text));
-        }
-        bar
+        // The line is always there, empty when there is nothing to say. It used to appear and
+        // disappear with the message, and a query that takes five milliseconds would show
+        // "Searching collection…" for one frame — pushing the whole document list down and back.
+        let (text, color) = feedback.unwrap_or_else(|| (String::new(), cx.theme().transparent));
+        bar.child(div().text_xs().h(FEEDBACK_LINE_HEIGHT).text_color(color).child(text))
     }
 }
 

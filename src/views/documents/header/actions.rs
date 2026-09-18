@@ -34,7 +34,6 @@ pub fn render_documents_actions(
     session_key: Option<SessionKey>,
     selected_doc: Option<DocumentKey>,
     selected_count: usize,
-    is_loading: bool,
     filter_active: bool,
     table_column_keys: Vec<String>,
     col_visibility_search: Entity<InputState>,
@@ -55,7 +54,6 @@ pub fn render_documents_actions(
         session_key,
         selected_doc,
         selected_count,
-        is_loading,
         filter_active,
         ai_available,
         ai_loading,
@@ -423,7 +421,6 @@ fn render_documents_actions_clean(
     session_key: Option<SessionKey>,
     selected_doc: Option<DocumentKey>,
     selected_count: usize,
-    is_loading: bool,
     filter_active: bool,
     ai_available: bool,
     ai_loading: bool,
@@ -442,7 +439,7 @@ fn render_documents_actions_clean(
         .is_some_and(|key| !state.read(cx).connection_read_only(key.connection_id));
 
     let insert_button = clean_toolbar_icon_button(
-        Button::new("insert-document-clean").xsmall().disabled(!writable || is_loading).on_click({
+        Button::new("insert-document-clean").xsmall().disabled(!writable).on_click({
             let session_key = session_key.clone();
             let state_for_insert = state_for_insert.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -524,8 +521,7 @@ fn render_documents_actions_clean(
         }),
         IconName::Redo,
         "Refresh",
-    )
-    .disabled(is_loading);
+    );
 
     let view_mode =
         session_key.as_ref().map(|sk| state.read(cx).session_view_mode(sk)).unwrap_or_default();
@@ -780,7 +776,7 @@ fn render_documents_actions_clean(
         .ghost()
         .xsmall()
         .label("JSON")
-        .disabled(is_loading || saving)
+        .disabled(saving)
         .when(view_mode == DocumentViewMode::Json, |button| button.bg(active_bg))
         .on_click({
             let view = view.clone();

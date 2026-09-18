@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- The filter bar keeps a line for its message whether or not it has one, so a query that finishes in milliseconds no longer flashes "Searching collection…" and shifts the documents under it
+- JSON, Insert and Refresh no longer grey out for the length of a query, which made the toolbar blink on every reload while Tree and Table stayed put
 - Running a query no longer rewrites the filter, sort and projection inputs or closes the options row, which made the view blink on every Find
 - The @collection list in the chat answers to the arrow keys, and Enter takes the highlighted collection instead of sending the half-typed name as a message
 - Switching themes now reaches the layer that draws the chat's markdown, so a dark theme no longer renders answers with light tables and washed-out text

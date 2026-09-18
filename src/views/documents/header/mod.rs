@@ -104,7 +104,6 @@ impl CollectionView {
                 session_key.clone(),
                 selected_doc,
                 selected_count,
-                is_loading,
                 filter_active,
                 table_column_keys,
                 col_visibility_search,
