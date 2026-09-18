@@ -686,6 +686,10 @@ impl Render for CollectionView {
                 });
             }
             self.filter_expanded = false;
+            // A different collection has a different filter; there is nothing to go back to.
+            self.ask_mode = false;
+            self.ask_ai_filter = None;
+            self.ask_ai_error = None;
             self.input_session = session_key.clone();
             self.syncing_query_inputs = true;
             if let Some(filter_state) = self.filter_state.clone() {
@@ -721,7 +725,10 @@ impl Render for CollectionView {
                 let expected =
                     if filter_raw.trim().is_empty() { String::new() } else { filter_raw.clone() };
                 let current = filter_state.read(cx).value().to_string();
-                if !self.calendar_open && !query_drafts_equal(&current, &expected) {
+                // While the bar is being asked a question it holds the question, not the filter.
+                // Syncing it to the stored filter here overwrote every keystroke as it was typed.
+                if !self.ask_mode && !self.calendar_open && !query_drafts_equal(&current, &expected)
+                {
                     self.syncing_query_inputs = true;
                     filter_state.update(cx, |state, cx| {
                         state.replace_all(expected.clone(), window, cx);
