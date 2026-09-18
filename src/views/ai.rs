@@ -2265,7 +2265,6 @@ fn coalesce_stream_events(events: Vec<StreamEvent>) -> Vec<StreamEvent> {
 fn confirmation_button_label(tool_name: &str) -> &'static str {
     match tool_name {
         "insert_documents" => "Insert",
-        "update_documents" => "Update",
         "replace_documents" => "Replace",
         "delete_documents" => "Delete",
         "create_index" => "Create Index",
@@ -2275,10 +2274,7 @@ fn confirmation_button_label(tool_name: &str) -> &'static str {
 }
 
 fn is_danger_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "update_documents" | "replace_documents" | "delete_documents" | "drop_index"
-    )
+    matches!(tool_name, "replace_documents" | "delete_documents" | "drop_index")
 }
 
 fn ai_write_identity_is_current(

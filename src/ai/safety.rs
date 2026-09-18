@@ -70,6 +70,7 @@ const AUTO_EXECUTE_TOOLS: &[&str] = &[
     "collection_schema",
     "list_indexes",
     "explain_query",
+    "sample_field_values",
     "generate_report",
 ];
 
@@ -195,6 +196,26 @@ fn check_blocked_patterns(tool_name: &str, args_json: &str) -> Option<SafetyClas
 
 #[cfg(test)]
 mod tests {
+    /// A tool the classifier does not recognise is Blocked, so a tool added to the registry
+    /// without a tier would quietly stop working. This is that alarm.
+    #[test]
+    fn every_registered_tool_has_a_safety_tier() {
+        for name in crate::ai::tools::TOOL_NAMES {
+            let classification = super::classify_tool_call(name, r#"{"filter":{"_id":1}}"#);
+            assert!(
+                !matches!(classification.tier, super::SafetyTier::Blocked),
+                "{name} has no safety tier: {}",
+                classification.description
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_tool_is_blocked() {
+        let classification = super::classify_tool_call("drop_database", "{}");
+        assert!(matches!(classification.tier, super::SafetyTier::Blocked));
+    }
+
     use super::*;
 
     #[test]

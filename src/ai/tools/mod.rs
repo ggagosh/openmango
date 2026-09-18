@@ -14,6 +14,7 @@ pub mod sample_values;
 pub mod schema;
 
 use rig::agent::{Agent, AgentBuilder, NoToolConfig};
+use rig::tool::Tool as _;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
 use crate::models::ConnectionWriteIdentity;
@@ -85,6 +86,26 @@ pub enum StreamEvent {
         response_tx: ConfirmationSender,
     },
 }
+
+/// Every tool the agent can be given. It sits next to `build_agent` so the safety rules and the
+/// registry cannot drift apart — a tool the classifier does not know is treated as unsafe.
+pub const TOOL_NAMES: &[&str] = &[
+    find::FindDocumentsTool::NAME,
+    aggregate::AggregateTool::NAME,
+    count::CountDocumentsTool::NAME,
+    list_collections::ListCollectionsTool::NAME,
+    collection_stats::CollectionStatsTool::NAME,
+    schema::CollectionSchemaTool::NAME,
+    indexes::ListIndexesTool::NAME,
+    explain::ExplainQueryTool::NAME,
+    sample_values::SampleFieldValuesTool::NAME,
+    generate_report::GenerateReportTool::NAME,
+    insert::InsertDocumentsTool::NAME,
+    replace::ReplaceDocumentsTool::NAME,
+    delete::DeleteDocumentsTool::NAME,
+    create_index::CreateIndexTool::NAME,
+    drop_index::DropIndexTool::NAME,
+];
 
 /// Register every MongoDB tool on the agent.
 ///
