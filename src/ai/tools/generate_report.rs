@@ -1,7 +1,6 @@
 use futures::TryStreamExt;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use super::{MongoContext, ToolError, doc_to_json, parse_json_to_doc, resolve_collection};
@@ -41,53 +40,57 @@ impl Tool for GenerateReportTool {
     type Args = GenerateReportArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Generate a downloadable report from MongoDB data. Use this when the \
+    fn description(&self) -> String {
+        "Generate a downloadable report from MongoDB data. Use this when the \
                 user asks for a report, export, spreadsheet, or downloadable data. Supports \
                 multiple sheets (tabs) in a single Excel report. Each sheet runs an aggregation \
                 pipeline. Returns a small preview; the user can then download the full report \
                 as Excel."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Report title (e.g. 'Top Customers by Revenue')"
-                    },
-                    "sheets": {
-                        "type": "array",
-                        "description": "One or more sheets. Each runs its own aggregation \
-                            pipeline. For a simple report use a single sheet.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "Sheet/tab name (e.g. 'By Region')"
-                                },
-                                "collection": {
-                                    "type": "string",
-                                    "description": "Collection name (optional if default is set)"
-                                },
-                                "pipeline": {
-                                    "type": "string",
-                                    "description": "Aggregation pipeline as a JSON array"
-                                }
-                            },
-                            "required": ["name", "pipeline"]
-                        },
-                        "minItems": 1
-                    }
-                },
-                "required": ["sheets"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: GenerateReportArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Report title (e.g. 'Top Customers by Revenue')"
+                },
+                "sheets": {
+                    "type": "array",
+                    "description": "One or more sheets. Each runs its own aggregation \
+                        pipeline. For a simple report use a single sheet.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Sheet/tab name (e.g. 'By Region')"
+                            },
+                            "collection": {
+                                "type": "string",
+                                "description": "Collection name (optional if default is set)"
+                            },
+                            "pipeline": {
+                                "type": "string",
+                                "description": "Aggregation pipeline as a JSON array"
+                            }
+                        },
+                        "required": ["name", "pipeline"]
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": ["sheets"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: GenerateReportArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         if args.sheets.is_empty() {
             return Err(ToolError::InvalidInput("At least one sheet is required".to_string()));
         }

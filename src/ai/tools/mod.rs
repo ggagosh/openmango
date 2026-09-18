@@ -13,7 +13,7 @@ pub mod replace;
 pub mod sample_values;
 pub mod schema;
 
-use rig::tool::ToolDyn;
+use rig::agent::{Agent, AgentBuilder, NoToolConfig};
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
 use crate::models::ConnectionWriteIdentity;
@@ -81,32 +81,36 @@ pub enum StreamEvent {
     },
 }
 
-/// Build all available MongoDB tools for the given context.
-pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
-    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
-        Box::new(find::FindDocumentsTool::new(ctx.clone())),
-        Box::new(aggregate::AggregateTool::new(ctx.clone())),
-        Box::new(count::CountDocumentsTool::new(ctx.clone())),
-        Box::new(list_collections::ListCollectionsTool::new(ctx.clone())),
-        Box::new(collection_stats::CollectionStatsTool::new(ctx.clone())),
-        Box::new(schema::CollectionSchemaTool::new(ctx.clone())),
-        Box::new(indexes::ListIndexesTool::new(ctx.clone())),
-        Box::new(explain::ExplainQueryTool::new(ctx.clone())),
-        Box::new(sample_values::SampleFieldValuesTool::new(ctx.clone())),
-        Box::new(generate_report::GenerateReportTool::new(ctx.clone())),
-    ];
-
-    if !ctx.read_only {
-        tools.extend([
-            Box::new(insert::InsertDocumentsTool::new(ctx.clone())) as Box<dyn ToolDyn>,
-            Box::new(replace::ReplaceDocumentsTool::new(ctx.clone())),
-            Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
-            Box::new(create_index::CreateIndexTool::new(ctx.clone())),
-            Box::new(self::drop_index::DropIndexTool::new(ctx)),
-        ]);
+/// Register every MongoDB tool on the agent.
+///
+/// Write tools are left off a read-only connection, so the model is never told they exist —
+/// cheaper and clearer than letting it call one and refusing afterwards.
+pub fn build_agent(builder: AgentBuilder<NoToolConfig>, ctx: Option<MongoContext>) -> Agent {
+    let Some(ctx) = ctx else {
+        return builder.build();
+    };
+    let read_only = ctx.read_only;
+    let builder = builder
+        .tool(find::FindDocumentsTool::new(ctx.clone()))
+        .tool(aggregate::AggregateTool::new(ctx.clone()))
+        .tool(count::CountDocumentsTool::new(ctx.clone()))
+        .tool(list_collections::ListCollectionsTool::new(ctx.clone()))
+        .tool(collection_stats::CollectionStatsTool::new(ctx.clone()))
+        .tool(schema::CollectionSchemaTool::new(ctx.clone()))
+        .tool(indexes::ListIndexesTool::new(ctx.clone()))
+        .tool(explain::ExplainQueryTool::new(ctx.clone()))
+        .tool(sample_values::SampleFieldValuesTool::new(ctx.clone()))
+        .tool(generate_report::GenerateReportTool::new(ctx.clone()));
+    if read_only {
+        return builder.build();
     }
-
-    tools
+    builder
+        .tool(insert::InsertDocumentsTool::new(ctx.clone()))
+        .tool(replace::ReplaceDocumentsTool::new(ctx.clone()))
+        .tool(delete::DeleteDocumentsTool::new(ctx.clone()))
+        .tool(create_index::CreateIndexTool::new(ctx.clone()))
+        .tool(self::drop_index::DropIndexTool::new(ctx))
+        .build()
 }
 
 pub fn ensure_writable(ctx: &MongoContext) -> Result<(), ToolError> {

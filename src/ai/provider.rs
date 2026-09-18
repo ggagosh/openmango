@@ -1,25 +1,25 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
-use rig::agent::{MultiTurnStreamItem, PromptHook, ToolCallHookAction};
-use rig::client::CompletionClient as _;
-use rig::client::Nothing;
-use rig::completion::{
-    Chat as _, CompletionModel, Message as RigMessage, Prompt as _, PromptError,
+use rig::agent::{
+    AgentHook, HookContext, ModelTurnAction, ModelTurnFinished, MultiTurnStreamItem,
+    StreamingResult, ToolCall as ToolCallEvent, ToolCallAction,
 };
+use rig::client::Nothing;
+use rig::completion::{Chat as _, Message as RigMessage, Prompt as _, PromptError};
+use rig::prelude::*;
 use rig::providers::{anthropic, gemini, ollama, openai};
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat as _};
-use rig::tool::ToolDyn;
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ai::blocks::{ChatMessage, ChatRole};
 use crate::ai::errors::AiError;
 use crate::ai::settings::{AiProvider, AiSettings};
-use crate::ai::tools::{MongoContext, StreamEvent, build_tools, truncate_str};
+use crate::ai::tools::{MongoContext, StreamEvent, build_agent, truncate_str};
 
 const HISTORY_LIMIT: usize = 18;
 const MAX_OUTPUT_TOKENS: u32 = 4096;
@@ -27,44 +27,68 @@ const MAX_TURNS: usize = 15;
 const MAX_TOOL_CALLS: usize = 6;
 
 // ---------------------------------------------------------------------------
-// ToolCallLimiter — PromptHook that terminates after N tool calls
+// RunPolicy — what the agent loop is allowed to do
 // ---------------------------------------------------------------------------
 
+/// Stops the run when the user hits Stop, and keeps the model from grinding through tool calls
+/// forever. rig calls this at every tool call and at the end of every model turn, so a cancelled
+/// run ends inside the loop instead of being abandoned mid-request.
 #[derive(Clone)]
-struct ToolCallLimiter {
+struct RunPolicy {
     max_calls: usize,
-    call_count: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
+    cancel: Arc<AtomicBool>,
 }
 
-impl ToolCallLimiter {
-    fn new(max_calls: usize) -> Self {
-        Self { max_calls, call_count: Arc::new(AtomicUsize::new(0)) }
+impl RunPolicy {
+    fn new(max_calls: usize, cancel: Arc<AtomicBool>) -> Self {
+        Self { max_calls, calls: Arc::new(AtomicUsize::new(0)), cancel }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
     }
 }
 
-impl<M: CompletionModel> PromptHook<M> for ToolCallLimiter {
+const CANCELLED: &str = "The user stopped this request.";
+
+impl AgentHook for RunPolicy {
     fn on_tool_call(
         &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        _args: &str,
-    ) -> impl Future<Output = ToolCallHookAction> + Send {
-        let count = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
-        let max = self.max_calls;
-        let name = tool_name.to_string();
+        _ctx: &HookContext,
+        event: ToolCallEvent<'_>,
+    ) -> impl Future<Output = ToolCallAction> + Send {
+        let cancelled = self.cancelled();
+        let count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let (max, name) = (self.max_calls, event.tool_name.to_string());
         async move {
+            if cancelled {
+                return ToolCallAction::stop(CANCELLED);
+            }
             if count > max {
-                log::debug!(
-                    "[ai-hook] skipping: tool call #{count} ({name}) exceeds limit of {max}"
-                );
-                ToolCallHookAction::skip(
+                log::debug!("[ai-hook] skipping tool call #{count} ({name}), limit is {max}");
+                ToolCallAction::skip(
                     "TOOL CALL LIMIT REACHED. Do NOT call any more tools. \
                      Respond to the user NOW with what you have found so far.",
                 )
             } else {
                 log::debug!("[ai-hook] allowing tool call #{count}/{max}: {name}");
-                ToolCallHookAction::cont()
+                ToolCallAction::run()
+            }
+        }
+    }
+
+    fn on_model_turn_finished(
+        &self,
+        _ctx: &HookContext,
+        _event: ModelTurnFinished<'_>,
+    ) -> impl Future<Output = ModelTurnAction> + Send {
+        let cancelled = self.cancelled();
+        async move {
+            if cancelled {
+                ModelTurnAction::stop(CANCELLED)
+            } else {
+                ModelTurnAction::continue_run()
             }
         }
     }
@@ -98,28 +122,28 @@ pub async fn generate_text_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tool_ctx: Option<MongoContext>,
+    cancel: Arc<AtomicBool>,
     event_tx: UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     settings.validate_for_request()?;
-    let tools: Vec<Box<dyn ToolDyn>> = match settings.provider {
-        // OpenAI GPT-5 models can reject tool-call replay in multi-turn streams
-        // with: function_call item missing required reasoning item.
-        // Keep OpenAI stable by running without attached tools.
-        AiProvider::OpenAi => Vec::new(),
-        _ => tool_ctx
-            .map(|mut ctx| {
-                ctx.event_tx = Some(event_tx.clone());
-                build_tools(ctx)
-            })
-            .unwrap_or_default(),
-    };
+    let tool_ctx = tool_ctx.map(|mut ctx| {
+        ctx.event_tx = Some(event_tx.clone());
+        ctx
+    });
+    let policy = RunPolicy::new(MAX_TOOL_CALLS, cancel);
     match settings.provider {
-        AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &event_tx).await,
-        AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &event_tx).await,
-        AiProvider::Anthropic => {
-            call_anthropic_streaming(settings, request, tools, &event_tx).await
+        AiProvider::Gemini => {
+            call_gemini_streaming(settings, request, tool_ctx, policy, &event_tx).await
         }
-        AiProvider::Ollama => call_ollama_streaming(settings, request, tools, &event_tx).await,
+        AiProvider::OpenAi => {
+            call_openai_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::Anthropic => {
+            call_anthropic_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::Ollama => {
+            call_ollama_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
     }
 }
 
@@ -148,11 +172,11 @@ async fn call_gemini(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = to_rig_history(&request.history);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
     response.map_err(|error| map_rig_error(AiProvider::Gemini, error))
 }
@@ -178,11 +202,11 @@ async fn call_openai(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = to_rig_history(&request.history);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
     response.map_err(|error| map_rig_error(AiProvider::OpenAi, error))
 }
@@ -208,11 +232,11 @@ async fn call_anthropic(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = to_rig_history(&request.history);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
     response.map_err(|error| map_rig_error(AiProvider::Anthropic, error))
 }
@@ -258,11 +282,11 @@ async fn call_ollama(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = to_rig_history(&request.history);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
     response.map_err(|error| map_rig_error(AiProvider::Ollama, error))
 }
@@ -274,7 +298,8 @@ async fn call_ollama(
 async fn call_gemini_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
@@ -288,17 +313,17 @@ async fn call_gemini_streaming(
     let client = gemini::Client::new(api_key).map_err(|error| {
         AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
     })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let agent = build_agent(
+        client
+            .agent(model)
+            .preamble(&request.system_prompt)
+            .max_tokens(MAX_OUTPUT_TOKENS as u64)
+            .add_hook(policy),
+        tool_ctx,
+    );
 
     let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
 }
@@ -306,7 +331,8 @@ async fn call_gemini_streaming(
 async fn call_openai_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
@@ -320,17 +346,17 @@ async fn call_openai_streaming(
     let client = openai::Client::<reqwest::Client>::new(api_key).map_err(|error| {
         AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
     })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let agent = build_agent(
+        client
+            .agent(model)
+            .preamble(&request.system_prompt)
+            .max_tokens(MAX_OUTPUT_TOKENS as u64)
+            .add_hook(policy),
+        tool_ctx,
+    );
 
     let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
 }
@@ -338,7 +364,8 @@ async fn call_openai_streaming(
 async fn call_anthropic_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
@@ -352,17 +379,17 @@ async fn call_anthropic_streaming(
     let client = anthropic::Client::<reqwest::Client>::new(api_key).map_err(|error| {
         AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
     })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let agent = build_agent(
+        client
+            .agent(model)
+            .preamble(&request.system_prompt)
+            .max_tokens(MAX_OUTPUT_TOKENS as u64)
+            .add_hook(policy),
+        tool_ctx,
+    );
 
     let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
 }
@@ -370,7 +397,8 @@ async fn call_anthropic_streaming(
 async fn call_ollama_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
     let model = settings.model.trim();
@@ -404,17 +432,17 @@ async fn call_ollama_streaming(
         .map_err(|error| {
             AiError::Runtime(format!("failed to initialize Ollama client: {error}"))
         })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let agent = build_agent(
+        client
+            .agent(model)
+            .preamble(&request.system_prompt)
+            .max_tokens(MAX_OUTPUT_TOKENS as u64)
+            .add_hook(policy),
+        tool_ctx,
+    );
 
     let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
 }
@@ -423,11 +451,8 @@ async fn call_ollama_streaming(
 // Shared streaming loop
 // ---------------------------------------------------------------------------
 
-async fn consume_stream<R: Clone + Unpin>(
-    stream: &mut (
-             impl futures::Stream<Item = Result<MultiTurnStreamItem<R>, rig::agent::StreamingError>>
-             + Unpin
-         ),
+async fn consume_stream(
+    stream: &mut StreamingResult,
     provider: AiProvider,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<String, AiError> {
@@ -435,9 +460,6 @@ async fn consume_stream<R: Clone + Unpin>(
     let mut final_text = String::new();
     let mut turn_count: usize = 0;
     let mut tool_call_count: usize = 0;
-    // Track tool call name by internal_call_id for correlating results
-    let mut tool_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
 
     log::debug!("[ai-stream] starting consume_stream for provider={}", provider.label());
 
@@ -449,25 +471,23 @@ async fn consume_stream<R: Clone + Unpin>(
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
-                internal_call_id,
+                ..
             })) => {
                 tool_call_count += 1;
                 let name = tool_call.function.name.clone();
                 let args_full = tool_call.function.arguments.to_string();
                 let args_preview = truncate_str(&args_full, 200).to_string();
                 log::debug!("[ai-stream] tool_call #{tool_call_count}: {name} args={args_preview}");
-                tool_names.insert(internal_call_id, name.clone());
                 let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview, args_full });
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
-                internal_call_id,
+                ..
             })) => {
                 turn_count += 1;
-                let name = tool_names
-                    .get(&internal_call_id)
-                    .cloned()
-                    .unwrap_or_else(|| tool_result.id.clone());
+                // 0.42 reports the executed tool's own name, so results land on the right row
+                // even when the same tool runs twice in a turn.
+                let name = tool_result.name.clone();
                 let (result_preview, result_json) = extract_tool_result(&tool_result);
                 log::debug!(
                     "[ai-stream] tool_result #{turn_count}: {name} preview={}",
@@ -480,7 +500,7 @@ async fn consume_stream<R: Clone + Unpin>(
                 let _ = event_tx.send(event);
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = final_response.response().to_string();
+                final_text = final_response.output().to_string();
                 log::debug!(
                     "[ai-stream] final_response after {tool_call_count} tool calls, \
                      {turn_count} results"
@@ -490,12 +510,18 @@ async fn consume_stream<R: Clone + Unpin>(
                 log::debug!("[ai-stream] other event");
             }
             Err(error) => {
-                let msg = error.to_string();
-                log::debug!("[ai-stream] error after {tool_call_count} tool calls: {msg}");
-                if msg.contains("MaxTurnError")
-                    || msg.contains("MaxDepthError")
-                    || msg.contains("PromptCancelled")
-                {
+                log::debug!("[ai-stream] error after {tool_call_count} tool calls: {error}");
+                // Running out of turns, or the user pressing Stop, ends the run without
+                // being a failure: whatever the model already said still stands.
+                let ended_early = matches!(
+                    &error,
+                    rig::agent::StreamingError::Prompt(prompt)
+                        if matches!(
+                            prompt.as_ref(),
+                            PromptError::MaxTurnsError { .. } | PromptError::PromptCancelled { .. }
+                        )
+                );
+                if ended_early {
                     if full_text.trim().is_empty() {
                         let fallback =
                             "*(Tool call limit reached — see the results above.)*".to_string();
@@ -504,7 +530,7 @@ async fn consume_stream<R: Clone + Unpin>(
                     }
                     break;
                 }
-                return Err(map_provider_error(provider, msg));
+                return Err(map_provider_error(provider, error.to_string()));
             }
         }
     }

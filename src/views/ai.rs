@@ -536,9 +536,11 @@ impl AiView {
         // Channel for streaming deltas
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
 
+        // The same flag the hook reads, so Stop ends the run inside rig's loop.
+        let cancel_for_run = cancel_flag.clone();
         let task = cx.background_spawn(async move {
             AiBridge::block_on(async move {
-                generate_text_streaming(&ai_settings, request, tool_ctx, tx).await
+                generate_text_streaming(&ai_settings, request, tool_ctx, cancel_for_run, tx).await
             })
         });
 

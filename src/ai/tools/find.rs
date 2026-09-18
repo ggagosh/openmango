@@ -1,7 +1,6 @@
 use futures::TryStreamExt;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use super::{
@@ -32,41 +31,45 @@ impl Tool for FindDocumentsTool {
     type Args = FindArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Query documents in a MongoDB collection with optional filter, \
+    fn description(&self) -> String {
+        "Query documents in a MongoDB collection with optional filter, \
                 projection, sort, and limit. Returns up to 10 documents."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "description": "MongoDB filter as a JSON string, e.g. {\"age\": {\"$gt\": 25}}"
-                    },
-                    "projection": {
-                        "type": "string",
-                        "description": "Fields to include/exclude as JSON, e.g. {\"name\": 1, \"_id\": 0}"
-                    },
-                    "sort": {
-                        "type": "string",
-                        "description": "Sort order as JSON, e.g. {\"created_at\": -1}"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max documents to return (capped at 10)"
-                    }
-                }
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: FindArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "MongoDB filter as a JSON string, e.g. {\"age\": {\"$gt\": 25}}"
+                },
+                "projection": {
+                    "type": "string",
+                    "description": "Fields to include/exclude as JSON, e.g. {\"name\": 1, \"_id\": 0}"
+                },
+                "sort": {
+                    "type": "string",
+                    "description": "Sort order as JSON, e.g. {\"created_at\": -1}"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max documents to return (capped at 10)"
+                }
+            }
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: FindArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         let col = resolve_collection(&args.collection, &self.0)?;
         let filter = match &args.filter {
             Some(f) if !f.is_empty() => parse_json_to_doc(f)?,

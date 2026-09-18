@@ -13,7 +13,7 @@ use openmango::ai::tools::insert::{InsertArgs, InsertDocumentsTool};
 use openmango::ai::tools::replace::{ReplaceArgs, ReplaceDocumentsTool};
 use openmango::ai::tools::{MongoContext, StreamEvent};
 use openmango::models::{ConnectionWriteIdentity, SavedConnection};
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 
 fn write_identity(read_only: bool) -> ConnectionWriteIdentity {
     let mut connection =
@@ -40,12 +40,15 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
         event_tx: None,
     });
     let error = tool
-        .call(ReplaceArgs {
-            collection: None,
-            filter: r#"{"_id":"one"}"#.to_string(),
-            replacement: r#"{"status":"after"}"#.to_string(),
-            many: Some(false),
-        })
+        .call(
+            &mut ToolContext::default(),
+            ReplaceArgs {
+                collection: None,
+                filter: r#"{"_id":"one"}"#.to_string(),
+                replacement: r#"{"status":"after"}"#.to_string(),
+                many: Some(false),
+            },
+        )
         .await
         .expect_err("Read-only AI replacement must be rejected");
 
@@ -69,12 +72,15 @@ async fn read_only_ai_index_creation_is_rejected() {
     });
 
     let error = tool
-        .call(CreateIndexArgs {
-            collection: None,
-            keys: r#"{"email":1}"#.to_string(),
-            unique: Some(true),
-            name: Some("email_unique".to_string()),
-        })
+        .call(
+            &mut ToolContext::default(),
+            CreateIndexArgs {
+                collection: None,
+                keys: r#"{"email":1}"#.to_string(),
+                unique: Some(true),
+                name: Some("email_unique".to_string()),
+            },
+        )
         .await
         .expect_err("Read-only AI index creation must be rejected");
 
@@ -96,8 +102,11 @@ async fn ai_write_requires_confirmation_but_not_history() {
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {
-        tool.call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
-            .await
+        tool.call(
+            &mut ToolContext::default(),
+            InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() },
+        )
+        .await
     });
     let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
         .await
@@ -126,10 +135,13 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
         event_tx: None,
     });
     let error = tool
-        .call(AggregateArgs {
-            collection: None,
-            pipeline: r#"[{"$out":"ai_read_only_output"}]"#.to_string(),
-        })
+        .call(
+            &mut ToolContext::default(),
+            AggregateArgs {
+                collection: None,
+                pipeline: r#"[{"$out":"ai_read_only_output"}]"#.to_string(),
+            },
+        )
         .await
         .expect_err("Read-only AI output stage must be rejected");
 
@@ -157,10 +169,13 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {
-        tool.call(AggregateArgs {
-            collection: None,
-            pipeline: r#"[{"$limit":2},{"$out":"ai_confirmed_output"}]"#.to_string(),
-        })
+        tool.call(
+            &mut ToolContext::default(),
+            AggregateArgs {
+                collection: None,
+                pipeline: r#"[{"$limit":2},{"$out":"ai_confirmed_output"}]"#.to_string(),
+            },
+        )
         .await
     });
 

@@ -1,6 +1,5 @@
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
@@ -32,38 +31,42 @@ impl Tool for CreateIndexTool {
     type Args = CreateIndexArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Create an index on a MongoDB collection. Specify the index key \
+    fn description(&self) -> String {
+        "Create an index on a MongoDB collection. Specify the index key \
                 definition as a JSON object."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "keys": {
-                        "type": "string",
-                        "description": "Index key definition as JSON, e.g. {\"email\": 1} or {\"location\": \"2dsphere\"}"
-                    },
-                    "unique": {
-                        "type": "boolean",
-                        "description": "Whether the index should enforce uniqueness"
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Optional custom name for the index"
-                    }
-                },
-                "required": ["keys", "name"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: CreateIndexArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "keys": {
+                    "type": "string",
+                    "description": "Index key definition as JSON, e.g. {\"email\": 1} or {\"location\": \"2dsphere\"}"
+                },
+                "unique": {
+                    "type": "boolean",
+                    "description": "Whether the index should enforce uniqueness"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional custom name for the index"
+                }
+            },
+            "required": ["keys", "name"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: CreateIndexArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let keys = parse_json_to_doc(&args.keys)?;

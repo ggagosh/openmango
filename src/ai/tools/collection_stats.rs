@@ -1,6 +1,5 @@
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use super::{MongoContext, ToolError, resolve_collection};
@@ -24,24 +23,27 @@ impl Tool for CollectionStatsTool {
     type Args = CollStatsArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get statistics for a collection (document count, sizes, index info)."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    }
-                }
-            }),
-        }
+    fn description(&self) -> String {
+        "Get statistics for a collection (document count, sizes, index info).".to_string()
     }
 
-    async fn call(&self, args: CollStatsArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                }
+            }
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: CollStatsArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         use futures::TryStreamExt as _;
 
         let col_name = resolve_collection(&args.collection, &self.0)?;

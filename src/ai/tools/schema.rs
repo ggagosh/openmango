@@ -1,7 +1,6 @@
 use futures::TryStreamExt;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::state::commands::schema_to_summary;
@@ -29,28 +28,32 @@ impl Tool for CollectionSchemaTool {
     type Args = SchemaArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Sample documents and analyze the schema of a collection. \
+    fn description(&self) -> String {
+        "Sample documents and analyze the schema of a collection. \
                 Returns field names, types, presence percentages, cardinality, \
                 and sample values for each field. Use to discover field names, \
                 data shape, and reference patterns (ObjectId fields) before \
                 constructing queries."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    }
-                }
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: SchemaArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                }
+            }
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: SchemaArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         let col = resolve_collection(&args.collection, &self.0)?;
         let collection =
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col);

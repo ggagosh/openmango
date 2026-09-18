@@ -1,7 +1,6 @@
 use futures::TryStreamExt as _;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
@@ -49,38 +48,42 @@ impl Tool for ReplaceDocumentsTool {
     type Args = ReplaceArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Replace up to 100 documents matching a filter with a complete document. \
+    fn description(&self) -> String {
+        "Replace up to 100 documents matching a filter with a complete document. \
                 Each original _id is preserved and local confirmation is required."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "description": "MongoDB filter as a JSON string"
-                    },
-                    "replacement": {
-                        "type": "string",
-                        "description": "Complete replacement document as a JSON string; omit _id"
-                    },
-                    "many": {
-                        "type": "boolean",
-                        "description": "Replace every match by default; false replaces the first _id-sorted match"
-                    }
-                },
-                "required": ["filter", "replacement"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: ReplaceArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "MongoDB filter as a JSON string"
+                },
+                "replacement": {
+                    "type": "string",
+                    "description": "Complete replacement document as a JSON string; omit _id"
+                },
+                "many": {
+                    "type": "boolean",
+                    "description": "Replace every match by default; false replaces the first _id-sorted match"
+                }
+            },
+            "required": ["filter", "replacement"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: ReplaceArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;
