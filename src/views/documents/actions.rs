@@ -48,6 +48,14 @@ impl CollectionView {
             this.show_search_bar(window, cx);
             cx.stop_propagation();
         }))
+        .on_action(cx.listener(|this, _: &crate::keyboard::AskAiFilter, window, cx| {
+            if !this.state.read(cx).ai_assistant_available() {
+                return;
+            }
+            let on = !this.ask_mode;
+            this.set_ask_mode(on, window, cx);
+            cx.stop_propagation();
+        }))
         .on_action(cx.listener(|this, _: &CloseSearch, window, cx| {
             if !this.search_visible {
                 return;

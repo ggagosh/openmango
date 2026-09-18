@@ -100,6 +100,7 @@ actions!(
         PreviousAiMention,
         NextAiMention,
         ConfirmAiMention,
+        AskAiFilter,
         RunForgeAll,
         RunForgeSelectionOrStatement,
         CancelForgeRun,
@@ -401,6 +402,9 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("up", PreviousAiMention, Some("AiPanel > Input")),
         KeyBinding::new("down", NextAiMention, Some("AiPanel > Input")),
         KeyBinding::new("enter", ConfirmAiMention, Some("AiPanel > Input")),
+        // Turns the filter bar into the one you describe a filter to, and back.
+        KeyBinding::new("cmd-i", AskAiFilter, Some("Documents")),
+        KeyBinding::new("ctrl-i", AskAiFilter, Some("Documents")),
         KeyBinding::new("cmd-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new("ctrl-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new(FOCUS_CONTENT_KEYS[0], FocusContent, Some("Workspace")),

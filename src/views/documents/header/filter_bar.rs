@@ -28,9 +28,15 @@ fn query_action_button(window: &Window, label: &'static str, icon: impl Into<Ico
         .primary()
         .with_size(Size::Medium)
         .h(query_editor_height(1, window))
+        .min_w(QUERY_ACTION_WIDTH)
         .label(label)
         .icon(icon.into().small())
 }
+
+/// Wide enough for "Generate", the longer of the two labels this button carries: the app is mono
+/// throughout, so eight characters at the button's text size plus its icon and padding is a
+/// number rather than a guess. Without it the row resized the moment the mode changed.
+const QUERY_ACTION_WIDTH: Pixels = px(112.0);
 
 fn set_query_object_default(
     input: &mut EditorState,
@@ -192,10 +198,14 @@ impl CollectionView {
                 .h(control_height)
                 .icon(Icon::new(crate::assets::AppIcon::Sparkles).small())
                 .selected(ask_mode)
-                .tooltip(match ask_mode {
-                    true => "Back to writing the filter",
-                    false => "Describe the filter in words",
-                })
+                .tooltip_with_action(
+                    match ask_mode {
+                        true => "Back to writing the filter",
+                        false => "Describe the filter in words",
+                    },
+                    &crate::keyboard::AskAiFilter,
+                    Some("Documents"),
+                )
                 .disabled(disabled || self.ask_ai_busy)
                 .on_click(move |_, window, cx| {
                     view.update(cx, |view, cx| {
