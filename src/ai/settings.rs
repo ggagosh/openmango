@@ -14,6 +14,7 @@ pub enum AiProvider {
     Gemini,
     OpenAi,
     Anthropic,
+    OpenRouter,
     Ollama,
 }
 
@@ -23,6 +24,7 @@ impl AiProvider {
             Self::Gemini => "Gemini",
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",
+            Self::OpenRouter => "OpenRouter",
             Self::Ollama => "Ollama",
         }
     }
@@ -32,13 +34,26 @@ impl AiProvider {
             Self::Gemini => Some("GEMINI_API_KEY"),
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::Ollama => None,
         }
     }
 
     /// The model a provider starts on: its balanced preset.
     pub fn default_model(self) -> &'static str {
-        self.preset_model(ModelPreset::Balanced).unwrap_or(LOCAL_DEFAULT_MODEL)
+        match self {
+            // A predictable starting point among hundreds; `openrouter/auto` routes anywhere and
+            // can answer with images, which is not what this assistant is for.
+            Self::OpenRouter => "anthropic/claude-sonnet-5",
+            Self::Ollama => LOCAL_DEFAULT_MODEL,
+            provider => provider.preset_model(ModelPreset::Balanced).unwrap_or(LOCAL_DEFAULT_MODEL),
+        }
+    }
+
+    /// An aggregator serves models it did not train, open weights included; a first-party API
+    /// only lists what it runs itself.
+    pub fn is_aggregator(self) -> bool {
+        matches!(self, Self::OpenRouter)
     }
 
     /// models.dev keys Gemini under "google"; Ollama serves its own list over HTTP.
@@ -47,6 +62,7 @@ impl AiProvider {
             Self::Gemini => "google",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
             Self::Ollama => return None,
         })
     }
@@ -64,8 +80,10 @@ impl AiProvider {
             (Self::Anthropic, ModelPreset::Fast) => "claude-haiku-4-5",
             (Self::Anthropic, ModelPreset::Balanced) => "claude-sonnet-5",
             (Self::Anthropic, ModelPreset::Powerful) => "claude-opus-5",
-            // Local models are whatever Ollama is serving, so they have no presets.
-            (Self::Ollama, _) => return None,
+            // OpenRouter is a catalogue of hundreds of models from every lab; picking three for
+            // the user would be arbitrary, so it offers the full searchable list instead.
+            // Local models are whatever Ollama is serving, so they have no presets either.
+            (Self::OpenRouter | Self::Ollama, _) => return None,
         })
     }
 
@@ -79,11 +97,13 @@ impl AiProvider {
             Self::Gemini => "gemini",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
             Self::Ollama => "ollama",
         }
     }
 
-    pub const ALL: [Self; 4] = [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::Ollama];
+    pub const ALL: [Self; 5] =
+        [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::OpenRouter, Self::Ollama];
 }
 
 /// How much model to spend on a question. Each provider maps these to a curated model id.
@@ -350,10 +370,26 @@ mod tests {
     }
 
     #[test]
-    fn the_default_model_is_the_balanced_preset() {
+    fn every_provider_starts_on_a_model_it_can_actually_use() {
+        let catalog = crate::ai::catalog::ModelCatalog::bundled();
         for provider in AiProvider::ALL {
-            let expected = provider.preset_model(ModelPreset::Balanced).unwrap_or("qwen3:32b");
-            assert_eq!(provider.default_model(), expected);
+            let model = provider.default_model();
+            assert!(!model.trim().is_empty(), "{} has no default model", provider.label());
+
+            if let Some(preset) = provider.preset_model(ModelPreset::Balanced) {
+                assert_eq!(model, preset, "a provider with presets starts on the balanced one");
+            }
+            // A provider with a catalogue must start on a model that is in it.
+            if provider.catalog_key().is_some() {
+                let info = catalog.model(provider, model).unwrap_or_else(|| {
+                    panic!("{} default {model} is not listed", provider.label())
+                });
+                assert!(
+                    info.is_chat_model(provider.is_aggregator()),
+                    "{} default {model} cannot hold a tool-calling conversation",
+                    provider.label()
+                );
+            }
         }
     }
 }

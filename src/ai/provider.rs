@@ -11,7 +11,7 @@ use rig::agent::{
 use rig::client::Nothing;
 use rig::completion::{Chat as _, Message as RigMessage, Prompt as _, PromptError};
 use rig::prelude::*;
-use rig::providers::{anthropic, gemini, ollama, openai};
+use rig::providers::{anthropic, gemini, ollama, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
@@ -180,6 +180,7 @@ pub async fn generate_text(
         AiProvider::Gemini => call_gemini(settings, request).await,
         AiProvider::OpenAi => call_openai(settings, request).await,
         AiProvider::Anthropic => call_anthropic(settings, request).await,
+        AiProvider::OpenRouter => call_openrouter(settings, request).await,
         AiProvider::Ollama => call_ollama(settings, request).await,
     }
 }
@@ -206,6 +207,9 @@ pub async fn generate_text_streaming(
         }
         AiProvider::Anthropic => {
             call_anthropic_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::OpenRouter => {
+            call_openrouter_streaming(settings, request, tool_ctx, policy, &event_tx).await
         }
         AiProvider::Ollama => {
             call_ollama_streaming(settings, request, tool_ctx, policy, &event_tx).await
@@ -317,6 +321,40 @@ async fn call_anthropic(
         agent.chat(request.user_prompt, &mut history).await
     };
     response.map_err(|error| map_rig_error(AiProvider::Anthropic, error))
+}
+
+async fn call_openrouter(
+    settings: &AiSettings,
+    request: AiGenerationRequest,
+) -> Result<String, AiError> {
+    let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
+        provider: settings.provider.label().to_string(),
+    })?;
+    let model = settings.model.trim();
+    if model.is_empty() {
+        return Err(AiError::Parse("OpenRouter model is empty".to_string()));
+    }
+
+    let client = openrouter::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenRouter client: {error}"))
+        })?;
+    let agent = client
+        .agent(model)
+        .preamble(&request.system_prompt)
+        .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .build();
+
+    let mut history = conversation_history(&request);
+    let response = if history.is_empty() {
+        agent.prompt(request.user_prompt).await
+    } else {
+        agent.chat(request.user_prompt, &mut history).await
+    };
+    response.map_err(|error| map_rig_error(AiProvider::OpenRouter, error))
 }
 
 async fn call_ollama(
@@ -522,6 +560,52 @@ async fn call_anthropic_streaming(
         .await;
 
     consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
+}
+
+async fn call_openrouter_streaming(
+    settings: &AiSettings,
+    request: AiGenerationRequest,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
+    event_tx: &UnboundedSender<StreamEvent>,
+) -> Result<TurnOutcome, AiError> {
+    let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
+        provider: settings.provider.label().to_string(),
+    })?;
+    let model = settings.model.trim();
+    if model.is_empty() {
+        return Err(AiError::Parse("OpenRouter model is empty".to_string()));
+    }
+
+    let client = openrouter::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenRouter client: {error}"))
+        })?;
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy),
+            &request,
+        ),
+        tool_ctx,
+    );
+
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
+
+    consume_stream(&mut stream, AiProvider::OpenRouter, event_tx).await
 }
 
 async fn call_ollama_streaming(

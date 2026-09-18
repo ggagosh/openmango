@@ -71,12 +71,15 @@ impl ModelInfo {
     }
 
     /// A text model this app can hold a tool-calling conversation with. Image and audio
-    /// generators, live/realtime variants and open-weight models these APIs do not serve
-    /// would only pad the picker.
-    pub fn is_chat_model(&self) -> bool {
+    /// generators and live/realtime variants would only pad the picker.
+    ///
+    /// `serves_open_weights` is true for an aggregator like OpenRouter, which really does run
+    /// Llama and Qwen for you; a first-party API listing them only means the lab published the
+    /// weights, not that the endpoint serves them.
+    pub fn is_chat_model(&self, serves_open_weights: bool) -> bool {
         self.tool_call
             && !self.is_deprecated()
-            && !self.open_weights
+            && (serves_open_weights || !self.open_weights)
             && self.modalities.output == ["text"]
             && self.modalities.input.iter().any(|input| input == "text")
     }
@@ -190,7 +193,7 @@ impl ModelCatalog {
     pub fn usable_model_ids(&self, provider: AiProvider) -> Vec<String> {
         self.models(provider)
             .iter()
-            .filter(|model| model.is_chat_model())
+            .filter(|model| model.is_chat_model(provider.is_aggregator()))
             .map(|model| model.id.clone())
             .collect()
     }
@@ -326,7 +329,10 @@ mod tests {
                 let model = catalog.model(provider, id).unwrap_or_else(|| {
                     panic!("{} {} missing: {id}", provider.label(), preset.label())
                 });
-                assert!(model.is_chat_model(), "{id} is not a usable chat model");
+                assert!(
+                    model.is_chat_model(provider.is_aggregator()),
+                    "{id} is not a usable chat model"
+                );
             }
         }
     }

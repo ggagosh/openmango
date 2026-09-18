@@ -2228,12 +2228,9 @@ fn render_ai_section(
             .rounded(islands::radius_sm(&settings.appearance))
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                let providers = [
-                    AiProvider::Gemini,
-                    AiProvider::OpenAi,
-                    AiProvider::Anthropic,
-                    AiProvider::Ollama,
-                ];
+                // Every provider the app knows, so adding one does not mean remembering to add
+                // it here as well.
+                let providers = AiProvider::ALL;
                 let mut menu = menu;
                 for provider in providers {
                     let state = state.clone();
@@ -2258,7 +2255,8 @@ fn render_ai_section(
     };
 
     // Presets are what most people want; the picker below is for naming an exact model.
-    let preset_picker = (current_provider.catalog_key().is_some()).then(|| {
+    let has_presets = current_provider.preset_model(ModelPreset::Balanced).is_some();
+    let preset_picker = has_presets.then(|| {
         let selected = current_provider.preset_for_model(&settings.ai.model);
         let state = state.clone();
         ButtonGroup::new("ai-model-presets")

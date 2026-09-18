@@ -100,7 +100,7 @@ fn model_items(state: &AppState) -> (Vec<ModelItem>, Vec<ModelItem>) {
     let mut models: Vec<ModelItem> = catalog
         .models(provider)
         .iter()
-        .filter(|model| model.is_chat_model())
+        .filter(|model| model.is_chat_model(provider.is_aggregator()))
         // A preset already has its own row; listing it twice only makes the search noisier.
         .filter(|model| provider.preset_for_model(&model.id).is_none())
         .map(|model| {
@@ -252,6 +252,18 @@ mod tests {
         let all: Vec<_> = models.iter().map(|item| item.id.to_string()).collect();
         assert!(!all.contains(&balanced.to_string()), "preset listed twice");
         assert!(!all.is_empty());
+    }
+
+    /// OpenRouter lists hundreds of models from every lab, so it offers the searchable list
+    /// rather than three arbitrary presets — and open-weight models count, because it runs them.
+    #[test]
+    fn an_aggregator_offers_every_model_and_no_presets() {
+        let state = state_for(AiProvider::OpenRouter, "anthropic/claude-sonnet-5");
+        let (presets, models) = model_items(&state);
+
+        assert!(presets.is_empty(), "no presets for a catalogue this wide");
+        assert!(models.len() > 100, "the whole list is on offer, got {}", models.len());
+        assert!(models.iter().any(|item| item.id == "anthropic/claude-sonnet-5"));
     }
 
     #[test]

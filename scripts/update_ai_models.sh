@@ -11,14 +11,15 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$root/assets/ai-models.json"
 
-# models.dev keys Gemini under "google"; Ollama serves local models and is listed
-# through its own /api/tags instead.
-providers='["anthropic","openai","google"]'
+# models.dev keys Gemini under "google"; Ollama serves local models and is listed through its own
+# /api/tags instead. OpenRouter is an aggregator: it really does serve open-weight models, so the
+# open-weights rule below applies only to the providers that run their own models.
+providers='["anthropic","openai","google","openrouter"]'
 
 curl -fsSL https://models.dev/api.json |
 	jq -S --argjson providers "$providers" '
     with_entries(select(.key as $key | $providers | index($key)))
-    | map_values({
+    | with_entries(.key as $key | .value |= {
         id,
         name,
         models: (
@@ -30,7 +31,7 @@ curl -fsSL https://models.dev/api.json |
               # and no open-weight models that these APIs do not actually serve.
               and (.modalities.output == ["text"])
               and (.modalities.input | index("text"))
-              and (.open_weights // false) == false
+              and (($key == "openrouter") or ((.open_weights // false) == false))
             ))
           | map_values({
               id,
