@@ -2235,93 +2235,16 @@ fn render_ai_section(
 
     let model_dropdown = {
         let state = state.clone();
-        let current_model = settings.ai.model.clone();
-
-        let models: Vec<String> = match current_provider {
-            AiProvider::Ollama => match cached {
-                ModelCache::Loaded(list) => {
-                    let mut m = list.clone();
-                    if !current_model.trim().is_empty() && !m.contains(&current_model) {
-                        m.push(current_model.clone());
-                        m.sort();
-                    }
-                    m
-                }
-                _ => {
-                    if !current_model.trim().is_empty() {
-                        vec![current_model.clone()]
-                    } else {
-                        vec![]
-                    }
-                }
-            },
-            _ => current_provider.model_options(&current_model),
-        };
-
-        let cached_hint: Option<String> = if current_provider == AiProvider::Ollama {
-            match cached {
-                ModelCache::Loading => Some("Loading models...".to_string()),
-                ModelCache::Error(msg) => {
-                    let hint = crate::helpers::truncate_chars(msg, 60);
-                    Some(hint)
-                }
-                ModelCache::NotFetched => Some("Fetching models...".to_string()),
-                _ => None,
-            }
-        } else if matches!(cached, ModelCache::NoKey) {
-            Some("Add API key in Settings".to_string())
-        } else {
-            None
-        };
-
+        let label = crate::components::model_menu::model_button_label(state.read(cx));
         gpui_kit::component::button::Button::new("ai-model-dropdown")
             .ghost()
             .xsmall()
-            .label(current_model)
+            .label(label)
             .dropdown_caret(true)
             .rounded(islands::radius_sm(&settings.appearance))
             .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                let mut menu = menu;
-                if let Some(hint) = &cached_hint {
-                    menu = menu.item(PopupMenuItem::new(hint.clone()).disabled(true));
-                }
-                for model in &models {
-                    let state = state.clone();
-                    let m = model.clone();
-                    let note = AiProvider::model_note(model);
-                    let item = if let Some(note) = note {
-                        let model_label = model.clone();
-                        let note = note.to_string();
-                        PopupMenuItem::element(move |_window, cx| {
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .child(model_label.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(note.clone()),
-                                )
-                        })
-                    } else {
-                        PopupMenuItem::new(model.clone())
-                    };
-                    menu = menu.item(item.on_click(move |_, _, cx| {
-                        state.update(cx, |app_state, cx| {
-                            app_state.settings.ai.set_model(m.clone());
-                            app_state.save_settings();
-                            cx.notify();
-                        });
-                    }));
-                }
-                menu
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, cx| {
+                crate::components::model_menu::build_model_menu(menu, state.clone(), cx)
             })
     };
 

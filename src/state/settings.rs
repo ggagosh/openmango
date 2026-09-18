@@ -435,7 +435,8 @@ mod tests {
         assert!(settings.mcp.grants.is_empty());
         assert!(settings.mcp.legacy_access);
         assert!(!settings.ai.enabled);
-        assert_eq!(settings.ai.model, "gemini-3-flash-preview");
+        // The balanced preset; `scripts/update_ai_models.sh` moves this on.
+        assert_eq!(settings.ai.model, "gemini-3.8-flash");
         assert_eq!(settings.interactive_query_timeout_ms, 30_000);
     }
 

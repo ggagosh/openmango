@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::ai::errors::AiError;
 use crate::helpers::keystore::KeyStore;
 
+/// Ollama has no catalogue, so a common local model stands in as its default.
+const LOCAL_DEFAULT_MODEL: &str = "qwen3:32b";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AiProvider {
@@ -33,13 +36,42 @@ impl AiProvider {
         }
     }
 
+    /// The model a provider starts on: its balanced preset.
     pub fn default_model(self) -> &'static str {
-        match self {
-            Self::Gemini => "gemini-3-flash-preview",
-            Self::OpenAi => "gpt-5.4",
-            Self::Anthropic => "claude-sonnet-4-6",
-            Self::Ollama => "qwen3:32b",
-        }
+        self.preset_model(ModelPreset::Balanced).unwrap_or(LOCAL_DEFAULT_MODEL)
+    }
+
+    /// models.dev keys Gemini under "google"; Ollama serves its own list over HTTP.
+    pub fn catalog_key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Gemini => "google",
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Ollama => return None,
+        })
+    }
+
+    /// The curated model behind each preset. Refresh these with `scripts/update_ai_models.sh`
+    /// when models.dev ships newer ones; the catalogue tests fail if an id goes stale.
+    pub fn preset_model(self, preset: ModelPreset) -> Option<&'static str> {
+        Some(match (self, preset) {
+            (Self::Gemini, ModelPreset::Fast) => "gemini-3.5-flash-lite",
+            (Self::Gemini, ModelPreset::Balanced) => "gemini-3.8-flash",
+            (Self::Gemini, ModelPreset::Powerful) => "gemini-3.1-pro-preview",
+            (Self::OpenAi, ModelPreset::Fast) => "gpt-5.6-luna",
+            (Self::OpenAi, ModelPreset::Balanced) => "gpt-5.6",
+            (Self::OpenAi, ModelPreset::Powerful) => "gpt-6-astra",
+            (Self::Anthropic, ModelPreset::Fast) => "claude-haiku-4-5",
+            (Self::Anthropic, ModelPreset::Balanced) => "claude-sonnet-5",
+            (Self::Anthropic, ModelPreset::Powerful) => "claude-opus-5",
+            // Local models are whatever Ollama is serving, so they have no presets.
+            (Self::Ollama, _) => return None,
+        })
+    }
+
+    /// The preset this model belongs to, or `None` when it was chosen by hand.
+    pub fn preset_for_model(self, model: &str) -> Option<ModelPreset> {
+        ModelPreset::ALL.into_iter().find(|preset| self.preset_model(*preset) == Some(model))
     }
 
     pub fn keystore_id(self) -> &'static str {
@@ -52,66 +84,34 @@ impl AiProvider {
     }
 
     pub const ALL: [Self; 4] = [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::Ollama];
+}
 
-    pub fn model_display_name(self, model: &str) -> String {
-        let label = match (self, model) {
-            (Self::Gemini, "gemini-3-flash-preview") => "3.1 Flash",
-            (Self::Gemini, "gemini-3.1-pro-preview") => "3.1 Pro",
-            (Self::Gemini, "gemini-3.1-flash-lite-preview") => "3.1 Flash Lite",
-            (Self::OpenAi, "gpt-5-mini") => "GPT-5 Mini",
-            (Self::OpenAi, "gpt-5.4") => "GPT-5.4",
-            (Self::Anthropic, "claude-opus-4-6") => "Opus 4.6",
-            (Self::Anthropic, "claude-sonnet-4-6") => "Sonnet 4.6",
-            (Self::Anthropic, "claude-haiku-4-5") => "Haiku 4.5",
-            _ => model,
-        };
-        format!("{}: {}", self.label(), label)
+/// How much model to spend on a question. Each provider maps these to a curated model id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPreset {
+    Fast,
+    Balanced,
+    Powerful,
+}
+
+impl ModelPreset {
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Balanced, Self::Powerful];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "Fast",
+            Self::Balanced => "Balanced",
+            Self::Powerful => "Powerful",
+        }
     }
 
-    pub fn model_options(self, current_model: &str) -> Vec<String> {
-        let mut options: Vec<String> = match self {
-            Self::Gemini => {
-                vec![
-                    "gemini-3-flash-preview",
-                    "gemini-3.1-pro-preview",
-                    "gemini-3.1-flash-lite-preview",
-                ]
-            }
-            Self::OpenAi => vec!["gpt-5-mini", "gpt-5.4"],
-            Self::Anthropic => {
-                vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
-            }
-            Self::Ollama => vec![], // dynamic only
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Fast => "Cheapest and quickest, for short questions",
+            Self::Balanced => "The default: good answers at a sane price",
+            Self::Powerful => "Most capable, for hard multi-step work",
         }
-        .into_iter()
-        .map(String::from)
-        .collect();
-
-        if self != Self::OpenAi
-            && !current_model.trim().is_empty()
-            && !options.iter().any(|model| model == current_model)
-        {
-            options.push(current_model.to_string());
-        }
-        options
-    }
-
-    /// Short description for a known model, shown in dropdown menus.
-    pub fn model_note(model: &str) -> Option<&'static str> {
-        Some(match model {
-            // Gemini
-            "gemini-3-flash-preview" => "Fast flagship, pro-grade reasoning",
-            "gemini-3.1-pro-preview" => "Most capable, complex tasks",
-            "gemini-3.1-flash-lite-preview" => "Fastest, budget-friendly",
-            // OpenAI
-            "gpt-5-mini" => "Medium preset",
-            "gpt-5.4" => "Smart preset",
-            // Anthropic
-            "claude-opus-4-6" => "Most capable, deep reasoning",
-            "claude-sonnet-4-6" => "Balanced, fast and smart",
-            "claude-haiku-4-5" => "Fastest, lightweight tasks",
-            _ => return None,
-        })
     }
 }
 
@@ -328,21 +328,22 @@ mod tests {
     }
 
     #[test]
-    fn openai_model_options_are_curated_pair() {
-        let options = AiProvider::OpenAi.model_options("gpt-5.2");
-        assert_eq!(options, vec!["gpt-5-mini".to_string(), "gpt-5.4".to_string()]);
+    fn presets_round_trip_through_model_ids() {
+        for provider in AiProvider::ALL {
+            for preset in ModelPreset::ALL {
+                let Some(model) = provider.preset_model(preset) else { continue };
+                assert_eq!(provider.preset_for_model(model), Some(preset));
+            }
+        }
+        assert_eq!(AiProvider::Anthropic.preset_for_model("some-custom-model"), None);
+        assert!(AiProvider::Ollama.preset_model(ModelPreset::Fast).is_none());
     }
 
     #[test]
-    fn model_display_names_are_human_readable() {
-        assert_eq!(
-            AiProvider::Gemini.model_display_name("gemini-3.1-flash-lite-preview"),
-            "Gemini: 3.1 Flash Lite"
-        );
-        assert_eq!(AiProvider::OpenAi.model_display_name("gpt-5-mini"), "OpenAI: GPT-5 Mini");
-        assert_eq!(
-            AiProvider::Anthropic.model_display_name("claude-sonnet-4-6"),
-            "Anthropic: Sonnet 4.6"
-        );
+    fn the_default_model_is_the_balanced_preset() {
+        for provider in AiProvider::ALL {
+            let expected = provider.preset_model(ModelPreset::Balanced).unwrap_or("qwen3:32b");
+            assert_eq!(provider.default_model(), expected);
+        }
     }
 }

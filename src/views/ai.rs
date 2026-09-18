@@ -9,7 +9,7 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{
     Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection,
 };
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextViewStyle;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::ai::bridge::AiBridge;
 use crate::ai::budget::trim_history_for_context;
 use crate::ai::context::build_ai_context;
-use crate::ai::model_registry::{self, ModelCache};
+use crate::ai::model_registry;
 use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
 use crate::ai::safety::SafetyTier;
 use crate::ai::telemetry::AiRequestSpan;
@@ -705,8 +705,6 @@ impl Render for AiView {
         let is_loading = ai_chat.is_loading;
         let session_key = app_state.current_ai_session_key();
         let streaming_turn_id = ai_chat.current_turn_id;
-        let current_provider = app_state.settings.ai.provider;
-        let current_model = app_state.settings.ai.model.clone();
         let selected_db = app_state.selected_database_name();
         let selected_collection = app_state.selected_collection_name();
         let session_ready = session_key.is_some();
@@ -1092,121 +1090,25 @@ impl Render for AiView {
             message_list
         };
 
-        // Model selector dropdown — shows only current provider's models
+        // Model selector dropdown — presets first, then everything the catalogue lists
         let model_selector = {
-            let selector_label =
-                compact_label(&current_provider.model_display_name(&current_model), 24);
             let state_for_menu = state.clone();
+            let label = crate::components::model_menu::model_button_label(state.read(cx));
             gpui_kit::component::button::Button::new("ai-model-selector")
                 .ghost()
                 .xsmall()
-                .label(selector_label)
+                .label(label)
                 .dropdown_caret(true)
                 .rounded(islands::radius_sm(&appearance))
                 .with_size(Size::Small)
                 .disabled(is_loading)
-                .dropdown_menu_with_anchor(
-                    Anchor::TopLeft,
-                    move |mut menu: PopupMenu, _window, cx| {
-                        let state_read = state_for_menu.read(cx);
-                        let provider = state_read.settings.ai.provider;
-                        let active_model = state_read.settings.ai.model.clone();
-                        let cached = &state_read.ai_chat.cached_models;
-
-                        menu = menu.label(provider.label());
-
-                        let models: Vec<String> = match provider {
-                            AiProvider::Ollama => match cached {
-                                ModelCache::Loaded(list) => {
-                                    let mut m = list.clone();
-                                    if !active_model.trim().is_empty() && !m.contains(&active_model)
-                                    {
-                                        m.push(active_model.clone());
-                                        m.sort();
-                                    }
-                                    m
-                                }
-                                _ => {
-                                    if !active_model.trim().is_empty() {
-                                        vec![active_model.clone()]
-                                    } else {
-                                        vec![]
-                                    }
-                                }
-                            },
-                            _ => provider.model_options(&active_model),
-                        };
-
-                        // Show status hints for Ollama non-Loaded states
-                        if provider == AiProvider::Ollama {
-                            match cached {
-                                ModelCache::Loading => {
-                                    menu = menu.item(
-                                        PopupMenuItem::new("Loading models...").disabled(true),
-                                    );
-                                }
-                                ModelCache::Error(msg) => {
-                                    let hint = crate::helpers::truncate_chars(msg, 60);
-                                    menu = menu.item(PopupMenuItem::new(hint).disabled(true));
-                                }
-                                ModelCache::NotFetched => {
-                                    menu = menu.item(
-                                        PopupMenuItem::new("Fetching models...").disabled(true),
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        // Show NoKey hint for cloud providers
-                        if !matches!(provider, AiProvider::Ollama)
-                            && matches!(cached, ModelCache::NoKey)
-                        {
-                            menu = menu
-                                .item(PopupMenuItem::new("Add API key in Settings").disabled(true));
-                        }
-
-                        for model in models {
-                            let is_current = model == active_model;
-                            let s = state_for_menu.clone();
-                            let m = model.clone();
-                            let display_name = provider.model_display_name(&model);
-                            let note = AiProvider::model_note(&model);
-                            let item = if let Some(note) = note {
-                                let model_label = display_name.clone();
-                                let note = note.to_string();
-                                PopupMenuItem::element(move |_window, cx| {
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().foreground)
-                                                .child(model_label.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(note.clone()),
-                                        )
-                                })
-                                .checked(is_current)
-                            } else {
-                                PopupMenuItem::new(display_name).checked(is_current)
-                            };
-                            menu = menu.item(item.on_click(move |_, _, cx| {
-                                s.update(cx, |state, cx| {
-                                    state.settings.ai.set_model(m.clone());
-                                    state.save_settings();
-                                    cx.notify();
-                                });
-                            }));
-                        }
-                        menu
-                    },
-                )
+                .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, cx| {
+                    crate::components::model_menu::build_model_menu(
+                        menu,
+                        state_for_menu.clone(),
+                        cx,
+                    )
+                })
         };
 
         // Send/Stop icon button

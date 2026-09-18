@@ -3,6 +3,7 @@
 pub mod blocks;
 pub mod bridge;
 pub mod budget;
+pub mod catalog;
 pub mod context;
 pub mod errors;
 pub mod model_registry;

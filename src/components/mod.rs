@@ -37,6 +37,7 @@ pub mod error_history;
 pub mod file_picker;
 pub mod filter_builder;
 pub mod form_field;
+pub mod model_menu;
 pub mod query_library;
 mod status_bar;
 mod unsaved_guard;

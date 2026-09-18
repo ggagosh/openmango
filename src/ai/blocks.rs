@@ -429,6 +429,11 @@ pub struct AiChatState {
     pub cancel_flag: Option<Arc<AtomicBool>>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
+    /// The catalogue from the last refresh; the bundled snapshot stands in until then.
+    #[serde(skip)]
+    pub refreshed_catalog: Option<Arc<crate::ai::catalog::ModelCatalog>>,
+    #[serde(skip)]
+    pub catalog_etag: Option<String>,
     /// Collections @-mentioned for additional context in the next message.
     #[serde(skip)]
     pub mentioned_collections: Vec<String>,
@@ -439,6 +444,11 @@ pub struct AiChatState {
 
 impl AiChatState {
     const TIMELINE_LIMIT: usize = 200;
+
+    /// The model catalogue in force: the last refresh, or the bundled snapshot.
+    pub fn catalog(&self) -> Arc<crate::ai::catalog::ModelCatalog> {
+        self.refreshed_catalog.clone().unwrap_or_else(crate::ai::catalog::ModelCatalog::bundled)
+    }
 
     pub fn begin_turn(&mut self, content: impl Into<String>) -> Uuid {
         let user_message = ChatMessage::new(ChatRole::User, content);
