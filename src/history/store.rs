@@ -21,6 +21,17 @@ const QUEUE_CAPACITY: usize = 128;
 const PAGE_LIMIT: u32 = 100;
 pub(crate) const CONNECTION_CURSOR_SCOPE: &str = "__connection__";
 
+/// SQLite stores signed integers, so counts and byte totals cross the boundary as `i64` and come
+/// back as the `u64` the rest of the app uses. Neither direction can realistically overflow — a
+/// batch of 9.2 quintillion items is not a case worth carrying — so the bounds saturate.
+fn to_sql(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn from_sql(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
 type Job = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
 
 enum Message {
@@ -124,7 +135,7 @@ impl HistoryStore {
             CONNECTION_CURSOR_SCOPE,
             &event.resume_token,
         )?;
-        let bytes = encrypted_payload.len() as u64;
+        let bytes = encrypted_payload.len() as i64;
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let recorded_at_ms = Utc::now().timestamp_millis();
@@ -188,7 +199,7 @@ impl HistoryStore {
                     ],
                 )?;
             }
-            let ordinal: u64 = transaction.query_row(
+            let ordinal: i64 = transaction.query_row(
                 "SELECT item_count FROM history_batches WHERE id = ?1",
                 [batch_id.to_string()],
                 |row| row.get(0),
@@ -507,7 +518,7 @@ impl HistoryStore {
                    AND restore_outcome IN ('pending', 'applying')
                  ORDER BY ordinal DESC LIMIT ?2",
             )?;
-            let rows = statement.query_map(params![batch_id.to_string(), limit as u64], |row| {
+            let rows = statement.query_map(params![batch_id.to_string(), limit as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, Vec<u8>>(2)?))
             })?;
             let mut items = Vec::new();
@@ -639,9 +650,9 @@ impl HistoryStore {
                 [id],
                 |row| {
                     Ok(Usage {
-                        encrypted_bytes: row.get(0)?,
-                        batches: row.get(1)?,
-                        items: row.get(2)?,
+                        encrypted_bytes: from_sql(row.get(0)?),
+                        batches: from_sql(row.get(1)?),
+                        items: from_sql(row.get(2)?),
                     })
                 },
             )?)
@@ -663,13 +674,13 @@ impl HistoryStore {
                 params![connection_id.to_string(), cutoff],
             )?;
             loop {
-                let usage: u64 = connection.query_row(
+                let usage: i64 = connection.query_row(
                     "SELECT COALESCE(SUM(encrypted_bytes), 0) FROM history_batches
                      WHERE connection_id = ?1",
                     [connection_id.to_string()],
                     |row| row.get(0),
                 )?;
-                if usage <= max_bytes {
+                if from_sql(usage) <= max_bytes {
                     break;
                 }
                 let oldest: Option<String> = connection
@@ -692,9 +703,9 @@ impl HistoryStore {
                 [connection_id.to_string()],
                 |row| {
                     Ok(Usage {
-                        encrypted_bytes: row.get(0)?,
-                        batches: row.get(1)?,
-                        items: row.get(2)?,
+                        encrypted_bytes: from_sql(row.get(0)?),
+                        batches: from_sql(row.get(1)?),
+                        items: from_sql(row.get(2)?),
                     })
                 },
             )?)
@@ -814,7 +825,7 @@ fn find_open_batch(
                     event.collection,
                     event.family.as_str(),
                     transaction_hash.map(|hash| hash.as_slice()),
-                    MAX_BATCH_ITEMS,
+                    to_sql(MAX_BATCH_ITEMS),
                 ],
                 |row| row.get(0),
             )
@@ -832,7 +843,7 @@ fn find_open_batch(
                     event.collection,
                     event.family.as_str(),
                     event.trace_id.map(|id| id.to_string()),
-                    MAX_BATCH_ITEMS,
+                    to_sql(MAX_BATCH_ITEMS),
                 ],
                 |row| row.get(0),
             )
@@ -854,7 +865,7 @@ fn find_open_batch(
                     event.wall_time.timestamp_millis(),
                     OBSERVED_IDLE_MS,
                     OBSERVED_MAX_MS,
-                    MAX_BATCH_ITEMS,
+                    to_sql(MAX_BATCH_ITEMS),
                 ],
                 |row| row.get(0),
             )
@@ -950,7 +961,7 @@ fn list_batches(connection: &Connection, query: BatchQuery) -> Result<Page<Batch
     let limit = query.limit.clamp(1, PAGE_LIMIT);
     let database = query.database;
     let collection = query.collection;
-    let total: u64 = connection.query_row(
+    let total: i64 = connection.query_row(
         "SELECT COUNT(*) FROM history_batches
          WHERE connection_id = ?1
            AND (?2 IS NULL OR database_name = ?2)
@@ -973,6 +984,7 @@ fn list_batches(connection: &Connection, query: BatchQuery) -> Result<Page<Batch
         batch_from_row,
     )?;
     let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let total = from_sql(total);
     let next = (u64::from(query.offset) + (items.len() as u64) < total)
         .then_some(query.offset + items.len() as u32);
     Ok(Page { items, total, next_offset: next })
@@ -1015,14 +1027,14 @@ fn batch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatchSummary> {
         trace_id: row.get::<_, Option<String>>(6)?.and_then(|value| Uuid::parse_str(&value).ok()),
         first_wall_time: Utc.timestamp_millis_opt(row.get(7)?).single().unwrap_or_else(Utc::now),
         last_wall_time: Utc.timestamp_millis_opt(row.get(8)?).single().unwrap_or_else(Utc::now),
-        item_count: row.get(9)?,
-        revertible_count: row.get(10)?,
-        conflict_count: row.get(11)?,
-        encrypted_bytes: row.get(12)?,
+        item_count: from_sql(row.get(9)?),
+        revertible_count: from_sql(row.get(10)?),
+        conflict_count: from_sql(row.get(11)?),
+        encrypted_bytes: from_sql(row.get(12)?),
         status: BatchStatus::parse(&status).unwrap_or(BatchStatus::Failed),
-        restored_count: row.get(14)?,
-        skipped_count: row.get(15)?,
-        failed_count: row.get(16)?,
+        restored_count: from_sql(row.get(14)?),
+        skipped_count: from_sql(row.get(15)?),
+        failed_count: from_sql(row.get(16)?),
     })
 }
 
