@@ -1564,13 +1564,26 @@ fn ai_section_gap() -> Pixels {
     spacing::md()
 }
 
+/// How much bigger than the answer's own text each heading level is.
+///
+/// The body is 14px, so a heading that lands on 14px is a heading only its author can see: the
+/// old scale put an h3 at 14.04px. Levels 4 and down stay body-sized and lean on their weight.
+fn heading_scale(level: u8) -> f32 {
+    match level {
+        1 => 1.5,
+        2 => 1.28,
+        3 => 1.14,
+        _ => 1.0,
+    }
+}
+
 fn ai_markdown_style(cx: &App) -> TextViewStyle {
     // An answer is mostly prose with the occasional query in it, so the code block has room to
     // breathe and the table reads as data rather than as more paragraphs.
     let code_block_style = gpui_kit::StyleRefinement::default()
         .mt(spacing::sm())
         .mb(spacing::sm())
-        .p(spacing::sm())
+        .p(spacing::md())
         .rounded(borders::radius_sm())
         .bg(cx.theme().secondary.opacity(0.35))
         .border_1()
@@ -1589,7 +1602,16 @@ fn ai_markdown_style(cx: &App) -> TextViewStyle {
     TextViewStyle {
         // Wider than the old 0.72: paragraphs that touch read as one block of text.
         paragraph_gap: rems(0.9),
-        heading_base_font_size: px(13.0),
+        // The body text these are measured against, so `heading_scale` reads as a multiple of it.
+        heading_base_font_size: px(14.0),
+        // A field name in a sentence is the same name the document tree shows, so it is coloured
+        // the same. The chip stays, faintly: the kit renders inline code at 87.5% of the body and
+        // small grey-on-grey text is the thing that chops a sentence into blocks.
+        inline_code: HighlightStyle {
+            color: Some(crate::theme::colors::syntax_key(cx)),
+            background_color: Some(cx.theme().accent.opacity(0.55)),
+            ..Default::default()
+        },
         highlight_theme: cx.theme().highlight_theme.clone(),
         is_dark: cx.theme().mode.is_dark(),
         code_block: code_block_style,
@@ -1598,15 +1620,7 @@ fn ai_markdown_style(cx: &App) -> TextViewStyle {
         table_cell: table_cell_style,
         ..TextViewStyle::default()
     }
-    .heading_font_size(|level, base| {
-        let scale = match level {
-            1 => 1.34,
-            2 => 1.2,
-            3 => 1.08,
-            _ => 1.0,
-        };
-        base * scale
-    })
+    .heading_font_size(|level, base| base * heading_scale(level))
 }
 
 /// The assistant's side of a turn. The kit's Message owns the row and the Bubble the surface;
@@ -1778,7 +1792,7 @@ fn render_turn(
             }
             body = body
                 .child(
-                    div().min_w(px(0.0)).text_color(cx.theme().foreground).child(
+                    div().text_sm().min_w(px(0.0)).text_color(cx.theme().foreground).child(
                         TextView::markdown(
                             ElementId::Name(format!("ai-stream-{}", msg.id).into()),
                             msg.content.clone(),
@@ -2875,6 +2889,14 @@ fn download_report_as_excel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn a_heading_never_reads_as_the_text_it_introduces() {
+        let scales: Vec<f32> = (1..=6).map(heading_scale).collect();
+        assert!(scales.iter().all(|scale| *scale >= 1.0), "a heading is never below body size");
+        assert!(scales.windows(2).all(|pair| pair[0] >= pair[1]), "a deeper heading never grows");
+        assert!(scales[2] * 14.0 - 14.0 >= 1.5, "h3 is the one models reach for: it has to show");
+    }
 
     fn tool(status: ToolActivityStatus) -> AiChatEntry {
         AiChatEntry::ToolActivity(ToolActivity {

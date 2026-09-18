@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - After a query the status bar says how many documents were loaded, out of how many matched, and how long it took
 - The Find button shows a spinner in place of its icon instead of pushing the row aside, and busy buttons keep their size
 - The status bar and the chat are built on gpui-kit's own components, so the chat scrolls, follows new messages and renders markdown the way the rest of the app does
+- Headings in an answer are bigger than the text they introduce, field names in a sentence carry the same blue the document tree gives them, code blocks have room around them, and the answer no longer changes size the moment it finishes streaming
 
 ### Removed
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
