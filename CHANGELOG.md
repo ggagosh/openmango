@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - AI models come from a models.dev catalogue: Fast, Balanced and Powerful presets per provider, a searchable picker that shows each model's context size and price, and a Refresh that fetches the latest list; a snapshot ships with the app so the picker is right offline
 - OpenRouter as an AI provider, offering its whole searchable catalogue of tool-calling models instead of presets
 - The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
-- Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the conversation
+- Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the whole conversation
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
 - Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
 
@@ -43,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- The @collection list in the chat answers to the arrow keys, and Enter takes the highlighted collection instead of sending the half-typed name as a message
 - Switching themes now reaches the layer that draws the chat's markdown, so a dark theme no longer renders answers with light tables and washed-out text
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line

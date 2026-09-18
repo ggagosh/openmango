@@ -97,6 +97,9 @@ actions!(
         OpenForge,
         ToggleAiPanel,
         ClearAiChat,
+        PreviousAiMention,
+        NextAiMention,
+        ConfirmAiMention,
         RunForgeAll,
         RunForgeSelectionOrStatement,
         CancelForgeRun,
@@ -393,6 +396,11 @@ fn default_keybindings() -> Vec<KeyBinding> {
         // Only while the chat has focus, so it cannot be mistaken for deleting a collection.
         KeyBinding::new("cmd-shift-backspace", ClearAiChat, Some("AiPanel")),
         KeyBinding::new("ctrl-shift-backspace", ClearAiChat, Some("AiPanel")),
+        // The @collection list is a list. Without these the arrows moved the caret behind it and
+        // Enter sent the half-typed name as a message.
+        KeyBinding::new("up", PreviousAiMention, Some("AiPanel > Input")),
+        KeyBinding::new("down", NextAiMention, Some("AiPanel > Input")),
+        KeyBinding::new("enter", ConfirmAiMention, Some("AiPanel > Input")),
         KeyBinding::new("cmd-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new("ctrl-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new(FOCUS_CONTENT_KEYS[0], FocusContent, Some("Workspace")),

@@ -9,7 +9,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::bubble::{Bubble, BubbleVariant};
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{
-    Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection,
+    self, Editor, EditorState, InputEvent, Position, TextDecoration, TextDecorationCollection,
 };
 use gpui_kit::component::message::{
     Message, MessageAlignment, MessageContent, MessageFooter, MessageHeader,
@@ -284,6 +284,54 @@ impl AiView {
         decorations.set(highlights, cx);
     }
 
+    /// Move the highlight in the mention list, or let the caret move when there is no list.
+    fn navigate_mention(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_query.is_none() || self.mention_filtered.is_empty() {
+            let caret: Box<dyn gpui_kit::Action> =
+                if delta < 0 { Box::new(input::MoveUp) } else { Box::new(input::MoveDown) };
+            window.dispatch_action(caret, cx);
+            return;
+        }
+        self.mention_selected_index =
+            wrap_index(self.mention_selected_index, self.mention_filtered.len(), delta);
+        cx.notify();
+    }
+
+    /// Enter takes the highlighted collection when the list is up, and sends the message when
+    /// it is not. Sending mid-mention was the bug: the half-typed name went with it.
+    fn confirm_mention_or_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_query.is_some() && !self.mention_filtered.is_empty() {
+            self.accept_mention(window, cx);
+            return;
+        }
+        window.dispatch_action(Box::new(input::Enter { secondary: false, shift: false }), cx);
+    }
+
+    /// Write the highlighted collection into the text, in place of what was typed after the `@`.
+    fn accept_mention(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(collection) = self.mention_filtered.get(self.mention_selected_index).cloned()
+        else {
+            return;
+        };
+        let Some(input) = self.input_state.clone() else { return };
+        let (text, cursor) = {
+            let input = input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        let cursor = cursor.min(text.len());
+        let Some(at) = find_at_trigger(&text[..cursor]) else { return };
+
+        let replacement = format!("@{collection} ");
+        let caret = at + replacement.len();
+        let text = format!("{}{}{}", &text[..at], replacement, &text[cursor..]);
+        input.update(cx, |input, cx| {
+            input.set_value(text.clone(), window, cx);
+            input.set_cursor_position(position_at(&text, caret), window, cx);
+        });
+        self.confirm_mention(cx);
+        self.update_mention_highlights(&text, cx);
+    }
+
     fn confirm_mention(&mut self, cx: &mut Context<Self>) {
         let Some(collection) = self.mention_filtered.get(self.mention_selected_index).cloned()
         else {
@@ -414,16 +462,8 @@ impl AiView {
                                     let new_cursor_byte = at_pos + replacement.len();
                                     entity.update(cx, |input, cx| {
                                         input.set_value(new_text.clone(), window, cx);
-                                        let before_cursor = &new_text[..new_cursor_byte];
-                                        let line = before_cursor.matches('\n').count() as u32;
-                                        let last_nl =
-                                            before_cursor.rfind('\n').map_or(0, |p| p + 1);
-                                        let character =
-                                            before_cursor[last_nl..].chars().count() as u32;
                                         input.set_cursor_position(
-                                            gpui_kit::component::input::Position::new(
-                                                line, character,
-                                            ),
+                                            position_at(&new_text, new_cursor_byte),
                                             window,
                                             cx,
                                         );
@@ -800,7 +840,7 @@ impl Render for AiView {
             let header_buttons = div().flex().items_center().gap(px(6.0));
 
             let has_entries = !ai_chat.entries.is_empty();
-            let conversation_cost = ai_chat.conversation_cost();
+            let conversation_usage = ai_chat.conversation_usage();
             let header_buttons = if is_loading {
                 let view = cx.entity();
                 header_buttons.child(
@@ -875,17 +915,18 @@ impl Render for AiView {
                                 .text_color(cx.theme().foreground)
                                 .child("AI Chat"),
                         )
-                        // What the conversation has cost so far. The per-answer number is in
+                        // What the whole conversation has spent. The per-answer number is in
                         // each footer; this is the one that decides whether to keep going.
-                        .children(conversation_cost.map(|cost| {
+                        .children((!conversation_usage.is_empty()).then(|| {
+                            let detail =
+                                format!("{} on this conversation", conversation_usage.label());
                             div()
                                 .id("ai-conversation-cost")
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(crate::ai::catalog::format_usd(cost))
-                                .tooltip(|window, cx| {
-                                    Tooltip::new("Spent on this conversation, at list prices")
-                                        .build(window, cx)
+                                .child(conversation_usage.short_label())
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(detail.clone()).build(window, cx)
                                 })
                         })),
                 )
@@ -1280,6 +1321,18 @@ impl Render for AiView {
                     cx.notify();
                 });
             }))
+            .on_action(cx.listener(|this, _: &crate::keyboard::PreviousAiMention, window, cx| {
+                this.navigate_mention(-1, window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &crate::keyboard::NextAiMention, window, cx| {
+                this.navigate_mention(1, window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &crate::keyboard::ConfirmAiMention, window, cx| {
+                this.confirm_mention_or_send(window, cx);
+                cx.stop_propagation();
+            }))
             .flex()
             .flex_col()
             .flex_1()
@@ -1301,6 +1354,23 @@ impl Render for AiView {
             .children(mention_popup)
             .child(input_area)
     }
+}
+
+/// The next highlighted row, wrapping at either end: a short list is quicker to cycle than to
+/// walk back up.
+fn wrap_index(current: usize, count: usize, delta: isize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    (current as isize + delta).rem_euclid(count as isize) as usize
+}
+
+/// Where a byte offset falls, as the editor counts position: lines, then characters.
+fn position_at(text: &str, byte: usize) -> Position {
+    let before = &text[..byte.min(text.len())];
+    let line = before.matches('\n').count() as u32;
+    let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+    Position::new(line, before[line_start..].chars().count() as u32)
 }
 
 /// Find the byte position of an `@` trigger scanning backward from the end of `text`.
@@ -2993,6 +3063,26 @@ fn download_report_as_excel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn the_mention_list_cycles_at_both_ends() {
+        assert_eq!(wrap_index(0, 3, 1), 1);
+        assert_eq!(wrap_index(2, 3, 1), 0, "past the last one is the first");
+        assert_eq!(wrap_index(0, 3, -1), 2, "before the first one is the last");
+        assert_eq!(wrap_index(0, 0, 1), 0, "an empty list has nowhere to go");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_caret_offset_becomes_a_line_and_a_column() {
+        let text = "ask about\n@auditlogs ";
+        let end = position_at(text, text.len());
+        assert_eq!((end.line, end.character), (1, 11));
+        let start = position_at(text, 0);
+        assert_eq!((start.line, start.character), (0, 0));
+        // Multi-byte text is counted in characters, not bytes.
+        let accented = position_at("héllo", "héllo".len());
+        assert_eq!(accented.character, 5);
+    }
 
     #[::core::prelude::v1::test]
     fn the_send_button_names_the_key_that_sends() {

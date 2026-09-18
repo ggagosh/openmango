@@ -389,6 +389,15 @@ impl TurnUsage {
         self.input_tokens == 0 && self.output_tokens == 0
     }
 
+    /// The money if there is any, else the tokens: what fits beside a title.
+    pub fn short_label(&self) -> String {
+        use crate::helpers::format_number;
+        match self.cost_usd {
+            Some(cost) => crate::ai::catalog::format_usd(cost),
+            None => format!("{} tokens", format_number(self.input_tokens + self.output_tokens)),
+        }
+    }
+
     /// "1,234 in · 567 out · $0.0042", the line under a finished answer.
     pub fn label(&self) -> String {
         use crate::helpers::format_number;
@@ -502,18 +511,23 @@ impl AiChatState {
         *self.conversation_id.get_or_insert_with(Uuid::new_v4)
     }
 
-    /// What this conversation has cost so far. `None` until a priced turn has finished, which
-    /// is also the permanent answer for a local model.
-    pub fn conversation_cost(&self) -> Option<f64> {
-        let total: f64 = self
-            .entries
+    /// Everything this conversation has spent: every turn's tokens, and the money for the turns
+    /// that carried a price.
+    pub fn conversation_usage(&self) -> TurnUsage {
+        self.entries
             .iter()
             .filter_map(|entry| match entry {
-                AiChatEntry::Turn(turn) => turn.usage?.cost_usd,
+                AiChatEntry::Turn(turn) => turn.usage,
                 _ => None,
             })
-            .sum();
-        (total > 0.0).then_some(total)
+            .fold(TurnUsage::default(), |mut total, turn| {
+                total.input_tokens += turn.input_tokens;
+                total.output_tokens += turn.output_tokens;
+                if let Some(cost) = turn.cost_usd {
+                    total.cost_usd = Some(total.cost_usd.unwrap_or(0.0) + cost);
+                }
+                total
+            })
     }
 
     /// The model catalogue in force: the last refresh, or the bundled snapshot.
@@ -809,7 +823,11 @@ mod tests {
             turn.usage.map(|usage| usage.label()),
             Some("1,234 in · 56 out · $0.0042".to_string())
         );
-        assert_eq!(chat.conversation_cost(), Some(0.004_2), "the header adds the turns up");
+        assert_eq!(
+            chat.conversation_usage().label(),
+            "1,234 in · 56 out · $0.0042",
+            "the header adds the turns up"
+        );
 
         // A provider that reports nothing leaves the footer off entirely.
         let second = chat.begin_turn("and customers?");
