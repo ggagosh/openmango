@@ -429,6 +429,10 @@ pub struct AiChatState {
     pub cancel_flag: Option<Arc<AtomicBool>>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
+    /// The model's own transcript of this session — tool calls and their results included.
+    /// Not persisted: it is provider-shaped, and a restart can start the model fresh.
+    #[serde(skip)]
+    pub transcript: Vec<rig::completion::Message>,
     /// The catalogue from the last refresh; the bundled snapshot stands in until then.
     #[serde(skip)]
     pub refreshed_catalog: Option<Arc<crate::ai::catalog::ModelCatalog>>,
@@ -514,6 +518,9 @@ impl AiChatState {
         self.current_turn_id = None;
         self.last_error = None;
         self.mentioned_collections.clear();
+        // A cleared chat starts the model over too, or it would answer from a conversation
+        // the user can no longer see.
+        self.transcript.clear();
     }
 
     pub fn find_turn_mut(&mut self, turn_id: Uuid) -> Option<&mut AiTurn> {

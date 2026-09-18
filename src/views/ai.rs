@@ -527,7 +527,10 @@ impl AiView {
             })
         };
 
-        let request = AiGenerationRequest { system_prompt, history, user_prompt: prompt };
+        // What rig sent and received last turn, so tool results survive into this one.
+        let transcript = self.state.read(cx).ai_chat.transcript.clone();
+        let request =
+            AiGenerationRequest { system_prompt, history, user_prompt: prompt, transcript };
 
         let provider_label = ai_settings.provider.label().to_string();
         let model_label = ai_settings.model.clone();
@@ -662,9 +665,10 @@ impl AiView {
             cx.update(|cx| {
                 state.update(cx, |s, cx| {
                     match result {
-                        Ok(final_text) => {
-                            s.ai_chat.finalize_turn_response(message_id, final_text.clone());
-                            span.finish_ok(final_text.len());
+                        Ok(outcome) => {
+                            s.ai_chat.transcript = outcome.transcript;
+                            s.ai_chat.finalize_turn_response(message_id, outcome.text.clone());
+                            span.finish_ok(outcome.text.len());
                         }
                         Err(ref error) => {
                             let msg = error.user_message();

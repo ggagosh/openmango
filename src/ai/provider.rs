@@ -23,8 +23,10 @@ use crate::ai::tools::{MongoContext, StreamEvent, build_agent, truncate_str};
 
 const HISTORY_LIMIT: usize = 18;
 const MAX_OUTPUT_TOKENS: u32 = 4096;
-const MAX_TURNS: usize = 15;
-const MAX_TOOL_CALLS: usize = 6;
+/// Model calls in one run. A step is cheap; being cut off mid-investigation is not.
+const MAX_TURNS: usize = 30;
+/// Tool calls in one run — the backstop against a model looping on the database.
+const MAX_TOOL_CALLS: usize = 20;
 
 // ---------------------------------------------------------------------------
 // RunPolicy — what the agent loop is allowed to do
@@ -103,6 +105,27 @@ pub struct AiGenerationRequest {
     pub system_prompt: String,
     pub history: Vec<ChatMessage>,
     pub user_prompt: String,
+    /// What rig sent and received last turn, tool calls and results included. Empty on the first
+    /// turn of a session, when `history` (the visible chat) stands in.
+    pub transcript: Vec<RigMessage>,
+}
+
+/// One completed turn.
+#[derive(Debug, Clone, Default)]
+pub struct TurnOutcome {
+    pub text: String,
+    /// Feed this back as the next turn's transcript so the model keeps what its tools found.
+    pub transcript: Vec<RigMessage>,
+}
+
+/// The exact transcript rig produced last turn beats a reconstruction from visible chat text:
+/// it carries the tool calls and their results, so a follow-up builds on what was already found.
+fn conversation_history(request: &AiGenerationRequest) -> Vec<RigMessage> {
+    if request.transcript.is_empty() {
+        to_rig_history(&request.history)
+    } else {
+        request.transcript.clone()
+    }
 }
 
 pub async fn generate_text(
@@ -124,7 +147,7 @@ pub async fn generate_text_streaming(
     tool_ctx: Option<MongoContext>,
     cancel: Arc<AtomicBool>,
     event_tx: UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     settings.validate_for_request()?;
     let tool_ctx = tool_ctx.map(|mut ctx| {
         ctx.event_tx = Some(event_tx.clone());
@@ -301,7 +324,7 @@ async fn call_gemini_streaming(
     tool_ctx: Option<MongoContext>,
     policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -322,7 +345,7 @@ async fn call_gemini_streaming(
         tool_ctx,
     );
 
-    let history = to_rig_history(&request.history);
+    let history = conversation_history(&request);
     let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
@@ -334,7 +357,7 @@ async fn call_openai_streaming(
     tool_ctx: Option<MongoContext>,
     policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -355,7 +378,7 @@ async fn call_openai_streaming(
         tool_ctx,
     );
 
-    let history = to_rig_history(&request.history);
+    let history = conversation_history(&request);
     let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
@@ -367,7 +390,7 @@ async fn call_anthropic_streaming(
     tool_ctx: Option<MongoContext>,
     policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -388,7 +411,7 @@ async fn call_anthropic_streaming(
         tool_ctx,
     );
 
-    let history = to_rig_history(&request.history);
+    let history = conversation_history(&request);
     let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
@@ -400,7 +423,7 @@ async fn call_ollama_streaming(
     tool_ctx: Option<MongoContext>,
     policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let model = settings.model.trim();
     if model.is_empty() {
         return Err(AiError::Parse("Ollama model is empty".to_string()));
@@ -441,7 +464,7 @@ async fn call_ollama_streaming(
         tool_ctx,
     );
 
-    let history = to_rig_history(&request.history);
+    let history = conversation_history(&request);
     let mut stream = agent.stream_chat(request.user_prompt, history).max_turns(MAX_TURNS).await;
 
     consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
@@ -455,9 +478,10 @@ async fn consume_stream(
     stream: &mut StreamingResult,
     provider: AiProvider,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let mut full_text = String::new();
     let mut final_text = String::new();
+    let mut transcript = Vec::new();
     let mut turn_count: usize = 0;
     let mut tool_call_count: usize = 0;
 
@@ -501,6 +525,7 @@ async fn consume_stream(
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.output().to_string();
+                transcript = final_response.messages.clone().unwrap_or_default();
                 log::debug!(
                     "[ai-stream] final_response after {tool_call_count} tool calls, \
                      {turn_count} results"
@@ -544,7 +569,7 @@ async fn consume_stream(
     if full_text.trim().is_empty() {
         full_text = final_text;
     }
-    Ok(full_text)
+    Ok(TurnOutcome { text: full_text, transcript })
 }
 
 /// rig reports a failed tool call as its result text, tagged with the error variant.
@@ -669,6 +694,27 @@ pub async fn detect_ollama_models(base_url: &str) -> Result<Vec<String>, AiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(transcript: Vec<RigMessage>) -> AiGenerationRequest {
+        AiGenerationRequest {
+            system_prompt: String::new(),
+            history: vec![ChatMessage::new(ChatRole::User, "what collections are there?")],
+            user_prompt: "and how big is orders?".to_string(),
+            transcript,
+        }
+    }
+
+    #[test]
+    fn the_previous_transcript_wins_over_replayed_chat_text() {
+        let visible_only = conversation_history(&request(Vec::new()));
+        assert_eq!(visible_only.len(), 1, "falls back to the visible chat on a first turn");
+
+        let with_tools = conversation_history(&request(vec![
+            RigMessage::user("what collections are there?"),
+            RigMessage::assistant("orders, customers"),
+        ]));
+        assert_eq!(with_tools.len(), 2, "rig's own transcript is used as-is");
+    }
 
     #[test]
     fn history_conversion_skips_system_messages() {

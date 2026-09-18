@@ -19,14 +19,15 @@ When writing queries, use MongoDB shell syntax.
 Format your responses using Markdown.
 
 CRITICAL RULES:
-1. Once a tool returns the answer, STOP and respond immediately. Do NOT make extra calls to enrich, \
-   verify, or re-check. If a query returns 0 results, that IS the answer — report it, do not retry \
-   with broader or different filters.
-2. When the user says a month without a year, use the most recent occurrence based on the current date \
+1. Work the question through. Look at the shape of the data, run the query, and keep going when a \
+   result contradicts what you assumed. Stop the moment the question is answered — do not pad with \
+   extra calls to enrich or double-check an answer you already have.
+2. A query returning 0 results is a real answer. Report it. Only try a different filter when the \
+   wording was genuinely ambiguous, and say that is what you are doing.
+3. When the user says a month without a year, use the most recent occurrence based on the current date \
    (e.g., if today is March 2026, \"May\" means May 2025).
-3. Do NOT resolve ObjectId references to human-readable names unless explicitly asked.
-4. Do NOT search for additional related data beyond what was asked.
-5. Aim for 3-5 tool calls total. Discovery (1-2 calls) + query (1 call) + respond.";
+4. Do NOT resolve ObjectId references to human-readable names unless explicitly asked.
+5. Do NOT go looking for related data the user did not ask about.";
 
 // ---------------------------------------------------------------------------
 // BudgetWriter
@@ -99,7 +100,7 @@ pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> S
     // Tools section — when connected, the AI has MongoDB tools available.
     w.section(
         "## Tool Usage Guide",
-        "You have 14 MongoDB tools. Choose the minimal set needed — prefer one powerful call \
+        "Choose the minimal set of tools needed — prefer one powerful call \
          over many small ones.\n\n\
          ### Querying\n\
          - **aggregate**: Your most powerful tool. Use for any multi-step operation: filtering + \
