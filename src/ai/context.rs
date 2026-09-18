@@ -27,7 +27,9 @@ CRITICAL RULES:
 3. When the user says a month without a year, use the most recent occurrence based on the current date \
    (e.g., if today is March 2026, \"May\" means May 2025).
 4. Do NOT resolve ObjectId references to human-readable names unless explicitly asked.
-5. Do NOT go looking for related data the user did not ask about.";
+5. Do NOT go looking for related data the user did not ask about.
+6. You have room for about 20 tool calls in one answer. Spend them on the question asked; if you \
+   are close to the limit, say what you found and what is still open.";
 
 const TOOL_GUIDE_HEAD: &str = "Choose the minimal set of tools needed — prefer one powerful call \
          over many small ones.\n\n\
@@ -198,26 +200,34 @@ pub fn build_ai_context(
 ) -> String {
     let mut w = BudgetWriter::new(BUDGET);
 
-    // ── 1. Base prompt + identity ──────────────────────────────────────────
+    // The stable part comes first — the rules and the tool guide are identical from turn to
+    // turn, and providers only reuse a cached prompt while its leading text is unchanged. Today's
+    // date and everything about the current collection follow, because those move.
     w.raw(BASE_PROMPT);
 
     let now = chrono::Local::now();
-    let date_info =
-        format!("Current date: {} ({})", now.format("%Y-%m-%d %H:%M"), now.format("%Z"),);
-    w.section("## Date & Time", &date_info);
+    let date_info = format!("Today is {} ({})", now.format("%Y-%m-%d, %A"), now.format("%Z"));
 
     let conn_id = match state.selected_connection_id() {
         Some(id) => id,
-        None => return w.finish(),
+        None => {
+            w.section("## Date", &date_info);
+            return w.finish();
+        }
     };
     let active = match state.active_connection_by_id(conn_id) {
         Some(c) => c,
-        None => return w.finish(),
+        None => {
+            w.section("## Date", &date_info);
+            return w.finish();
+        }
     };
 
     // Tools section — when connected, the AI has MongoDB tools available.
     let write_tools = if writable { WRITE_TOOLS_GUIDE } else { "" };
     w.section("## Tool Usage Guide", &format!("{TOOL_GUIDE_HEAD}{write_tools}{TOOL_GUIDE_TAIL}"));
+
+    w.section("## Date", &date_info);
 
     let conn_name = state.connection_name(conn_id).unwrap_or_default();
     let db_name = state.selected_database_name();
@@ -632,6 +642,17 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
 mod tests {
     use super::{TOOL_GUIDE_HEAD, TOOL_GUIDE_TAIL, WRITE_TOOLS_GUIDE};
     use crate::ai::tools::TOOL_NAMES;
+
+    /// Providers reuse a cached prompt only while its leading text is unchanged, so the parts
+    /// that move — the date, the current collection — must not sit in front of the tool guide.
+    #[test]
+    fn the_unchanging_rules_come_before_anything_that_moves() {
+        use crate::state::AppState;
+        let prompt = super::build_ai_context(&AppState::new(), &[], true);
+        let date = prompt.find("## Date").expect("the date is in the prompt");
+        let rules = prompt.find("CRITICAL RULES").expect("the rules are in the prompt");
+        assert!(rules < date, "the rules have to lead");
+    }
 
     /// A tool the prompt never mentions is a tool the model never calls.
     #[test]
