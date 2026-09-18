@@ -51,7 +51,7 @@ impl QueryInput {
 
     pub fn placeholder(self) -> &'static str {
         match self {
-            Self::Filter => "Describe what to find…",
+            Self::Filter => "e.g. created this week and action is CREATE",
             Self::Sort => "Describe the order…",
             Self::Projection => "Describe which fields to keep…",
         }

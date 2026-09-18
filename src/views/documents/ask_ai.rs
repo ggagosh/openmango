@@ -36,11 +36,20 @@ impl CollectionView {
         input
     }
 
-    /// Open the box, or close it and give the filter back its focus.
-    pub(crate) fn toggle_ask_ai(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.ask_ai_open = !self.ask_ai_open;
+    /// The panel opened or closed. Closing hands the filter back its focus, so whatever was
+    /// written is where the cursor lands.
+    pub(super) fn set_ask_ai_open(
+        &mut self,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ask_ai_open == open {
+            return;
+        }
+        self.ask_ai_open = open;
         self.ask_ai_error = None;
-        if self.ask_ai_open {
+        if open {
             let input = self.ensure_ask_ai_state(window, cx);
             let focus = input.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
