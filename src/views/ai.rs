@@ -23,7 +23,6 @@ use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::ai::bridge::AiBridge;
-use crate::ai::budget::trim_history_for_context;
 use crate::ai::context::build_ai_context;
 use crate::ai::model_registry;
 use crate::ai::provider::{AiGenerationRequest, generate_text_streaming};
@@ -521,7 +520,6 @@ impl AiView {
             system_prompt.len(),
             history.len()
         );
-        trim_history_for_context(&mut history, system_prompt.len(), None);
 
         let tool_ctx = {
             let s = self.state.read(cx);
@@ -542,10 +540,26 @@ impl AiView {
             })
         };
 
-        // What rig sent and received last turn, so tool results survive into this one.
-        let transcript = self.state.read(cx).ai_chat.transcript.clone();
-        let request =
-            AiGenerationRequest { system_prompt, history, user_prompt: prompt, transcript };
+        // What rig sent and received last turn, so tool results survive into this one, and how
+        // much of it the chosen model can actually hold.
+        let (transcript, context_tokens) = {
+            let state = self.state.read(cx);
+            let settings = &state.settings.ai;
+            let context = state
+                .ai_chat
+                .catalog()
+                .model(settings.provider, &settings.model)
+                .and_then(|model| model.limit.context)
+                .map(|context| context as usize);
+            (state.ai_chat.transcript.clone(), context)
+        };
+        let request = AiGenerationRequest {
+            system_prompt,
+            history,
+            user_prompt: prompt,
+            transcript,
+            context_tokens,
+        };
 
         let provider_label = ai_settings.provider.label().to_string();
         let model_label = ai_settings.model.clone();

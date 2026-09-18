@@ -21,7 +21,6 @@ use crate::ai::errors::AiError;
 use crate::ai::settings::{AiProvider, AiSettings};
 use crate::ai::tools::{MongoContext, StreamEvent, build_agent, truncate_str};
 
-const HISTORY_LIMIT: usize = 18;
 const MAX_OUTPUT_TOKENS: u32 = 4096;
 /// Model calls in one run. A step is cheap; being cut off mid-investigation is not.
 const MAX_TURNS: usize = 30;
@@ -117,6 +116,8 @@ pub struct AiGenerationRequest {
     /// What rig sent and received last turn, tool calls and results included. Empty on the first
     /// turn of a session, when `history` (the visible chat) stands in.
     pub transcript: Vec<RigMessage>,
+    /// The chosen model's context window, from the catalogue. `None` falls back to a safe default.
+    pub context_tokens: Option<usize>,
 }
 
 /// One completed turn.
@@ -132,11 +133,23 @@ pub struct TurnOutcome {
 /// The exact transcript rig produced last turn beats a reconstruction from visible chat text:
 /// it carries the tool calls and their results, so a follow-up builds on what was already found.
 fn conversation_history(request: &AiGenerationRequest) -> Vec<RigMessage> {
-    if request.transcript.is_empty() {
-        to_rig_history(&request.history)
+    let mut history = if request.transcript.is_empty() {
+        let mut visible = request.history.clone();
+        crate::ai::budget::trim_history_for_context(
+            &mut visible,
+            request.system_prompt.chars().count(),
+            request.context_tokens,
+        );
+        to_rig_history(&visible)
     } else {
         request.transcript.clone()
-    }
+    };
+    crate::ai::budget::trim_transcript(
+        &mut history,
+        request.system_prompt.chars().count(),
+        request.context_tokens,
+    );
+    history
 }
 
 pub async fn generate_text(
@@ -661,7 +674,7 @@ fn extract_tool_result(result: &rig::message::ToolResult) -> (String, Option<Str
 
 fn to_rig_history(history: &[ChatMessage]) -> Vec<RigMessage> {
     let mut out = Vec::new();
-    for message in history.iter().rev().take(HISTORY_LIMIT).rev() {
+    for message in history {
         if message.content.trim().is_empty() {
             continue;
         }
@@ -755,6 +768,7 @@ mod tests {
             history: vec![ChatMessage::new(ChatRole::User, "what collections are there?")],
             user_prompt: "and how big is orders?".to_string(),
             transcript,
+            context_tokens: None,
         }
     }
 

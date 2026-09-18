@@ -271,6 +271,7 @@ impl SettingsView {
                     history: Vec::new(),
                     user_prompt: "Return exactly: AI test passed.".to_string(),
                     transcript: Vec::new(),
+                    context_tokens: None,
                 };
                 generate_text(&settings, request).await
             })
