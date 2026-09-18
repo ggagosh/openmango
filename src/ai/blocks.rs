@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier};
@@ -480,7 +479,8 @@ pub struct AiChatState {
     #[serde(skip)]
     pub current_turn_id: Option<Uuid>,
     #[serde(skip)]
-    pub cancel_flag: Option<Arc<AtomicBool>>,
+    /// Cancels the run in flight, including a tool call that has already started.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
     /// Names this conversation in the memory store, so reopening the app continues it rather
@@ -608,11 +608,65 @@ impl AiChatState {
         self.last_error = None;
     }
 
-    pub fn clear_chat(&mut self) {
+    /// Put the conversation in progress away and start an empty one.
+    ///
+    /// Unlike Clear, nothing is deleted: the old conversation stays in the store and in the
+    /// history list, which is what makes starting over safe to do.
+    pub fn start_new_conversation(&mut self) {
+        self.save_conversation();
+        self.reset_visible_chat();
+        // The next turn names it, so an abandoned empty chat never reaches the store.
+        self.conversation_id = None;
+    }
+
+    /// Put the conversation in progress away and bring an earlier one back.
+    pub fn open_conversation(&mut self, id: Uuid) {
+        if self.conversation_id == Some(id) {
+            return;
+        }
+        self.save_conversation();
+        self.entries = match &self.memory {
+            Some(memory) => memory.load_timeline(&id.to_string()).unwrap_or_else(|error| {
+                log::warn!("Could not open the stored conversation: {error}");
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        self.current_turn_id = None;
+        self.last_error = None;
+        self.mentioned_collections.clear();
+        self.conversation_id = Some(id);
+    }
+
+    /// The conversations worth offering, newest first, without the one on screen.
+    pub fn recent_conversations(&self, limit: usize) -> Vec<crate::ai::memory::Conversation> {
+        let Some(memory) = &self.memory else { return Vec::new() };
+        let current = self.conversation_id.map(|id| id.to_string()).unwrap_or_default();
+        memory.recent(&current, limit).unwrap_or_else(|error| {
+            log::warn!("Could not list earlier conversations: {error}");
+            Vec::new()
+        })
+    }
+
+    /// Write what is on screen to the store, so leaving this conversation does not lose it.
+    pub fn save_conversation(&self) {
+        if let (Some(memory), Some(id)) = (&self.memory, self.conversation_id)
+            && !self.entries.is_empty()
+            && let Err(error) = memory.save_timeline(&id.to_string(), &self.entries)
+        {
+            log::warn!("Could not save the conversation: {error}");
+        }
+    }
+
+    fn reset_visible_chat(&mut self) {
         self.entries.clear();
         self.current_turn_id = None;
         self.last_error = None;
         self.mentioned_collections.clear();
+    }
+
+    pub fn clear_chat(&mut self) {
+        self.reset_visible_chat();
         // A cleared chat starts the model over too, or it would answer from a conversation the
         // user can no longer see. The stored conversation goes with it.
         if let (Some(memory), Some(id)) = (&self.memory, self.conversation_id)
@@ -690,6 +744,18 @@ impl AiChatState {
 
     /// The row this result belongs to: the call rig names, or — for rows from before call ids
     /// were recorded — the most recent running call of that tool.
+    /// Close off whatever was still running when the user pressed Stop. The call was dropped
+    /// mid-flight, so its row would otherwise spin for the rest of the session.
+    pub fn stop_running_tools(&mut self) {
+        for entry in &mut self.entries {
+            if let AiChatEntry::ToolActivity(activity) = entry
+                && matches!(activity.status, ToolActivityStatus::Running)
+            {
+                activity.status = ToolActivityStatus::Failed("Stopped.".to_string());
+            }
+        }
+    }
+
     fn running_tool_mut(&mut self, call_id: &str, name: &str) -> Option<&mut ToolActivity> {
         let mut fallback = None;
         for (index, entry) in self.entries.iter().enumerate().rev() {
@@ -808,6 +874,30 @@ impl AiChatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Starting over must not feel like losing the last hour of work.
+    #[test]
+    fn a_new_chat_keeps_the_old_one_and_can_go_back_to_it() {
+        let mut chat = AiChatState {
+            memory: Some(crate::ai::memory::ChatMemory::in_memory().expect("store")),
+            ..AiChatState::default()
+        };
+        let first = chat.conversation_id();
+        chat.begin_turn("how many orders shipped?");
+
+        chat.start_new_conversation();
+        assert!(chat.entries.is_empty(), "the screen is empty");
+        assert_ne!(chat.conversation_id, Some(first), "and the model starts over too");
+
+        chat.open_conversation(first);
+        assert_eq!(chat.conversation_id, Some(first));
+        assert_eq!(chat.entries.len(), 1, "what was asked before came back");
+
+        // Clear is the one that really deletes, and what it deletes cannot be reopened.
+        chat.clear_chat();
+        chat.open_conversation(first);
+        assert!(chat.entries.is_empty());
+    }
 
     #[test]
     fn usage_is_recorded_on_the_turn_it_belongs_to() {

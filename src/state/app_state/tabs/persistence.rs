@@ -66,11 +66,7 @@ impl AppState {
         // The conversation itself goes to the assistant's encrypted store; the workspace keeps
         // only the name of it.
         self.workspace.ai_conversation_id = self.ai_chat.conversation_id;
-        if let (Some(memory), Some(id)) = (&self.ai_chat.memory, self.ai_chat.conversation_id)
-            && let Err(error) = memory.save_timeline(&id.to_string(), &self.ai_chat.entries)
-        {
-            log::warn!("Could not save the conversation: {error}");
-        }
+        self.ai_chat.save_conversation();
 
         self.update_workspace_selection();
     }

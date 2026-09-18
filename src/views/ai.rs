@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::bubble::{Bubble, BubbleVariant};
 use gpui_kit::component::button::ButtonVariants as _;
@@ -61,6 +60,10 @@ pub struct AiView {
     mention_query: Option<String>,
     mention_filtered: Vec<String>,
     mention_selected_index: usize,
+    /// Whether the list of earlier conversations is showing.
+    history_open: bool,
+    /// The list, read from the store when it opens rather than on every frame.
+    recent_conversations: Vec<crate::ai::memory::Conversation>,
 }
 
 impl AiView {
@@ -90,7 +93,34 @@ impl AiView {
             mention_query: None,
             mention_filtered: Vec::new(),
             mention_selected_index: 0,
+            history_open: false,
+            recent_conversations: Vec::new(),
         }
+    }
+
+    /// Show or hide the history. The store is read on the way open, which is the only moment
+    /// the list can have changed under us.
+    fn toggle_history(&mut self, cx: &mut Context<Self>) {
+        self.history_open = !self.history_open;
+        if self.history_open {
+            self.recent_conversations =
+                self.state.read(cx).ai_chat.recent_conversations(RECENT_CONVERSATIONS);
+        }
+        cx.notify();
+    }
+
+    fn open_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Ok(id) = Uuid::parse_str(id) else { return };
+        self.state.update(cx, |state, cx| {
+            state.ai_chat.open_conversation(id);
+            cx.notify();
+        });
+        self.history_open = false;
+        self.tool_group_overrides.clear();
+        // The rows are entirely different now; the revision would otherwise look unchanged.
+        self.timeline_revision = 0;
+        self.scroller = None;
+        cx.notify();
     }
 
     fn ensure_scroller(
@@ -525,7 +555,7 @@ impl AiView {
     ) {
         let ai_settings = self.state.read(cx).settings.ai.clone();
 
-        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel = tokio_util::sync::CancellationToken::new();
 
         // User-submitted turns should always pin the timeline to the latest message.
         self.follow_tail(cx);
@@ -534,7 +564,7 @@ impl AiView {
         self.state.update(cx, |state, cx| {
             state.ai_chat.begin_turn(&prompt);
             state.ai_chat.is_loading = true;
-            state.ai_chat.cancel_flag = Some(cancel_flag.clone());
+            state.ai_chat.cancel = Some(cancel.clone());
             cx.notify();
         });
 
@@ -549,7 +579,7 @@ impl AiView {
         let Some(message_id) = message_id else {
             self.state.update(cx, |state, cx| {
                 state.ai_chat.is_loading = false;
-                state.ai_chat.cancel_flag = None;
+                state.ai_chat.cancel = None;
                 state.ai_chat.last_error =
                     Some("Failed to initialize streaming response.".to_string());
                 cx.notify();
@@ -641,7 +671,7 @@ impl AiView {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
 
         // The same flag the hook reads, so Stop ends the run inside rig's loop.
-        let cancel_for_run = cancel_flag.clone();
+        let cancel_for_run = cancel.clone();
         let task = cx.background_spawn(async move {
             AiBridge::block_on(async move {
                 generate_text_streaming(&ai_settings, request, tool_ctx, cancel_for_run, tx).await
@@ -649,7 +679,7 @@ impl AiView {
         });
 
         let state = self.state.clone();
-        let cancel_for_poll = cancel_flag;
+        let cancel_for_poll = cancel;
         cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
             let span = AiRequestSpan::start(&provider_label, &model_label, &session_label);
             const MAX_EVENTS_PER_FLUSH: usize = 24;
@@ -697,7 +727,7 @@ impl AiView {
             loop {
                 match rx.try_recv() {
                     Ok(event) => {
-                        if cancel_for_poll.load(Ordering::Relaxed) {
+                        if cancel_for_poll.is_cancelled() {
                             cancelled = true;
                             break;
                         }
@@ -722,7 +752,7 @@ impl AiView {
                         flush_pending(&mut pending_events, cx);
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        if cancel_for_poll.load(Ordering::Relaxed) {
+                        if cancel_for_poll.is_cancelled() {
                             cancelled = true;
                             break;
                         }
@@ -743,8 +773,9 @@ impl AiView {
                 span.finish_err(crate::ai::AiErrorKind::Cancelled);
                 cx.update(|cx| {
                     state.update(cx, |s, cx| {
+                        s.ai_chat.stop_running_tools();
                         s.ai_chat.is_loading = false;
-                        s.ai_chat.cancel_flag = None;
+                        s.ai_chat.cancel = None;
                         s.ai_chat.current_turn_id = None;
                         cx.notify();
                     });
@@ -779,7 +810,7 @@ impl AiView {
                         }
                     }
                     s.ai_chat.is_loading = false;
-                    s.ai_chat.cancel_flag = None;
+                    s.ai_chat.cancel = None;
                     s.ai_chat.current_turn_id = None;
                     cx.notify();
                 });
@@ -790,11 +821,12 @@ impl AiView {
 
     fn stop_generation(&self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| {
-            if let Some(flag) = &state.ai_chat.cancel_flag {
-                flag.store(true, Ordering::Relaxed);
+            if let Some(cancel) = &state.ai_chat.cancel {
+                cancel.cancel();
             }
+            state.ai_chat.stop_running_tools();
             state.ai_chat.is_loading = false;
-            state.ai_chat.cancel_flag = None;
+            state.ai_chat.cancel = None;
             state.ai_chat.current_turn_id = None;
             cx.notify();
         });
@@ -855,6 +887,46 @@ impl Render for AiView {
                             });
                         }),
                 )
+            } else {
+                header_buttons
+            };
+
+            // Starting over and going back: neither destroys anything, unlike Clear beside them.
+            let header_buttons = if !is_loading {
+                let view = cx.entity();
+                let new_chat_view = cx.entity();
+                header_buttons
+                    .child(
+                        Button::new("new-chat")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Plus).xsmall())
+                            .tooltip("New chat — this one stays in the history")
+                            .disabled(!has_entries)
+                            .on_click(move |_, _, cx| {
+                                new_chat_view.update(cx, |this, cx| {
+                                    this.state.update(cx, |state, cx| {
+                                        state.ai_chat.start_new_conversation();
+                                        cx.notify();
+                                    });
+                                    this.history_open = false;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("chat-history")
+                            .ghost()
+                            .xsmall()
+                            .selected(self.history_open)
+                            .icon(Icon::new(crate::assets::AppIcon::History).xsmall())
+                            .tooltip("Earlier conversations")
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.toggle_history(cx);
+                                });
+                            }),
+                    )
             } else {
                 header_buttons
             };
@@ -939,6 +1011,75 @@ impl Render for AiView {
                         .child(close_button),
                 )
         };
+
+        let history_panel: Option<AnyElement> = self.history_open.then(|| {
+            let rows: Vec<AnyElement> = self
+                .recent_conversations
+                .iter()
+                .map(|conversation| {
+                    let view = cx.entity();
+                    let id = conversation.id.clone();
+                    div()
+                        .id(ElementId::Name(format!("chat-history-{id}").into()))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .px(spacing::sm())
+                        .py(spacing::xs())
+                        .rounded(crate::theme::borders::radius_sm())
+                        .cursor_pointer()
+                        .hover(|s: gpui_kit::StyleRefinement| {
+                            s.bg(cx.theme().secondary.opacity(0.2))
+                        })
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().foreground)
+                                .child(compact_label(&conversation.title, 96)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground.opacity(0.8))
+                                .child(when_label(conversation.updated_ms)),
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            view.update(cx, |this, cx| this.open_conversation(&id, cx));
+                        })
+                        .into_any_element()
+                })
+                .collect();
+
+            div()
+                .id("chat-history")
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .max_h(px(260.0))
+                .overflow_y_scroll()
+                .mx(spacing::md())
+                .mt(spacing::sm())
+                .p(spacing::xs())
+                .rounded(islands::radius_sm(&appearance))
+                .bg(islands::ai_surface_bg(&appearance, cx))
+                .border_1()
+                .border_color(islands::ai_border(&appearance, cx))
+                .children(if rows.is_empty() {
+                    vec![
+                        div()
+                            .px(spacing::sm())
+                            .py(spacing::xs())
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Nothing earlier yet — this is the first conversation.")
+                            .into_any_element(),
+                    ]
+                } else {
+                    rows
+                })
+                .into_any_element()
+        });
 
         let status_rows: Vec<AnyElement> = Vec::new();
 
@@ -1341,6 +1482,7 @@ impl Render for AiView {
             .overflow_hidden()
             .bg(islands::ai_shell_bg(&appearance, cx))
             .child(header)
+            .children(history_panel)
             .children((!status_rows.is_empty()).then(|| {
                 div()
                     .flex()
@@ -1435,6 +1577,21 @@ fn render_empty_feature(
         .into_any_element()
 }
 
+/// "just now", "2h ago", "Mar 4" — enough to tell one conversation from another.
+fn when_label(updated_ms: i64) -> String {
+    let Some(when) = chrono::DateTime::from_timestamp_millis(updated_ms) else {
+        return String::new();
+    };
+    let elapsed = chrono::Utc::now().signed_duration_since(when);
+    match (elapsed.num_minutes(), elapsed.num_hours(), elapsed.num_days()) {
+        (minutes, _, _) if minutes < 1 => "just now".to_string(),
+        (minutes, _, _) if minutes < 60 => format!("{minutes}m ago"),
+        (_, hours, _) if hours < 24 => format!("{hours}h ago"),
+        (_, _, days) if days < 7 => format!("{days}d ago"),
+        _ => when.format("%b %-d").to_string(),
+    }
+}
+
 fn compact_label(label: &str, max_chars: usize) -> String {
     if label.chars().count() <= max_chars {
         return label.to_string();
@@ -1470,6 +1627,10 @@ impl ToolDetail {
         self != ToolDetail::Collapsed
     }
 }
+
+/// How many earlier conversations the history offers. Further back is what the assistant's own
+/// `recall_conversations` tool is for.
+const RECENT_CONVERSATIONS: usize = 20;
 
 /// How many calls a group shows while it opens itself. A question that walks every collection
 /// runs a dozen tools; all of them at once pushes the answer off the screen.

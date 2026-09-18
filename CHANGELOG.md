@@ -19,9 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
 - Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the whole conversation
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
+- New chat and a list of earlier conversations in the chat header: starting over keeps what came before, and any of the last 20 conversations can be reopened where it left off
 - Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
 
 ### Changed
+- Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
+- When a request fails, the chat says what to do about it: which key to check, which model to pick, or that it is a rate limit that will clear
 - New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
 - The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection
 - Document values are plain text everywhere with one set of rules: numbers, `true`/`false`, ObjectId hex, dates such as `2024-01-31` or RFC 3339 timestamps, `null`, and mongosh forms like `ISODate("…")` or `NumberLong(42)`, replacing the switches and number steppers in inline tree editing, the edit value dialog, and the filter builder

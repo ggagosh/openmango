@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -15,6 +15,7 @@ use rig::providers::{anthropic, gemini, ollama, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 
 use crate::ai::blocks::{ChatMessage, ChatRole};
 use crate::ai::errors::AiError;
@@ -47,16 +48,16 @@ const MAX_TOOL_CALLS: usize = 20;
 struct RunPolicy {
     max_calls: usize,
     calls: Arc<AtomicUsize>,
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
 }
 
 impl RunPolicy {
-    fn new(max_calls: usize, cancel: Arc<AtomicBool>) -> Self {
+    fn new(max_calls: usize, cancel: CancellationToken) -> Self {
         Self { max_calls, calls: Arc::new(AtomicUsize::new(0)), cancel }
     }
 
     fn cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
+        self.cancel.is_cancelled()
     }
 }
 
@@ -192,7 +193,7 @@ pub async fn generate_text_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tool_ctx: Option<MongoContext>,
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
     event_tx: UnboundedSender<StreamEvent>,
 ) -> Result<TurnOutcome, AiError> {
     settings.validate_for_request()?;
@@ -255,7 +256,7 @@ async fn call_gemini(
     } else {
         agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Gemini, error))
+    response.map_err(|error| map_rig_error(AiProvider::Gemini, model, error))
 }
 
 async fn call_openai(
@@ -289,7 +290,7 @@ async fn call_openai(
     } else {
         agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::OpenAi, error))
+    response.map_err(|error| map_rig_error(AiProvider::OpenAi, model, error))
 }
 
 async fn call_anthropic(
@@ -323,7 +324,7 @@ async fn call_anthropic(
     } else {
         agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Anthropic, error))
+    response.map_err(|error| map_rig_error(AiProvider::Anthropic, model, error))
 }
 
 async fn call_openrouter(
@@ -357,7 +358,7 @@ async fn call_openrouter(
     } else {
         agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::OpenRouter, error))
+    response.map_err(|error| map_rig_error(AiProvider::OpenRouter, model, error))
 }
 
 async fn call_ollama(
@@ -408,7 +409,7 @@ async fn call_ollama(
     } else {
         agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Ollama, error))
+    response.map_err(|error| map_rig_error(AiProvider::Ollama, model, error))
 }
 
 /// Give the agent the conversation store, wrapped in the window policy that decides how much of
@@ -455,7 +456,7 @@ async fn call_gemini_streaming(
                 .agent(model)
                 .preamble(&request.system_prompt)
                 .max_tokens(MAX_OUTPUT_TOKENS as u64)
-                .add_hook(policy),
+                .add_hook(policy.clone()),
             &request,
         ),
         tool_ctx,
@@ -470,7 +471,15 @@ async fn call_gemini_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Gemini, request.price.as_ref(), event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::Gemini,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_openai_streaming(
@@ -501,7 +510,7 @@ async fn call_openai_streaming(
                 .agent(model)
                 .preamble(&request.system_prompt)
                 .max_tokens(MAX_OUTPUT_TOKENS as u64)
-                .add_hook(policy),
+                .add_hook(policy.clone()),
             &request,
         ),
         tool_ctx,
@@ -516,7 +525,15 @@ async fn call_openai_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::OpenAi, request.price.as_ref(), event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::OpenAi,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_anthropic_streaming(
@@ -547,7 +564,7 @@ async fn call_anthropic_streaming(
                 .agent(model)
                 .preamble(&request.system_prompt)
                 .max_tokens(MAX_OUTPUT_TOKENS as u64)
-                .add_hook(policy),
+                .add_hook(policy.clone()),
             &request,
         ),
         tool_ctx,
@@ -562,7 +579,15 @@ async fn call_anthropic_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Anthropic, request.price.as_ref(), event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::Anthropic,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_openrouter_streaming(
@@ -593,7 +618,7 @@ async fn call_openrouter_streaming(
                 .agent(model)
                 .preamble(&request.system_prompt)
                 .max_tokens(MAX_OUTPUT_TOKENS as u64)
-                .add_hook(policy),
+                .add_hook(policy.clone()),
             &request,
         ),
         tool_ctx,
@@ -608,7 +633,15 @@ async fn call_openrouter_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::OpenRouter, request.price.as_ref(), event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::OpenRouter,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_ollama_streaming(
@@ -656,7 +689,7 @@ async fn call_ollama_streaming(
                 .agent(model)
                 .preamble(&request.system_prompt)
                 .max_tokens(MAX_OUTPUT_TOKENS as u64)
-                .add_hook(policy),
+                .add_hook(policy.clone()),
             &request,
         ),
         tool_ctx,
@@ -671,7 +704,15 @@ async fn call_ollama_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Ollama, request.price.as_ref(), event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::Ollama,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +723,8 @@ async fn consume_stream(
     stream: &mut StreamingResult,
     provider: AiProvider,
     price: Option<&crate::ai::catalog::Cost>,
+    model: &str,
+    policy: &RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<TurnOutcome, AiError> {
     let mut full_text = String::new();
@@ -693,7 +736,21 @@ async fn consume_stream(
 
     log::debug!("[ai-stream] starting consume_stream for provider={}", provider.label());
 
-    while let Some(chunk) = stream.next().await {
+    // Stop has to reach a tool that is already running: dropping the stream future drops the
+    // database call with it, instead of waiting for a collection scan to finish first.
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            () = policy.cancel.cancelled() => {
+                log::debug!("[ai-stream] stopped mid-run after {tool_call_count} tool calls");
+                break;
+            }
+            chunk = stream.next() => match chunk {
+                Some(chunk) => chunk,
+                None => break,
+            },
+        };
+
         match chunk {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
                 full_text.push_str(&text.text);
@@ -787,7 +844,7 @@ async fn consume_stream(
                     }
                     break;
                 }
-                return Err(map_provider_error(provider, error.to_string()));
+                return Err(map_provider_error(provider, model, error.to_string()));
             }
         }
     }
@@ -852,26 +909,51 @@ fn to_rig_history(history: &[ChatMessage]) -> Vec<RigMessage> {
     out
 }
 
-fn map_provider_error(provider: AiProvider, message: String) -> AiError {
+/// Turn whatever the provider said into the one thing the user can act on.
+///
+/// Providers report the same condition half a dozen ways — a bare 401, "invalid x-api-key",
+/// "Incorrect API key provided" — so the match is on both the status code and the words.
+fn map_provider_error(provider: AiProvider, model: &str, message: String) -> AiError {
     let provider_name = provider.label().to_string();
     let lower = message.to_lowercase();
     if lower.contains("cancel") || lower.contains("abort") {
         return AiError::Cancelled;
     }
-    if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") {
+    if lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("api key")
+        || lower.contains("api-key")
+        || lower.contains("authentication")
+    {
         return AiError::Unauthorized { provider: provider_name };
     }
-    if lower.contains("429") || lower.contains("rate") {
+    if lower.contains("429") || lower.contains("rate limit") || lower.contains("quota") {
         return AiError::RateLimited { provider: provider_name };
     }
-    if lower.contains("timeout") {
+    // A 404 from a chat endpoint is the model, not the URL: the URL is ours and it is right.
+    if lower.contains("404")
+        || lower.contains("model_not_found")
+        || (lower.contains("model")
+            && (lower.contains("not found") || lower.contains("does not exist")))
+    {
+        return AiError::UnknownModel { provider: provider_name, model: model.to_string() };
+    }
+    if lower.contains("timeout") || lower.contains("timed out") {
         return AiError::Timeout(message);
+    }
+    if lower.contains("dns")
+        || lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("tcp connect")
+    {
+        return AiError::Network(message);
     }
     AiError::Provider(message)
 }
 
-fn map_rig_error(provider: AiProvider, error: PromptError) -> AiError {
-    map_provider_error(provider, error.to_string())
+fn map_rig_error(provider: AiProvider, model: &str, error: PromptError) -> AiError {
+    map_provider_error(provider, model, error.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -926,6 +1008,26 @@ pub async fn detect_ollama_models(base_url: &str) -> Result<Vec<String>, AiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A provider says the same thing half a dozen ways; the user needs one instruction.
+    #[test]
+    fn a_provider_failure_is_turned_into_something_to_do_about_it() {
+        let map = |message: &str| {
+            map_provider_error(AiProvider::OpenAi, "gpt-5", message.to_string()).user_message()
+        };
+
+        assert!(map("401 Unauthorized").contains("Settings > AI"));
+        assert!(map("Incorrect API key provided: sk-...").contains("Settings > AI"));
+        assert!(map("429 Too Many Requests").contains("rate limiting"));
+        assert!(map("You exceeded your current quota").contains("rate limiting"));
+        assert!(map("404 model_not_found").contains("gpt-5"), "name the model that is missing");
+        assert!(map("error sending request: tcp connect error").contains("proxy"));
+        assert_eq!(map("request was cancelled"), "Stopped.");
+
+        // Anything unrecognised still says what the provider said, and what to try.
+        let unknown = map("500 internal server error");
+        assert!(unknown.contains("500 internal server error") && unknown.contains("another model"));
+    }
 
     fn request(history: Vec<ChatMessage>) -> AiGenerationRequest {
         AiGenerationRequest {

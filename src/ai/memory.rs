@@ -32,6 +32,16 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 /// is not, and OWASP's agent-memory guidance asks for a size limit on anything persisted.
 const MAX_STORED_CHARS: usize = 5_000;
 
+/// One conversation in the history list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conversation {
+    pub id: String,
+    /// When it was last written to, as a Unix timestamp in milliseconds.
+    pub updated_ms: i64,
+    /// What it was about: the first thing the user asked, shortened.
+    pub title: String,
+}
+
 /// One hit from a search over past conversations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recall {
@@ -259,6 +269,40 @@ impl ChatMemory {
         let count: i64 =
             connection.query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))?;
         Ok(count as usize)
+    }
+
+    /// The conversations to offer, newest first.
+    ///
+    /// A conversation is named by the first thing that was asked in it, which is what the user
+    /// will recognise; there is nowhere to put a title the model wrote, and asking it for one
+    /// would cost a request per chat.
+    pub fn recent(&self, exclude: &str, limit: usize) -> Result<Vec<Conversation>> {
+        let rows: Vec<(String, i64)> = {
+            let connection = self.lock()?;
+            let mut statement = connection.prepare(
+                "SELECT id, updated_ms FROM conversations
+                 WHERE id <> ?1 ORDER BY updated_ms DESC, rowid DESC LIMIT ?2",
+            )?;
+            statement
+                .query_map(params![exclude, limit as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(Result::ok)
+                .collect()
+        };
+
+        let mut conversations = Vec::with_capacity(rows.len());
+        for (id, updated_ms) in rows {
+            let title = self
+                .load_messages(&id)?
+                .iter()
+                .find(|message| matches!(message, RigMessage::User { .. }))
+                .map(|message| snippet(&message_text(message)))
+                .unwrap_or_default();
+            if title.is_empty() {
+                continue;
+            }
+            conversations.push(Conversation { id, updated_ms, title });
+        }
+        Ok(conversations)
     }
 
     /// Find text from earlier conversations.
@@ -521,6 +565,32 @@ mod tests {
 
         store.forget_everything().expect("forget all");
         assert_eq!(store.conversation_count().expect("count"), 0);
+    }
+
+    #[test]
+    fn the_history_lists_conversations_newest_first_under_what_was_asked() {
+        let store = memory();
+        store
+            .append_messages("older", vec![RigMessage::user("how many orders shipped?")])
+            .expect("write");
+        store
+            .append_messages("newer", vec![RigMessage::user("index the audit log")])
+            .expect("write");
+
+        let recent = store.recent("", 10).expect("recent");
+        assert_eq!(
+            recent.iter().map(|chat| chat.id.as_str()).collect::<Vec<_>>(),
+            ["newer", "older"],
+            "the one used last is the one offered first"
+        );
+        assert_eq!(recent[0].title, "index the audit log");
+
+        let without_current = store.recent("newer", 10).expect("recent");
+        assert_eq!(without_current.len(), 1, "the conversation in progress is not in its own list");
+
+        // A conversation with nothing the user said has no name to show, so it is left out.
+        store.append_messages("empty", vec![RigMessage::assistant("hello?")]).expect("write");
+        assert!(store.recent("", 10).expect("recent").iter().all(|chat| chat.id != "empty"));
     }
 
     #[test]
