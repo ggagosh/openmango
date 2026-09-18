@@ -6,9 +6,13 @@
 //! Two decisions shape it. First, what is kept: the dialogue, never the tool results. A
 //! `find_documents` result is a copy of production rows, and keeping those on disk would turn a
 //! chat log into a durable extract of the user's database — so tool calls and their results are
-//! dropped on the way in, and the model re-runs a query when it needs the rows again. Second, how
-//! it is kept: every row is sealed with the same AES-256-GCM construction and keychain-held key as
-//! the app's change history, and nothing is indexed in the clear, so search decrypts as it scans.
+//! dropped on the way in, and the model re-runs a query when it needs the rows again.
+//!
+//! Second, how it is kept: the file is a SQLCipher database, encrypted whole — pages, indexes,
+//! journals and WAL — with a key held in the OS keychain. That is the shape desktop applications
+//! settle on (Signal Desktop is the reference), and it covers the table names, row counts and
+//! timestamps that encrypting each row on its own would leave in the clear. Temporary files are
+//! held in memory so no page is spilled to disk unencrypted.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -18,8 +22,6 @@ use rig::completion::{AssistantContent, Message as RigMessage};
 use rig::memory::{ConversationMemory, MemoryError};
 use rig::message::UserContent;
 use rusqlite::{Connection, OptionalExtension as _, params};
-
-use crate::history::crypto::HistoryCipher;
 
 /// How long a conversation is kept by default. Thirty days is what ChatGPT's temporary chats,
 /// OpenAI's abuse logs and Claude Code's local transcripts all settle on. `0` keeps them until
@@ -45,7 +47,6 @@ pub struct ChatMemory {
     // SQLite writes here are small and local; a mutex costs less than a worker thread and keeps
     // the store usable from rig's async trait without a runtime of its own.
     connection: Arc<Mutex<Connection>>,
-    cipher: Arc<HistoryCipher>,
 }
 
 impl std::fmt::Debug for ChatMemory {
@@ -54,14 +55,18 @@ impl std::fmt::Debug for ChatMemory {
     }
 }
 
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS conversations (
+const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS timelines (
+         conversation_id TEXT PRIMARY KEY,
+         entries         TEXT NOT NULL
+     );
+     CREATE TABLE IF NOT EXISTS conversations (
          id          TEXT PRIMARY KEY,
          updated_ms  INTEGER NOT NULL
      );
      CREATE TABLE IF NOT EXISTS messages (
          conversation_id TEXT NOT NULL,
          seq             INTEGER NOT NULL,
-         payload         BLOB NOT NULL,
+         payload         TEXT NOT NULL,
          PRIMARY KEY (conversation_id, seq)
      );";
 
@@ -71,44 +76,62 @@ impl ChatMemory {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("Could not create {}", parent.display()))?;
         }
-        let connection = Connection::open(&path)
-            .with_context(|| format!("Could not open {}", path.display()))?;
-        connection.execute_batch(&format!(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             {SCHEMA}
-             PRAGMA user_version = 2;"
-        ))?;
-        let memory = Self { connection: Arc::new(Mutex::new(connection)), cipher: cipher(key)? };
+        let memory = match Self::open_encrypted(&path, key) {
+            Ok(memory) => memory,
+            Err(error) => {
+                // A file written before this store was encrypted — or with a key that is gone —
+                // cannot be read and is not worth keeping: it holds at most a month of chat.
+                log::warn!("Starting the assistant's memory over: {error}");
+                let _ = std::fs::remove_file(&path);
+                for suffix in ["-wal", "-shm"] {
+                    let _ = std::fs::remove_file(path.with_extension(format!("sqlite3{suffix}")));
+                }
+                Self::open_encrypted(&path, key)?
+            }
+        };
         memory.prune(retention_days)?;
         Ok(memory)
     }
 
+    fn open_encrypted(path: &std::path::Path, key: [u8; 32]) -> Result<Self> {
+        let connection =
+            Connection::open(path).with_context(|| format!("Could not open {}", path.display()))?;
+        // The key comes first: SQLCipher reads nothing until it is set.
+        connection
+            .pragma_update(None, "key", format!("x'{}'", hex(&key)))
+            .context("The assistant's memory could not be unlocked")?;
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             -- Keep scratch pages in memory so nothing is spilled to disk in the clear.
+             PRAGMA temp_store = MEMORY;",
+        )?;
+        // Proves the key is right; on a wrong key SQLCipher fails here rather than at open.
+        connection
+            .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
+            .context("The assistant's memory is not readable with this key")?;
+        connection.execute_batch(&format!("{SCHEMA} PRAGMA user_version = 3;"))?;
+        Ok(Self { connection: Arc::new(Mutex::new(connection)) })
+    }
+
     /// The store used when there is nowhere to write: the conversation still works, it is just
     /// forgotten when the app closes.
-    pub fn in_memory(key: [u8; 32]) -> Result<Self> {
+    pub fn in_memory() -> Result<Self> {
         let connection = Connection::open_in_memory()?;
         connection.execute_batch(SCHEMA)?;
-        Ok(Self { connection: Arc::new(Mutex::new(connection)), cipher: cipher(key)? })
+        Ok(Self { connection: Arc::new(Mutex::new(connection)) })
     }
 
     fn load_messages(&self, conversation_id: &str) -> Result<Vec<RigMessage>> {
         let connection = self.lock()?;
         let mut statement = connection
-            .prepare("SELECT seq, payload FROM messages WHERE conversation_id = ?1 ORDER BY seq")?;
-        let rows = statement.query_map(params![conversation_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?;
+            .prepare("SELECT payload FROM messages WHERE conversation_id = ?1 ORDER BY seq")?;
+        let rows = statement.query_map(params![conversation_id], |row| row.get::<_, String>(0))?;
         let mut messages = Vec::new();
         for row in rows {
-            let (seq, sealed) = row?;
-            // A row that cannot be opened or read is skipped rather than failing the turn: an old
-            // conversation is worth less than the one being had now.
-            match self
-                .cipher
-                .open(&aad(conversation_id, seq), &sealed)
-                .and_then(|plain| Ok(serde_json::from_slice::<RigMessage>(&plain)?))
-            {
+            // A message this version can no longer read is skipped rather than failing the turn:
+            // an old conversation is worth less than the one being had now.
+            match serde_json::from_str(&row?) {
                 Ok(message) => messages.push(message),
                 Err(error) => log::warn!("Skipping an unreadable stored message: {error}"),
             }
@@ -135,12 +158,10 @@ impl ChatMemory {
 
         for message in &messages {
             seq += 1;
-            let plaintext = serde_json::to_vec(message)?;
-            let sealed = self.cipher.seal(&aad(conversation_id, seq), &plaintext)?;
             transaction.execute(
                 "INSERT OR REPLACE INTO messages (conversation_id, seq, payload)
                  VALUES (?1, ?2, ?3)",
-                params![conversation_id, seq, sealed],
+                params![conversation_id, seq, serde_json::to_string(message)?],
             )?;
         }
         transaction.execute(
@@ -152,11 +173,53 @@ impl ChatMemory {
         Ok(())
     }
 
+    /// Keep the chat as the user sees it, so reopening the app shows the conversation back.
+    ///
+    /// It lives here rather than in the workspace file because the workspace file is plain text:
+    /// the questions and answers belong behind the same key as everything else.
+    pub fn save_timeline(
+        &self,
+        conversation_id: &str,
+        entries: &[crate::ai::AiChatEntry],
+    ) -> Result<()> {
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO timelines (conversation_id, entries) VALUES (?1, ?2)
+             ON CONFLICT(conversation_id) DO UPDATE SET entries = ?2",
+            params![conversation_id, serde_json::to_string(entries)?],
+        )?;
+        connection.execute(
+            "INSERT INTO conversations (id, updated_ms) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET updated_ms = ?2",
+            params![conversation_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_timeline(&self, conversation_id: &str) -> Result<Vec<crate::ai::AiChatEntry>> {
+        let connection = self.lock()?;
+        let entries: Option<String> = connection
+            .query_row(
+                "SELECT entries FROM timelines WHERE conversation_id = ?1",
+                params![conversation_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match entries {
+            Some(entries) => Ok(serde_json::from_str(&entries).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Drop a conversation, so clearing the chat really forgets it.
     pub fn forget(&self, conversation_id: &str) -> Result<()> {
         let connection = self.lock()?;
         connection
             .execute("DELETE FROM messages WHERE conversation_id = ?1", params![conversation_id])?;
+        connection.execute(
+            "DELETE FROM timelines WHERE conversation_id = ?1",
+            params![conversation_id],
+        )?;
         connection.execute("DELETE FROM conversations WHERE id = ?1", params![conversation_id])?;
         Ok(())
     }
@@ -164,7 +227,9 @@ impl ChatMemory {
     /// Erase every stored conversation, for the control in Settings.
     pub fn forget_everything(&self) -> Result<()> {
         let connection = self.lock()?;
-        connection.execute_batch("DELETE FROM messages; DELETE FROM conversations; VACUUM;")?;
+        connection.execute_batch(
+            "DELETE FROM messages; DELETE FROM timelines; DELETE FROM conversations; VACUUM;",
+        )?;
         Ok(())
     }
 
@@ -176,11 +241,15 @@ impl ChatMemory {
         }
         let cutoff = now_ms() - days * 24 * 60 * 60 * 1_000;
         let connection = self.lock()?;
-        connection.execute(
-            "DELETE FROM messages WHERE conversation_id IN
-                 (SELECT id FROM conversations WHERE updated_ms < ?1)",
-            params![cutoff],
-        )?;
+        for table in ["messages", "timelines"] {
+            connection.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE conversation_id IN
+                         (SELECT id FROM conversations WHERE updated_ms < ?1)"
+                ),
+                params![cutoff],
+            )?;
+        }
         Ok(connection
             .execute("DELETE FROM conversations WHERE updated_ms < ?1", params![cutoff])?)
     }
@@ -269,14 +338,8 @@ impl ConversationMemory for ChatMemory {
     }
 }
 
-fn cipher(key: [u8; 32]) -> Result<Arc<HistoryCipher>> {
-    Ok(Arc::new(HistoryCipher::new(key)?))
-}
-
-/// Binds a row to its place: a sealed message cannot be moved to another conversation or another
-/// position without the tag failing.
-fn aad(conversation_id: &str, seq: i64) -> Vec<u8> {
-    format!("ai-memory:{conversation_id}:{seq}").into_bytes()
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn now_ms() -> i64 {
@@ -347,10 +410,8 @@ fn snippet(text: &str) -> String {
 mod tests {
     use super::*;
 
-    const KEY: [u8; 32] = [7; 32];
-
     fn memory() -> ChatMemory {
-        ChatMemory::in_memory(KEY).expect("memory store")
+        ChatMemory::in_memory().expect("memory store")
     }
 
     #[test]
@@ -402,45 +463,49 @@ mod tests {
         assert!(!stored.contains("find_documents"), "no tool call is left without its result");
     }
 
-    #[test]
-    fn what_is_written_to_the_file_is_not_readable() {
-        let store = memory();
-        store
-            .append_messages("chat-1", vec![RigMessage::user("secret question about payroll")])
-            .expect("append");
+    const KEY: [u8; 32] = [7; 32];
 
-        let connection = store.connection.lock().expect("lock");
-        let payload: Vec<u8> = connection
-            .query_row("SELECT payload FROM messages LIMIT 1", [], |row| row.get(0))
-            .expect("row");
-        let raw = String::from_utf8_lossy(&payload);
-        assert!(!raw.contains("payroll"), "the row is sealed, not stored as text");
-    }
-
-    /// A sealed row is bound to its conversation and position, so moving it is detected.
+    /// The file is the thing an attacker gets. It must give up nothing: not the text, not even
+    /// the fact that it is a SQLite database.
     #[test]
-    fn a_row_moved_to_another_conversation_does_not_open() {
-        let store = memory();
-        store.append_messages("chat-1", vec![RigMessage::user("about payroll")]).expect("append");
+    fn the_file_on_disk_reveals_nothing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("ai-memory.sqlite3");
         {
-            let connection = store.connection.lock().expect("lock");
-            connection
-                .execute(
-                    "INSERT INTO messages (conversation_id, seq, payload)
-                     SELECT 'chat-2', 0, payload FROM messages WHERE conversation_id = 'chat-1'",
-                    [],
-                )
-                .expect("move the row");
-            connection
-                .execute(
-                    "INSERT INTO conversations (id, updated_ms) VALUES ('chat-2', ?1)",
-                    params![now_ms()],
-                )
-                .expect("conversation");
+            let store = ChatMemory::open(path.clone(), KEY, DEFAULT_RETENTION_DAYS).expect("open");
+            store
+                .append_messages("chat-1", vec![RigMessage::user("secret question about payroll")])
+                .expect("append");
         }
 
-        assert!(store.load_messages("chat-2").expect("load").is_empty(), "the tag fails");
-        assert_eq!(store.load_messages("chat-1").expect("load").len(), 1, "its own row is fine");
+        let bytes = std::fs::read(&path).expect("read the file");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("payroll"), "the conversation is readable on disk");
+        assert!(!text.contains("chat-1"), "even the conversation id is exposed");
+        assert!(!bytes.starts_with(b"SQLite format 3"), "the header names the file a database");
+    }
+
+    /// Without the keychain entry the store is unreadable. It starts over rather than failing,
+    /// because a month of chat is not worth blocking the assistant on.
+    #[test]
+    fn another_key_does_not_open_what_was_written() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("ai-memory.sqlite3");
+        {
+            let store = ChatMemory::open(path.clone(), KEY, DEFAULT_RETENTION_DAYS).expect("open");
+            store
+                .append_messages("chat-1", vec![RigMessage::user("about payroll")])
+                .expect("append");
+        }
+
+        assert!(
+            ChatMemory::open_encrypted(&path, [9; 32]).is_err(),
+            "the wrong key must not open the store"
+        );
+
+        let reopened = ChatMemory::open(path, [9; 32], DEFAULT_RETENTION_DAYS).expect("start over");
+        assert!(reopened.load_messages("chat-1").expect("load").is_empty());
+        assert_eq!(reopened.conversation_count().expect("count"), 0);
     }
 
     #[test]

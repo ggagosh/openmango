@@ -33,9 +33,15 @@ pub struct WorkspaceState {
     /// Draft input text in the AI panel.
     #[serde(default)]
     pub ai_draft_input: String,
-    /// Persisted AI chat entries.
-    #[serde(default)]
+    /// The chat as the user sees it.
+    ///
+    /// Read from older workspaces, never written again: what was said now lives in the
+    /// assistant's encrypted store, and this file is plain text on disk.
+    #[serde(default, skip_serializing)]
     pub ai_entries: Vec<AiChatEntry>,
+    /// Names the conversation in the assistant's store.
+    #[serde(default)]
+    pub ai_conversation_id: Option<Uuid>,
     /// Persisted width of AI side panel (px), restored on reopen/restart.
     #[serde(default)]
     pub ai_panel_width: Option<f32>,
@@ -69,8 +75,8 @@ pub struct WorkspaceTab {
     pub ai_panel_open: bool,
     #[serde(default)]
     pub ai_draft_input: String,
-    /// Unified timeline entries.
-    #[serde(default)]
+    /// Unified timeline entries. Read from older workspaces, never written again.
+    #[serde(default, skip_serializing)]
     pub ai_entries: Vec<AiChatEntry>,
     /// Legacy: kept for backwards-compatible deserialization of old workspaces.
     #[serde(default)]

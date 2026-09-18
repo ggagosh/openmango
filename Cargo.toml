@@ -72,7 +72,10 @@ axum = "0.8.9"
 tokio-util = "0.7.19"
 tower-http = { version = "0.6.8", features = ["limit"] }
 schemars = "1.2.1"
-rusqlite = { version = "0.37", features = ["bundled"] }
+# SQLCipher rather than plain SQLite: the assistant's conversation store is encrypted whole —
+# file, indexes, WAL and journals — with a key from the OS keychain. A database opened without a
+# key behaves exactly like SQLite, so the change-history store is unaffected.
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

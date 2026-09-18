@@ -348,16 +348,16 @@ impl AppRoot {
                     Ok(memory) => Some(memory),
                     Err(error) => {
                         log::error!("Could not open the assistant's memory: {error}");
-                        crate::ai::memory::ChatMemory::in_memory(key).ok()
+                        crate::ai::memory::ChatMemory::in_memory().ok()
                     }
                 },
-                // No key, or the user asked us not to remember: this run only.
-                Some(key) => crate::ai::memory::ChatMemory::in_memory(key).ok(),
+                // The user asked us not to remember: this run only.
+                Some(_) => crate::ai::memory::ChatMemory::in_memory().ok(),
                 None => {
                     log::warn!(
                         "Without a keychain entry the assistant keeps this conversation in memory only"
                     );
-                    crate::ai::memory::ChatMemory::in_memory(rand::random()).ok()
+                    crate::ai::memory::ChatMemory::in_memory().ok()
                 }
             };
             cx.update(|cx| {

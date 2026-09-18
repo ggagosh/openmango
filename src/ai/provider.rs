@@ -703,7 +703,12 @@ async fn consume_stream(
                 let name = tool_call.function.name.clone();
                 let args_full = tool_call.function.arguments.to_string();
                 let args_preview = truncate_str(&args_full, 200).to_string();
-                log::debug!("[ai-stream] tool_call #{tool_call_count}: {name} args={args_preview}");
+                // The arguments carry filters and values from the user's database; the log says
+                // what ran and how big it was, never what was in it.
+                log::debug!(
+                    "[ai-stream] tool_call #{tool_call_count}: {name} ({} bytes of arguments)",
+                    args_full.len()
+                );
                 let _ = event_tx.send(StreamEvent::ToolCallStart {
                     call_id: internal_call_id,
                     name,
@@ -721,8 +726,8 @@ async fn consume_stream(
                 let name = tool_result.name.clone();
                 let (result_preview, result_json) = extract_tool_result(&tool_result);
                 log::debug!(
-                    "[ai-stream] tool_result #{turn_count}: {name} preview={}",
-                    truncate_str(&result_preview, 100)
+                    "[ai-stream] tool_result #{turn_count}: {name} ({} bytes)",
+                    result_preview.len()
                 );
                 let event = match tool_failure_reason(result_json.as_deref().unwrap_or_default()) {
                     Some(reason) => {

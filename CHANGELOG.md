@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Match system appearance in Settings and in the command palette's theme list switches between Mango Dark and Mango Light with the system's dark or light mode; choosing a theme turns it off
 - AI models come from a models.dev catalogue: Fast, Balanced and Powerful presets per provider, a searchable picker that shows each model's context size and price, and a Refresh that fetches the latest list; a snapshot ships with the app so the picker is right offline
 - OpenRouter as an AI provider, offering its whole searchable catalogue of tool-calling models instead of presets
-- The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. What was said is encrypted on your machine with a key from the system keychain; tool results, which hold your data, are never written to disk. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
+- The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
 - Every answer shows what it cost in tokens and can be copied; an answer that failed can be tried again
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
 
