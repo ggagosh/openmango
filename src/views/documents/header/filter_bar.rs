@@ -5,7 +5,7 @@ use gpui_kit::component::Disableable as _;
 use gpui_kit::component::RopeExt as _;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::input::EditorState;
+use gpui_kit::component::input::{EditorState, Input};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -17,6 +17,80 @@ use crate::theme::spacing;
 use crate::views::documents::CollectionView;
 
 use super::super::query_editor::{query_editor, query_editor_height};
+
+impl CollectionView {
+    /// The box the description goes in. It sits under the filter it writes, so the answer lands
+    /// where the eye already is.
+    fn render_ask_ai_row(&self, control_height: Pixels, cx: &mut Context<Self>) -> Div {
+        let view = cx.entity();
+        let input = self.ask_ai_state.clone();
+        let busy = self.ask_ai_busy;
+
+        let mut row = div().flex().items_start().gap(spacing::sm()).child(
+            div()
+                .h(control_height)
+                .flex()
+                .items_center()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Ask AI"),
+        );
+        if let Some(input) = input.clone() {
+            row = row.child(
+                div().flex_1().min_w(px(0.0)).child(
+                    Input::new(&input)
+                        .with_size(Size::Medium)
+                        .h(control_height)
+                        .disabled(busy)
+                        .font_family(crate::theme::fonts::ui()),
+                ),
+            );
+        }
+        row = row.child(
+            crate::components::busy_label(
+                Button::new("ask-ai-write").primary(),
+                Size::Medium,
+                "Write",
+                busy,
+            )
+            .h(control_height)
+            .on_click({
+                let view = view.clone();
+                move |_, window, cx| {
+                    view.update(cx, |view, cx| view.submit_ask_ai(window, cx));
+                }
+            }),
+        );
+
+        let note = match (&self.ask_ai_error, busy) {
+            (Some(error), _) => Some((error.clone(), cx.theme().warning)),
+            (None, true) => Some(("Writing the filter…".to_string(), cx.theme().muted_foreground)),
+            (None, false) => Some((
+                "Enter writes it into the filter · Escape closes · nothing runs until you press \
+                 Find"
+                    .to_string(),
+                cx.theme().muted_foreground,
+            )),
+        };
+        // The editor lets Escape through when it has nothing of its own to dismiss, so the box
+        // closes on it and hands the filter back its focus.
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .on_action(cx.listener(|view, _: &gpui_kit::component::input::Escape, window, cx| {
+                if view.ask_ai_open {
+                    view.toggle_ask_ai(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(row);
+        if let Some((text, color)) = note {
+            column = column.child(div().text_xs().text_color(color).child(text));
+        }
+        column
+    }
+}
 
 /// One line of 12px text at the app's line height, reserved whether or not there is a message.
 const FEEDBACK_LINE_HEIGHT: Pixels = px(18.0);
@@ -167,7 +241,31 @@ impl CollectionView {
                     }
                 }
             });
-        let primary = div().flex().items_start().gap(spacing::sm()).child(input_row).child(find);
+        // Describing a filter is occasional, so it gets an icon beside Find rather than a box
+        // that is always open. It only exists when the assistant is set up.
+        let ai_available = self.state.read(cx).ai_assistant_available();
+        let ask_button = ai_available.then(|| {
+            let view = view.clone();
+            Button::new("ask-ai-filter")
+                .ghost()
+                .with_size(Size::Medium)
+                .h(control_height)
+                .icon(Icon::new(crate::assets::AppIcon::Sparkles).small())
+                .selected(self.ask_ai_open)
+                .tooltip("Describe the filter in words")
+                .disabled(disabled)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| view.toggle_ask_ai(window, cx));
+                })
+        });
+
+        let primary = div()
+            .flex()
+            .items_start()
+            .gap(spacing::sm())
+            .child(input_row)
+            .children(ask_button)
+            .child(find);
 
         let mut tools = div()
             .flex()
@@ -296,6 +394,10 @@ impl CollectionView {
             .gap(px(4.0))
             .font_family(crate::theme::fonts::ui())
             .child(primary)
+            .children(
+                (ai_available && self.ask_ai_open)
+                    .then(|| self.render_ask_ai_row(control_height, cx)),
+            )
             .child(tools);
         let feedback = if let Some(error) = &self.filter_error_message {
             Some((error.clone(), cx.theme().warning))

@@ -6,6 +6,7 @@ pub mod budget;
 pub mod catalog;
 pub mod context;
 pub mod errors;
+pub mod inline;
 pub mod memory;
 pub mod model_registry;
 pub mod naming;
