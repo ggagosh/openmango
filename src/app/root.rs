@@ -316,18 +316,55 @@ impl AppRoot {
         .detach();
     }
 
-    /// Open the store the assistant remembers conversations in. If it cannot be opened the app
-    /// carries on with memory that lasts only as long as this run.
+    /// Open the store the assistant remembers conversations in.
+    ///
+    /// The key lives in the OS keychain, like the History key. If it cannot be read or written,
+    /// the assistant keeps the conversation in memory for this run only — writing it to disk
+    /// unprotected would be worse than forgetting it.
     fn open_ai_memory(state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let key_read = KeyStore::read_memory_key(cx);
         let path = state.read(cx).config.ai_memory_path();
-        let memory = match crate::ai::memory::ChatMemory::open(path) {
-            Ok(memory) => Some(memory),
-            Err(error) => {
-                log::error!("Could not open the assistant's memory: {error}");
-                crate::ai::memory::ChatMemory::in_memory().ok()
-            }
-        };
-        state.update(cx, |state, _| state.ai_chat.memory = memory);
+        let retention = state.read(cx).settings.ai.memory_retention_days as i64;
+        let remember = state.read(cx).settings.ai.remember_conversations;
+        let state = state.clone();
+        cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let key = match key_read.await {
+                Ok(Some(key)) => <[u8; 32]>::try_from(key).ok(),
+                Ok(None) => {
+                    let key: [u8; 32] = rand::random();
+                    let write = cx.update(|cx| KeyStore::write_memory_key(cx, &key));
+                    write.await.is_ok().then_some(key)
+                }
+                Err(error) => {
+                    log::error!("The assistant's memory key could not be read: {error}");
+                    None
+                }
+            };
+
+            let memory = match key {
+                Some(key) if remember => match crate::ai::memory::ChatMemory::open(
+                    path, key, retention,
+                ) {
+                    Ok(memory) => Some(memory),
+                    Err(error) => {
+                        log::error!("Could not open the assistant's memory: {error}");
+                        crate::ai::memory::ChatMemory::in_memory(key).ok()
+                    }
+                },
+                // No key, or the user asked us not to remember: this run only.
+                Some(key) => crate::ai::memory::ChatMemory::in_memory(key).ok(),
+                None => {
+                    log::warn!(
+                        "Without a keychain entry the assistant keeps this conversation in memory only"
+                    );
+                    crate::ai::memory::ChatMemory::in_memory(rand::random()).ok()
+                }
+            };
+            cx.update(|cx| {
+                state.update(cx, |state, _| state.ai_chat.memory = memory);
+            });
+        })
+        .detach();
     }
 
     fn start_history(state: Entity<AppState>, cx: &mut Context<Self>) {

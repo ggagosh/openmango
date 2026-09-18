@@ -1,4 +1,4 @@
-mod crypto;
+pub(crate) mod crypto;
 mod model;
 mod store;
 

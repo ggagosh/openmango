@@ -2189,6 +2189,62 @@ fn render_ai_section(
         )
     };
 
+    let remember_conversations_checkbox = {
+        let state = state.clone();
+        let checked = settings.ai.remember_conversations;
+        gpui_kit::component::checkbox::Checkbox::new("ai-remember-conversations")
+            .checked(checked)
+            .on_click(move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.ai.remember_conversations = !checked;
+                    state.save_settings();
+                    cx.notify();
+                });
+            })
+    };
+
+    let forget_conversations_button = {
+        let state = state.clone();
+        let stored = state
+            .read(cx)
+            .ai_chat
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.conversation_count().ok().filter(|count| *count > 0));
+        Button::new("ai-forget-conversations")
+            .xsmall()
+            .danger()
+            .label(match stored {
+                Some(1) => "Delete 1 conversation".to_string(),
+                Some(count) => format!("Delete {count} conversations"),
+                None => "Delete all".to_string(),
+            })
+            .disabled(stored.is_none())
+            .on_click(move |_, window, cx| {
+                let state = state.clone();
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Delete stored conversations",
+                    "The assistant forgets every earlier conversation on this machine. The chat \
+                     you can see stays as it is.",
+                    "Delete",
+                    true,
+                    move |_, cx| {
+                        state.update(cx, |state, cx| {
+                            if let Some(memory) = &state.ai_chat.memory
+                                && let Err(error) = memory.forget_everything()
+                            {
+                                log::error!("Could not delete stored conversations: {error}");
+                            }
+                            state.ai_chat.conversation_id = None;
+                            cx.notify();
+                        });
+                    },
+                );
+            })
+    };
+
     let selected_documents_checkbox = {
         let state = state.clone();
         let checked = settings.ai.share_selected_documents;
@@ -2400,6 +2456,21 @@ fn render_ai_section(
                         "Share document samples",
                         "Include up to five documents from the current result set in automatic AI context.",
                         sample_documents_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row_with_description(
+                        "Remember conversations",
+                        "Keep conversations between runs so the assistant can follow up on earlier \
+                         work. What you and the assistant said is encrypted on this machine; tool \
+                         results, which hold your data, are never written to disk. Conversations \
+                         are deleted after 30 days.",
+                        remember_conversations_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row_with_description(
+                        "Stored conversations",
+                        "Delete every conversation the assistant has kept on this machine.",
+                        forget_conversations_button,
                         cx,
                     )),
                 &settings.appearance,

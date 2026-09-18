@@ -151,6 +151,13 @@ pub struct AiSettings {
     pub share_selected_documents: bool,
     #[serde(default)]
     pub share_sample_documents: bool,
+    /// Whether conversations are kept between runs. On by default, visible and reversible in
+    /// Settings; turning it off keeps the assistant's memory to the current run.
+    #[serde(default = "default_remember_conversations")]
+    pub remember_conversations: bool,
+    /// Days a stored conversation is kept. `0` keeps conversations until they are deleted.
+    #[serde(default = "default_memory_retention_days")]
+    pub memory_retention_days: u32,
 }
 
 impl Default for AiSettings {
@@ -164,6 +171,8 @@ impl Default for AiSettings {
             ollama_base_url: default_ollama_base_url(),
             share_selected_documents: false,
             share_sample_documents: false,
+            remember_conversations: default_remember_conversations(),
+            memory_retention_days: default_memory_retention_days(),
         }
     }
 }
@@ -261,6 +270,14 @@ impl AiSettings {
 
 fn default_model() -> String {
     AiProvider::Gemini.default_model().to_string()
+}
+
+fn default_remember_conversations() -> bool {
+    true
+}
+
+fn default_memory_retention_days() -> u32 {
+    crate::ai::memory::DEFAULT_RETENTION_DAYS as u32
 }
 
 fn default_ollama_base_url() -> String {

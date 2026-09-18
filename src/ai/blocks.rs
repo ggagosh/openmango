@@ -422,10 +422,16 @@ pub struct ToolActivity {
     pub tool_name: String,
     pub status: ToolActivityStatus,
     pub args_preview: String,
+    /// What the tool returned, for this run only.
+    ///
+    /// Not persisted: a result is a copy of the user's production rows, and the workspace file is
+    /// plain text on disk. The row comes back after a restart saying which tool ran on what; the
+    /// rows themselves are re-read from the database when they are needed again.
+    #[serde(skip)]
     pub result_preview: Option<String>,
-    /// Full structured result for native rendering.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Boxed: a report block is far larger than the rest of the row put together.
+    /// Full structured result for native rendering. Boxed: a report block is far larger than the
+    /// rest of the row put together. Not persisted, for the same reason as `result_preview`.
+    #[serde(skip)]
     pub result_block: Option<Box<ContentBlock>>,
     /// Collection name extracted from tool args (persists across restarts).
     #[serde(default, skip_serializing_if = "Option::is_none")]

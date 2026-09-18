@@ -91,6 +91,16 @@ impl HistoryCipher {
         self.decrypt(&cursor_aad(connection_id, database), encrypted)
     }
 
+    /// Seal arbitrary bytes with the same construction the History payloads use: a random
+    /// nonce, AES-256-GCM, and `aad` bound into the tag so a row cannot be moved elsewhere.
+    pub(crate) fn seal(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+        self.encrypt(aad, plaintext)
+    }
+
+    pub(crate) fn open(&self, aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt(aad, sealed)
+    }
+
     fn encrypt(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         let nonce: [u8; NONCE_LEN] = rand::random();
         let ciphertext = self
