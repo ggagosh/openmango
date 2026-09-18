@@ -89,6 +89,35 @@ async fn read_only_ai_index_creation_is_rejected() {
 }
 
 #[tokio::test]
+async fn ai_insert_refuses_more_documents_than_it_promises() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "ai_insert_cap");
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let tool = InsertDocumentsTool::new(MongoContext {
+        client: mongo.client.clone(),
+        database: mongo.db_name("test_db"),
+        collection: Some("ai_insert_cap".to_string()),
+        write_identity: write_identity(false),
+        read_only: false,
+        event_tx: Some(event_tx),
+    });
+
+    // The tool tells the model "at most 100 per call"; 101 has to be refused, not truncated
+    // and not written, and it is refused before any confirmation is asked for.
+    let documents: Vec<String> = (0..101).map(|index| format!(r#"{{"n":{index}}}"#)).collect();
+    let error = tool
+        .call(
+            &mut ToolContext::default(),
+            InsertArgs { collection: None, documents: format!("[{}]", documents.join(",")) },
+        )
+        .await
+        .expect_err("an oversized insert must be rejected");
+
+    assert!(error.to_string().contains("100"), "the limit belongs in the message: {error}");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 0, "nothing was written");
+}
+
+#[tokio::test]
 async fn ai_write_requires_confirmation_but_not_history() {
     let mongo = MongoTestContainer::start().await;
     let collection = mongo.collection::<Document>("test_db", "ai_confirmed_insert");

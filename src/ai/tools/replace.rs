@@ -6,8 +6,8 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable, parse_json_to_doc,
-    require_confirmation, resolve_collection,
+    MAX_WRITE_DOCUMENTS, MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable,
+    parse_json_to_doc, require_confirmation, resolve_collection,
 };
 
 pub struct ReplaceDocumentsTool(MongoContext);
@@ -94,7 +94,11 @@ impl Tool for ReplaceDocumentsTool {
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
         let many = args.many.unwrap_or(true);
         let matching_count = collection.count_documents(filter.clone()).await?;
-        let affected_count = if many { matching_count } else { matching_count.min(1) };
+        let affected_count = if many {
+            matching_count.min(MAX_WRITE_DOCUMENTS as u64)
+        } else {
+            matching_count.min(1)
+        };
         let cursor = collection
             .find(filter.clone())
             .sort(target_sort())
@@ -116,7 +120,9 @@ impl Tool for ReplaceDocumentsTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        let limit = if many { 0 } else { 1 };
+        // Never unlimited: `0` would rewrite every match, which is not what the model was
+        // told it could do, nor what the user approved in the preview.
+        let limit = if many { MAX_WRITE_DOCUMENTS as i64 } else { 1 };
         let cursor = collection.find(filter).sort(target_sort()).limit(limit).await?;
         let documents: Vec<bson::Document> = cursor.try_collect().await?;
         let mut matched_count = 0u64;

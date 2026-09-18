@@ -514,7 +514,12 @@ impl AiView {
         {
             history.pop();
         }
-        let system_prompt = build_ai_context(self.state.read(cx), &mentioned);
+        // The prompt must describe the same tools `build_agent` hands over.
+        let writable = {
+            let state = self.state.read(cx);
+            state.selected_connection_id().is_some_and(|id| !state.connection_read_only(id))
+        };
+        let system_prompt = build_ai_context(self.state.read(cx), &mentioned, writable);
         log::debug!(
             "[ai-chat] system_prompt len={} history_msgs={}",
             system_prompt.len(),
@@ -550,7 +555,10 @@ impl AiView {
                 .catalog()
                 .model(settings.provider, &settings.model)
                 .and_then(|model| model.limit.context)
-                .map(|context| context as usize);
+                .map(|context| context as usize)
+                // Ollama serves whatever is installed and the catalogue does not list it, so
+                // assume the small end rather than overrun a local model's window.
+                .or((settings.provider == AiProvider::Ollama).then_some(32_000));
             (state.ai_chat.transcript.clone(), context)
         };
         let request = AiGenerationRequest {

@@ -5,7 +5,8 @@ use serde::Deserialize;
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, StreamEvent, ToolError, ensure_writable, require_confirmation, resolve_collection,
+    MAX_WRITE_DOCUMENTS, MongoContext, StreamEvent, ToolError, ensure_writable,
+    require_confirmation, resolve_collection,
 };
 
 pub struct InsertDocumentsTool(MongoContext);
@@ -89,6 +90,13 @@ impl Tool for InsertDocumentsTool {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        if bson_docs.len() > MAX_WRITE_DOCUMENTS {
+            return Err(ToolError::InvalidInput(format!(
+                "Insert at most {MAX_WRITE_DOCUMENTS} documents per call; this call had {}",
+                bson_docs.len()
+            )));
+        }
 
         // Build preview
         let sample_docs: Vec<serde_json::Value> = docs_array.iter().take(3).cloned().collect();

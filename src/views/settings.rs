@@ -2294,15 +2294,10 @@ fn render_ai_section(
             (AiProvider::Ollama, ModelCache::Loaded(list)) => {
                 (format!("{} models", list.len()), cx.theme().primary)
             }
-            (AiProvider::Ollama, ModelCache::Loading) => {
+            (_, ModelCache::Loading) | (_, ModelCache::NotFetched) => {
                 ("Loading models".to_string(), cx.theme().warning)
             }
-            (AiProvider::Ollama, ModelCache::NotFetched) => {
-                ("Fetching models".to_string(), cx.theme().warning)
-            }
-            (AiProvider::Ollama, ModelCache::Error(_)) => {
-                ("Model fetch error".to_string(), cx.theme().danger)
-            }
+            (_, ModelCache::Error(_)) => ("Model list unavailable".to_string(), cx.theme().danger),
             (_, ModelCache::NoKey) => ("API key missing".to_string(), cx.theme().warning),
             _ => ("Ready".to_string(), cx.theme().muted_foreground),
         };

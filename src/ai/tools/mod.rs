@@ -3,6 +3,7 @@ pub mod collection_stats;
 pub mod count;
 pub mod create_index;
 pub mod delete;
+pub mod drop_index;
 pub mod explain;
 pub mod find;
 pub mod generate_report;
@@ -291,4 +292,6 @@ pub fn doc_to_json(doc: &mongodb::bson::Document) -> serde_json::Value {
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_FIND_LIMIT: i64 = 50;
 
-pub mod drop_index;
+/// The most documents one write tool call may touch. The model is told this number, so it has
+/// to be enforced rather than advertised.
+pub const MAX_WRITE_DOCUMENTS: usize = 100;

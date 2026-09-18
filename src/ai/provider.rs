@@ -134,13 +134,7 @@ pub struct TurnOutcome {
 /// it carries the tool calls and their results, so a follow-up builds on what was already found.
 fn conversation_history(request: &AiGenerationRequest) -> Vec<RigMessage> {
     let mut history = if request.transcript.is_empty() {
-        let mut visible = request.history.clone();
-        crate::ai::budget::trim_history_for_context(
-            &mut visible,
-            request.system_prompt.chars().count(),
-            request.context_tokens,
-        );
-        to_rig_history(&visible)
+        to_rig_history(&request.history)
     } else {
         request.transcript.clone()
     };
@@ -223,7 +217,7 @@ async fn call_gemini(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let mut history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
@@ -257,7 +251,7 @@ async fn call_openai(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let mut history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
@@ -291,7 +285,7 @@ async fn call_anthropic(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let mut history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
@@ -342,7 +336,7 @@ async fn call_ollama(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let mut history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
@@ -605,20 +599,22 @@ async fn consume_stream(
                 log::debug!("[ai-stream] error after {tool_call_count} tool calls: {error}");
                 // Running out of turns, or the user pressing Stop, ends the run without
                 // being a failure: whatever the model already said still stands.
-                let ended_early = matches!(
-                    &error,
-                    rig::agent::StreamingError::Prompt(prompt)
-                        if matches!(
-                            prompt.as_ref(),
-                            PromptError::MaxTurnsError { .. } | PromptError::PromptCancelled { .. }
-                        )
-                );
-                if ended_early {
+                // Running out of turns, or the user pressing Stop, ends the run without being a
+                // failure: whatever the model already said still stands.
+                let ended_early = match &error {
+                    rig::agent::StreamingError::Prompt(prompt) => match prompt.as_ref() {
+                        PromptError::MaxTurnsError { .. } => {
+                            Some("*(Tool call limit reached — see the results above.)*")
+                        }
+                        PromptError::PromptCancelled { .. } => Some("*(Stopped.)*"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(note) = ended_early {
                     if full_text.trim().is_empty() {
-                        let fallback =
-                            "*(Tool call limit reached — see the results above.)*".to_string();
-                        let _ = event_tx.send(StreamEvent::TextDelta(fallback.clone()));
-                        full_text = fallback;
+                        let _ = event_tx.send(StreamEvent::TextDelta(note.to_string()));
+                        full_text = note.to_string();
                     }
                     break;
                 }
