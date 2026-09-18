@@ -18,6 +18,7 @@ use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerStat
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
 
 use uuid::Uuid;
@@ -544,19 +545,19 @@ impl AiView {
             history.len()
         );
 
-        let (conversation_id, memory, context_tokens) = self.state.update(cx, |state, _| {
+        let (conversation_id, memory, context_tokens, price) = self.state.update(cx, |state, _| {
             let settings = &state.settings.ai;
-            let context = state
-                .ai_chat
-                .catalog()
-                .model(settings.provider, &settings.model)
+            let catalog = state.ai_chat.catalog();
+            let model = catalog.model(settings.provider, &settings.model);
+            let context = model
                 .and_then(|model| model.limit.context)
                 .map(|context| context as usize)
                 // Ollama serves whatever is installed and the catalogue does not list it, so
                 // assume the small end rather than overrun a local model's window.
                 .or((settings.provider == AiProvider::Ollama).then_some(32_000));
+            let price = model.map(|model| model.cost.clone());
             let id = state.ai_chat.conversation_id();
-            (id, state.ai_chat.memory.clone(), context)
+            (id, state.ai_chat.memory.clone(), context, price)
         });
 
         let tool_ctx = {
@@ -589,6 +590,7 @@ impl AiView {
             conversation_id: conversation_id.to_string(),
             memory,
             context_tokens,
+            price,
         };
 
         let provider_label = ai_settings.provider.label().to_string();
@@ -798,6 +800,7 @@ impl Render for AiView {
             let header_buttons = div().flex().items_center().gap(px(6.0));
 
             let has_entries = !ai_chat.entries.is_empty();
+            let conversation_cost = ai_chat.conversation_cost();
             let header_buttons = if is_loading {
                 let view = cx.entity();
                 header_buttons.child(
@@ -854,10 +857,29 @@ impl Render for AiView {
                 .bg(islands::ai_header_bg(&appearance, cx))
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().foreground)
-                        .child("AI Chat"),
+                        .flex()
+                        .items_baseline()
+                        .gap(spacing::sm())
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(cx.theme().foreground)
+                                .child("AI Chat"),
+                        )
+                        // What the conversation has cost so far. The per-answer number is in
+                        // each footer; this is the one that decides whether to keep going.
+                        .children(conversation_cost.map(|cost| {
+                            div()
+                                .id("ai-conversation-cost")
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(crate::ai::catalog::format_usd(cost))
+                                .tooltip(|window, cx| {
+                                    Tooltip::new("Spent on this conversation, at list prices")
+                                        .build(window, cx)
+                                })
+                        })),
                 )
                 .child(
                     div()

@@ -128,6 +128,9 @@ pub struct AiGenerationRequest {
     pub memory: Option<crate::ai::memory::ChatMemory>,
     /// The chosen model's context window, from the catalogue. `None` falls back to a safe default.
     pub context_tokens: Option<usize>,
+    /// What the chosen model charges, from the catalogue, so a finished turn can say what it
+    /// cost. `None` for a model with no listed price.
+    pub price: Option<crate::ai::catalog::Cost>,
 }
 
 /// One completed turn.
@@ -467,7 +470,7 @@ async fn call_gemini_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
+    consume_stream(&mut stream, AiProvider::Gemini, request.price.as_ref(), event_tx).await
 }
 
 async fn call_openai_streaming(
@@ -513,7 +516,7 @@ async fn call_openai_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
+    consume_stream(&mut stream, AiProvider::OpenAi, request.price.as_ref(), event_tx).await
 }
 
 async fn call_anthropic_streaming(
@@ -559,7 +562,7 @@ async fn call_anthropic_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
+    consume_stream(&mut stream, AiProvider::Anthropic, request.price.as_ref(), event_tx).await
 }
 
 async fn call_openrouter_streaming(
@@ -605,7 +608,7 @@ async fn call_openrouter_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::OpenRouter, event_tx).await
+    consume_stream(&mut stream, AiProvider::OpenRouter, request.price.as_ref(), event_tx).await
 }
 
 async fn call_ollama_streaming(
@@ -668,7 +671,7 @@ async fn call_ollama_streaming(
         .max_turns(MAX_TURNS)
         .await;
 
-    consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
+    consume_stream(&mut stream, AiProvider::Ollama, request.price.as_ref(), event_tx).await
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +681,7 @@ async fn call_ollama_streaming(
 async fn consume_stream(
     stream: &mut StreamingResult,
     provider: AiProvider,
+    price: Option<&crate::ai::catalog::Cost>,
     event_tx: &UnboundedSender<StreamEvent>,
 ) -> Result<TurnOutcome, AiError> {
     let mut full_text = String::new();
@@ -745,9 +749,12 @@ async fn consume_stream(
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.output().to_string();
                 transcript = final_response.messages.clone().unwrap_or_default();
+                let (input_tokens, output_tokens) =
+                    (final_response.usage.input_tokens, final_response.usage.output_tokens);
                 usage = crate::ai::blocks::TurnUsage {
-                    input_tokens: final_response.usage.input_tokens,
-                    output_tokens: final_response.usage.output_tokens,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd: price.and_then(|price| price.of(input_tokens, output_tokens)),
                 };
                 log::debug!(
                     "[ai-stream] final_response after {tool_call_count} tool calls, \
@@ -928,6 +935,7 @@ mod tests {
             conversation_id: "chat-1".to_string(),
             memory: None,
             context_tokens: None,
+            price: None,
         }
     }
 

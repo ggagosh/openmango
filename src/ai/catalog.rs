@@ -39,6 +39,26 @@ pub struct Cost {
     pub output: Option<f64>,
 }
 
+impl Cost {
+    /// What a run of this model cost, in US dollars. `None` when the model lists no price,
+    /// which is the honest answer for Ollama: it runs on your own machine.
+    pub fn of(&self, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+        let (input, output) = (self.input?, self.output?);
+        Some((input_tokens as f64 * input + output_tokens as f64 * output) / 1_000_000.0)
+    }
+}
+
+/// Money spent, which is small enough that two decimals would read as free.
+pub fn format_usd(dollars: f64) -> String {
+    match dollars {
+        _ if dollars >= 1.0 => format!("${dollars:.2}"),
+        _ if dollars >= 0.01 => format!("${dollars:.3}"),
+        _ if dollars >= 0.000_05 => format!("${dollars:.4}"),
+        _ if dollars > 0.0 => "<$0.0001".to_string(),
+        _ => "$0".to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelInfo {
     pub id: String,
@@ -303,6 +323,27 @@ pub async fn fetch_catalog(
 mod tests {
     use super::*;
     use crate::ai::settings::ModelPreset;
+
+    #[test]
+    fn a_turn_is_priced_from_what_the_model_charges() {
+        // Claude Sonnet money: $3 in, $15 out per million tokens.
+        let cost = Cost { input: Some(3.0), output: Some(15.0) };
+        let spent = cost.of(12_000, 800).expect("a priced model");
+        assert!((spent - 0.048).abs() < 1e-9, "12k in and 800 out is 3.6c plus 1.2c");
+        assert_eq!(format_usd(spent), "$0.048");
+
+        // Ollama runs on your own machine, so there is no number to show.
+        assert_eq!(Cost::default().of(12_000, 800), None);
+    }
+
+    #[test]
+    fn small_change_never_rounds_away_to_nothing() {
+        assert_eq!(format_usd(0.0), "$0");
+        assert_eq!(format_usd(0.000_001), "<$0.0001");
+        assert_eq!(format_usd(0.004_2), "$0.0042");
+        assert_eq!(format_usd(0.42), "$0.420");
+        assert_eq!(format_usd(12.5), "$12.50");
+    }
 
     #[test]
     fn bundled_catalogue_covers_every_cloud_provider() {

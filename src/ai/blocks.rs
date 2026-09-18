@@ -374,10 +374,14 @@ pub struct AiTurn {
 }
 
 /// Tokens a turn spent, as the provider counted them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct TurnUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// What it cost at the price the model listed when it ran. Prices move and a local model
+    /// has none, so this is recorded with the turn rather than worked out again later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 impl TurnUsage {
@@ -385,14 +389,19 @@ impl TurnUsage {
         self.input_tokens == 0 && self.output_tokens == 0
     }
 
-    /// "1,234 in · 567 out", the line under a finished answer.
+    /// "1,234 in · 567 out · $0.0042", the line under a finished answer.
     pub fn label(&self) -> String {
         use crate::helpers::format_number;
-        format!(
+        let mut label = format!(
             "{} in · {} out",
             format_number(self.input_tokens),
             format_number(self.output_tokens)
-        )
+        );
+        if let Some(cost) = self.cost_usd {
+            label.push_str(" · ");
+            label.push_str(&crate::ai::catalog::format_usd(cost));
+        }
+        label
     }
 }
 
@@ -491,6 +500,20 @@ impl AiChatState {
     /// The id this conversation is stored under, minted on first use.
     pub fn conversation_id(&mut self) -> Uuid {
         *self.conversation_id.get_or_insert_with(Uuid::new_v4)
+    }
+
+    /// What this conversation has cost so far. `None` until a priced turn has finished, which
+    /// is also the permanent answer for a local model.
+    pub fn conversation_cost(&self) -> Option<f64> {
+        let total: f64 = self
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                AiChatEntry::Turn(turn) => turn.usage?.cost_usd,
+                _ => None,
+            })
+            .sum();
+        (total > 0.0).then_some(total)
     }
 
     /// The model catalogue in force: the last refresh, or the bundled snapshot.
@@ -776,10 +799,17 @@ mod tests {
     fn usage_is_recorded_on_the_turn_it_belongs_to() {
         let mut chat = AiChatState::default();
         let turn_id = chat.begin_turn("how many orders?");
-        chat.set_turn_usage(turn_id, TurnUsage { input_tokens: 1234, output_tokens: 56 });
+        chat.set_turn_usage(
+            turn_id,
+            TurnUsage { input_tokens: 1234, output_tokens: 56, cost_usd: Some(0.004_2) },
+        );
 
         let turn = chat.find_turn_mut(turn_id).expect("turn");
-        assert_eq!(turn.usage.map(|usage| usage.label()), Some("1,234 in · 56 out".to_string()));
+        assert_eq!(
+            turn.usage.map(|usage| usage.label()),
+            Some("1,234 in · 56 out · $0.0042".to_string())
+        );
+        assert_eq!(chat.conversation_cost(), Some(0.004_2), "the header adds the turns up");
 
         // A provider that reports nothing leaves the footer off entirely.
         let second = chat.begin_turn("and customers?");

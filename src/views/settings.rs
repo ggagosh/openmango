@@ -273,6 +273,7 @@ impl SettingsView {
                     conversation_id: "provider-test".to_string(),
                     memory: None,
                     context_tokens: None,
+                    price: None,
                 };
                 generate_text(&settings, request).await
             })
