@@ -139,8 +139,6 @@ fn test_workspace_tab_forge_roundtrip() {
         forge_content: "db.getCollection(\"users\").find({})".to_string(),
         ai_panel_open: false,
         ai_draft_input: String::new(),
-        ai_entries: Vec::new(),
-        ai_messages: Vec::new(),
         table_column_widths: HashMap::new(),
         table_column_order: Vec::new(),
         table_pinned_columns: HashSet::new(),

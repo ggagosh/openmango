@@ -110,13 +110,8 @@ impl AppState {
                     // skip pushing as a tab.
                     self.ai_chat.panel_open = true;
                     self.ai_chat.draft_input = tab.ai_draft_input.replace(['\n', '\r'], " ");
-                    self.ai_chat.entries = tab.resolved_ai_entries();
                     self.ai_chat.is_loading = false;
                     self.ai_chat.last_error = None;
-                    if self.ai_chat.entries.len() > 200 {
-                        let extra = self.ai_chat.entries.len().saturating_sub(200);
-                        self.ai_chat.entries.drain(0..extra);
-                    }
                 }
                 WorkspaceTabKind::Transfer => {
                     let mut transfer_state = tab.transfer.clone().unwrap_or_default();
@@ -170,8 +165,7 @@ impl AppState {
                         Vec::new()
                     })
                 }
-                // A workspace written before the store existed still has its chat inline.
-                _ => self.workspace.ai_entries.clone(),
+                _ => Vec::new(),
             };
             self.ai_chat.is_loading = false;
             self.ai_chat.last_error = None;
@@ -319,8 +313,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths,
                     table_column_order,
                     table_pinned_columns,
@@ -342,8 +334,6 @@ impl AppState {
                 forge_content: String::new(),
                 ai_panel_open: false,
                 ai_draft_input: String::new(),
-                ai_entries: Vec::new(),
-                ai_messages: Vec::new(),
                 table_column_widths: HashMap::new(),
                 table_column_order: Vec::new(),
                 table_pinned_columns: HashSet::new(),
@@ -366,8 +356,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -395,8 +383,6 @@ impl AppState {
                     forge_content: content,
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -420,8 +406,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -611,8 +595,6 @@ mod tests {
             forge_content: String::new(),
             ai_panel_open: false,
             ai_draft_input: String::new(),
-            ai_entries: Vec::new(),
-            ai_messages: Vec::new(),
             table_column_widths: HashMap::new(),
             table_column_order: Vec::new(),
             table_pinned_columns: HashSet::new(),
@@ -685,8 +667,6 @@ mod tests {
             forge_content: String::new(),
             ai_panel_open: true,
             ai_draft_input: "old draft".to_string(),
-            ai_entries: Vec::new(),
-            ai_messages: Vec::new(),
             table_column_widths: HashMap::new(),
             table_column_order: Vec::new(),
             table_pinned_columns: HashSet::new(),
