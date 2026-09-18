@@ -31,7 +31,7 @@ use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
 use crate::ai::{
     AiChatEntry, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock, ToolActivity,
-    ToolActivityStatus, TurnUsage,
+    ToolActivityStatus,
 };
 use crate::components::Button;
 use crate::state::{AiProvider, AppCommands, AppState};
@@ -1189,10 +1189,12 @@ impl Render for AiView {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .gap(spacing::sm())
+            .gap(spacing::xs())
             .mx(spacing::md())
             .mb(spacing::md())
-            .p(px(6.0))
+            // The kit's multi-line input brings its own 10px inset; stacking further padding on
+            // top of it is what pushed the caret so far in from the border.
+            .py(spacing::xs())
             .bg(islands::ai_surface_bg(&appearance, cx).opacity(0.96))
             .border_1()
             .border_color(composer_border)
@@ -1203,20 +1205,21 @@ impl Render for AiView {
         // The box grows with what is typed instead of opening as a block of dead space.
         let composer_rows = input_state.read(cx).value().lines().count().max(1).clamp(2, 8);
         input_area = input_area
-            .child(div().px(px(2.0)).py(px(2.0)).child(
+            .child(
                 Editor::new(&input_state).text_xs().appearance(false).w_full().h(window.rem_size()
                     * 0.75
                     * 1.55
                     * composer_rows as f32
                     + px(4.0)),
-            ))
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(spacing::sm())
-                    .pt(px(2.0))
+                    // Line the controls up with the text above them, not with the border.
+                    .px(px(10.0))
                     .child(
                         div()
                             .flex()
@@ -1448,7 +1451,7 @@ fn render_timeline_row(
             render_turn(
                 turn,
                 tool_section,
-                TurnReportContext { reports, state: ctx.state.clone() },
+                TurnContext { reports, state: ctx.state.clone(), view: ctx.view.clone() },
                 ctx.streaming_turn_id == Some(turn.id),
                 &ctx.appearance,
                 window,
@@ -1611,7 +1614,7 @@ fn assistant_message(
     body: impl IntoElement,
     surface: Hsla,
     border: Hsla,
-    usage: Option<TurnUsage>,
+    footer: Option<AnyElement>,
     appearance: &crate::state::AppearanceSettings,
 ) -> Message {
     let message = Message::new()
@@ -1635,24 +1638,77 @@ fn assistant_message(
                     .child(body),
             ),
         );
-    match usage.filter(|usage| !usage.is_empty()) {
-        Some(usage) => message.footer(
-            MessageFooter::new()
-                .child(div().text_xs().text_color(label_color.opacity(0.7)).child(usage.label())),
-        ),
+    match footer {
+        Some(footer) => message.footer(MessageFooter::new().child(footer)),
         None => message,
     }
 }
 
-struct TurnReportContext {
+/// What sits under a finished answer: what it cost, and the things people reach for — copying it,
+/// or trying again when it failed.
+fn assistant_footer(
+    turn: &AiTurn,
+    content: String,
+    failed: bool,
+    view: Entity<AiView>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let usage = turn.usage.filter(|usage| !usage.is_empty());
+    if usage.is_none() && content.trim().is_empty() && !failed {
+        return None;
+    }
+    let muted = cx.theme().muted_foreground;
+    let retry_prompt = turn.user_message.content.clone();
+
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(spacing::xs())
+            .children(
+                usage.map(|usage| {
+                    div().text_xs().text_color(muted.opacity(0.75)).child(usage.label())
+                }),
+            )
+            .children((!content.trim().is_empty()).then(|| {
+                Button::new(SharedString::from(format!("copy-answer-{}", turn.id)))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::Copy).xsmall())
+                    .tooltip("Copy this answer")
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
+                    })
+            }))
+            .children(failed.then(|| {
+                Button::new(SharedString::from(format!("retry-turn-{}", turn.id)))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::Redo).xsmall())
+                    .label("Try again")
+                    .tooltip("Ask the same question again")
+                    .on_click(move |_, _, cx| {
+                        let prompt = retry_prompt.clone();
+                        view.update(cx, |this, cx| {
+                            this.send_message_with_mentions(prompt, Vec::new(), cx);
+                        });
+                    })
+            }))
+            .into_any_element(),
+    )
+}
+
+/// What a turn needs besides its own messages.
+struct TurnContext {
     reports: Vec<(String, Vec<crate::ai::ReportSheet>)>,
     state: Entity<AppState>,
+    view: Entity<AiView>,
 }
 
 fn render_turn(
     turn: &AiTurn,
     tool_section: Option<AnyElement>,
-    report_ctx: TurnReportContext,
+    turn_ctx: TurnContext,
     is_streaming: bool,
     appearance: &crate::state::AppearanceSettings,
     window: &mut Window,
@@ -1708,7 +1764,7 @@ fn render_turn(
                 body,
                 cx.theme().danger.opacity(0.1),
                 cx.theme().danger.opacity(0.42),
-                None,
+                assistant_footer(turn, String::new(), true, turn_ctx.view.clone(), cx),
                 appearance,
             ))
         }
@@ -1742,7 +1798,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
-                turn.usage,
+                None,
                 appearance,
             ))
         }
@@ -1768,10 +1824,10 @@ fn render_turn(
                     .child(div().flex().flex_col().gap(ai_block_gap()).children(blocks)),
             );
 
-            if !report_ctx.reports.is_empty() {
+            if !turn_ctx.reports.is_empty() {
                 let buttons = render_report_download_buttons(
-                    &report_ctx.reports,
-                    &report_ctx.state,
+                    &turn_ctx.reports,
+                    &turn_ctx.state,
                     &turn.id,
                     cx,
                 );
@@ -1784,7 +1840,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
-                turn.usage,
+                assistant_footer(turn, msg.content.clone(), false, turn_ctx.view.clone(), cx),
                 appearance,
             ))
         }
@@ -1807,7 +1863,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
-                turn.usage,
+                None,
                 appearance,
             ))
         }
