@@ -3,19 +3,20 @@
 mod keybindings;
 
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
+use crate::ai::settings::ModelPreset;
 use crate::components::model_select::{ModelSelectState, ModelSelector};
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::settings::CollectionDoubleClickAction;
@@ -2254,6 +2255,36 @@ fn render_ai_section(
             })
     };
 
+    // Presets are what most people want; the picker below is for naming an exact model.
+    let preset_picker = (current_provider.catalog_key().is_some()).then(|| {
+        let selected = current_provider.preset_for_model(&settings.ai.model);
+        let state = state.clone();
+        ButtonGroup::new("ai-model-presets")
+            .compact()
+            .children(ModelPreset::ALL.into_iter().map(|preset| {
+                gpui_kit::component::button::Button::new(SharedString::from(preset.label()))
+                    .label(preset.label())
+                    .tooltip(preset.description())
+                    .selected(selected == Some(preset))
+                    .with_size(Size::Small)
+            }))
+            .on_click(move |selection, _window, cx| {
+                let Some(preset) = selection.first().and_then(|index| ModelPreset::ALL.get(*index))
+                else {
+                    return;
+                };
+                state.update(cx, |app_state, cx| {
+                    let provider = app_state.settings.ai.provider;
+                    let Some(model) = provider.preset_model(*preset) else {
+                        return;
+                    };
+                    app_state.settings.ai.set_model(model.to_string());
+                    app_state.save_settings();
+                    cx.notify();
+                });
+            })
+    });
+
     let model_dropdown =
         crate::components::model_select::model_select(&model_select, Size::Small, px(260.0));
 
@@ -2342,6 +2373,7 @@ fn render_ai_section(
                                             .text_color(cx.theme().secondary_foreground)
                                             .child("Model"),
                                     )
+                                    .children(preset_picker)
                                     .child(model_dropdown),
                             )
                             .child(model_status_badge),
