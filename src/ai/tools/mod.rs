@@ -47,17 +47,22 @@ pub enum ToolError {
 pub enum StreamEvent {
     TextDelta(String),
     ToolCallStart {
+        /// rig's own handle for this call. Two calls to the same tool in one turn are told
+        /// apart by this, not by name.
+        call_id: String,
         name: String,
         args_preview: String,
         args_full: String,
     },
     ToolCallEnd {
+        call_id: String,
         name: String,
         result_preview: String,
         result_json: Option<String>,
     },
     /// The tool returned an error instead of a result.
     ToolCallFailed {
+        call_id: String,
         name: String,
         reason: String,
     },

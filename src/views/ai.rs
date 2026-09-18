@@ -15,7 +15,7 @@ use gpui_kit::component::message::{Message, MessageAlignment, MessageContent, Me
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::text::TextViewStyle;
+use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::*;
 
 use uuid::Uuid;
@@ -1395,7 +1395,7 @@ fn render_timeline_row(
             });
             let reports: Vec<(String, Vec<crate::ai::ReportSheet>)> = tools
                 .iter()
-                .filter_map(|tool| match &tool.result_block {
+                .filter_map(|tool| match tool.result_block.as_deref() {
                     Some(ContentBlock::Report { title, sheets }) => {
                         Some((title.clone(), sheets.clone()))
                     }
@@ -1541,6 +1541,39 @@ fn ai_markdown_style(cx: &App) -> TextViewStyle {
     })
 }
 
+/// The assistant's side of a turn. The kit's Message owns the row and the Bubble the surface;
+/// the island colours are kept as overrides so the panel still looks like the rest of the app.
+fn assistant_message(
+    label: &'static str,
+    label_color: Hsla,
+    body: impl IntoElement,
+    surface: Hsla,
+    border: Hsla,
+    appearance: &crate::state::AppearanceSettings,
+) -> Message {
+    Message::new()
+        .alignment(MessageAlignment::Start)
+        .with_stack_style(StyleRefinement::default().w_full().min_w(px(0.0)))
+        .header(MessageHeader::new().child(
+            div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(label_color).child(label),
+        ))
+        .content(
+            MessageContent::new().w_full().bubble(
+                Bubble::new()
+                    .with_variant(BubbleVariant::Ghost)
+                    .px(spacing::md())
+                    .py(spacing::sm())
+                    .bg(surface)
+                    .border_1()
+                    .border_color(border)
+                    .rounded(islands::radius_sm(appearance))
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(body),
+            ),
+        )
+}
+
 struct TurnReportContext {
     reports: Vec<(String, Vec<crate::ai::ReportSheet>)>,
     state: Entity<AppState>,
@@ -1588,13 +1621,7 @@ fn render_turn(
 
     let assistant_section = match &turn.assistant_message {
         Some(msg) if msg.tone == ChatMessageTone::Error => {
-            let mut body = div().flex().flex_col().gap(ai_block_gap()).child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().danger)
-                    .child("Error"),
-            );
+            let mut body = div().flex().flex_col().gap(ai_block_gap());
             if let Some(ts) = tool_section {
                 body = body.child(ts);
             }
@@ -1605,33 +1632,30 @@ fn render_turn(
                     .child(render_plain_text_lines(&msg.content, cx.theme().foreground)),
             );
 
-            Some(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(cx.theme().danger.opacity(0.1))
-                    .border_1()
-                    .border_color(cx.theme().danger.opacity(0.42))
-                    .rounded(islands::radius_sm(appearance))
-                    .child(body),
-            )
+            Some(assistant_message(
+                "Error",
+                cx.theme().danger,
+                body,
+                cx.theme().danger.opacity(0.1),
+                cx.theme().danger.opacity(0.42),
+                appearance,
+            ))
         }
         Some(msg) if is_streaming && !msg.content.is_empty() => {
-            let mut body = div().flex().flex_col().gap(ai_block_gap()).child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().primary)
-                    .child("Assistant"),
-            );
+            let mut body = div().flex().flex_col().gap(ai_block_gap());
             if let Some(ts) = tool_section {
                 body = body.child(ts);
             }
             body = body
                 .child(
-                    div()
-                        .min_w(px(0.0))
-                        .child(render_plain_text_lines(&msg.content, cx.theme().foreground)),
+                    div().min_w(px(0.0)).text_color(cx.theme().foreground).child(
+                        TextView::markdown(
+                            ElementId::Name(format!("ai-stream-{}", msg.id).into()),
+                            msg.content.clone(),
+                        )
+                        .selectable(true)
+                        .style(ai_markdown_style(cx)),
+                    ),
                 )
                 .child(
                     div().text_xs().child(
@@ -1641,16 +1665,14 @@ fn render_turn(
                     ),
                 );
 
-            Some(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(assistant_bg)
-                    .border_1()
-                    .border_color(border)
-                    .rounded(islands::radius_sm(appearance))
-                    .child(body),
-            )
+            Some(assistant_message(
+                "Assistant",
+                cx.theme().primary,
+                body,
+                assistant_bg,
+                border,
+                appearance,
+            ))
         }
         Some(msg) if !msg.content.is_empty() => {
             let md_style = ai_markdown_style(cx);
@@ -1662,13 +1684,7 @@ fn render_turn(
                 cx,
             );
 
-            let mut body = div().flex().flex_col().gap(ai_block_gap()).child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().primary)
-                    .child("Assistant"),
-            );
+            let mut body = div().flex().flex_col().gap(ai_block_gap());
             if let Some(ts) = tool_section {
                 body = body.child(ts);
             }
@@ -1690,16 +1706,14 @@ fn render_turn(
                 body = body.child(buttons);
             }
 
-            Some(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(assistant_bg)
-                    .border_1()
-                    .border_color(border)
-                    .rounded(islands::radius_sm(appearance))
-                    .child(body),
-            )
+            Some(assistant_message(
+                "Assistant",
+                cx.theme().primary,
+                body,
+                assistant_bg,
+                border,
+                appearance,
+            ))
         }
         Some(_) if is_streaming => {
             let mut body = div().flex().flex_col().gap(ai_block_gap());
@@ -1714,22 +1728,25 @@ fn render_turn(
                 ),
             );
 
-            Some(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .bg(assistant_bg)
-                    .border_1()
-                    .border_color(border)
-                    .rounded(islands::radius_sm(appearance))
-                    .child(body),
-            )
+            Some(assistant_message(
+                "Assistant",
+                cx.theme().primary,
+                body,
+                assistant_bg,
+                border,
+                appearance,
+            ))
         }
+        // Tool work with nothing said about it yet: no bubble, just the activity.
         _ => tool_section.map(|ts| {
-            div()
-                .px(spacing::md())
-                .py(spacing::sm())
-                .child(div().flex().flex_col().gap(ai_block_gap()).child(ts))
+            Message::new()
+                .alignment(MessageAlignment::Start)
+                .with_stack_style(StyleRefinement::default().w_full().min_w(px(0.0)))
+                .content(
+                    MessageContent::new()
+                        .w_full()
+                        .child(div().px(spacing::md()).py(spacing::sm()).child(ts)),
+                )
         }),
     };
 
@@ -1917,7 +1934,7 @@ fn render_tool_group(
         }
 
         item = item.child(render_tool_row(t, state.clone(), appearance, cx));
-        if let Some(block) = t.result_block.as_ref() {
+        if let Some(block) = t.result_block.as_deref() {
             if let ContentBlock::Report { title, sheets } = block {
                 let st = state.clone();
                 let title_dl = title.clone();
@@ -2171,16 +2188,16 @@ fn handle_stream_event(
             state.ai_chat.append_turn_delta(message_id, &delta);
             None
         }
-        StreamEvent::ToolCallStart { name, args_preview, args_full } => {
-            state.ai_chat.push_tool_start(name, args_preview, args_full);
+        StreamEvent::ToolCallStart { call_id, name, args_preview, args_full } => {
+            state.ai_chat.push_tool_start(call_id, name, args_preview, args_full);
             None
         }
-        StreamEvent::ToolCallEnd { name, result_preview, result_json } => {
-            state.ai_chat.complete_tool(&name, result_preview, result_json);
+        StreamEvent::ToolCallEnd { call_id, name, result_preview, result_json } => {
+            state.ai_chat.complete_tool(&call_id, &name, result_preview, result_json);
             None
         }
-        StreamEvent::ToolCallFailed { name, reason } => {
-            state.ai_chat.fail_tool(&name, reason);
+        StreamEvent::ToolCallFailed { call_id, name, reason } => {
+            state.ai_chat.fail_tool(&call_id, &name, reason);
             None
         }
         StreamEvent::DocumentsChanged { connection_id, database, collection } => {
@@ -2680,6 +2697,7 @@ mod tests {
     fn tool(status: ToolActivityStatus) -> AiChatEntry {
         AiChatEntry::ToolActivity(ToolActivity {
             id: Uuid::new_v4(),
+            call_id: None,
             tool_name: "find_documents".to_string(),
             status,
             args_preview: String::new(),
@@ -2778,6 +2796,7 @@ mod tests {
         let events = vec![
             StreamEvent::TextDelta("a".to_string()),
             StreamEvent::ToolCallStart {
+                call_id: "call-1".to_string(),
                 name: "find_documents".to_string(),
                 args_preview: "{}".to_string(),
                 args_full: "{}".to_string(),

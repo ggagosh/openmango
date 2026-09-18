@@ -390,13 +390,17 @@ pub enum ToolActivityStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolActivity {
     pub id: Uuid,
+    /// rig's handle for the call this row shows. Absent on rows restored from an old workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     pub tool_name: String,
     pub status: ToolActivityStatus,
     pub args_preview: String,
     pub result_preview: Option<String>,
     /// Full structured result for native rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_block: Option<ContentBlock>,
+    /// Boxed: a report block is far larger than the rest of the row put together.
+    pub result_block: Option<Box<ContentBlock>>,
     /// Collection name extracted from tool args (persists across restarts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
@@ -556,6 +560,7 @@ impl AiChatState {
 
     pub fn push_tool_start(
         &mut self,
+        call_id: String,
         name: String,
         args_preview: String,
         args_full: String,
@@ -567,6 +572,7 @@ impl AiChatState {
         let args_full_stored = if name == "aggregate" { Some(args_full.clone()) } else { None };
         self.entries.push(AiChatEntry::ToolActivity(ToolActivity {
             id,
+            call_id: Some(call_id),
             tool_name: name,
             status: ToolActivityStatus::Running,
             args_preview,
@@ -579,37 +585,54 @@ impl AiChatState {
         id
     }
 
-    pub fn fail_tool(&mut self, name: &str, reason: String) {
-        for entry in self.entries.iter_mut().rev() {
-            if let AiChatEntry::ToolActivity(activity) = entry
+    pub fn fail_tool(&mut self, call_id: &str, name: &str, reason: String) {
+        let Some(activity) = self.running_tool_mut(call_id, name) else {
+            return;
+        };
+        activity.status = ToolActivityStatus::Failed(reason);
+    }
+
+    /// The row this result belongs to: the call rig names, or — for rows from before call ids
+    /// were recorded — the most recent running call of that tool.
+    fn running_tool_mut(&mut self, call_id: &str, name: &str) -> Option<&mut ToolActivity> {
+        let mut fallback = None;
+        for (index, entry) in self.entries.iter().enumerate().rev() {
+            let AiChatEntry::ToolActivity(activity) = entry else {
+                continue;
+            };
+            if activity.call_id.as_deref() == Some(call_id) {
+                fallback = Some(index);
+                break;
+            }
+            if fallback.is_none()
+                && activity.call_id.is_none()
                 && activity.tool_name == name
                 && matches!(activity.status, ToolActivityStatus::Running)
             {
-                activity.status = ToolActivityStatus::Failed(reason);
-                return;
+                fallback = Some(index);
             }
+        }
+        match self.entries.get_mut(fallback?) {
+            Some(AiChatEntry::ToolActivity(activity)) => Some(activity),
+            _ => None,
         }
     }
 
     pub fn complete_tool(
         &mut self,
+        call_id: &str,
         name: &str,
         result_preview: String,
         result_json: Option<String>,
     ) {
-        // Find the most recent Running tool activity with matching name
-        let block = result_json.as_deref().and_then(|json| tool_result_to_block(name, json));
-        for entry in self.entries.iter_mut().rev() {
-            if let AiChatEntry::ToolActivity(activity) = entry
-                && activity.tool_name == name
-                && matches!(activity.status, ToolActivityStatus::Running)
-            {
-                activity.status = ToolActivityStatus::Completed;
-                activity.result_preview = Some(result_preview);
-                activity.result_block = block;
-                return;
-            }
-        }
+        let block =
+            result_json.as_deref().and_then(|json| tool_result_to_block(name, json)).map(Box::new);
+        let Some(activity) = self.running_tool_mut(call_id, name) else {
+            return;
+        };
+        activity.status = ToolActivityStatus::Completed;
+        activity.result_preview = Some(result_preview);
+        activity.result_block = block;
     }
 
     /// Transition a tool from AwaitingConfirmation back to Running (approved).
@@ -689,6 +712,45 @@ impl AiChatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_calls_to_one_tool_keep_their_own_results() {
+        let mut chat = AiChatState::default();
+        chat.push_tool_start(
+            "call-a".into(),
+            "find_documents".into(),
+            String::new(),
+            String::new(),
+        );
+        chat.push_tool_start(
+            "call-b".into(),
+            "find_documents".into(),
+            String::new(),
+            String::new(),
+        );
+
+        // The second call answers first — by name alone this landed on the wrong row.
+        chat.complete_tool("call-b", "find_documents", "second".into(), None);
+        chat.complete_tool("call-a", "find_documents", "first".into(), None);
+
+        let results: Vec<_> = chat
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                AiChatEntry::ToolActivity(activity) => {
+                    Some((activity.call_id.clone()?, activity.result_preview.clone()?))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results,
+            vec![
+                ("call-a".to_string(), "first".to_string()),
+                ("call-b".to_string(), "second".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn append_turn_delta_does_not_parse_blocks_until_finalize() {

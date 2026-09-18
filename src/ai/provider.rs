@@ -530,18 +530,23 @@ async fn consume_stream(
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
-                ..
+                internal_call_id,
             })) => {
                 tool_call_count += 1;
                 let name = tool_call.function.name.clone();
                 let args_full = tool_call.function.arguments.to_string();
                 let args_preview = truncate_str(&args_full, 200).to_string();
                 log::debug!("[ai-stream] tool_call #{tool_call_count}: {name} args={args_preview}");
-                let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview, args_full });
+                let _ = event_tx.send(StreamEvent::ToolCallStart {
+                    call_id: internal_call_id,
+                    name,
+                    args_preview,
+                    args_full,
+                });
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
-                ..
+                internal_call_id,
             })) => {
                 turn_count += 1;
                 // 0.42 reports the executed tool's own name, so results land on the right row
@@ -553,8 +558,15 @@ async fn consume_stream(
                     truncate_str(&result_preview, 100)
                 );
                 let event = match tool_failure_reason(result_json.as_deref().unwrap_or_default()) {
-                    Some(reason) => StreamEvent::ToolCallFailed { name, reason },
-                    None => StreamEvent::ToolCallEnd { name, result_preview, result_json },
+                    Some(reason) => {
+                        StreamEvent::ToolCallFailed { call_id: internal_call_id, name, reason }
+                    }
+                    None => StreamEvent::ToolCallEnd {
+                        call_id: internal_call_id,
+                        name,
+                        result_preview,
+                        result_json,
+                    },
                 };
                 let _ = event_tx.send(event);
             }
