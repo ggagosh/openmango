@@ -11,7 +11,9 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{
     Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection,
 };
-use gpui_kit::component::message::{Message, MessageAlignment, MessageContent, MessageHeader};
+use gpui_kit::component::message::{
+    Message, MessageAlignment, MessageContent, MessageFooter, MessageHeader,
+};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
@@ -30,7 +32,7 @@ use crate::ai::telemetry::AiRequestSpan;
 use crate::ai::tools::{MongoContext, StreamEvent};
 use crate::ai::{
     AiChatEntry, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock, ToolActivity,
-    ToolActivityStatus,
+    ToolActivityStatus, TurnUsage,
 };
 use crate::components::Button;
 use crate::state::{AiProvider, AppCommands, AppState};
@@ -680,6 +682,7 @@ impl AiView {
                     match result {
                         Ok(outcome) => {
                             s.ai_chat.transcript = outcome.transcript;
+                            s.ai_chat.set_turn_usage(turn_id, outcome.usage);
                             s.ai_chat.finalize_turn_response(message_id, outcome.text.clone());
                             span.finish_ok(outcome.text.len());
                         }
@@ -1549,9 +1552,10 @@ fn assistant_message(
     body: impl IntoElement,
     surface: Hsla,
     border: Hsla,
+    usage: Option<TurnUsage>,
     appearance: &crate::state::AppearanceSettings,
 ) -> Message {
-    Message::new()
+    let message = Message::new()
         .alignment(MessageAlignment::Start)
         .with_stack_style(StyleRefinement::default().w_full().min_w(px(0.0)))
         .header(MessageHeader::new().child(
@@ -1571,7 +1575,14 @@ fn assistant_message(
                     .min_w(px(0.0))
                     .child(body),
             ),
-        )
+        );
+    match usage.filter(|usage| !usage.is_empty()) {
+        Some(usage) => message.footer(
+            MessageFooter::new()
+                .child(div().text_xs().text_color(label_color.opacity(0.7)).child(usage.label())),
+        ),
+        None => message,
+    }
 }
 
 struct TurnReportContext {
@@ -1638,6 +1649,7 @@ fn render_turn(
                 body,
                 cx.theme().danger.opacity(0.1),
                 cx.theme().danger.opacity(0.42),
+                None,
                 appearance,
             ))
         }
@@ -1671,6 +1683,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
+                turn.usage,
                 appearance,
             ))
         }
@@ -1712,6 +1725,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
+                turn.usage,
                 appearance,
             ))
         }
@@ -1734,6 +1748,7 @@ fn render_turn(
                 body,
                 assistant_bg,
                 border,
+                turn.usage,
                 appearance,
             ))
         }
@@ -2711,6 +2726,7 @@ mod tests {
     fn turn() -> AiChatEntry {
         AiChatEntry::Turn(AiTurn {
             id: Uuid::new_v4(),
+            usage: None,
             user_message: ChatMessage::new(ChatRole::User, "how many orders?"),
             assistant_message: None,
             created_at: chrono::Utc::now(),

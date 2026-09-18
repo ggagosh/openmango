@@ -123,6 +123,8 @@ pub struct AiGenerationRequest {
 #[derive(Debug, Clone, Default)]
 pub struct TurnOutcome {
     pub text: String,
+    /// What the provider charged for this turn.
+    pub usage: crate::ai::blocks::TurnUsage,
     /// Feed this back as the next turn's transcript so the model keeps what its tools found.
     pub transcript: Vec<RigMessage>,
 }
@@ -517,6 +519,7 @@ async fn consume_stream(
     let mut full_text = String::new();
     let mut final_text = String::new();
     let mut transcript = Vec::new();
+    let mut usage = crate::ai::blocks::TurnUsage::default();
     let mut turn_count: usize = 0;
     let mut tool_call_count: usize = 0;
 
@@ -573,6 +576,10 @@ async fn consume_stream(
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = final_response.output().to_string();
                 transcript = final_response.messages.clone().unwrap_or_default();
+                usage = crate::ai::blocks::TurnUsage {
+                    input_tokens: final_response.usage.input_tokens,
+                    output_tokens: final_response.usage.output_tokens,
+                };
                 log::debug!(
                     "[ai-stream] final_response after {tool_call_count} tool calls, \
                      {turn_count} results"
@@ -616,7 +623,7 @@ async fn consume_stream(
     if full_text.trim().is_empty() {
         full_text = final_text;
     }
-    Ok(TurnOutcome { text: full_text, transcript })
+    Ok(TurnOutcome { text: full_text, transcript, usage })
 }
 
 /// rig reports a failed tool call as its result text, tagged with the error variant.

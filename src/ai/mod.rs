@@ -15,7 +15,7 @@ pub mod tools;
 
 pub use blocks::{
     AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock,
-    ReportSheet, ToolActivity, ToolActivityStatus,
+    ReportSheet, ToolActivity, ToolActivityStatus, TurnUsage,
 };
 pub use errors::{AiError, AiErrorKind};
 pub use settings::{AiProvider, AiSettings};

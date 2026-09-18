@@ -365,9 +365,35 @@ impl ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTurn {
     pub id: Uuid,
+    /// What the turn cost, once it finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TurnUsage>,
     pub user_message: ChatMessage,
     pub assistant_message: Option<ChatMessage>,
     pub created_at: DateTime<Utc>,
+}
+
+/// Tokens a turn spent, as the provider counted them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl TurnUsage {
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens == 0 && self.output_tokens == 0
+    }
+
+    /// "1,234 in · 567 out", the line under a finished answer.
+    pub fn label(&self) -> String {
+        use crate::helpers::format_number;
+        format!(
+            "{} in · {} out",
+            format_number(self.input_tokens),
+            format_number(self.output_tokens)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,8 +487,13 @@ impl AiChatState {
     pub fn begin_turn(&mut self, content: impl Into<String>) -> Uuid {
         let user_message = ChatMessage::new(ChatRole::User, content);
         let turn_id = Uuid::new_v4();
-        let turn =
-            AiTurn { id: turn_id, user_message, assistant_message: None, created_at: Utc::now() };
+        let turn = AiTurn {
+            id: turn_id,
+            usage: None,
+            user_message,
+            assistant_message: None,
+            created_at: Utc::now(),
+        };
         self.entries.push(AiChatEntry::Turn(turn));
         self.current_turn_id = Some(turn_id);
         self.trim_entries();
@@ -488,6 +519,15 @@ impl AiChatState {
         {
             msg.content.push_str(delta);
             msg.tone = ChatMessageTone::Normal;
+        }
+    }
+
+    pub fn set_turn_usage(&mut self, turn_id: Uuid, usage: TurnUsage) {
+        if usage.is_empty() {
+            return;
+        }
+        if let Some(turn) = self.find_turn_mut(turn_id) {
+            turn.usage = Some(usage);
         }
     }
 
@@ -712,6 +752,21 @@ impl AiChatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_is_recorded_on_the_turn_it_belongs_to() {
+        let mut chat = AiChatState::default();
+        let turn_id = chat.begin_turn("how many orders?");
+        chat.set_turn_usage(turn_id, TurnUsage { input_tokens: 1234, output_tokens: 56 });
+
+        let turn = chat.find_turn_mut(turn_id).expect("turn");
+        assert_eq!(turn.usage.map(|usage| usage.label()), Some("1,234 in · 56 out".to_string()));
+
+        // A provider that reports nothing leaves the footer off entirely.
+        let second = chat.begin_turn("and customers?");
+        chat.set_turn_usage(second, TurnUsage::default());
+        assert!(chat.find_turn_mut(second).expect("turn").usage.is_none());
+    }
 
     #[test]
     fn two_calls_to_one_tool_keep_their_own_results() {
