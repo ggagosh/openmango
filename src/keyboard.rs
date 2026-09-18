@@ -331,8 +331,10 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-r", RefreshView, Some("Workspace")),
         KeyBinding::new("cmd-q", QuitApp, Some("Workspace")),
         KeyBinding::new("ctrl-q", QuitApp, Some("Workspace")),
-        KeyBinding::new("cmd-f", FindInResults, Some("Documents")),
-        KeyBinding::new("ctrl-f", FindInResults, Some("Documents")),
+        // Not while typing: the query editors have their own find, and taking Cmd+F from an
+        // input to open the document search is not what anyone means by it.
+        KeyBinding::new("cmd-f", FindInResults, Some("Documents && !Input")),
+        KeyBinding::new("ctrl-f", FindInResults, Some("Documents && !Input")),
         KeyBinding::new("escape", CloseSearch, Some("Documents")),
         KeyBinding::new("escape", CloseSearch, Some("Documents && Input")),
         KeyBinding::new("cmd-f", FindInSidebar, Some("Sidebar")),
