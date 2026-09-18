@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The command palette also opens with Cmd/Ctrl+Shift+P, lists recently used commands first, finds commands by related words such as "dump" for Export Data, and narrows the search to databases and collections when it starts with `#` or to connections with `@`
 - Mango Dark and Mango Light themes in the openmango.app colors, listed first in each group, with every text color meeting WCAG AA contrast on the surfaces it appears on
 - Match system appearance in Settings and in the command palette's theme list switches between Mango Dark and Mango Light with the system's dark or light mode; choosing a theme turns it off
+- AI models come from a models.dev catalogue: Fast, Balanced and Powerful presets per provider, a searchable picker that shows each model's context size and price, and a Refresh that fetches the latest list; a snapshot ships with the app so the picker is right offline
+- OpenRouter as an AI provider, offering its whole searchable catalogue of tool-calling models instead of presets
+- The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before
+- Every answer shows what it cost in tokens and can be copied; an answer that failed can be tried again
+- Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
 
 ### Changed
 - New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
@@ -25,6 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Indexes tab shows keys as field and direction pairs and properties such as Unique, TTL, or Partial as tags, without disabled actions on the built-in `_id_` index
 - The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
 - The command palette shows shortcuts as keycaps, scrolls its whole list with a scrollbar, follows the mouse with one highlight, checks the current theme, names the open submenu with a back button (Backspace also goes back), and clears the search on the first Escape
+- The assistant works a question through step by step instead of being told to stop after a few tool calls, keeps what its tools found across follow-up questions, and retries a request the provider rate-limited
+- Save and Discard for unsaved document edits sit in the collection header with their keyboard shortcuts shown, and act on every unsaved document in the tab rather than only the selected ones
+- After a query the status bar says how many documents were loaded, out of how many matched, and how long it took
+- The Find button shows a spinner in place of its icon instead of pushing the row aside, and busy buttons keep their size
+- The status bar and the chat are built on gpui-kit's own components, so the chat scrolls, follows new messages and renders markdown the way the rest of the app does
 
 ### Removed
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
@@ -38,6 +48,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shortcut hints in the command palette and sidebar tooltips showed the Ctrl variant on macOS
 - Double-clicking a value in the document tree to edit it shifted the text and the rows below
 - The Schema tab's field filter showed its text low, clipped, and indented behind an empty gutter; it now matches the documents filter
+- Replacing documents with `many` now stops at the 100 it promises, instead of rewriting every document that matched the filter
+- Inserting more than 100 documents is refused rather than quietly exceeding the limit the assistant was told about
+- A field's value no longer shifts by a couple of pixels when it is marked as edited or selected, and a document's key no longer moves when it gets unsaved changes
+- Two calls to the same tool in one answer keep their own results
+- On a read-only connection the assistant is no longer told about write tools it does not have
+- Stopping an answer says it stopped, instead of reporting a tool call limit
+- The chat's text box starts the caret at the edge of the box, and grows as you type
+- The model picker opens on the model you are using, and Settings says when the model list could not be loaded instead of showing "Ready"
+- A group of tool calls can be collapsed while the assistant is still working, and no longer blinks open and shut between calls
 
 ## [0.3.0] - 2026-09-14
 
