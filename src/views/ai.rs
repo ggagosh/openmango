@@ -18,6 +18,7 @@ use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use uuid::Uuid;
@@ -777,6 +778,7 @@ impl AiView {
                         s.ai_chat.is_loading = false;
                         s.ai_chat.cancel = None;
                         s.ai_chat.current_turn_id = None;
+                        s.ai_chat.save_conversation();
                         cx.notify();
                     });
                 });
@@ -812,6 +814,9 @@ impl AiView {
                     s.ai_chat.is_loading = false;
                     s.ai_chat.cancel = None;
                     s.ai_chat.current_turn_id = None;
+                    // Every finished turn goes to the store, so the history is never behind what
+                    // is on screen and reopening a conversation brings all of it back.
+                    s.ai_chat.save_conversation();
                     cx.notify();
                 });
             });
@@ -1012,6 +1017,7 @@ impl Render for AiView {
                 )
         };
 
+        let current_conversation = ai_chat.conversation_id.map(|id| id.to_string());
         let history_panel: Option<AnyElement> = self.history_open.then(|| {
             let rows: Vec<AnyElement> = self
                 .recent_conversations
@@ -1019,6 +1025,7 @@ impl Render for AiView {
                 .map(|conversation| {
                     let view = cx.entity();
                     let id = conversation.id.clone();
+                    let current = current_conversation.as_deref() == Some(id.as_str());
                     div()
                         .id(ElementId::Name(format!("chat-history-{id}").into()))
                         .flex()
@@ -1028,6 +1035,7 @@ impl Render for AiView {
                         .py(spacing::xs())
                         .rounded(crate::theme::borders::radius_sm())
                         .cursor_pointer()
+                        .when(current, |row| row.bg(cx.theme().primary.opacity(0.12)))
                         .hover(|s: gpui_kit::StyleRefinement| {
                             s.bg(cx.theme().secondary.opacity(0.2))
                         })
@@ -1041,7 +1049,12 @@ impl Render for AiView {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground.opacity(0.8))
-                                .child(when_label(conversation.updated_ms)),
+                                .child(match current {
+                                    true => {
+                                        format!("{} · open", when_label(conversation.updated_ms))
+                                    }
+                                    false => when_label(conversation.updated_ms),
+                                }),
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             cx.stop_propagation();

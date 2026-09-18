@@ -638,11 +638,14 @@ impl AiChatState {
         self.conversation_id = Some(id);
     }
 
-    /// The conversations worth offering, newest first, without the one on screen.
+    /// The conversations worth offering, newest first. The one on screen is in the list, marked
+    /// by the view: a switcher that hides where you are reads as broken when there are only one
+    /// or two chats.
     pub fn recent_conversations(&self, limit: usize) -> Vec<crate::ai::memory::Conversation> {
         let Some(memory) = &self.memory else { return Vec::new() };
-        let current = self.conversation_id.map(|id| id.to_string()).unwrap_or_default();
-        memory.recent(&current, limit).unwrap_or_else(|error| {
+        // The chat on screen may be ahead of the store, so it is written out before it is listed.
+        self.save_conversation();
+        memory.recent(limit).unwrap_or_else(|error| {
             log::warn!("Could not list earlier conversations: {error}");
             Vec::new()
         })
@@ -884,6 +887,12 @@ mod tests {
         };
         let first = chat.conversation_id();
         chat.begin_turn("how many orders shipped?");
+
+        // The conversation on screen is in its own list: hiding it made one chat look like none.
+        let listed = chat.recent_conversations(20);
+        assert_eq!(listed.len(), 1, "the conversation in progress is listed");
+        assert_eq!(listed[0].title, "how many orders shipped?");
+        assert_eq!(listed[0].id, first.to_string());
 
         chat.start_new_conversation();
         assert!(chat.entries.is_empty(), "the screen is empty");

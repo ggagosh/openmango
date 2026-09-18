@@ -271,38 +271,56 @@ impl ChatMemory {
         Ok(count as usize)
     }
 
-    /// The conversations to offer, newest first.
+    /// The conversations to offer, newest first, including the one in progress.
     ///
     /// A conversation is named by the first thing that was asked in it, which is what the user
     /// will recognise; there is nowhere to put a title the model wrote, and asking it for one
     /// would cost a request per chat.
-    pub fn recent(&self, exclude: &str, limit: usize) -> Result<Vec<Conversation>> {
+    ///
+    /// The name comes from the saved chat rather than from what was sent to the model: a turn
+    /// that failed never reached the model, but the user still asked it and still expects to
+    /// find it here.
+    pub fn recent(&self, limit: usize) -> Result<Vec<Conversation>> {
         let rows: Vec<(String, i64)> = {
             let connection = self.lock()?;
             let mut statement = connection.prepare(
                 "SELECT id, updated_ms FROM conversations
-                 WHERE id <> ?1 ORDER BY updated_ms DESC, rowid DESC LIMIT ?2",
+                 ORDER BY updated_ms DESC, rowid DESC LIMIT ?1",
             )?;
             statement
-                .query_map(params![exclude, limit as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .query_map(params![limit as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .filter_map(Result::ok)
                 .collect()
         };
 
         let mut conversations = Vec::with_capacity(rows.len());
         for (id, updated_ms) in rows {
-            let title = self
-                .load_messages(&id)?
-                .iter()
-                .find(|message| matches!(message, RigMessage::User { .. }))
-                .map(|message| snippet(&message_text(message)))
-                .unwrap_or_default();
-            if title.is_empty() {
-                continue;
-            }
+            let title = match self.first_question(&id)? {
+                Some(title) => title,
+                None => continue,
+            };
             conversations.push(Conversation { id, updated_ms, title });
         }
         Ok(conversations)
+    }
+
+    /// What a conversation is called: the first thing the user asked in it.
+    fn first_question(&self, conversation_id: &str) -> Result<Option<String>> {
+        let from_timeline =
+            self.load_timeline(conversation_id)?.into_iter().find_map(|entry| match entry {
+                crate::ai::AiChatEntry::Turn(turn) => Some(snippet(&turn.user_message.content)),
+                _ => None,
+            });
+        if let Some(title) = from_timeline.filter(|title| !title.is_empty()) {
+            return Ok(Some(title));
+        }
+        // A conversation from before the chat itself was stored still has what went to the model.
+        Ok(self
+            .load_messages(conversation_id)?
+            .iter()
+            .find(|message| matches!(message, RigMessage::User { .. }))
+            .map(|message| snippet(&message_text(message)))
+            .filter(|title| !title.is_empty()))
     }
 
     /// Find text from earlier conversations.
@@ -577,7 +595,7 @@ mod tests {
             .append_messages("newer", vec![RigMessage::user("index the audit log")])
             .expect("write");
 
-        let recent = store.recent("", 10).expect("recent");
+        let recent = store.recent(10).expect("recent");
         assert_eq!(
             recent.iter().map(|chat| chat.id.as_str()).collect::<Vec<_>>(),
             ["newer", "older"],
@@ -585,12 +603,24 @@ mod tests {
         );
         assert_eq!(recent[0].title, "index the audit log");
 
-        let without_current = store.recent("newer", 10).expect("recent");
-        assert_eq!(without_current.len(), 1, "the conversation in progress is not in its own list");
-
         // A conversation with nothing the user said has no name to show, so it is left out.
         store.append_messages("empty", vec![RigMessage::assistant("hello?")]).expect("write");
-        assert!(store.recent("", 10).expect("recent").iter().all(|chat| chat.id != "empty"));
+        assert!(store.recent(10).expect("recent").iter().all(|chat| chat.id != "empty"));
+
+        // A question that never reached the model is still findable: the chat is what counts.
+        let asked = crate::ai::AiChatEntry::Turn(crate::ai::AiTurn {
+            id: uuid::Uuid::new_v4(),
+            usage: None,
+            user_message: crate::ai::ChatMessage::new(
+                crate::ai::ChatRole::User,
+                "why is this slow?",
+            ),
+            assistant_message: None,
+            created_at: chrono::Utc::now(),
+        });
+        store.save_timeline("failed", &[asked]).expect("write");
+        let failed = store.recent(10).expect("recent");
+        assert_eq!(failed[0].title, "why is this slow?", "and it is the most recent");
     }
 
     #[test]
