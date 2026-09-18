@@ -12,7 +12,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Fable 5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-06-07",
         "status": null,
@@ -29,7 +40,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Fable 5.1",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-09-01",
         "status": null,
@@ -46,7 +68,18 @@
           "context": 200000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Haiku 4.5 (latest)",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-10-15",
         "status": null,
@@ -63,7 +96,18 @@
           "context": 200000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Haiku 4.5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-10-15",
         "status": null,
@@ -80,7 +124,18 @@
           "context": 200000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 4.5 (latest)",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-11-24",
         "status": null,
@@ -97,7 +152,18 @@
           "context": 200000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 4.5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-11-24",
         "status": null,
@@ -114,7 +180,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 4.6",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-04",
         "status": null,
@@ -131,7 +208,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 4.7",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-04-14",
         "status": null,
@@ -148,7 +236,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 4.8",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-05-28",
         "status": null,
@@ -165,7 +264,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Opus 5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-24",
         "status": null,
@@ -182,7 +292,18 @@
           "context": 1000000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Sonnet 4.5 (latest)",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-09-29",
         "status": null,
@@ -199,7 +320,18 @@
           "context": 1000000,
           "output": 64000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Sonnet 4.5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-09-29",
         "status": null,
@@ -216,7 +348,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Sonnet 4.6",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-17",
         "status": null,
@@ -233,7 +376,18 @@
           "context": 1000000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Claude Sonnet 5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-06-29",
         "status": null,
@@ -246,40 +400,6 @@
   "google": {
     "id": "google",
     "models": {
-      "deep-research-max-preview-04-2026": {
-        "cost": {
-          "input": 2,
-          "output": 12
-        },
-        "id": "deep-research-max-preview-04-2026",
-        "limit": {
-          "context": 131072,
-          "output": 65536
-        },
-        "name": "Deep Research Max Preview (Apr-21-2026)",
-        "reasoning": true,
-        "release_date": "2026-04-21",
-        "status": null,
-        "structured_output": null,
-        "tool_call": true
-      },
-      "deep-research-preview-04-2026": {
-        "cost": {
-          "input": 2,
-          "output": 12
-        },
-        "id": "deep-research-preview-04-2026",
-        "limit": {
-          "context": 131072,
-          "output": 65536
-        },
-        "name": "Deep Research Preview (Apr-21-2026)",
-        "reasoning": true,
-        "release_date": "2026-04-21",
-        "status": null,
-        "structured_output": null,
-        "tool_call": true
-      },
       "gemini-2.5-computer-use-preview-10-2025": {
         "cost": {
           "input": 1.25,
@@ -290,7 +410,17 @@
           "context": 131072,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 2.5 Computer Use Preview 10-2025",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-10-07",
         "status": null,
@@ -307,7 +437,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 2.5 Flash",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-06-17",
         "status": null,
@@ -324,7 +467,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 2.5 Flash-Lite",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-06-17",
         "status": null,
@@ -341,7 +497,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 2.5 Pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-06-17",
         "status": null,
@@ -358,7 +527,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3 Flash Preview",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-12-17",
         "status": null,
@@ -375,45 +557,24 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.1 Flash Lite",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-05-07",
         "status": null,
         "structured_output": true,
-        "tool_call": true
-      },
-      "gemini-3.1-flash-lite-image": {
-        "cost": {
-          "input": 0.25,
-          "output": 30
-        },
-        "id": "gemini-3.1-flash-lite-image",
-        "limit": {
-          "context": 65536,
-          "output": 65536
-        },
-        "name": "Nano Banana 2 Lite",
-        "reasoning": true,
-        "release_date": "2026-06-30",
-        "status": null,
-        "structured_output": false,
-        "tool_call": true
-      },
-      "gemini-3.1-flash-live-preview": {
-        "cost": {
-          "input": 0.75,
-          "output": 4.5
-        },
-        "id": "gemini-3.1-flash-live-preview",
-        "limit": {
-          "context": 131072,
-          "output": 65536
-        },
-        "name": "Gemini 3.1 Flash Live Preview",
-        "reasoning": true,
-        "release_date": "2026-03-26",
-        "status": null,
-        "structured_output": false,
         "tool_call": true
       },
       "gemini-3.1-pro-preview": {
@@ -426,7 +587,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.1 Pro Preview",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-19",
         "status": null,
@@ -443,7 +617,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.1 Pro Preview Custom Tools",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-19",
         "status": null,
@@ -460,7 +647,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.5 Flash",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-05-19",
         "status": null,
@@ -477,7 +677,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.5 Flash Lite",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-21",
         "status": null,
@@ -494,7 +707,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.6 Flash",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-21",
         "status": null,
@@ -511,7 +737,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.7 Flash",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-08-13",
         "status": null,
@@ -528,7 +767,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini 3.8 Flash",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-09-02",
         "status": null,
@@ -545,7 +797,20 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini Flash Latest",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-08-13",
         "status": null,
@@ -562,43 +827,22 @@
           "context": 1048576,
           "output": 65536
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "Gemini Flash-Lite Latest",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-21",
-        "status": null,
-        "structured_output": true,
-        "tool_call": true
-      },
-      "gemma-4-26b-a4b-it": {
-        "cost": {
-          "input": null,
-          "output": null
-        },
-        "id": "gemma-4-26b-a4b-it",
-        "limit": {
-          "context": 262144,
-          "output": 32768
-        },
-        "name": "Gemma 4 26B A4B IT",
-        "reasoning": true,
-        "release_date": "2026-04-02",
-        "status": null,
-        "structured_output": true,
-        "tool_call": true
-      },
-      "gemma-4-31b-it": {
-        "cost": {
-          "input": null,
-          "output": null
-        },
-        "id": "gemma-4-31b-it",
-        "limit": {
-          "context": 262144,
-          "output": 32768
-        },
-        "name": "Gemma 4 31B IT",
-        "reasoning": true,
-        "release_date": "2026-04-02",
         "status": null,
         "structured_output": true,
         "tool_call": true
@@ -619,7 +863,18 @@
           "context": 1047576,
           "output": 32768
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4.1",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2025-04-14",
         "status": null,
@@ -636,7 +891,18 @@
           "context": 1047576,
           "output": 32768
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4.1 mini",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2025-04-14",
         "status": null,
@@ -653,7 +919,18 @@
           "context": 128000,
           "output": 16384
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4o",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2024-05-13",
         "status": null,
@@ -670,7 +947,17 @@
           "context": 128000,
           "output": 16384
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4o (2024-08-06)",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2024-08-06",
         "status": null,
@@ -687,7 +974,17 @@
           "context": 128000,
           "output": 16384
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4o (2024-11-20)",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2024-11-20",
         "status": null,
@@ -704,7 +1001,18 @@
           "context": 128000,
           "output": 16384
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-4o mini",
+        "open_weights": false,
         "reasoning": false,
         "release_date": "2024-07-18",
         "status": null,
@@ -722,7 +1030,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-08-07",
         "status": null,
@@ -740,7 +1058,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5 Mini",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-08-07",
         "status": null,
@@ -758,7 +1086,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5 Nano",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-08-07",
         "status": null,
@@ -776,7 +1114,17 @@
           "input": 272000,
           "output": 272000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5 Pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-10-06",
         "status": null,
@@ -794,7 +1142,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.1",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-11-13",
         "status": null,
@@ -812,7 +1170,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.2",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-12-11",
         "status": null,
@@ -830,7 +1198,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.2 Pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-12-11",
         "status": null,
@@ -848,7 +1226,18 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.3 Codex",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-05",
         "status": null,
@@ -866,7 +1255,18 @@
           "input": 100000,
           "output": 32000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.3 Codex Spark",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-02-05",
         "status": null,
@@ -884,7 +1284,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.4",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-03-05",
         "status": null,
@@ -902,7 +1313,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.4 mini",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-03-17",
         "status": null,
@@ -920,7 +1341,17 @@
           "input": 272000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.4 nano",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-03-17",
         "status": null,
@@ -938,7 +1369,17 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.4 Pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-03-05",
         "status": null,
@@ -956,7 +1397,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.5",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-04-23",
         "status": null,
@@ -974,7 +1426,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.5 Pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-04-23",
         "status": null,
@@ -992,7 +1455,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.6",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-09",
         "status": null,
@@ -1010,7 +1484,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.6 Luna",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-09",
         "status": null,
@@ -1028,7 +1513,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.6 Sol",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-09",
         "status": null,
@@ -1046,7 +1542,18 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-5.6 Terra",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-07-09",
         "status": null,
@@ -1064,29 +1571,22 @@
           "input": 922000,
           "output": 128000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "GPT-6 Astra",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2026-09-04",
         "status": null,
         "structured_output": true,
-        "tool_call": true
-      },
-      "gpt-realtime-2.1": {
-        "cost": {
-          "input": 4,
-          "output": 24
-        },
-        "id": "gpt-realtime-2.1",
-        "limit": {
-          "context": 128000,
-          "input": 96000,
-          "output": 32000
-        },
-        "name": "GPT-Realtime-2.1",
-        "reasoning": true,
-        "release_date": "2026-07-06",
-        "status": null,
-        "structured_output": false,
         "tool_call": true
       },
       "o3": {
@@ -1099,7 +1599,18 @@
           "context": 200000,
           "output": 100000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "o3",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-04-16",
         "status": null,
@@ -1116,7 +1627,17 @@
           "context": 200000,
           "output": 100000
         },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
         "name": "o3-pro",
+        "open_weights": false,
         "reasoning": true,
         "release_date": "2025-06-10",
         "status": null,

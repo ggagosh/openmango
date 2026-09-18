@@ -16,6 +16,7 @@ use gpui_kit::*;
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
+use crate::components::model_select::{ModelSelectState, ModelSelector};
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::settings::CollectionDoubleClickAction;
 use crate::state::{
@@ -44,6 +45,7 @@ pub struct SettingsView {
     ai_ollama_base_url_input_state: Option<Entity<InputState>>,
     ai_test_in_flight: bool,
     ai_test_result: Option<AiTestResult>,
+    model_selector: Option<ModelSelector>,
     last_seen_provider: AiProvider,
 }
 
@@ -66,6 +68,7 @@ impl SettingsView {
             _subscriptions: subscriptions,
             keybindings_view,
             template_input_state: None,
+            model_selector: None,
             batch_size_input_state: None,
             query_timeout_input_state: None,
             ai_api_key_input_state: None,
@@ -77,6 +80,19 @@ impl SettingsView {
     }
 
     /// Initialize input states on first render (when window is available)
+    /// The model picker keeps its own search state, so it is built once and then synced.
+    fn ensure_model_selector(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ModelSelectState> {
+        let state = self.state.clone();
+        let selector =
+            self.model_selector.get_or_insert_with(|| ModelSelector::new(&state, window, cx));
+        selector.sync(&state, window, cx);
+        selector.entity()
+    }
+
     fn ensure_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.template_input_state.is_some()
             && self.batch_size_input_state.is_some()
@@ -278,6 +294,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_input_states(window, cx);
+        let model_select = self.ensure_model_selector(window, cx);
 
         let view = cx.entity();
         let state = self.state.clone();
@@ -361,6 +378,7 @@ impl Render for SettingsView {
         let ai_state = state.clone();
         let ai_view = view.clone();
         let ai_ui = AiSectionUiState {
+            model_select,
             api_key_input_state: self.ai_api_key_input_state.clone().unwrap(),
             ollama_base_url_input_state: self.ai_ollama_base_url_input_state.clone().unwrap(),
             ai_test_in_flight: self.ai_test_in_flight,
@@ -2101,6 +2119,7 @@ fn render_transfer_section(
 struct AiSectionUiState {
     api_key_input_state: Entity<InputState>,
     ollama_base_url_input_state: Entity<InputState>,
+    model_select: Entity<ModelSelectState>,
     ai_test_in_flight: bool,
     ai_test_result: Option<AiTestResult>,
 }
@@ -2115,6 +2134,7 @@ fn render_ai_section(
     let AiSectionUiState {
         api_key_input_state,
         ollama_base_url_input_state,
+        model_select,
         ai_test_in_flight,
         ai_test_result,
     } = ai_ui;
@@ -2233,20 +2253,8 @@ fn render_ai_section(
             })
     };
 
-    let model_dropdown = {
-        let state = state.clone();
-        let label = crate::components::model_menu::model_button_label(state.read(cx));
-        gpui_kit::component::button::Button::new("ai-model-dropdown")
-            .ghost()
-            .xsmall()
-            .label(label)
-            .dropdown_caret(true)
-            .rounded(islands::radius_sm(&settings.appearance))
-            .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, cx| {
-                crate::components::model_menu::build_model_menu(menu, state.clone(), cx)
-            })
-    };
+    let model_dropdown =
+        crate::components::model_select::model_select(&model_select, Size::Small, px(260.0));
 
     let model_status_badge = {
         let (label, accent) = match (current_provider, cached) {

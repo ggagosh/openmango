@@ -23,7 +23,15 @@ curl -fsSL https://models.dev/api.json |
         name,
         models: (
           .models
-          | map_values(select(.tool_call == true and (.status // "") != "deprecated"))
+          | map_values(select(
+              .tool_call == true
+              and (.status // "") != "deprecated"
+              # Chat models only: no image or audio generators, no live/realtime variants,
+              # and no open-weight models that these APIs do not actually serve.
+              and (.modalities.output == ["text"])
+              and (.modalities.input | index("text"))
+              and (.open_weights // false) == false
+            ))
           | map_values({
               id,
               name,
@@ -33,6 +41,8 @@ curl -fsSL https://models.dev/api.json |
               release_date,
               status,
               limit,
+              modalities,
+              open_weights,
               cost: ((.cost // {}) | {input, output}),
             })
         ),

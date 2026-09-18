@@ -24,6 +24,14 @@ pub struct Limit {
     pub output: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Modalities {
+    #[serde(default)]
+    pub input: Vec<String>,
+    #[serde(default)]
+    pub output: Vec<String>,
+}
+
 /// US dollars per million tokens.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Cost {
@@ -51,11 +59,26 @@ pub struct ModelInfo {
     pub limit: Limit,
     #[serde(default)]
     pub cost: Cost,
+    #[serde(default)]
+    pub modalities: Modalities,
+    #[serde(default)]
+    pub open_weights: bool,
 }
 
 impl ModelInfo {
     pub fn is_deprecated(&self) -> bool {
         self.status.as_deref() == Some("deprecated")
+    }
+
+    /// A text model this app can hold a tool-calling conversation with. Image and audio
+    /// generators, live/realtime variants and open-weight models these APIs do not serve
+    /// would only pad the picker.
+    pub fn is_chat_model(&self) -> bool {
+        self.tool_call
+            && !self.is_deprecated()
+            && !self.open_weights
+            && self.modalities.output == ["text"]
+            && self.modalities.input.iter().any(|input| input == "text")
     }
 
     /// "1M context · $2/$10 per Mtok", the line under a model in the picker.
@@ -167,7 +190,7 @@ impl ModelCatalog {
     pub fn usable_model_ids(&self, provider: AiProvider) -> Vec<String> {
         self.models(provider)
             .iter()
-            .filter(|model| model.tool_call && !model.is_deprecated())
+            .filter(|model| model.is_chat_model())
             .map(|model| model.id.clone())
             .collect()
     }
@@ -303,8 +326,7 @@ mod tests {
                 let model = catalog.model(provider, id).unwrap_or_else(|| {
                     panic!("{} {} missing: {id}", provider.label(), preset.label())
                 });
-                assert!(model.tool_call, "{id} cannot call tools");
-                assert!(!model.is_deprecated(), "{id} is deprecated");
+                assert!(model.is_chat_model(), "{id} is not a usable chat model");
             }
         }
     }
@@ -326,7 +348,8 @@ mod tests {
     fn unknown_providers_and_fields_are_ignored() {
         let catalog = ModelCatalog::parse(
             r#"{"anthropic":{"id":"anthropic","name":"Anthropic","models":{
-                 "m":{"id":"m","name":"M","tool_call":true,"npm":"x","limit":{"context":1000}}}},
+                 "m":{"id":"m","name":"M","tool_call":true,"npm":"x","limit":{"context":1000},
+                      "modalities":{"input":["text"],"output":["text"]}}}},
                 "some-other-provider":{"models":{}}}"#,
         )
         .expect("parse");
@@ -346,6 +369,8 @@ mod tests {
             status: None,
             limit: Limit { context: Some(1_000_000), output: Some(64_000) },
             cost: Cost { input: Some(0.3), output: Some(2.5) },
+            modalities: Modalities { input: vec!["text".into()], output: vec!["text".into()] },
+            open_weights: false,
         };
         assert_eq!(model.summary(), "1M context · $0.30/$2.50 per Mtok");
     }

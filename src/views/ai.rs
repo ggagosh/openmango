@@ -9,7 +9,6 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{
     Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection,
 };
-use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextViewStyle;
@@ -56,6 +55,8 @@ pub struct AiView {
     /// Absent = auto (expanded while running, collapsed when done).
     tool_group_overrides: HashMap<Uuid, bool>,
     last_seen_provider: AiProvider,
+    /// The model picker keeps its own search state, so the view holds it across frames.
+    model_selector: Option<crate::components::model_select::ModelSelector>,
     _subscriptions: Vec<Subscription>,
     /// @-mention popup state
     mention_query: Option<String>,
@@ -89,6 +90,7 @@ impl AiView {
             pending_follow_frames: 0,
             tool_group_overrides: HashMap::new(),
             last_seen_provider,
+            model_selector: None,
             _subscriptions: subscriptions,
             mention_query: None,
             mention_filtered: Vec::new(),
@@ -694,6 +696,14 @@ impl AiView {
 
 impl Render for AiView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let model_select = {
+            let state = self.state.clone();
+            let selector = self.model_selector.get_or_insert_with(|| {
+                crate::components::model_select::ModelSelector::new(&state, window, cx)
+            });
+            selector.sync(&state, window, cx);
+            selector.entity()
+        };
         let input_state = self.ensure_input_state(window, cx);
         self.send_pending_prompt(&input_state, window, cx);
 
@@ -1090,26 +1100,10 @@ impl Render for AiView {
             message_list
         };
 
-        // Model selector dropdown — presets first, then everything the catalogue lists
-        let model_selector = {
-            let state_for_menu = state.clone();
-            let label = crate::components::model_menu::model_button_label(state.read(cx));
-            gpui_kit::component::button::Button::new("ai-model-selector")
-                .ghost()
-                .xsmall()
-                .label(label)
-                .dropdown_caret(true)
-                .rounded(islands::radius_sm(&appearance))
-                .with_size(Size::Small)
-                .disabled(is_loading)
-                .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, cx| {
-                    crate::components::model_menu::build_model_menu(
-                        menu,
-                        state_for_menu.clone(),
-                        cx,
-                    )
-                })
-        };
+        // Model selector — presets first, then every model, searchable
+        let model_selector =
+            crate::components::model_select::model_select(&model_select, Size::Small, px(190.0))
+                .disabled(is_loading);
 
         // Send/Stop icon button
         let send_or_stop_button = if is_loading {
