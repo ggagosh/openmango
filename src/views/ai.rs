@@ -35,7 +35,7 @@ use crate::ai::{
 };
 use crate::components::Button;
 use crate::state::{AiProvider, AppCommands, AppState};
-use crate::theme::{islands, spacing};
+use crate::theme::{borders, islands, spacing};
 use gpui_kit::component::{Icon, IconName, Size};
 
 pub struct AiView {
@@ -365,6 +365,11 @@ impl AiView {
                     .smart_indent(false)
                     .soft_wrap(true)
                     .line_number(false)
+                    // Without this the fold gutter reserves space and the caret starts a long
+                    // way in from the border.
+                    .folding(false)
+                    .scroll_beyond_last_line(Some(0))
+                    .cursor_surrounding_lines(Some(0))
                     .submit_on_enter(true)
                     .clean_on_escape()
                     .placeholder("Ask about your data…")
@@ -1554,25 +1559,44 @@ fn ai_section_gap() -> Pixels {
 }
 
 fn ai_markdown_style(cx: &App) -> TextViewStyle {
+    // An answer is mostly prose with the occasional query in it, so the code block has room to
+    // breathe and the table reads as data rather than as more paragraphs.
     let code_block_style = gpui_kit::StyleRefinement::default()
-        .mt(spacing::xs())
-        .mb(spacing::xs())
+        .mt(spacing::sm())
+        .mb(spacing::sm())
+        .p(spacing::sm())
+        .rounded(borders::radius_sm())
+        .bg(cx.theme().secondary.opacity(0.35))
         .border_1()
         .border_color(cx.theme().border.opacity(0.82));
+    let table_style = gpui_kit::StyleRefinement::default()
+        .mt(spacing::sm())
+        .mb(spacing::sm())
+        .rounded(borders::radius_sm())
+        .border_1()
+        .border_color(cx.theme().border.opacity(0.82));
+    let table_head_style = gpui_kit::StyleRefinement::default()
+        .bg(cx.theme().secondary.opacity(0.35))
+        .text_color(cx.theme().muted_foreground);
+    let table_cell_style = gpui_kit::StyleRefinement::default().px(spacing::sm()).py(spacing::xs());
 
     TextViewStyle {
-        paragraph_gap: rems(0.72),
+        // Wider than the old 0.72: paragraphs that touch read as one block of text.
+        paragraph_gap: rems(0.9),
         heading_base_font_size: px(13.0),
         highlight_theme: cx.theme().highlight_theme.clone(),
         is_dark: cx.theme().mode.is_dark(),
         code_block: code_block_style,
+        table: table_style,
+        table_head: table_head_style,
+        table_cell: table_cell_style,
         ..TextViewStyle::default()
     }
     .heading_font_size(|level, base| {
         let scale = match level {
-            1 => 1.42,
-            2 => 1.28,
-            3 => 1.16,
+            1 => 1.34,
+            2 => 1.2,
+            3 => 1.08,
             _ => 1.0,
         };
         base * scale
@@ -1948,14 +1972,27 @@ fn render_tool_group(
                 .flex()
                 .items_center()
                 .gap(spacing::sm())
+                .min_w(px(0.0))
                 .child(header_icon)
                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label)),
         )
-        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
-            "{} call{}",
-            tools.len(),
-            if tools.len() == 1 { "" } else { "s" }
-        )))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .flex_shrink_0()
+                // Which tools ran, at a glance, without opening the group.
+                .children(distinct_tool_icons(tools).into_iter().map(|icon| {
+                    icon.xsmall().text_color(cx.theme().muted_foreground.opacity(0.75))
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{}", tools.len())),
+                ),
+        )
         .on_mouse_down(MouseButton::Left, {
             move |_, _, cx| {
                 cx.stop_propagation();
@@ -2163,7 +2200,7 @@ fn render_tool_row(
         status => {
             let (icon_el, suffix) = match status {
                 ToolActivityStatus::Running => {
-                    (Spinner::new().xsmall().into_any_element(), "running...")
+                    (Spinner::new().xsmall().into_any_element(), "running")
                 }
                 ToolActivityStatus::Completed => (
                     Icon::new(IconName::Check)
@@ -2216,13 +2253,18 @@ fn render_tool_row(
                 .items_center()
                 .gap(spacing::sm())
                 .py(spacing::xs())
-                .child(icon_el)
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{display_name} {suffix}")),
+                    tool_icon(&activity.tool_name).xsmall().text_color(cx.theme().muted_foreground),
                 )
+                .child(
+                    div().text_xs().text_color(cx.theme().foreground).child(display_name.clone()),
+                )
+                .children(activity.collection.clone().map(|collection| {
+                    div().text_xs().text_color(cx.theme().muted_foreground).child(collection)
+                }))
+                .child(div().flex_1())
+                .child(icon_el)
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(suffix))
                 .into_any_element()
         }
     }
@@ -2522,6 +2564,41 @@ fn render_confirmation_card(
                 .child(confirm_button),
         )
         .into_any_element()
+}
+
+/// One icon per distinct tool in a group, in the order they ran, capped so a long run does not
+/// turn the header into a strip of icons.
+fn distinct_tool_icons(tools: &[&ToolActivity]) -> Vec<Icon> {
+    let mut seen: Vec<&str> = Vec::new();
+    for tool in tools {
+        if !seen.contains(&tool.tool_name.as_str()) {
+            seen.push(tool.tool_name.as_str());
+        }
+    }
+    seen.into_iter().take(4).map(tool_icon).collect()
+}
+
+/// The icon for a tool, so a run reads as a sequence of actions rather than a wall of names.
+fn tool_icon(name: &str) -> Icon {
+    use crate::assets::AppIcon;
+    match name {
+        "find_documents" => Icon::new(IconName::Search),
+        "aggregate" => Icon::new(AppIcon::Workflow),
+        "count_documents" => Icon::new(IconName::Asterisk),
+        "list_collections" => Icon::new(AppIcon::Table2),
+        "collection_stats" => Icon::new(IconName::ChartPie),
+        "collection_schema" => Icon::new(AppIcon::Braces),
+        "list_indexes" => Icon::new(IconName::LayoutDashboard),
+        "explain_query" => Icon::new(IconName::Cpu),
+        "sample_field_values" => Icon::new(AppIcon::Filter),
+        "generate_report" => Icon::new(AppIcon::FileSpreadsheet),
+        "insert_documents" => Icon::new(IconName::Plus),
+        "replace_documents" => Icon::new(IconName::Replace),
+        "delete_documents" => Icon::new(AppIcon::Trash),
+        "create_index" => Icon::new(IconName::Plus),
+        "drop_index" => Icon::new(IconName::Minus),
+        _ => Icon::new(IconName::SquareTerminal),
+    }
 }
 
 fn display_tool_name(name: &str) -> String {
