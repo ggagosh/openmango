@@ -96,6 +96,7 @@ actions!(
         OpenSettings,
         OpenForge,
         ToggleAiPanel,
+        ClearAiChat,
         RunForgeAll,
         RunForgeSelectionOrStatement,
         CancelForgeRun,
@@ -389,6 +390,9 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-,", OpenSettings, Some("Workspace")),
         KeyBinding::new("cmd-l", ToggleAiPanel, Some("Workspace")),
         KeyBinding::new("ctrl-l", ToggleAiPanel, Some("Workspace")),
+        // Only while the chat has focus, so it cannot be mistaken for deleting a collection.
+        KeyBinding::new("cmd-shift-backspace", ClearAiChat, Some("AiPanel")),
+        KeyBinding::new("ctrl-shift-backspace", ClearAiChat, Some("AiPanel")),
         KeyBinding::new("cmd-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new("ctrl-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new(FOCUS_CONTENT_KEYS[0], FocusContent, Some("Workspace")),

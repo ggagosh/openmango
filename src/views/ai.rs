@@ -826,7 +826,11 @@ impl Render for AiView {
                         .ghost()
                         .xsmall()
                         .icon(Icon::new(IconName::Delete).xsmall())
-                        .tooltip("Clear chat")
+                        .tooltip_with_action(
+                            "Clear chat",
+                            &crate::keyboard::ClearAiChat,
+                            Some("AiPanel"),
+                        )
                         .on_click(move |_, _, cx| {
                             clear_state.update(cx, |state, cx| {
                                 state.ai_chat.clear_chat();
@@ -841,7 +845,11 @@ impl Render for AiView {
             let close_button = Button::new("ai-panel-close")
                 .ghost()
                 .icon(Icon::new(IconName::Close).xsmall())
-                .tooltip("Close AI panel")
+                .tooltip_with_action(
+                    "Close AI panel",
+                    &crate::keyboard::ToggleAiPanel,
+                    Some("Workspace"),
+                )
                 .on_click(move |_, _, cx| {
                     close_state.update(cx, |state, cx| {
                         state.toggle_ai_panel(cx);
@@ -1022,7 +1030,7 @@ impl Render for AiView {
                 .primary()
                 .xsmall()
                 .icon(Icon::new(IconName::ArrowUp).xsmall())
-                .tooltip("Send (Enter)")
+                .tooltip(send_tooltip())
                 .disabled(!can_submit)
                 .on_click(move |_, window, cx| {
                     let prompt = input_state_for_submit.read(cx).value().to_string();
@@ -1265,6 +1273,13 @@ impl Render for AiView {
             );
 
         div()
+            .key_context("AiPanel")
+            .on_action(cx.listener(|this, _: &crate::keyboard::ClearAiChat, _, cx| {
+                this.state.update(cx, |state, cx| {
+                    state.ai_chat.clear_chat();
+                    cx.notify();
+                });
+            }))
             .flex()
             .flex_col()
             .flex_1()
@@ -1299,6 +1314,15 @@ fn find_at_trigger(text: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// "Send (⏎)". Enter is handled by the composer itself rather than by an action, so the kit's
+/// `tooltip_with_action` has nothing to look up and the keycap is spelled out here.
+fn send_tooltip() -> String {
+    match gpui_kit::Keystroke::parse("enter") {
+        Ok(enter) => format!("Send ({})", gpui_kit::component::kbd::Kbd::format(&enter)),
+        Err(_) => "Send".to_string(),
+    }
 }
 
 fn info_chip(label: &str, accent: Hsla) -> AnyElement {
@@ -1355,10 +1379,31 @@ fn compact_label(label: &str, max_chars: usize) -> String {
 /// One row of the chat as the scroller sees it: owned, because the scroller renders rows by
 /// index on demand rather than from a borrow of the entry list.
 pub(crate) enum TimelineRow {
-    Turn { turn: AiTurn, tools: Vec<ToolActivity>, expanded: bool },
-    ToolGroup { tools: Vec<ToolActivity>, expanded: bool },
+    Turn { turn: AiTurn, tools: Vec<ToolActivity>, detail: ToolDetail },
+    ToolGroup { tools: Vec<ToolActivity>, detail: ToolDetail },
     Other(AiChatEntry),
 }
+
+/// How much of a tool group is on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolDetail {
+    /// The summary row alone: "Used 14 tools".
+    Collapsed,
+    /// The last few calls, so a long run still says what it is doing without burying the answer.
+    Recent,
+    /// Every call, because the user opened the group.
+    All,
+}
+
+impl ToolDetail {
+    fn is_open(self) -> bool {
+        self != ToolDetail::Collapsed
+    }
+}
+
+/// How many calls a group shows while it opens itself. A question that walks every collection
+/// runs a dozen tools; all of them at once pushes the answer off the screen.
+const RECENT_TOOL_CALLS: usize = 4;
 
 /// What every row needs besides its own data.
 struct RowContext {
@@ -1368,26 +1413,28 @@ struct RowContext {
     streaming_turn_id: Option<Uuid>,
 }
 
-/// Whether a tool group shows its detail.
+/// How much of a tool group to show.
 ///
 /// The user's own toggle always wins — reopening a group they just closed is what made it feel
-/// unclickable. Left alone, a group stays open for as long as the turn is working, rather than
-/// opening and closing as each tool starts and finishes.
-fn group_expanded(
+/// unclickable — and opening it deliberately shows every call. Left alone, a group follows the
+/// work: open for as long as the turn is working, rather than opening and closing as each tool
+/// starts and finishes, and only ever showing the last few.
+fn group_detail(
     tools: &[ToolActivity],
     overrides: &HashMap<Uuid, bool>,
     turn_working: bool,
-) -> bool {
+) -> ToolDetail {
     if let Some(&expanded) = overrides.get(&tools[0].id) {
-        return expanded;
+        return if expanded { ToolDetail::All } else { ToolDetail::Collapsed };
     }
-    turn_working
+    let working = turn_working
         || tools.iter().any(|tool| {
             matches!(
                 tool.status,
                 ToolActivityStatus::Running | ToolActivityStatus::AwaitingConfirmation { .. }
             )
-        })
+        });
+    if working { ToolDetail::Recent } else { ToolDetail::Collapsed }
 }
 
 /// Group the flat entry list into rows. Tool activity folds into the turn it belongs to.
@@ -1406,7 +1453,7 @@ fn build_timeline(
         let tools = std::mem::take(pending);
         match rows.last_mut() {
             Some(TimelineRow::Turn { tools: existing, .. }) => existing.extend(tools),
-            _ => rows.push(TimelineRow::ToolGroup { tools, expanded: false }),
+            _ => rows.push(TimelineRow::ToolGroup { tools, detail: ToolDetail::Collapsed }),
         }
     };
 
@@ -1421,7 +1468,7 @@ fn build_timeline(
                 rows.push(TimelineRow::Turn {
                     turn: turn.clone(),
                     tools: Vec::new(),
-                    expanded: false,
+                    detail: ToolDetail::Collapsed,
                 });
             }
             _ => rows.push(TimelineRow::Other(entry.clone())),
@@ -1431,11 +1478,11 @@ fn build_timeline(
 
     for row in &mut rows {
         match row {
-            TimelineRow::Turn { tools, expanded, .. } if !tools.is_empty() => {
-                *expanded = group_expanded(tools, overrides, turn_working);
+            TimelineRow::Turn { tools, detail, .. } if !tools.is_empty() => {
+                *detail = group_detail(tools, overrides, turn_working);
             }
-            TimelineRow::ToolGroup { tools, expanded } => {
-                *expanded = group_expanded(tools, overrides, turn_working);
+            TimelineRow::ToolGroup { tools, detail } => {
+                *detail = group_detail(tools, overrides, turn_working);
             }
             _ => {}
         }
@@ -1450,12 +1497,12 @@ fn render_timeline_row(
     cx: &mut App,
 ) -> AnyElement {
     match row {
-        TimelineRow::Turn { turn, tools, expanded } => {
+        TimelineRow::Turn { turn, tools, detail } => {
             let tool_refs: Vec<&ToolActivity> = tools.iter().collect();
             let tool_section = (!tools.is_empty()).then(|| {
                 render_tool_group(
                     &tool_refs,
-                    *expanded,
+                    *detail,
                     tools[0].id,
                     ctx.view.clone(),
                     ctx.state.clone(),
@@ -1483,11 +1530,11 @@ fn render_timeline_row(
                 cx,
             )
         }
-        TimelineRow::ToolGroup { tools, expanded } => {
+        TimelineRow::ToolGroup { tools, detail } => {
             let tool_refs: Vec<&ToolActivity> = tools.iter().collect();
             render_tool_group(
                 &tool_refs,
-                *expanded,
+                *detail,
                 tools[0].id,
                 ctx.view.clone(),
                 ctx.state.clone(),
@@ -1996,7 +2043,7 @@ fn render_plain_text_lines(text: &str, color: Hsla) -> AnyElement {
 #[allow(clippy::too_many_arguments)]
 fn render_tool_group(
     tools: &[&ToolActivity],
-    expanded: bool,
+    detail: ToolDetail,
     group_key: Uuid,
     view: Entity<AiView>,
     state: Entity<AppState>,
@@ -2021,7 +2068,7 @@ fn render_tool_group(
             .xsmall()
             .text_color(cx.theme().warning)
             .into_any_element()
-    } else if expanded {
+    } else if detail.is_open() {
         Icon::new(IconName::ChevronDown)
             .xsmall()
             .text_color(cx.theme().muted_foreground)
@@ -2089,10 +2136,11 @@ fn render_tool_group(
                 ),
         )
         .on_mouse_down(MouseButton::Left, {
+            let view = view.clone();
             move |_, _, cx| {
                 cx.stop_propagation();
                 view.update(cx, |this, cx| {
-                    this.tool_group_overrides.insert(group_key, !expanded);
+                    this.tool_group_overrides.insert(group_key, !detail.is_open());
                     cx.notify();
                 });
             }
@@ -2101,9 +2149,43 @@ fn render_tool_group(
     // Interleave each tool's status row with its result block so results
     // appear directly under the tool that produced them. Keep spacing
     // deterministic by rendering each tool call in its own stack.
+    let shown = match detail {
+        ToolDetail::Collapsed => 0,
+        ToolDetail::Recent => RECENT_TOOL_CALLS.min(tools.len()),
+        ToolDetail::All => tools.len(),
+    };
+    let hidden = tools.len() - shown;
+
     let mut tool_elements: Vec<AnyElement> = Vec::new();
+    // What the group skipped, and the way to get it back. Clicking the header would close the
+    // group instead, which is the opposite of what someone reading this wants.
+    if hidden > 0 && detail.is_open() {
+        let view = view.clone();
+        tool_elements.push(
+            div()
+                .id(ElementId::Name(format!("tool-group-earlier-{group_key}").into()))
+                .px(spacing::sm())
+                .py(spacing::xs())
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .cursor_pointer()
+                .hover(|s| s.text_color(cx.theme().foreground))
+                .child(match hidden {
+                    1 => "Show 1 earlier call".to_string(),
+                    many => format!("Show {many} earlier calls"),
+                })
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    view.update(cx, |this, cx| {
+                        this.tool_group_overrides.insert(group_key, true);
+                        cx.notify();
+                    });
+                })
+                .into_any_element(),
+        );
+    }
     for (i, t) in tools.iter().enumerate() {
-        if !expanded {
+        if i < hidden {
             continue;
         }
 
@@ -2913,6 +2995,13 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn the_send_button_names_the_key_that_sends() {
+        let tooltip = send_tooltip();
+        assert!(tooltip.starts_with("Send ("), "{tooltip}");
+        assert_ne!(tooltip, "Send", "the keycap has to survive parsing");
+    }
+
+    #[::core::prelude::v1::test]
     fn a_heading_never_reads_as_the_text_it_introduces() {
         let scales: Vec<f32> = (1..=6).map(heading_scale).collect();
         assert!(scales.iter().all(|scale| *scale >= 1.0), "a heading is never below body size");
@@ -2952,9 +3041,9 @@ mod tests {
 
         assert_eq!(rows.len(), 1, "one turn, not three rows");
         match &rows[0] {
-            TimelineRow::Turn { tools, expanded, .. } => {
+            TimelineRow::Turn { tools, detail, .. } => {
                 assert_eq!(tools.len(), 2);
-                assert!(!expanded, "finished tools stay collapsed");
+                assert_eq!(*detail, ToolDetail::Collapsed, "finished tools stay collapsed");
             }
             _ => panic!("expected a turn row"),
         }
@@ -2970,7 +3059,9 @@ mod tests {
 
         let rows = build_timeline(&entries, &HashMap::new(), true);
         match &rows[0] {
-            TimelineRow::Turn { expanded, .. } => assert!(*expanded, "running work opens itself"),
+            TimelineRow::Turn { detail, .. } => {
+                assert_eq!(*detail, ToolDetail::Recent, "running work opens itself")
+            }
             _ => panic!("expected a turn row"),
         }
 
@@ -2979,7 +3070,9 @@ mod tests {
         overrides.insert(key, false);
         let rows = build_timeline(&entries, &overrides, true);
         match &rows[0] {
-            TimelineRow::Turn { expanded, .. } => assert!(!*expanded, "the user's choice wins"),
+            TimelineRow::Turn { detail, .. } => {
+                assert_eq!(*detail, ToolDetail::Collapsed, "the user's choice wins")
+            }
             _ => panic!("expected a turn row"),
         }
     }
@@ -2990,9 +3083,43 @@ mod tests {
         let entries = vec![turn(), tool(ToolActivityStatus::Completed)];
         let rows = build_timeline(&entries, &HashMap::new(), true);
         match &rows[0] {
-            TimelineRow::Turn { expanded, .. } => {
-                assert!(*expanded, "the turn is still working, so its tools stay visible")
+            TimelineRow::Turn { detail, .. } => {
+                assert_eq!(
+                    *detail,
+                    ToolDetail::Recent,
+                    "the turn is still working, so its tools stay visible"
+                )
             }
+            _ => panic!("expected a turn row"),
+        }
+    }
+
+    /// A question that walks every collection runs a dozen tools. Showing all of them while it
+    /// works pushed the answer off the screen.
+    #[::core::prelude::v1::test]
+    fn a_long_run_shows_only_its_last_few_calls() {
+        let mut entries = vec![turn()];
+        entries.extend((0..14).map(|_| tool(ToolActivityStatus::Completed)));
+        let key = match &entries[1] {
+            AiChatEntry::ToolActivity(activity) => activity.id,
+            _ => unreachable!(),
+        };
+
+        let rows = build_timeline(&entries, &HashMap::new(), true);
+        match &rows[0] {
+            TimelineRow::Turn { tools, detail, .. } => {
+                assert_eq!(tools.len(), 14, "every call is still there to be shown");
+                assert_eq!(*detail, ToolDetail::Recent);
+            }
+            _ => panic!("expected a turn row"),
+        }
+
+        // Opening the group deliberately is a request for all of it.
+        let mut overrides = HashMap::new();
+        overrides.insert(key, true);
+        let rows = build_timeline(&entries, &overrides, true);
+        match &rows[0] {
+            TimelineRow::Turn { detail, .. } => assert_eq!(*detail, ToolDetail::All),
             _ => panic!("expected a turn row"),
         }
     }

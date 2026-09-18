@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
 - Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the conversation
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
+- Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
 
 ### Changed
 - New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
@@ -34,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Save and Discard for unsaved document edits sit in the collection header with their keyboard shortcuts shown, and act on every unsaved document in the tab rather than only the selected ones
 - After a query the status bar says how many documents were loaded, out of how many matched, and how long it took
 - The Find button shows a spinner in place of its icon instead of pushing the row aside, and busy buttons keep their size
+- A long run of tool calls shows only its last few while it works, with the rest one click away, instead of pushing the answer off the screen
 - The status bar and the chat are built on gpui-kit's own components, so the chat scrolls, follows new messages and renders markdown the way the rest of the app does
 - Headings in an answer are bigger than the text they introduce, field names in a sentence carry the same blue the document tree gives them, code blocks have room around them, and the answer no longer changes size the moment it finishes streaming
 
@@ -41,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- Switching themes now reaches the layer that draws the chat's markdown, so a dark theme no longer renders answers with light tables and washed-out text
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line
 - Error messages on the Indexes tab and in the index, edit value, and bulk update dialogs were drawn in a color that matched the background in most themes

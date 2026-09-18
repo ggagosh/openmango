@@ -47,6 +47,13 @@ pub fn apply_design_tokens(cx: &mut App) {
     theme.mono_font_family = fonts::mono().into();
     theme.radius = borders::radius_sm();
     theme.radius_lg = borders::radius_md();
+    // Writing to the theme's fields leaves the kit's Base layer on the colors it was built with,
+    // and that layer paints the markdown in the chat and the scrollbars. Without this a dark
+    // theme draws a white table on a dark answer.
+    gpui_kit::component::theme::Theme::sync_base(cx);
+    // Writing to the theme's fields leaves the kit's Base layer on the colors it was built with,
+    // and that layer paints the markdown in the chat and the scrollbars. Without this a dark
+    // theme draws a white table on a dark answer.
 }
 
 pub fn apply_theme(app_theme: AppTheme, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
@@ -297,6 +304,27 @@ mod tests {
                 assert_eq!(base.tokens.radius.sm, super::borders::radius_xs(), "{id}");
                 assert_eq!(base.tokens.radius.md, super::borders::radius_sm(), "{id}");
                 assert_eq!(base.tokens.radius.lg, super::borders::radius_md(), "{id}");
+            }
+        });
+    }
+
+    /// The chat renders markdown through the kit's Base layer, which keeps its own copy of the
+    /// theme. Switching themes has to reach it, or a dark answer is drawn with light tables.
+    #[gpui_kit::test]
+    fn switching_themes_reaches_the_layer_that_draws_the_chat(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            for (theme, dark) in [(AppTheme::MangoDark, true), (AppTheme::MangoLight, false)] {
+                let config = super::load_theme_config(theme.theme_id()).expect("bundled theme");
+                gpui_kit::component::Theme::global_mut(cx).apply_config(&config);
+                super::apply_design_tokens(cx);
+                let base = gpui_kit::base::Theme::global(cx);
+                assert_eq!(
+                    base.appearance == gpui_kit::base::ThemeAppearance::Dark,
+                    dark,
+                    "{} left the rich-text layer on the other mode",
+                    theme.theme_id()
+                );
             }
         });
     }
