@@ -96,6 +96,15 @@ impl AgentHook for RunPolicy {
     }
 }
 
+/// An HTTP client that retries the failures worth retrying: 429s and transient 5xx, backing off
+/// between attempts. rig has no retry of its own, and a rate limit should not end a turn.
+fn retrying_http_client() -> reqwest_middleware::ClientWithMiddleware {
+    let policy = reqwest_retry::policies::ExponentialBackoff::builder().build_with_max_retries(3);
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::default())
+        .with(reqwest_retry::RetryTransientMiddleware::new_with_policy(policy))
+        .build()
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -186,9 +195,13 @@ async fn call_gemini(
         return Err(AiError::Parse("Gemini model is empty".to_string()));
     }
 
-    let client = gemini::Client::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
-    })?;
+    let client = gemini::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
@@ -216,9 +229,13 @@ async fn call_openai(
         return Err(AiError::Parse("OpenAI model is empty".to_string()));
     }
 
-    let client = openai::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
-    })?;
+    let client = openai::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
@@ -246,9 +263,13 @@ async fn call_anthropic(
         return Err(AiError::Parse("Anthropic model is empty".to_string()));
     }
 
-    let client = anthropic::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
-    })?;
+    let client = anthropic::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
@@ -292,7 +313,8 @@ async fn call_ollama(
         });
     }
 
-    let client = ollama::Client::<reqwest::Client>::builder()
+    let client = ollama::Client::builder()
+        .http_client(retrying_http_client())
         .api_key(Nothing)
         .base_url(base_url)
         .build()
@@ -333,9 +355,13 @@ async fn call_gemini_streaming(
         return Err(AiError::Parse("Gemini model is empty".to_string()));
     }
 
-    let client = gemini::Client::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
-    })?;
+    let client = gemini::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
+        })?;
     let agent = build_agent(
         client
             .agent(model)
@@ -366,9 +392,13 @@ async fn call_openai_streaming(
         return Err(AiError::Parse("OpenAI model is empty".to_string()));
     }
 
-    let client = openai::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
-    })?;
+    let client = openai::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
+        })?;
     let agent = build_agent(
         client
             .agent(model)
@@ -399,9 +429,13 @@ async fn call_anthropic_streaming(
         return Err(AiError::Parse("Anthropic model is empty".to_string()));
     }
 
-    let client = anthropic::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
-    })?;
+    let client = anthropic::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
+        })?;
     let agent = build_agent(
         client
             .agent(model)
@@ -448,7 +482,8 @@ async fn call_ollama_streaming(
         });
     }
 
-    let client = ollama::Client::<reqwest::Client>::builder()
+    let client = ollama::Client::builder()
+        .http_client(retrying_http_client())
         .api_key(Nothing)
         .base_url(base_url)
         .build()
