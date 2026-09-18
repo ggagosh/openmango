@@ -33,13 +33,17 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 const MAX_STORED_CHARS: usize = 5_000;
 
 /// One conversation in the history list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Conversation {
     pub id: String,
     /// When it was last written to, as a Unix timestamp in milliseconds.
     pub updated_ms: i64,
-    /// What it was about: the first thing the user asked, shortened.
+    /// What it was about: the name the model gave it, or the first thing the user asked.
     pub title: String,
+    /// How many questions were asked in it.
+    pub turns: usize,
+    /// What it spent, added up across those turns.
+    pub usage: crate::ai::TurnUsage,
 }
 
 /// One hit from a search over past conversations.
@@ -72,6 +76,10 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS timelines (
      CREATE TABLE IF NOT EXISTS conversations (
          id          TEXT PRIMARY KEY,
          updated_ms  INTEGER NOT NULL
+     );
+     CREATE TABLE IF NOT EXISTS titles (
+         conversation_id TEXT PRIMARY KEY,
+         title           TEXT NOT NULL
      );
      CREATE TABLE IF NOT EXISTS messages (
          conversation_id TEXT NOT NULL,
@@ -230,6 +238,8 @@ impl ChatMemory {
             "DELETE FROM timelines WHERE conversation_id = ?1",
             params![conversation_id],
         )?;
+        connection
+            .execute("DELETE FROM titles WHERE conversation_id = ?1", params![conversation_id])?;
         connection.execute("DELETE FROM conversations WHERE id = ?1", params![conversation_id])?;
         Ok(())
     }
@@ -238,7 +248,8 @@ impl ChatMemory {
     pub fn forget_everything(&self) -> Result<()> {
         let connection = self.lock()?;
         connection.execute_batch(
-            "DELETE FROM messages; DELETE FROM timelines; DELETE FROM conversations; VACUUM;",
+            "DELETE FROM messages; DELETE FROM timelines; DELETE FROM titles;
+             DELETE FROM conversations; VACUUM;",
         )?;
         Ok(())
     }
@@ -251,7 +262,7 @@ impl ChatMemory {
         }
         let cutoff = now_ms() - days * 24 * 60 * 60 * 1_000;
         let connection = self.lock()?;
-        for table in ["messages", "timelines"] {
+        for table in ["messages", "timelines", "titles"] {
             connection.execute(
                 &format!(
                     "DELETE FROM {table} WHERE conversation_id IN
@@ -295,23 +306,86 @@ impl ChatMemory {
 
         let mut conversations = Vec::with_capacity(rows.len());
         for (id, updated_ms) in rows {
-            let title = match self.first_question(&id)? {
+            let entries = self.load_timeline(&id)?;
+            let turns = entries
+                .iter()
+                .filter(|entry| matches!(entry, crate::ai::AiChatEntry::Turn(_)))
+                .count();
+            let usage = entries.iter().fold(crate::ai::TurnUsage::default(), |mut total, entry| {
+                if let crate::ai::AiChatEntry::Turn(turn) = entry
+                    && let Some(usage) = turn.usage
+                {
+                    total.input_tokens += usage.input_tokens;
+                    total.output_tokens += usage.output_tokens;
+                    if let Some(cost) = usage.cost_usd {
+                        total.cost_usd = Some(total.cost_usd.unwrap_or(0.0) + cost);
+                    }
+                }
+                total
+            });
+            let title = match self.title_of(&id, &entries)? {
                 Some(title) => title,
                 None => continue,
             };
-            conversations.push(Conversation { id, updated_ms, title });
+            conversations.push(Conversation { id, updated_ms, title, turns, usage });
         }
         Ok(conversations)
     }
 
-    /// What a conversation is called: the first thing the user asked in it.
-    fn first_question(&self, conversation_id: &str) -> Result<Option<String>> {
-        let from_timeline =
-            self.load_timeline(conversation_id)?.into_iter().find_map(|entry| match entry {
-                crate::ai::AiChatEntry::Turn(turn) => Some(snippet(&turn.user_message.content)),
-                _ => None,
-            });
-        if let Some(title) = from_timeline.filter(|title| !title.is_empty()) {
+    /// Name a conversation. Called once, with what the model made of the first exchange.
+    pub fn set_title(&self, conversation_id: &str, title: &str) -> Result<()> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Ok(());
+        }
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO titles (conversation_id, title) VALUES (?1, ?2)
+             ON CONFLICT(conversation_id) DO UPDATE SET title = ?2",
+            params![conversation_id, crate::helpers::truncate_chars(title, SNIPPET_CHARS)],
+        )?;
+        Ok(())
+    }
+
+    /// Whether this conversation has been named, so it is only named once.
+    pub fn has_title(&self, conversation_id: &str) -> bool {
+        let Ok(connection) = self.lock() else { return false };
+        connection
+            .query_row(
+                "SELECT 1 FROM titles WHERE conversation_id = ?1",
+                params![conversation_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .unwrap_or(None)
+            .is_some()
+    }
+
+    /// What a conversation is called: the name the model gave it, else the first question in it.
+    fn title_of(
+        &self,
+        conversation_id: &str,
+        entries: &[crate::ai::AiChatEntry],
+    ) -> Result<Option<String>> {
+        let named: Option<String> = {
+            let connection = self.lock()?;
+            connection
+                .query_row(
+                    "SELECT title FROM titles WHERE conversation_id = ?1",
+                    params![conversation_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+        };
+        if let Some(title) = named.filter(|title| !title.trim().is_empty()) {
+            return Ok(Some(title));
+        }
+
+        let asked = entries.iter().find_map(|entry| match entry {
+            crate::ai::AiChatEntry::Turn(turn) => Some(snippet(&turn.user_message.content)),
+            _ => None,
+        });
+        if let Some(title) = asked.filter(|title| !title.is_empty()) {
             return Ok(Some(title));
         }
         // A conversation from before the chat itself was stored still has what went to the model.
@@ -607,6 +681,15 @@ mod tests {
         store.append_messages("empty", vec![RigMessage::assistant("hello?")]).expect("write");
         assert!(store.recent(10).expect("recent").iter().all(|chat| chat.id != "empty"));
 
+        // A name from the model wins over the first question, and only one is ever stored.
+        store.set_title("newer", "Audit log indexing").expect("title");
+        assert_eq!(store.recent(10).expect("recent")[0].title, "Audit log indexing");
+        store.forget("newer").expect("forget");
+        assert!(
+            store.recent(10).expect("recent").iter().all(|chat| chat.id != "newer"),
+            "deleting a conversation takes its name with it"
+        );
+
         // A question that never reached the model is still findable: the chat is what counts.
         let asked = crate::ai::AiChatEntry::Turn(crate::ai::AiTurn {
             id: uuid::Uuid::new_v4(),
@@ -621,6 +704,7 @@ mod tests {
         store.save_timeline("failed", &[asked]).expect("write");
         let failed = store.recent(10).expect("recent");
         assert_eq!(failed[0].title, "why is this slow?", "and it is the most recent");
+        assert_eq!(failed[0].turns, 1, "the row says how much was asked in it");
     }
 
     #[test]

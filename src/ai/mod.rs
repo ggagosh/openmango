@@ -8,6 +8,7 @@ pub mod context;
 pub mod errors;
 pub mod memory;
 pub mod model_registry;
+pub mod naming;
 pub mod provider;
 pub mod safety;
 pub mod settings;

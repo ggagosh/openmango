@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
 - Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the whole conversation
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
-- New chat and a list of conversations in the chat header, the open one marked: starting over keeps what came before, and any of the last 20 conversations can be reopened where it left off
+- New chat and a list of conversations in the chat header, the open one marked: starting over keeps what came before, and any of the last 20 conversations can be reopened where it left off. Each one is named by the model from its first exchange, says when it was, how many questions were asked and what it spent, and can be deleted from the list
 - Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
 
 ### Changed

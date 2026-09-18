@@ -110,6 +110,26 @@ impl AiView {
         cx.notify();
     }
 
+    /// Delete a conversation from the list. Like Clear, it is not undoable and does not ask:
+    /// the row it removes is the one under the pointer, and the chat it holds is the user's.
+    fn delete_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Ok(uuid) = Uuid::parse_str(id) else { return };
+        self.state.update(cx, |state, cx| {
+            if state.ai_chat.conversation_id == Some(uuid) {
+                // Deleting what is on screen leaves the screen empty, not showing a dead chat.
+                state.ai_chat.clear_chat();
+            } else if let Some(memory) = &state.ai_chat.memory
+                && let Err(error) = memory.forget(id)
+            {
+                log::warn!("Could not delete the conversation: {error}");
+            }
+            cx.notify();
+        });
+        self.recent_conversations.retain(|conversation| conversation.id != id);
+        self.timeline_revision = 0;
+        cx.notify();
+    }
+
     fn open_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
         let Ok(id) = Uuid::parse_str(id) else { return };
         self.state.update(cx, |state, cx| {
@@ -664,6 +684,7 @@ impl AiView {
             price,
         };
 
+        let naming_settings = ai_settings.clone();
         let provider_label = ai_settings.provider.label().to_string();
         let model_label = ai_settings.model.clone();
         let session_label = turn_id.to_string();
@@ -820,6 +841,25 @@ impl AiView {
                     cx.notify();
                 });
             });
+
+            // Give the conversation a name off the first exchange, once, on the cheapest model
+            // the provider has. It costs a few hundred tokens and buys a history worth reading.
+            let job = cx.update(|cx| state.read(cx).ai_chat.naming_job(&naming_settings));
+            if let Some(job) = job {
+                cx.background_spawn(async move {
+                    let named = AiBridge::block_on(crate::ai::naming::name_conversation(
+                        &job.settings,
+                        &job.question,
+                        &job.answer,
+                    ));
+                    if let Some(title) = named
+                        && let Err(error) = job.memory.set_title(&job.conversation_id, &title)
+                    {
+                        log::warn!("Could not name the conversation: {error}");
+                    }
+                })
+                .detach();
+            }
         })
         .detach();
     }
@@ -1025,12 +1065,15 @@ impl Render for AiView {
                 .map(|conversation| {
                     let view = cx.entity();
                     let id = conversation.id.clone();
+                    let delete_id = id.clone();
+                    let delete_view = cx.entity();
                     let current = current_conversation.as_deref() == Some(id.as_str());
                     div()
                         .id(ElementId::Name(format!("chat-history-{id}").into()))
+                        .group(SharedString::from(format!("chat-history-{id}")))
                         .flex()
-                        .flex_col()
-                        .gap(px(2.0))
+                        .items_center()
+                        .gap(spacing::sm())
                         .px(spacing::sm())
                         .py(spacing::xs())
                         .rounded(crate::theme::borders::radius_sm())
@@ -1041,20 +1084,50 @@ impl Render for AiView {
                         })
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(cx.theme().foreground)
-                                .child(compact_label(&conversation.title, 96)),
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().foreground)
+                                        .child(compact_label(&conversation.title, 96)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground.opacity(0.8))
+                                        .child(conversation_meta(conversation, current)),
+                                ),
                         )
+                        // Deleting a conversation is the one thing worth doing from the list
+                        // without opening it first, so the button waits for the pointer.
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground.opacity(0.8))
-                                .child(match current {
-                                    true => {
-                                        format!("{} · open", when_label(conversation.updated_ms))
-                                    }
-                                    false => when_label(conversation.updated_ms),
-                                }),
+                                .invisible()
+                                .group_hover(
+                                    SharedString::from(format!("chat-history-{id}")),
+                                    |style| style.visible(),
+                                )
+                                .child(
+                                    Button::new(ElementId::Name(
+                                        format!("chat-history-delete-{id}").into(),
+                                    ))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Icon::new(IconName::Delete).xsmall())
+                                    .tooltip("Delete this conversation")
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let id = delete_id.clone();
+                                            delete_view.update(cx, |this, cx| {
+                                                this.delete_conversation(&id, cx);
+                                            });
+                                        },
+                                    ),
+                                ),
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             cx.stop_propagation();
@@ -1588,6 +1661,22 @@ fn render_empty_feature(
         )
         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(hint))
         .into_any_element()
+}
+
+/// The second line of a history row: when it was, how much was asked, and what it cost.
+fn conversation_meta(conversation: &crate::ai::memory::Conversation, current: bool) -> String {
+    let mut parts = vec![when_label(conversation.updated_ms)];
+    if current {
+        parts.push("open".to_string());
+    }
+    parts.push(match conversation.turns {
+        1 => "1 question".to_string(),
+        turns => format!("{turns} questions"),
+    });
+    if !conversation.usage.is_empty() {
+        parts.push(conversation.usage.short_label());
+    }
+    parts.join(" · ")
 }
 
 /// "just now", "2h ago", "Mar 4" — enough to tell one conversation from another.

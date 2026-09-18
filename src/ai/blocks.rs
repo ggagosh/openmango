@@ -372,6 +372,15 @@ pub struct AiTurn {
     pub created_at: DateTime<Utc>,
 }
 
+/// Everything the namer needs, collected on the main thread so the work can leave it.
+pub struct NamingJob {
+    pub conversation_id: String,
+    pub settings: crate::ai::settings::AiSettings,
+    pub question: String,
+    pub answer: String,
+    pub memory: crate::ai::memory::ChatMemory,
+}
+
 /// Tokens a turn spent, as the provider counted them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct TurnUsage {
@@ -648,6 +657,34 @@ impl AiChatState {
         memory.recent(limit).unwrap_or_else(|error| {
             log::warn!("Could not list earlier conversations: {error}");
             Vec::new()
+        })
+    }
+
+    /// What it takes to name this conversation, when it still needs a name.
+    ///
+    /// Only the first exchange is used and only once, so a long conversation keeps the name it
+    /// was given rather than drifting as the subject moves on.
+    pub fn naming_job(&self, settings: &crate::ai::settings::AiSettings) -> Option<NamingJob> {
+        let memory = self.memory.clone()?;
+        let conversation_id = self.conversation_id?.to_string();
+        if memory.has_title(&conversation_id) {
+            return None;
+        }
+        let turn = self.entries.iter().find_map(|entry| match entry {
+            AiChatEntry::Turn(turn) => Some(turn),
+            _ => None,
+        })?;
+        let answer = turn.assistant_message.as_ref()?;
+        // A turn that failed says nothing about the subject.
+        if answer.tone == ChatMessageTone::Error || answer.content.trim().is_empty() {
+            return None;
+        }
+        Some(NamingJob {
+            conversation_id,
+            settings: settings.clone(),
+            question: turn.user_message.content.clone(),
+            answer: answer.content.clone(),
+            memory,
         })
     }
 
