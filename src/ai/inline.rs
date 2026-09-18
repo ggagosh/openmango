@@ -57,9 +57,10 @@ const RULES: &str = "You turn a description into a MongoDB find for a database G
      - PROJECTION maps field names to 1 to include or 0 to exclude, never both, except that _id \
      may be excluded alongside included fields.\n\
      - In FILTER use operators such as $gte, $in, $regex and $exists where they fit, and write \
-     absolute dates from the date given below.\n\
-     - Use only the fields listed. Where a field lists its values, match one of them exactly — \
-     they are case sensitive.\n\
+     absolute dates from the date given below. Several values of one field are $in, not $or.\n\
+     - Use only the fields listed. The values after \"e.g.\" are examples from the rows in view, \
+     not the whole set: copy their form and case exactly, and when the request names a value \
+     that is not among them, write it in that same form rather than leaving it out.\n\
      - Quote field names and string values with double quotes. An ObjectId is written \
      ObjectId(\"…\") and a date ISODate(\"…\"); the GUI understands both.";
 
@@ -169,7 +170,7 @@ mod tests {
             database: "au_new".to_string(),
             collection: "auditlogs".to_string(),
             fields: vec![
-                "action: string (CREATE, UPDATE, DELETE)".to_string(),
+                "action: string e.g. CREATE, UPDATE".to_string(),
                 "createdAt: date".to_string(),
             ],
         }
@@ -223,8 +224,12 @@ mod tests {
     fn the_prompt_carries_the_collection_its_fields_and_their_values() {
         let prompt = prompt(&context());
         assert!(prompt.contains("au_new.auditlogs"));
-        assert!(prompt.contains("action: string (CREATE, UPDATE, DELETE)"));
-        assert!(prompt.contains("case sensitive"), "or it writes \"create\" for CREATE");
+        assert!(prompt.contains("action: string e.g. CREATE, UPDATE"));
+        assert!(prompt.contains("copy their form and case"), "or it writes \"create\" for CREATE");
+        assert!(
+            prompt.contains("rather than leaving it out"),
+            "asking for a value the page never showed must not drop it from the filter"
+        );
         assert!(prompt.contains("FILTER:") && prompt.contains("SORT:"));
     }
 

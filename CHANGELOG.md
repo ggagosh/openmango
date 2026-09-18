@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Ask AI in the documents filter: the sparkle turns the filter bar into a bar you describe the filter to, Find becomes Generate, and what you typed comes back as the filter in the same box, written from the collection's own field names, types and — for fields that hold a handful of values — the values themselves. A description that asks for an order or for particular fields fills Sort and Projection too and opens the options row to show them. Nothing runs until you press Find, Escape gives back the filter you had, and undo takes it back after that. Cmd/Ctrl+I switches the bar either way without reaching for the mouse
+- Ask AI in the documents filter: the sparkle turns the filter bar into a bar you describe the filter to, Find becomes Generate, and what you typed comes back as the filter in the same box, written from the collection's own field names, types and — for fields that hold a handful of values — examples of those values. A description that asks for an order or for particular fields fills Sort and Projection too and opens the options row to show them. Nothing runs until you press Find, Escape gives back the filter you had, and undo takes it back after that. Cmd/Ctrl+I switches the bar either way without reaching for the mouse
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened
 - Multiple cursors in Forge and the query editors: Alt-click adds a cursor and Shift-Alt-drag selects a column

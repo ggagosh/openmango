@@ -235,9 +235,11 @@ fn field_lines(documents: &[crate::state::SessionDocument]) -> Vec<String> {
                     )
                 }
             };
+            // "e.g." and not a bare list: these are the values this page happened to show, and
+            // a model that reads them as the whole set drops the one the user asked for.
             if !facts.open_ended && !facts.values.is_empty() {
                 line.push_str(&format!(
-                    " ({})",
+                    " e.g. {}",
                     facts.values.iter().cloned().collect::<Vec<_>>().join(", ")
                 ));
             }
@@ -343,7 +345,7 @@ mod tests {
 
         assert_eq!(
             field_lines(&documents),
-            ["action: string (CREATE, UPDATE)", "message: string"],
+            ["action: string e.g. CREATE, UPDATE", "message: string"],
             "the choices are named; the prose is not"
         );
     }
@@ -363,10 +365,10 @@ mod tests {
         assert_eq!(
             field_lines(&page),
             [
-                "logId: string (DOC-C-1)",
+                "logId: string e.g. DOC-C-1",
                 "version: number",
                 "diff: object",
-                "diff.before: string (x)",
+                "diff.before: string e.g. x",
             ],
             "parents before children, in the order the document lists them"
         );
@@ -382,7 +384,7 @@ mod tests {
             SessionDocument { key: DocumentKey::from_document(&first, 0), doc: first },
             SessionDocument { key: DocumentKey::from_document(&second, 1), doc: second },
         ];
-        assert_eq!(field_lines(&page), ["value: number | string (text)"]);
+        assert_eq!(field_lines(&page), ["value: number | string e.g. text"]);
     }
 
     #[test]
