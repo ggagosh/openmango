@@ -8,9 +8,9 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 use uuid::Uuid;
 
+use crate::components::node_commands::{confirm_delete_node, copy_node_name};
 use crate::components::{
-    ConnectionManager, WriteConfirmation, open_confirm_dialog, request_connection_write,
-    request_disconnect_connection, request_preview_collection, request_remove_connection,
+    ConnectionManager, request_disconnect_connection, request_preview_collection,
     request_unsaved_action,
 };
 use crate::keyboard::FocusContent;
@@ -736,20 +736,8 @@ impl Sidebar {
     }
 
     fn handle_copy_selection_name(&mut self, cx: &mut Context<Self>) {
-        let Some(node_id) = self.model.selected_tree_id.clone() else {
-            return;
-        };
-        let text = match node_id {
-            TreeNodeId::Connection(connection_id) => {
-                self.state.read(cx).connection_name(connection_id)
-            }
-            TreeNodeId::Database { database, .. } => Some(database),
-            TreeNodeId::Collection { database, collection, .. } => {
-                Some(format!("{database}/{collection}"))
-            }
-        };
-        if let Some(text) = text {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        if let Some(node_id) = self.model.selected_tree_id.as_ref() {
+            copy_node_name(&self.state, node_id, cx);
         }
     }
 
@@ -898,79 +886,8 @@ impl Sidebar {
     }
 
     fn handle_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(node_id) = self.model.selected_tree_id.clone() else {
-            return;
-        };
-        match node_id {
-            TreeNodeId::Connection(connection_id) => {
-                let name = self
-                    .state
-                    .read(cx)
-                    .connection_name(connection_id)
-                    .unwrap_or_else(|| "this connection".to_string());
-                let message = format!("Remove connection \"{name}\"? This cannot be undone.");
-                open_confirm_dialog(window, cx, "Remove connection", message, "Remove", true, {
-                    let state = self.state.clone();
-                    move |window, cx| {
-                        request_remove_connection(state.clone(), connection_id, window, cx);
-                    }
-                });
-            }
-            TreeNodeId::Database { connection, database } => {
-                let message = format!("Drop database \"{database}\"? This cannot be undone.");
-                let state = self.state.clone();
-                let state_for_write = state.clone();
-                request_connection_write(
-                    state,
-                    crate::components::WriteRequest::new(
-                        connection,
-                        database.clone(),
-                        "Drop a database",
-                        Some(WriteConfirmation {
-                            title: "Drop database".into(),
-                            message,
-                            confirm_label: "Drop".into(),
-                            destructive: true,
-                        }),
-                    ),
-                    window,
-                    cx,
-                    move |_window, cx| {
-                        AppCommands::drop_database(state_for_write, connection, database, cx);
-                    },
-                );
-            }
-            TreeNodeId::Collection { connection, database, collection } => {
-                let message =
-                    format!("Drop collection \"{database}.{collection}\"? This cannot be undone.");
-                let state = self.state.clone();
-                let state_for_write = state.clone();
-                request_connection_write(
-                    state,
-                    crate::components::WriteRequest::new(
-                        connection,
-                        format!("{database}.{collection}"),
-                        "Drop a collection",
-                        Some(WriteConfirmation {
-                            title: "Drop collection".into(),
-                            message,
-                            confirm_label: "Drop".into(),
-                            destructive: true,
-                        }),
-                    ),
-                    window,
-                    cx,
-                    move |_window, cx| {
-                        AppCommands::drop_collection(
-                            state_for_write,
-                            connection,
-                            database,
-                            collection,
-                            cx,
-                        );
-                    },
-                );
-            }
+        if let Some(node_id) = self.model.selected_tree_id.clone() {
+            confirm_delete_node(self.state.clone(), node_id, window, cx);
         }
     }
 

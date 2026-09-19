@@ -93,17 +93,26 @@ and `P95`.
 
 ### D. One command, several implementations that already disagree
 
+Done as `components/node_commands.rs`: Remove connection, Drop database, Drop collection and Copy
+Name each have one body that takes a `TreeNodeId`. The sidebar passes its selected row, the
+window-level actions pass what the app is showing, the context menus pass the row under the
+pointer. Five hand-written copies of the delete dialogs are gone. Copy Name copies the bare name
+everywhere (it was `db/collection` from the sidebar only); `db/collection` stays on Copy (Cmd+C).
+Create Index has one owner that the shortcut and the palette both call. Audit correction: the
+palette item was **not** a no-op, its own arm switched to Indexes first; that behaviour is the
+one that was kept.
+
 - [x] `app/actions.rs:372` vs `app/root.rs:1075-1080` — palette "AI Assistant" toggles the panel
   only; the real `ToggleAiPanel` handler also focuses the input. Dispatch the action. **S**
-- [ ] `app/actions.rs:288-297` vs `views/documents/actions.rs:86-99` vs `app/actions.rs:92-108` —
+- [x] `app/actions.rs:288-297` vs `views/documents/actions.rs:86-99` vs `app/actions.rs:92-108` —
   `CreateIndex` implemented three times with three different guards. And
   `components/action_bar/providers.rs:197-206` marks it available when both handlers would no-op.
   One owner method; derive `available` from its predicate. **M**
-- [ ] `app/root.rs:1021-1052` vs `app/sidebar/mod.rs:736-781` — `EditConnection`,
+- [x] `app/root.rs:1021-1052` vs `app/sidebar/mod.rs:736-781` — `EditConnection`,
   `DisconnectConnection`, `CopyConnectionUri`, `CopySelectionName` registered in both, reading
   different selections: Copy Name yields `db/collection` from the sidebar and the bare name from
   root; Disconnect checks `is_connected` only in the sidebar. Sidebar owns; root delegates. **M**
-- [ ] `app/actions.rs:243-430` (`execute_action`) — the palette is a third implementation of ~12
+- [x] `app/actions.rs:243-430` (`execute_action`) — the palette is a third implementation of ~12
   commands; some arms dispatch the Action, others copy the mutation (`cmd:create-database`,
   `cmd:create-collection`, `cmd:create-index`, `cmd:settings`, `cmd:query-library`, `cmd:ai`).
   Route every arm through `window.dispatch_action`. **M**
@@ -160,7 +169,7 @@ and `P95`.
   collection…", same for Import and Copy: `components/action_bar/providers.rs:230,240,250`,
   `app/menus.rs:242,263,284`, `views/documents/header/actions.rs:873,896,919` (these last also lack
   `.action(...)`, so their shortcuts never show). Pick one name per command. **M**
-- [ ] **Do with group D, not before.** These dialogs are built in five files (`app/menus.rs`,
+- [x] **Do with group D, not before.** These dialogs are built in five files (`app/menus.rs`,
   `app/root.rs`, `app/sidebar/mod.rs`, `views/documents/actions.rs`,
   `components/connection_manager/actions.rs`) because the commands are. Give each command one owner,
   then fix the wording once. Four confirm dialogs whose body re-asks the title: `app/menus.rs:57-60`, `:314,324`,

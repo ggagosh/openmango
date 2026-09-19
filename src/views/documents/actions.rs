@@ -4,26 +4,26 @@ use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 use crate::bson::{
     PathSegment, document_to_json_string, format_bson_for_clipboard, get_bson_at_path,
 };
+use crate::components::node_commands::confirm_delete_node;
 use crate::components::{WriteConfirmation, request_connection_write};
 use crate::keyboard::{
     AddAggregationStage, AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs,
     CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey,
-    CopyValue, CreateIndex, DeleteAggregationStage, DeleteCollection, DeleteDocument,
-    DiscardDocumentChanges, DuplicateAggregationStage, DuplicateDocument, EditDocumentJson,
-    EditValueType, FindInResults, FocusAggregationStageEditor, FormatAggregationStage,
-    InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp, NextSearchMatch,
-    PasteDocuments, PrevSearchMatch, RedoAggregationEdit, RemoveMatchingValues,
-    RemoveSelectedField, RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
-    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
-    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
-    UndoAggregationEdit,
+    CopyValue, DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
+    DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
+    FocusAggregationStageEditor, FormatAggregationStage, InsertDocument, MoveAggregationStageDown,
+    MoveAggregationStageUp, NextSearchMatch, PasteDocuments, PrevSearchMatch, RedoAggregationEdit,
+    RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation, SaveDocument,
+    SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
+    ShowDocumentsSubview, ShowHistorySubview, ShowIndexesSubview, ShowSchemaSubview,
+    ShowStatsSubview, ToggleAggregationStageEnabled, UndoAggregationEdit,
 };
+use crate::models::TreeNodeId;
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
 
 use super::export::{CopyFormat, ExportScope, ViewExportSnapshot, render_to_clipboard};
 
 use super::CollectionView;
-use super::dialogs::index_create::IndexCreateDialog;
 use super::dialogs::property_dialog::PropertyActionDialog;
 use super::node_meta::NodeMeta;
 use super::tree::tree_content::paste_documents_from_clipboard;
@@ -79,20 +79,6 @@ impl CollectionView {
                 window,
                 cx,
             );
-        }))
-        .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let subview = this
-                .state
-                .read(cx)
-                .session_subview(&session_key)
-                .unwrap_or(CollectionSubview::Documents);
-            if subview != CollectionSubview::Indexes {
-                return;
-            }
-            IndexCreateDialog::open(this.state.clone(), session_key, window, cx);
         }))
         .on_action(cx.listener(|this, _: &EditDocumentJson, window, cx| {
             let Some((session_key, _doc_key)) = this.selected_doc_key_for_current_session(cx)
@@ -225,38 +211,10 @@ impl CollectionView {
             }
         }))
         .on_action(cx.listener(|this, _: &DeleteCollection, window, cx| {
-            let Some(session_key) = this.view_model.current_session() else {
-                return;
-            };
-            let message =
-                format!("Drop collection {}? This cannot be undone.", session_key.collection);
-            let state = this.state.clone();
-            let state_for_write = state.clone();
-            request_connection_write(
-                state,
-                crate::components::WriteRequest::new(
-                    session_key.connection_id,
-                    session_key.namespace(),
-                    "Drop a collection",
-                    Some(WriteConfirmation {
-                        title: "Drop collection".into(),
-                        message,
-                        confirm_label: "Drop".into(),
-                        destructive: true,
-                    }),
-                ),
-                window,
-                cx,
-                move |_window, cx| {
-                    AppCommands::drop_collection(
-                        state_for_write,
-                        session_key.connection_id,
-                        session_key.database,
-                        session_key.collection,
-                        cx,
-                    );
-                },
-            );
+            if let Some(key) = this.view_model.current_session() {
+                let node = TreeNodeId::collection(key.connection_id, key.database, key.collection);
+                confirm_delete_node(this.state.clone(), node, window, cx);
+            }
         }))
         .on_action(cx.listener(|this, _: &PasteDocuments, window, cx| {
             if let Some((session_key, meta)) = this.selected_property_context(cx) {

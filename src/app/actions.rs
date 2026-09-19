@@ -3,12 +3,12 @@ use uuid::Uuid;
 
 use crate::components::action_bar::ActionExecution;
 use crate::components::{
-    ConnectionManager, ContentArea, QueryLibraryDialog, request_disconnect_connection,
-    request_unsaved_action,
+    ConnectionManager, ContentArea, request_disconnect_connection, request_unsaved_action,
 };
 use crate::keyboard::{
-    CloseTab, DiscardDocumentChanges, FocusContent, FocusSidebar, OpenForge, RefreshView,
-    SaveDocument, ToggleAiPanel, format_keystroke,
+    CloseTab, CreateCollection, CreateDatabase, DiscardDocumentChanges, FocusContent, FocusSidebar,
+    OpenForge, OpenQueryLibrary, OpenSettings, RefreshView, SaveDocument, ToggleAiPanel,
+    format_keystroke,
 };
 use crate::state::settings::AppTheme;
 use crate::state::{
@@ -89,22 +89,23 @@ impl AppRoot {
         open_create_collection_dialog(self.state.clone(), database, window, cx);
     }
 
-    pub(super) fn handle_create_index(&mut self, window: &mut Window, cx: &mut App) {
-        if !matches!(self.state.read(cx).current_view, View::Documents) {
+    /// Create Index, from the shortcut and from the command palette alike: shows the collection's
+    /// Indexes and opens the dialog there. The shortcut is bound only while Indexes is showing;
+    /// the palette offers it for any open collection.
+    pub(super) fn create_index(state: &Entity<AppState>, window: &mut Window, cx: &mut App) {
+        if !matches!(state.read(cx).current_view, View::Documents) {
             return;
         }
-        let Some(session_key) = self.state.read(cx).current_session_key() else {
+        let Some(session_key) = state.read(cx).current_session_key() else {
             return;
         };
-        let subview = self
-            .state
-            .read(cx)
-            .session_subview(&session_key)
-            .unwrap_or(CollectionSubview::Documents);
-        if subview != CollectionSubview::Indexes {
-            return;
+        if state.read(cx).session_subview(&session_key) != Some(CollectionSubview::Indexes) {
+            state.update(cx, |state, cx| {
+                state.set_collection_subview(&session_key, CollectionSubview::Indexes);
+                cx.notify();
+            });
         }
-        CollectionView::open_index_create_dialog(self.state.clone(), session_key, window, cx);
+        CollectionView::open_index_create_dialog(state.clone(), session_key, window, cx);
     }
 
     pub(super) fn handle_close_tab(&mut self, window: &mut Window, cx: &mut App) {
@@ -248,27 +249,10 @@ impl AppRoot {
                 ConnectionManager::open(state.clone(), window, cx);
             }
             "cmd:create-database" => {
-                let state_ref = state.read(cx);
-                let Some(conn_id) = state_ref.selected_connection_id() else {
-                    return;
-                };
-                if !state_ref.is_connected(conn_id) {
-                    return;
-                }
-                open_create_database_dialog(state.clone(), window, cx);
+                window.dispatch_action(Box::new(CreateDatabase), cx);
             }
             "cmd:create-collection" => {
-                let state_ref = state.read(cx);
-                let Some(conn_id) = state_ref.selected_connection_id() else {
-                    return;
-                };
-                if !state_ref.is_connected(conn_id) {
-                    return;
-                }
-                let Some(database) = state_ref.selected_database_name() else {
-                    return;
-                };
-                open_create_collection_dialog(state.clone(), database, window, cx);
+                window.dispatch_action(Box::new(CreateCollection), cx);
             }
             "cmd:insert-document" => {
                 let Some(session_key) = state.read(cx).current_session_key() else {
@@ -286,14 +270,7 @@ impl AppRoot {
                 );
             }
             "cmd:create-index" => {
-                let Some(session_key) = state.read(cx).current_session_key() else {
-                    return;
-                };
-                state.update(cx, |state, cx| {
-                    state.set_collection_subview(&session_key, CollectionSubview::Indexes);
-                    cx.notify();
-                });
-                CollectionView::open_index_create_dialog(state.clone(), session_key, window, cx);
+                Self::create_index(state, window, cx);
             }
             "cmd:run-aggregation" => {
                 let Some(session_key) = state.read(cx).current_session_key() else {
@@ -362,12 +339,10 @@ impl AppRoot {
                 // Handled as two-step in ActionBar (switches to Disconnect mode)
             }
             "cmd:query-library" => {
-                QueryLibraryDialog::open_for_current(state.clone(), window, cx);
+                window.dispatch_action(Box::new(OpenQueryLibrary), cx);
             }
             "cmd:settings" => {
-                state.update(cx, |state, cx| {
-                    state.open_settings_tab(cx);
-                });
+                window.dispatch_action(Box::new(OpenSettings), cx);
             }
             "cmd:ai" => {
                 // The action, not a copy of it: its handler also focuses the input on open.

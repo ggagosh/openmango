@@ -3,12 +3,14 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::components::{open_confirm_dialog, request_remove_connection};
+use crate::components::node_commands::confirm_delete_node;
+use crate::components::open_confirm_dialog;
 use crate::helpers::validate::{percent_decode, percent_encode};
 use crate::helpers::{
     UriSecrets, extract_host_from_uri, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
     validate_mongodb_uri,
 };
+use crate::models::TreeNodeId;
 use crate::models::{ProxyConfig, ProxyKind, SavedConnection, SshAuth, SshConfig};
 use crate::state::{AppCommands, AppState, TabKey, UnsavedScope};
 
@@ -970,21 +972,10 @@ impl ConnectionManager {
     }
 
     pub(super) fn remove_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(connection_id) = self.selected_id else {
-            return;
-        };
-        let state = self.state.clone();
-        open_confirm_dialog(
-            window,
-            cx,
-            "Remove connection",
-            "Remove this connection? This cannot be undone.".to_string(),
-            "Remove",
-            true,
-            move |window, cx| {
-                request_remove_connection(state.clone(), connection_id, window, cx);
-            },
-        );
+        if let Some(connection_id) = self.selected_id {
+            let node = TreeNodeId::connection(connection_id);
+            confirm_delete_node(self.state.clone(), node, window, cx);
+        }
     }
 }
 
