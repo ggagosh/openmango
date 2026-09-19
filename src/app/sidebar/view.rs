@@ -14,7 +14,6 @@ use gpui_kit::prelude::{
 };
 use gpui_kit::*;
 
-use crate::actions::model::ActionStatus;
 use crate::components::{ConnectionIdentity, connection_identity_tags};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
@@ -23,12 +22,11 @@ use crate::keyboard::{
     TransferExport, TransferImport,
 };
 use crate::models::TreeNodeId;
-use crate::state::{AppCommands, TransferMode};
+use crate::state::TransferMode;
 use crate::theme::{borders, colors, islands, sizing, spacing};
 
 use super::super::menus::{build_collection_menu, build_connection_menu, build_database_menu};
-use super::super::sidebar_model::SidebarModel;
-use super::Sidebar;
+use super::{ROW_HEIGHT, Sidebar};
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -71,15 +69,7 @@ impl Render for Sidebar {
                 .collect::<HashMap<_, _>>(),
         );
 
-        let pending_agent_actions = self
-            .state
-            .read(cx)
-            .action_broker()
-            .list_all()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|action| action.status == ActionStatus::PendingApproval)
-            .count();
+        let pending_agent_actions = self.pending_agent_actions;
         let activity_tooltip = if pending_agent_actions == 0 {
             "Agent activity".to_string()
         } else {
@@ -95,25 +85,7 @@ impl Render for Sidebar {
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
 
-        // Sticky connection header (one-frame-delayed: uses index computed by previous processor run)
-        let sticky_info = self.sticky_connection_index.and_then(|idx| {
-            let entry = self.model.entries.get(idx)?;
-            let connection_id = entry.id.connection_id();
-            let is_connected = active_connections.contains_key(&connection_id);
-            let is_connecting = connecting_id == Some(connection_id);
-            let accent =
-                connection_accents.get(&connection_id).copied().unwrap_or(cx.theme().foreground);
-            let identity = connection_identities.get(&connection_id).cloned();
-            Some((
-                idx,
-                entry.label.clone(),
-                connection_id,
-                is_connected,
-                is_connecting,
-                accent,
-                identity,
-            ))
-        });
+        let sticky_rows = self.sticky_rows();
 
         let search_query = self.search_state.read(cx).value().to_string();
         let search_results = if self.model.search_open {
@@ -404,9 +376,14 @@ impl Render for Sidebar {
                                     .into_any_element()
                             } else {
                                 div()
+                                    .id("sidebar-search-results")
                                     .flex()
                                     .flex_col()
                                     .gap(px(2.0))
+                                    // Bounded, so a broad query cannot push the tree off screen.
+                                    .max_h(px(320.0))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.search_scroll_handle)
                                     .children(search_results.iter().enumerate().map(|(ix, result)| {
                                         let result = result.clone();
                                         let title = result.title.clone();
@@ -416,6 +393,7 @@ impl Render for Sidebar {
                                         let is_selected = self.model.search_selected == Some(ix);
                                         div()
                                             .flex()
+                                            .flex_shrink_0()
                                             .items_center()
                                             .justify_between()
                                             .px(spacing::sm())
@@ -488,7 +466,9 @@ impl Render for Sidebar {
                             .flex()
                             .flex_col()
                             .flex_1()
-                            .overflow_y_scrollbar()
+                            .min_h_0()
+                            // The list scrolls itself; the bar reads the list's own handle.
+                            .vertical_scrollbar(&scroll_handle)
                             .child(if self.model.entries.is_empty() {
                         div()
                             .flex()
@@ -562,7 +542,6 @@ impl Render for Sidebar {
                                       visible_range: std::ops::Range<usize>,
                                       _window,
                                       cx| {
-                                    let visible_start = visible_range.start;
                                     let mut items = Vec::with_capacity(visible_range.len());
                                     let connecting_id = connecting_id;
 
@@ -575,7 +554,7 @@ impl Render for Sidebar {
                                         let is_folder = entry.is_folder;
                                         let is_expanded = entry.is_expanded;
                                         let label = entry.label.clone();
-                                        let label_for_menu = label.clone();
+                                        let label_for_menu = label.to_string();
 
                                         let is_connection = node_id.is_connection();
                                         let is_database = node_id.is_database();
@@ -598,8 +577,6 @@ impl Render for Sidebar {
                                         let is_loading_db =
                                             is_database && sidebar.model.loading_databases.contains(&node_id);
 
-                                        let db_name =
-                                            node_id.database_name().map(|db| db.to_string());
                                         let node_kind = if is_connection {
                                             "Connection"
                                         } else if is_database {
@@ -612,8 +589,10 @@ impl Render for Sidebar {
                                         let menu_focus = sidebar.focus_handle.clone();
                                         let row_focus = menu_focus.clone();
 
+                                        // Keyed by node, not position: hover and an open menu stay
+                                        // with their row when rows above it come and go.
                                         let row = div()
-                                            .id(("sidebar-row", ix))
+                                            .id(&node_id)
                                             .group("sidebar-row")
                                             .flex()
                                             .items_center()
@@ -621,7 +600,7 @@ impl Render for Sidebar {
                                             .overflow_hidden()
                                             .gap(px(4.0))
                                             .pl(px(8.0 + 12.0 * depth as f32))
-                                            .py(px(2.0))
+                                            .h(ROW_HEIGHT)
                                             .on_click({
                                                 let node_id = node_id.clone();
                                                 let sidebar_entity = sidebar_entity.clone();
@@ -660,25 +639,21 @@ impl Render for Sidebar {
                                             })
                                             .cursor_pointer()
                                             .tooltip({
-                                                let tooltip = format!(
-                                                    "{node_kind}: {label}. Press Enter to open, Arrow keys to navigate."
-                                                );
-                                                move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                                                let label = label.clone();
+                                                move |window, cx| {
+                                                    Tooltip::new(format!("{node_kind}: {label}"))
+                                                        .build(window, cx)
+                                                }
                                             })
                                             // Chevron for expandable items — single-click to toggle
                                             .when(is_folder, |this| {
                                                 let chevron_node_id = node_id.clone();
                                                 let chevron_sidebar = sidebar_entity.clone();
-                                                let chevron_state = state_clone.clone();
-                                                let chevron_db = db_name.clone();
-                                                let chevron_connection_id = connection_id;
-                                                let chevron_is_connection = is_connection;
-                                                let chevron_is_database = is_database;
-                                                let chevron_is_loading = is_loading_db;
                                                 this.child(
                                                     div()
                                                         .id(("chevron", ix))
                                                         .flex()
+                                                        .flex_shrink_0()
                                                         .items_center()
                                                         .justify_center()
                                                         .size(px(18.0))
@@ -686,65 +661,24 @@ impl Render for Sidebar {
                                                         .cursor_pointer()
                                                         .hover(|s| s.bg(theme_foreground.opacity(0.1)))
                                                         .tooltip({
-                                                            let action = if is_expanded { "Collapse" } else { "Expand" };
-                                                            let tooltip = format!("{action} {label}");
-                                                            move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                                                            let label = label.clone();
+                                                            move |window, cx| {
+                                                                let action = if is_expanded { "Collapse" } else { "Expand" };
+                                                                Tooltip::new(format!("{action} {label}")).build(window, cx)
+                                                            }
                                                         })
-                                                        .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                                        // Toggles on press, not release, so it answers at once.
+                                                        // Option-click closes the whole subtree.
+                                                        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                                                             cx.stop_propagation();
-
-                                                            let currently_expanded = chevron_sidebar
-                                                                .update(cx, |sidebar, _cx| {
-                                                                    sidebar.model.expanded_nodes.contains(&chevron_node_id)
-                                                                });
-                                                            let should_expand = !currently_expanded;
                                                             chevron_sidebar.update(cx, |sidebar, cx| {
-                                                                if should_expand {
-                                                                    sidebar.model.expanded_nodes.insert(chevron_node_id.clone());
-                                                                } else {
-                                                                    sidebar.model.expanded_nodes.remove(&chevron_node_id);
-                                                                }
-                                                                sidebar.persist_expanded_nodes(cx);
-                                                                sidebar.refresh_tree(cx);
+                                                                sidebar.set_node_expanded(
+                                                                    &chevron_node_id,
+                                                                    !is_expanded,
+                                                                    event.modifiers.alt,
+                                                                    cx,
+                                                                );
                                                             });
-
-                                                            // For connections: connect if not connected
-                                                            if chevron_is_connection && should_expand {
-                                                                let is_connected = chevron_state.read(cx)
-                                                                    .active_connection_by_id(chevron_connection_id)
-                                                                    .is_some();
-                                                                if !is_connected {
-                                                                    AppCommands::connect(
-                                                                        chevron_state.clone(),
-                                                                        chevron_connection_id,
-                                                                        cx,
-                                                                    );
-                                                                }
-                                                            }
-
-                                                            // For databases: load collections if needed
-                                                            if chevron_is_database && should_expand && !chevron_is_loading
-                                                                && let Some(ref db) = chevron_db
-                                                            {
-                                                                let should_load = chevron_state
-                                                                    .read(cx)
-                                                                    .active_connection_by_id(chevron_connection_id)
-                                                                    .is_some_and(|conn| {
-                                                                        !conn.collections.contains_key(db)
-                                                                    });
-                                                                if should_load {
-                                                                    chevron_sidebar.update(cx, |sidebar, cx| {
-                                                                        sidebar.model.loading_databases.insert(chevron_node_id.clone());
-                                                                        cx.notify();
-                                                                    });
-                                                                    AppCommands::load_collections(
-                                                                        chevron_state.clone(),
-                                                                        chevron_connection_id,
-                                                                        db.clone(),
-                                                                        cx,
-                                                                    );
-                                                                }
-                                                            }
                                                         })
                                                         .child(
                                                             Icon::new(if is_expanded {
@@ -942,20 +876,6 @@ impl Render for Sidebar {
                                         items.push(row);
                                     }
 
-                                    // Compute sticky connection header
-                                    sidebar.sticky_connection_index =
-                                        if !sidebar.model.entries.is_empty()
-                                            && visible_start > 0
-                                        {
-                                            SidebarModel::find_parent_connection_index(
-                                                &sidebar.model.entries,
-                                                visible_start,
-                                            )
-                                            .filter(|&idx| idx < visible_start)
-                                        } else {
-                                            None
-                                        };
-
                                     items
                                 },
                             )
@@ -963,65 +883,107 @@ impl Render for Sidebar {
                         .flex_grow(1.0)
                         .size_full()
                         .track_scroll(&scroll_handle)
-                        .with_sizing_behavior(ListSizingBehavior::Auto)
                         .into_any_element()
                     }),
                     )
-                    // Sticky connection header overlay
-                    .when_some(sticky_info, |this, (idx, label, _connection_id, _is_connected, _is_connecting, accent, identity)| {
-                        let scroll_handle = self.scroll_handle.clone();
-                        let sidebar_entity = sidebar_entity.clone();
+                    // Pinned ancestors: the connection, then the database, of the rows under them.
+                    .when(!sticky_rows.is_empty(), |this| {
                         let sticky_bg = opaque_color(cx.theme().sidebar);
                         let sticky_hover_bg = opaque_color(cx.theme().list_hover);
                         this.child(
                             div()
-                                .id("sticky-connection-header")
                                 .absolute()
                                 .top_0()
                                 .left_0()
                                 .right_0()
                                 .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .pl(px(8.0))
-                                .py(px(2.0))
+                                .flex_col()
                                 .bg(sticky_bg)
                                 .border_b_1()
                                 .border_color(cx.theme().border)
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(sticky_hover_bg))
-                                .tooltip({
-                                    let label = label.clone();
-                                    move |window, cx| {
-                                        Tooltip::new(format!("Jump to connection: {label}"))
-                                            .build(window, cx)
-                                    }
-                                })
-                                .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                    scroll_handle.scroll_to_item(idx, gpui_kit::ScrollStrategy::Top);
-                                    sidebar_entity.update(cx, |_sidebar, cx| {
-                                        cx.notify();
-                                    });
-                                })
-                                // Globe icon
-                                .child(
-                                    Icon::new(IconName::Globe)
-                                        .size(sizing::icon_md())
-                                        .text_color(accent),
-                                )
-                                // Label
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .truncate()
-                                        .child(label),
-                                )
-                                .when_some(identity, |header, identity| {
-                                    header.child(connection_identity_tags(&identity, cx))
-                                }),
+                                .children(sticky_rows.iter().filter_map(|&ix| {
+                                    let entry = self.model.entries.get(ix)?;
+                                    let connection_id = entry.id.connection_id();
+                                    let is_connection = entry.id.is_connection();
+                                    let label = entry.label.clone();
+                                    let depth = entry.depth;
+                                    let scroll_handle = self.scroll_handle.clone();
+                                    let sidebar_entity = sidebar_entity.clone();
+                                    Some(
+                                        div()
+                                            .id(("sticky-row", depth))
+                                            .flex()
+                                            .items_center()
+                                            .h(ROW_HEIGHT)
+                                            .gap(px(4.0))
+                                            // Same leading as a list row, so the label does not
+                                            // shift sideways as its row slides under the pin.
+                                            .border_l_2()
+                                            .border_color(gpui_kit::transparent_black())
+                                            .pl(px(8.0 + 12.0 * depth as f32))
+                                            .cursor_pointer()
+                                            .hover(move |s| s.bg(sticky_hover_bg))
+                                            .tooltip({
+                                                let label = label.clone();
+                                                move |window, cx| {
+                                                    Tooltip::new(format!("Jump to {label}"))
+                                                        .build(window, cx)
+                                                }
+                                            })
+                                            .on_click(move |_, _window, cx| {
+                                                scroll_handle.scroll_to_item_with_offset(
+                                                    ix,
+                                                    ScrollStrategy::Top,
+                                                    depth,
+                                                );
+                                                sidebar_entity.update(cx, |_, cx| cx.notify());
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_shrink_0()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .size(px(18.0))
+                                                    .child(
+                                                        Icon::new(IconName::ChevronDown)
+                                                            .size(sizing::icon_sm())
+                                                            .text_color(cx.theme().muted_foreground),
+                                                    ),
+                                            )
+                                            .child(if is_connection {
+                                                Icon::new(IconName::Globe)
+                                                    .size(sizing::icon_md())
+                                                    .text_color(
+                                                        connection_accents
+                                                            .get(&connection_id)
+                                                            .copied()
+                                                            .unwrap_or(cx.theme().primary),
+                                                    )
+                                            } else {
+                                                Icon::new(IconName::LayoutDashboard)
+                                                    .size(sizing::icon_md())
+                                                    .text_color(cx.theme().info)
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .text_sm()
+                                                    .text_color(cx.theme().foreground)
+                                                    .truncate()
+                                                    .child(label),
+                                            )
+                                            .when_some(
+                                                connection_identities
+                                                    .get(&connection_id)
+                                                    .filter(|_| is_connection),
+                                                |row, identity| {
+                                                    row.child(connection_identity_tags(identity, cx))
+                                                },
+                                            ),
+                                    )
+                                })),
                         )
                     })
                     // Typeahead query indicator
