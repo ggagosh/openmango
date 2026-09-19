@@ -8,7 +8,7 @@ use crate::components::{
 };
 use crate::keyboard::{
     CloseTab, DiscardDocumentChanges, FocusContent, FocusSidebar, OpenForge, RefreshView,
-    SaveDocument, format_keystroke,
+    SaveDocument, ToggleAiPanel, format_keystroke,
 };
 use crate::state::settings::AppTheme;
 use crate::state::{
@@ -370,9 +370,8 @@ impl AppRoot {
                 });
             }
             "cmd:ai" => {
-                state.update(cx, |state, cx| {
-                    state.toggle_ai_panel(cx);
-                });
+                // The action, not a copy of it: its handler also focuses the input on open.
+                window.dispatch_action(Box::new(ToggleAiPanel), cx);
             }
             "cmd:whats-new" => {
                 crate::changelog::open_changelog_tab(state.clone(), cx);

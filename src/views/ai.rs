@@ -1550,15 +1550,12 @@ impl Render for AiView {
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::PreviousAiMention, window, cx| {
                 this.navigate_mention(-1, window, cx);
-                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::NextAiMention, window, cx| {
                 this.navigate_mention(1, window, cx);
-                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::ConfirmAiMention, window, cx| {
                 this.confirm_mention_or_send(window, cx);
-                cx.stop_propagation();
             }))
             .flex()
             .flex_col()
@@ -2104,7 +2101,7 @@ fn assistant_footer(
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::Redo).xsmall())
-                    .label("Try again")
+                    .label("Retry")
                     .tooltip("Ask the same question again")
                     .on_click(move |_, _, cx| {
                         let prompt = retry_prompt.clone();

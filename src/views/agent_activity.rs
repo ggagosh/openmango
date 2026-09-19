@@ -477,7 +477,7 @@ fn action_card(
                             Button::new(("approve-agent-action", action_id.as_u128() as u64))
                                 .xsmall()
                                 .primary()
-                                .label("Approve & Run")
+                                .label("Approve and run")
                                 .on_click(move |_, window, cx| {
                                     if protected {
                                         open_typed_approval_dialog(
@@ -494,7 +494,7 @@ fn action_card(
                                             cx,
                                             "Approve and run",
                                             "OpenMango will revalidate this request, create a durable operation, and begin execution.",
-                                            "Approve & Run",
+                                            "Approve and run",
                                             false,
                                             move |_window, cx| {
                                                 AppCommands::approve_agent_action(
@@ -675,7 +675,7 @@ fn open_typed_approval_dialog(
                     cancel_button("cancel-protected-approval"),
                     Button::new("approve-protected-action")
                         .danger()
-                        .label("Approve & Run")
+                        .label("Approve and run")
                         .disabled(!matches)
                         .on_click(move |_, window, cx| {
                             if input_for_click.read(cx).value().as_ref() != target_for_click {

@@ -717,7 +717,7 @@ fn render_documents_actions_clean(
                                 Button::new("col-vis-show-all")
                                     .ghost()
                                     .xsmall()
-                                    .label("Show All")
+                                    .label("Show all")
                                     .on_click(move |_, _window, cx| {
                                         let Some(sk) = sk_show.clone() else {
                                             return;

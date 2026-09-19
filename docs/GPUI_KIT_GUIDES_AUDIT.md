@@ -93,7 +93,7 @@ and `P95`.
 
 ### D. One command, several implementations that already disagree
 
-- [ ] `app/actions.rs:372` vs `app/root.rs:1075-1080` — palette "AI Assistant" toggles the panel
+- [x] `app/actions.rs:372` vs `app/root.rs:1075-1080` — palette "AI Assistant" toggles the panel
   only; the real `ToggleAiPanel` handler also focuses the input. Dispatch the action. **S**
 - [ ] `app/actions.rs:288-297` vs `views/documents/actions.rs:86-99` vs `app/actions.rs:92-108` —
   `CreateIndex` implemented three times with three different guards. And
@@ -161,12 +161,12 @@ and `P95`.
 - [ ] Four confirm dialogs whose body re-asks the title: `app/menus.rs:57-60`, `:314,324`,
   `:518,530`, `views/documents/workflow.rs:84-85`. Put the object in the title
   (`Drop database "x"?`), leave only the consequence in the body. **S**
-- [ ] `views/settings.rs:1858,1860` — title and confirm label are both "Clear all History". **S**
+- [x] `views/settings.rs:1858,1860` — title and confirm label are both "Clear all History". **S**
 - [ ] `components/confirm.rs:115-117` — default production-write dialog: title "Confirm Production
   write", confirm label "Continue". Name the operation and its verb. **M**
-- [ ] `views/transfer/mod.rs:250,252` — "Confirm destructive transfer" names no object; "Run
+- [x] `views/transfer/mod.rs:250,252` — "Confirm destructive transfer" names no object; "Run
   Transfer" is the only Title Case confirm label. **S**
-- [ ] `components/unsaved_guard.rs:82-84` — destructive button "Cancel operations & quit" sits next
+- [x] `components/unsaved_guard.rs:82-84` — destructive button "Cancel operations & quit" sits next
   to the dialog's own "Cancel". Use "Quit anyway". **S**
 
 ---
@@ -200,7 +200,9 @@ parent's, so that is stable and allocates once per row instead of once per contr
 
 ### Unneeded `stop_propagation` (24 sites, S)
 
-- [ ] Tail of `on_action` handlers where no ancestor registers the same action:
+- [x] Tail of `on_action` handlers. These were no-ops, not just unneeded: GPUI stops propagation
+  by default for bubble-phase action handlers (its source says so), so removing them changes
+  nothing. 24 removed:
   `views/forge/actions.rs` (18), `views/ai.rs:1553,1557,1561`,
   `views/documents/actions.rs:49,57,65`. The other ~69 calls are justified.
 
@@ -294,8 +296,8 @@ parent's, so that is stable and allocates once per row instead of once per contr
 - [ ] Error strings: ~19 of 36 lack the final period; several name no cause or next step ("Drop
   failed: not allowed", "Export failed: {}"). **M**
 - [ ] Settings descriptions: 8 of 21 lack the period. **S**
-- [ ] Small lexicon drift: "Retry" ×5 vs "Try again" ×1; "Show All" vs "Show all"; "Approve & Run"
-  vs "Approve and run"; four phrasings of "discard changes"; "What's New" opens "Changelog". **S**
+- [x] Small lexicon drift: "Retry" everywhere; "Show all"; "Approve and run".
+- [ ] Still open: four phrasings of "discard changes"; "What's New" opens "Changelog". **S**
 - [ ] Eight strings use `document(s)` style plurals; `tree_menus.rs:38-40` already branches. **S**
 - [ ] `components/query_library.rs:1079,1091` — selection shown by mutating the label ("✓ This
   connection"). Use the button's selected state. **S**

@@ -1855,9 +1855,9 @@ fn render_agent_connections_section(
                             open_confirm_dialog(
                                 window,
                                 cx,
-                                "Clear all History",
+                                "Clear all history?",
                                 "Delete every non-active local encrypted History batch, gap, and resume cursor. Recording restarts from the current point. This cannot be undone.",
-                                "Clear all History",
+                                "Clear all",
                                 true,
                                 move |_, cx| {
                                     AppCommands::clear_all_history(state_for_clear.clone(), cx);

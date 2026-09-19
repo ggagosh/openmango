@@ -81,7 +81,8 @@ pub fn request_app_quit(state: Entity<AppState>, window: &mut Window, cx: &mut A
             cx,
             "Operations are still running",
             "Cancel running agent operations, wait for rollback or recovery state, then quit?",
-            "Cancel operations & quit",
+            // Not "Cancel …": the dialog's own Cancel sits beside it and means the opposite.
+            "Stop and quit",
             true,
             move |_window, cx| {
                 let broker = state.read(cx).action_broker();

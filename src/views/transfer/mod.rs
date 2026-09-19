@@ -226,9 +226,9 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
     };
     if let Some(connection_id) = write_connection {
         let ordinary = requires_confirmation.then(|| WriteConfirmation {
-            title: "Confirm destructive transfer".to_string(),
+            title: "Run destructive transfer?".to_string(),
             message,
-            confirm_label: "Run Transfer".to_string(),
+            confirm_label: "Run transfer".to_string(),
             destructive: true,
         });
         request_connection_write(
@@ -247,9 +247,9 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
         open_confirm_dialog(
             window,
             cx,
-            "Confirm destructive transfer",
+            "Run destructive transfer?",
             message,
-            "Run Transfer",
+            "Run transfer",
             true,
             run,
         );
