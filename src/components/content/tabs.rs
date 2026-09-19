@@ -10,7 +10,6 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::actions::model::ActionStatus;
 use crate::components::{
     Button, ConnectionIdentity, ConnectionManager as ConnectionManagerView,
     connection_identity_tags, request_unsaved_action,
@@ -164,13 +163,7 @@ impl Render for OpenTabsBar {
                     .into_iter()
                     .map(|connection| (connection.id, ConnectionIdentity::from(&connection)))
                     .collect::<HashMap<_, _>>(),
-                state
-                    .action_broker()
-                    .list_all()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|action| action.status == ActionStatus::PendingApproval)
-                    .count(),
+                state.pending_agent_actions(),
             )
         };
         let selected_index = match active_tab {

@@ -7,7 +7,7 @@ use mongodb::Client;
 use crate::actions::model::{
     BackupManifest, OperationRecord, ProposedAction, ProposedActionContent,
 };
-use crate::state::{AppEvent, AppState};
+use crate::state::AppState;
 use crate::sync::plan::ActionPreflight;
 
 use super::{McpConnection, policy::PolicyEvaluator};
@@ -179,9 +179,8 @@ impl McpBridge {
                                 .propose(*content)
                                 .map_err(|error| error.to_string());
                             let _ = response.send(result);
-                            state.update(cx, |_state, cx| {
-                                cx.emit(AppEvent::AgentActivityChanged);
-                                cx.notify();
+                            state.update(cx, |state, cx| {
+                                state.agent_activity_changed(cx);
                             });
                         }
                     }
@@ -225,9 +224,8 @@ impl McpBridge {
                             .cancel_operation_for_grant(operation_id, grant_id)
                             .map_err(|error| error.to_string());
                         let _ = response.send(result);
-                        state.update(cx, |_state, cx| {
-                            cx.emit(AppEvent::AgentActivityChanged);
-                            cx.notify();
+                        state.update(cx, |state, cx| {
+                            state.agent_activity_changed(cx);
                         });
                     }
                 });

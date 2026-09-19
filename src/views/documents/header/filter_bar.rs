@@ -62,8 +62,17 @@ impl CollectionView {
             .as_ref()
             .map(|input| input.read(cx).value().to_string())
             .unwrap_or_default();
-        let valid = super::super::fast_filter::compile_filter_input(&text).is_ok();
-        let id = super::super::fast_filter::document_id_input(&text);
+        let (valid, id) = {
+            let mut check = self.filter_check.borrow_mut();
+            if check.0 != text {
+                *check = (
+                    text.clone(),
+                    super::super::fast_filter::compile_filter_input(&text).is_ok(),
+                    super::super::fast_filter::document_id_input(&text),
+                );
+            }
+            (check.1, check.2.clone())
+        };
         let focused = filter_state
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));

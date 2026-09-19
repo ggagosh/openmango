@@ -30,23 +30,23 @@ below is the remainder.
 Measure before/after with the FPS monitor (command palette → "Toggle FPS Monitor"): watch `FRAME`
 and `P95`.
 
-- [ ] ✔ `components/content/tabs.rs:167` — `OpenTabsBar::render` calls `action_broker().list_all()`
+- [x] ✔ `components/content/tabs.rs:167` — `OpenTabsBar::render` calls `action_broker().list_all()`
   (`read_dir` + JSON parse of every file) every frame; the bar also observes all of `AppState`
   (`:121`). Same bug as the one fixed in the sidebar. Cache the pending count on the view, refresh
   on `AgentActivityChanged`. **M**
-- [ ] ✔ `views/agent_activity.rs:42-43` — `render` does `list_all()` **and** `list_operations()`
+- [x] ✔ `views/agent_activity.rs:42-43` — `render` does `list_all()` **and** `list_operations()`
   (two directory sweeps) per frame. Load into fields on open and on the change event. **M**
-- [ ] ✔ `views/agent_activity.rs:27-34` — a spawned loop calls `cx.notify()` every 500 ms forever,
+- [x] ✔ `views/agent_activity.rs:27-34` — a spawned loop calls `cx.notify()` every 500 ms forever,
   forcing those sweeps twice a second with nothing changed. Drop the timer; notify from the event.
   **S**
-- [ ] ✔ `state/app_state/sessions/model.rs:112-180` (called from `views/documents/view.rs:109`,
+- [x] ✔ `state/app_state/sessions/model.rs:112-180` (called from `views/documents/view.rs:109`,
   per frame) — `session_snapshot()` deep-clones the session: with the explain modal open that is
   up to 20 explain runs each holding the full `raw_json` plan, plus schema, indexes, aggregation
   stages, history and `selected_docs`. Put the payloads behind `Arc`, or split scalar snapshot from
   payload. **M**
-- [ ] `state/app_state/sessions/model.rs:137-142` — same path serializes the filter BSON → JSON
+- [x] `state/app_state/sessions/model.rs:137-142` — same path serializes the filter BSON → JSON
   every frame. Store the compiled string, recompute when the filter changes. **S**
-- [ ] ✔ `views/documents/header/filter_bar.rs:65-66` — re-parses the filter text every frame
+- [x] ✔ `views/documents/header/filter_bar.rs:65-66` — re-parses the filter text every frame
   (`compile_filter_input` + `document_id_input`) only to get a `valid` bool for styling. Compute on
   `InputEvent::Change` (subscription exists at `view.rs:299`). **S**
 

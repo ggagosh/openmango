@@ -134,12 +134,7 @@ impl AppState {
             selected_count,
             dirty_count,
             filter_raw: session.data.filter_raw.clone(),
-            filter_compiled_raw: session
-                .data
-                .filter
-                .as_ref()
-                .map(format_document_compact)
-                .unwrap_or_default(),
+            filter_compiled_raw: session.data.filter_compiled_raw.clone(),
             sort_raw: session.data.sort_raw.clone(),
             projection_raw: session.data.projection_raw.clone(),
             query_options_open: session.view.query_options_open,
@@ -343,6 +338,14 @@ impl AppState {
 
     pub fn ensure_session(&mut self, key: SessionKey) -> &mut SessionState {
         self.sessions.ensure(key)
+    }
+}
+
+impl SessionData {
+    /// Sets the filter together with its compact JSON form, so the two cannot drift.
+    pub fn set_filter(&mut self, filter: Option<Document>) {
+        self.filter_compiled_raw = filter.as_ref().map(format_document_compact).unwrap_or_default();
+        self.filter = filter;
     }
 }
 

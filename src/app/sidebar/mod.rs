@@ -8,7 +8,6 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 use uuid::Uuid;
 
-use crate::actions::model::ActionStatus;
 use crate::components::{
     ConnectionManager, WriteConfirmation, open_confirm_dialog, request_connection_write,
     request_disconnect_connection, request_preview_collection, request_remove_connection,
@@ -71,8 +70,6 @@ pub(crate) struct Sidebar {
     last_revealed: Option<TreeNodeId>,
     /// A reveal waiting for its row to load.
     pending_reveal: Option<TreeNodeId>,
-    /// Counted when agent activity changes; the broker reads disk, which render must not.
-    pending_agent_actions: usize,
     typeahead_clear_task: Option<Task<()>>,
     typeahead_generation: u64,
     keyboard_preview_task: Option<Task<()>>,
@@ -211,7 +208,6 @@ impl Sidebar {
                 | AppEvent::SchemaFailed { .. }
                 | AppEvent::UpdateAvailable { .. } => {}
                 AppEvent::AgentActivityChanged => {
-                    this.pending_agent_actions = Self::count_pending_agent_actions(&this.state, cx);
                     cx.notify();
                 }
                 AppEvent::ViewChanged => {
@@ -289,7 +285,6 @@ impl Sidebar {
             this.handle_typeahead_keystroke(ks, cx);
         }));
 
-        let pending_agent_actions = Self::count_pending_agent_actions(&state, cx);
         let sidebar = Self {
             state,
             model,
@@ -301,7 +296,6 @@ impl Sidebar {
             search_scroll_handle: ScrollHandle::new(),
             last_revealed: None,
             pending_reveal: None,
-            pending_agent_actions,
             typeahead_clear_task: None,
             typeahead_generation: 0,
             keyboard_preview_task: None,
@@ -336,17 +330,6 @@ impl Sidebar {
 
     pub(crate) fn toggle_collapsed(&mut self) {
         self.collapsed = !self.collapsed;
-    }
-
-    fn count_pending_agent_actions(state: &Entity<AppState>, cx: &App) -> usize {
-        state
-            .read(cx)
-            .action_broker()
-            .list_all()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|action| action.status == ActionStatus::PendingApproval)
-            .count()
     }
 
     fn view_node(&self, cx: &App) -> Option<TreeNodeId> {

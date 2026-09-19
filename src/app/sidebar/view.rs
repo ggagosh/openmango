@@ -69,7 +69,7 @@ impl Render for Sidebar {
                 .collect::<HashMap<_, _>>(),
         );
 
-        let pending_agent_actions = self.pending_agent_actions;
+        let pending_agent_actions = self.state.read(cx).pending_agent_actions();
         let activity_tooltip = if pending_agent_actions == 0 {
             "Agent activity".to_string()
         } else {

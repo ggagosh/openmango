@@ -34,6 +34,9 @@ pub struct CollectionView {
     pub(crate) aggregation_focus: FocusHandle,
     pub(crate) aggregation_stage_list_scroll: ScrollHandle,
     pub(crate) filter_state: Option<Entity<EditorState>>,
+    /// The last filter text checked, whether it compiles, and the `_id` it spells if any. The
+    /// filter row is drawn every frame; the text is parsed only when it changes.
+    pub(crate) filter_check: std::cell::RefCell<(String, bool, Option<mongodb::bson::Bson>)>,
     pub(crate) filter_completions: Option<std::rc::Rc<super::query_editor::QueryEditorCompletions>>,
     pub(crate) filter_completion_menu:
         Option<Entity<crate::views::editor_completion::EditorCompletionMenu>>,
@@ -436,6 +439,7 @@ impl CollectionView {
             aggregation_focus: cx.focus_handle().tab_stop(true),
             aggregation_stage_list_scroll: ScrollHandle::new(),
             filter_state: None,
+            filter_check: std::cell::RefCell::new((String::new(), true, None)),
             filter_completions: None,
             filter_completion_menu: None,
             filter_expanded: false,
