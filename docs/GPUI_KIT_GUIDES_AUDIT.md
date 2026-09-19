@@ -111,7 +111,7 @@ and `P95`.
 
 ### E. Element identity on a list the user reorders
 
-- [ ] `views/documents/views/aggregation/stage_list/stage_row.rs:251` and `:459` — the stage row and
+- [x] `views/documents/views/aggregation/stage_list/stage_row.rs:251` and `:459` — the stage row and
   its **drag handle** are keyed by index; the drag source's key changes the instant the drop lands.
   `PipelineStage` has no id. Add `id: u64` (`state/app_state/aggregation.rs:12`) from a per-pipeline
   counter; also fixes `:228` (remove button tooltip). **M**
@@ -175,25 +175,27 @@ and `P95`.
 
 ### Index-keyed ids on lists that shift (~28 sites, almost all S)
 
-The stable id is already in scope at nearly every site.
+The stable id is already in scope at nearly every site. Pattern used: key the **row** by its
+domain id and give the controls inside it plain static ids. An element's identity includes its
+parent's, so that is stable and allocates once per row instead of once per control.
 
-- [ ] `views/results/tree.rs:52,30` → `row.node_id` / `toggle_node_id`
-- [ ] `views/documents/tree/lazy_row.rs:146,114` → `node_id` / `toggle_node_id`
-- [ ] `views/documents/tree/tree_row.rs:139,88,356,442` → `item_id` / `toggle_item_id` (`:356` and
+- [x] `views/results/tree.rs:52,30` → `row.node_id` / `toggle_node_id`
+- [x] `views/documents/tree/lazy_row.rs:146,114` → `node_id` / `toggle_node_id`
+- [x] `views/documents/tree/tree_row.rs:139,88,356,442` → `item_id` / `toggle_item_id` (`:356` and
   `:442` are drag sources)
-- [ ] `views/forge/mod.rs:278,307` → `page_id` (the click handler already distrusts the index)
+- [x] `views/forge/mod.rs:278,307` → `page_id` (the click handler already distrusts the index)
 - [ ] `components/query_library.rs:730,837,864,889,915,935,959,977` → `item.id` **M**
 - [ ] `components/content/tabs.rs:282,264` → add `TabKey::element_key()` **M**
-- [ ] `views/documents/table/document_table_delegate.rs:188,179`,
+- [x] `views/documents/table/document_table_delegate.rs:188,179`,
   `aggregation_table_delegate.rs:176,167` → column key (the pin button re-keys under the cursor as
   it is clicked)
-- [ ] `views/documents/views/indexes_view.rs:174,156,115` → index name
-- [ ] `views/transfer/options.rs:251,237,641,627` → collection name (the two blocks are verbatim
+- [x] `views/documents/views/indexes_view.rs:174,156,115` → index name
+- [x] `views/transfer/options.rs:251,237,641,627` → collection name (the two blocks are verbatim
   duplicates; dedupe)
-- [ ] `views/documents/views/schema_view.rs:902` → token label
-- [ ] `views/documents/dialogs/index_create/key_rows.rs:117` → `suggestion.path`
-- [ ] `views/ai.rs:1433` → collection name
-- [ ] `app/sidebar/view.rs:654` → `.id("chevron")`, `:728` → `.id("connection-failure")` (parent row
+- [x] `views/documents/views/schema_view.rs:902` → token label
+- [x] `views/documents/dialogs/index_create/key_rows.rs:117` → `suggestion.path`
+- [x] `views/ai.rs:1433` → collection name
+- [x] `app/sidebar/view.rs:654` → `.id("chevron")`, `:728` → `.id("connection-failure")` (parent row
   already namespaces them), `:914` → `.id(&entry.id)` instead of depth
 
 ### Unneeded `stop_propagation` (24 sites, S)

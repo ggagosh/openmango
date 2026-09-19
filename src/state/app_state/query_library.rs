@@ -244,11 +244,7 @@ mod tests {
         let mut state = AppState::new();
         let key = SessionKey::new(Uuid::new_v4(), "app", "users");
         state.ensure_session(key.clone());
-        let stages = vec![PipelineStage {
-            operator: "$match".into(),
-            body: "{ active: true }".into(),
-            enabled: true,
-        }];
+        let stages = vec![PipelineStage::with("$match", "{ active: true }", true)];
         let definition = QueryDefinition {
             connection_id: key.connection_id,
             database: key.database.clone(),

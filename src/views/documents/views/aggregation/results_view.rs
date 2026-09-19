@@ -623,7 +623,6 @@ fn render_results_tree(
                                         let row = &visible_rows[ix];
                                         let meta = compute_row_meta(row, &documents, cx);
                                         render_lazy_readonly_row(
-                                            ix,
                                             row,
                                             &meta,
                                             false,

@@ -85,7 +85,7 @@ pub fn render_results_view<T: 'static>(
                             .map(|ix| {
                                 let row = &visible_rows[ix];
                                 let meta = compute_row_meta(row, &documents, cx);
-                                tree::render_result_row(ix, row, &meta, on_toggle_node.clone(), cx)
+                                tree::render_result_row(row, &meta, on_toggle_node.clone(), cx)
                             })
                             .collect()
                     }

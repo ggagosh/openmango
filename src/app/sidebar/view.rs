@@ -651,7 +651,7 @@ impl Render for Sidebar {
                                                 let chevron_sidebar = sidebar_entity.clone();
                                                 this.child(
                                                     div()
-                                                        .id(("chevron", ix))
+                                                        .id("chevron")
                                                         .flex()
                                                         .flex_shrink_0()
                                                         .items_center()
@@ -725,7 +725,7 @@ impl Render for Sidebar {
                                                                 "Couldn't connect. {failure}"
                                                             ));
                                                             div()
-                                                                .id(("connection-failure", ix))
+                                                                .id("connection-failure")
                                                                 .child(
                                                                     Icon::new(IconName::TriangleAlert)
                                                                         .size(sizing::icon_md())
@@ -911,7 +911,7 @@ impl Render for Sidebar {
                                     let sidebar_entity = sidebar_entity.clone();
                                     Some(
                                         div()
-                                            .id(("sticky-row", depth))
+                                            .id((ElementId::from("sticky-row"), entry.id.to_tree_id()))
                                             .flex()
                                             .items_center()
                                             .h(ROW_HEIGHT)

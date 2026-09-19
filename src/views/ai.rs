@@ -1430,7 +1430,7 @@ impl Render for AiView {
                         gpui_kit::transparent_black()
                     };
                     div()
-                        .id(ElementId::Name(format!("mention-item-{i}").into()))
+                        .id((ElementId::from("mention-item"), col_name.clone()))
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
@@ -3142,11 +3142,7 @@ fn parse_pipeline_from_args(
             let obj = stage.as_object()?;
             let (op, body_val) = obj.iter().next()?;
             let body = serde_json::to_string_pretty(body_val).ok()?;
-            Some(crate::state::app_state::PipelineStage {
-                operator: op.clone(),
-                body,
-                enabled: true,
-            })
+            Some(crate::state::app_state::PipelineStage::with(op.clone(), body, true))
         })
         .collect();
 

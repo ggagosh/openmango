@@ -881,6 +881,8 @@ fn render_filter_token_chip(
         crate::views::documents::schema_filter::SchemaFilterTokenKind::Flag(_) => cx.theme().green,
     };
     let chip_text = token.chip_label();
+    // Keyed by the token, not its position: removing one shifts the rest.
+    let clear_id = (ElementId::from("schema-filter-token-clear"), chip_text.clone());
     let tokens = all_tokens.to_vec();
     let query = query.to_string();
 
@@ -896,7 +898,7 @@ fn render_filter_token_chip(
         .border_color(accent.opacity(0.3))
         .child(div().text_xs().text_color(accent).child(chip_text))
         .child(
-            Button::new(("schema-filter-token-clear", index))
+            Button::new(clear_id)
                 .ghost()
                 .xsmall()
                 .icon(gpui_kit::component::Icon::new(gpui_kit::component::IconName::Close).xsmall())

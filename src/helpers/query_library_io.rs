@@ -330,11 +330,11 @@ mod tests {
             saved_query(
                 SavedQueryScope::Global,
                 QueryContent::Aggregation {
-                    stages: vec![crate::state::app_state::PipelineStage {
-                        operator: "$match".into(),
-                        body: "{ active: true }".into(),
-                        enabled: true,
-                    }],
+                    stages: vec![crate::state::app_state::PipelineStage::with(
+                        "$match",
+                        "{ active: true }",
+                        true,
+                    )],
                     selected_stage: Some(0),
                 },
             ),
@@ -378,11 +378,7 @@ mod tests {
         let mut aggregation = saved_query(
             SavedQueryScope::Global,
             QueryContent::Aggregation {
-                stages: vec![crate::state::app_state::PipelineStage {
-                    operator: "$match".into(),
-                    body: "{}".into(),
-                    enabled: true,
-                }],
+                stages: vec![crate::state::app_state::PipelineStage::with("$match", "{}", true)],
                 selected_stage: Some(0),
             },
         );

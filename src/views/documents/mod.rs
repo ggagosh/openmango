@@ -244,7 +244,7 @@ mod write_impact_tests {
     use super::*;
 
     fn stage(operator: &str, body: &str) -> PipelineStage {
-        PipelineStage { operator: operator.to_string(), body: body.to_string(), enabled: true }
+        PipelineStage::with(operator.to_string(), body.to_string(), true)
     }
 
     #[test]
