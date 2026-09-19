@@ -124,7 +124,7 @@ pub fn render_schema_panel(
                 Button::new("analyze-schema")
                     .primary()
                     .xsmall()
-                    .label("Analyze Schema")
+                    .label("Analyze schema")
                     .disabled(session_key.is_none())
                     .on_click({
                         let state = state.clone();

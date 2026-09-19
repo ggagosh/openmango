@@ -2579,7 +2579,7 @@ fn render_tool_group(
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
-                            .label("Open Collection")
+                            .label("Open collection")
                             .on_click(move |_, _, cx| {
                                 let col = col.clone();
                                 let should_load = st.update(cx, |state, cx| {
@@ -2620,7 +2620,7 @@ fn render_tool_group(
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
-                            .label("Open in Aggregation")
+                            .label("Open in aggregation")
                             .on_click(move |_, _, cx| {
                                 let col = col_for_agg.clone();
                                 let stages = stages_for_agg.clone();

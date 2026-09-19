@@ -711,7 +711,7 @@ fn render_support_section(state: Entity<AppState>, cx: &App) -> impl IntoElement
     let log_path = crate::helpers::support::app_log_path();
     let export_button = Button::new("export-support-bundle")
         .xsmall()
-        .label("Export Support Bundle…")
+        .label("Export support bundle…")
         .on_click(move |_, _, cx| {
             let state = state.clone();
             cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {

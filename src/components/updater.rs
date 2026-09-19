@@ -18,7 +18,7 @@ use super::Button;
 
 pub fn status_label(status: &UpdateStatus) -> String {
     match status {
-        UpdateStatus::Idle => "Software Update".into(),
+        UpdateStatus::Idle => "Software update".into(),
         UpdateStatus::Checking => "Checking for updates…".into(),
         UpdateStatus::UpToDate { channel } => {
             format!("No {} update available", channel.label().to_lowercase())
@@ -65,7 +65,7 @@ pub fn channel_picker(
 pub fn open_updates(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| UpdatePanel::new(state, cx));
     window.open_dialog(cx, move |dialog: Dialog, _, _| {
-        dialog.title("Software Update").w(px(500.0)).child(panel.clone())
+        dialog.title("Software update").w(px(500.0)).child(panel.clone())
     });
 }
 

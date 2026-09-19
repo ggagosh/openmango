@@ -30,7 +30,7 @@ pub(crate) fn build_connection_menu(
 ) -> PopupMenu {
     menu = menu
         .item(
-            PopupMenuItem::new("Edit Connection…")
+            PopupMenuItem::new("Edit connection…")
                 .icon(Icon::new(IconName::Settings))
                 .action(Box::new(EditConnection))
                 .on_click({
@@ -41,7 +41,7 @@ pub(crate) fn build_connection_menu(
                 }),
         )
         .item(
-            PopupMenuItem::new("Remove Connection…")
+            PopupMenuItem::new("Remove connection…")
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(DeleteSelection))
                 .on_click({
@@ -78,7 +78,7 @@ pub(crate) fn build_connection_menu(
                 }),
         )
         .item(
-            PopupMenuItem::new("Copy Name")
+            PopupMenuItem::new("Copy name")
                 .icon(Icon::new(IconName::Copy))
                 .action(Box::new(CopySelectionName))
                 .on_click({
@@ -103,9 +103,9 @@ fn menu_item_with_shortcut(
     let icon: Icon = match label {
         "Open Forge" => IconName::SquareTerminal.into(),
         "Reload Database" => IconName::Redo.into(),
-        "Export Data…" => crate::assets::AppIcon::Download.into(),
-        "Import Data…" => crate::assets::AppIcon::Upload.into(),
-        "Copy Data To…" | "Copy" => IconName::Copy.into(),
+        "Export data…" => crate::assets::AppIcon::Download.into(),
+        "Import data…" => crate::assets::AppIcon::Upload.into(),
+        "Copy data…" | "Copy" => IconName::Copy.into(),
         "Paste" => IconName::Inbox.into(),
         _ => IconName::Menu.into(),
     };
@@ -147,7 +147,7 @@ pub(crate) fn build_database_menu(
 
     menu = menu
         .item(
-            PopupMenuItem::new("Select Database")
+            PopupMenuItem::new("Select database")
                 .icon(Icon::new(IconName::LayoutDashboard))
                 .action(Box::new(OpenSelection))
                 .on_click({
@@ -176,7 +176,7 @@ pub(crate) fn build_database_menu(
                 .action(Box::new(OpenForge)),
         )
         .item(
-            PopupMenuItem::new("Create Collection…")
+            PopupMenuItem::new("Create collection…")
                 .icon(Icon::new(IconName::Plus))
                 .action(Box::new(CreateCollection))
                 .on_click({
@@ -213,7 +213,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Export Data…", &TransferExport, window)
+            menu_item_with_shortcut("Export data…", &TransferExport, window)
                 .action(Box::new(TransferExport))
                 .on_click({
                     let state = state.clone();
@@ -234,7 +234,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Import Data…", &TransferImport, window)
+            menu_item_with_shortcut("Import data…", &TransferImport, window)
                 .action(Box::new(TransferImport))
                 .on_click({
                     let state = state.clone();
@@ -255,7 +255,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy Data To…", &TransferCopy, window)
+            menu_item_with_shortcut("Copy data…", &TransferCopy, window)
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();
@@ -276,7 +276,7 @@ pub(crate) fn build_database_menu(
                 }),
         )
         .item(
-            PopupMenuItem::new("Drop Database…")
+            PopupMenuItem::new("Drop database…")
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(DeleteSelection))
                 .on_click({
@@ -395,7 +395,7 @@ pub(crate) fn build_collection_menu(
 
     menu = menu
         .item(
-            PopupMenuItem::new("Open Collection")
+            PopupMenuItem::new("Open collection")
                 .icon(Icon::new(crate::assets::AppIcon::Braces))
                 .action(Box::new(OpenSelection))
                 .on_click({
@@ -431,7 +431,7 @@ pub(crate) fn build_collection_menu(
                 .action(Box::new(OpenForge)),
         )
         .item(
-            PopupMenuItem::new("Rename Collection…")
+            PopupMenuItem::new("Rename collection…")
                 .icon(Icon::new(IconName::Settings2))
                 .action(Box::new(RenameCollection))
                 .on_click({
@@ -453,7 +453,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            PopupMenuItem::new("Drop Collection…")
+            PopupMenuItem::new("Drop collection…")
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(DeleteSelection))
                 .on_click({
@@ -466,7 +466,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Export Data…", &TransferExport, window)
+            menu_item_with_shortcut("Export data…", &TransferExport, window)
                 .action(Box::new(TransferExport))
                 .on_click({
                     let state = state.clone();
@@ -487,7 +487,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Import Data…", &TransferImport, window)
+            menu_item_with_shortcut("Import data…", &TransferImport, window)
                 .action(Box::new(TransferImport))
                 .on_click({
                     let state = state.clone();
@@ -508,7 +508,7 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
-            menu_item_with_shortcut("Copy Data To…", &TransferCopy, window)
+            menu_item_with_shortcut("Copy data…", &TransferCopy, window)
                 .action(Box::new(TransferCopy))
                 .on_click({
                     let state = state.clone();
@@ -621,7 +621,7 @@ pub(crate) fn build_collection_menu(
             )
         })
         .item(
-            PopupMenuItem::new("Copy Name")
+            PopupMenuItem::new("Copy name")
                 .icon(Icon::new(IconName::Copy))
                 .action(Box::new(CopySelectionName))
                 .on_click({

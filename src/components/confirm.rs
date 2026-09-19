@@ -111,10 +111,13 @@ pub fn request_connection_write(
         }
         WriteRequestDecision::Proceed => on_confirm(window, cx),
         WriteRequestDecision::Confirm => {
+            // No wording of its own: say what is about to happen and where, not "Confirm" and
+            // "Continue", which name neither.
             let confirmation = confirmation.unwrap_or_else(|| WriteConfirmation {
-                title: "Confirm Production write".into(),
-                message: format!("{operation}."),
-                confirm_label: "Continue".into(),
+                title: format!("{operation} on a Production connection?"),
+                message: "This connection is marked Production, so writes to it are confirmed."
+                    .into(),
+                confirm_label: "Write to Production".into(),
                 destructive: true,
             });
             let confirmation = WriteConfirmation {

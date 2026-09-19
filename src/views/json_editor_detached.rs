@@ -980,7 +980,7 @@ impl Render for DetachedJsonEditorView {
                         row = row.child(
                             Button::new("json-editor-window-load-inline-draft")
                                 .xsmall()
-                                .label("Load Inline Draft")
+                                .label("Load inline draft")
                                 .on_click({
                                     let view = view.clone();
                                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
@@ -994,7 +994,7 @@ impl Render for DetachedJsonEditorView {
                         row = row.child(
                             Button::new("json-editor-window-create-new")
                                 .xsmall()
-                                .label("Create as New")
+                                .label("Create as new")
                                 .on_click({
                                     let view = view.clone();
                                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {

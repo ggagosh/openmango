@@ -192,7 +192,7 @@ impl ConnectionManager {
                     Button::new("connection-list-more")
                         .small()
                         .ghost()
-                        .label("Import / Export")
+                        .label("Import / export")
                         .dropdown_menu(move |menu, _, _| {
                             menu.item(PopupMenuItem::new("Import connections…").on_click({
                                 let state = state.clone();

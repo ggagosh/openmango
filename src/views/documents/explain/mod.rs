@@ -38,9 +38,9 @@ impl CollectionView {
             .gap(spacing::xs())
             .child(
                 if explain.view_mode == ExplainViewMode::Tree {
-                    Button::new("explain-mode-tree").xsmall().primary().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().primary().label("Visual tree")
                 } else {
-                    Button::new("explain-mode-tree").xsmall().ghost().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().ghost().label("Visual tree")
                 }
                 .on_click({
                     let state = self.state.clone();
@@ -491,7 +491,7 @@ impl CollectionView {
                 Button::new("explain-clear-diff")
                     .xsmall()
                     .ghost()
-                    .label("Clear Diff")
+                    .label("Clear diff")
                     .disabled(session_key.is_none())
                     .on_click({
                         let state = self.state.clone();
@@ -510,7 +510,7 @@ impl CollectionView {
                 Button::new("explain-compare-prev")
                     .xsmall()
                     .ghost()
-                    .label("Compare Prev")
+                    .label("Compare prev")
                     .disabled(session_key.is_none() || !can_compare_prev)
                     .on_click({
                         let state = self.state.clone();

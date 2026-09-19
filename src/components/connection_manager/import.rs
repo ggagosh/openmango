@@ -90,7 +90,7 @@ fn open_passphrase_dialog(
         move |dialog: Dialog, window: &mut Window, cx: &mut App| {
             input_state.update(cx, |s, cx| s.focus(window, cx));
             dialog
-                .title("Enter Import Passphrase")
+                .title("Enter import passphrase")
                 .w(px(420.0))
                 .child(
                     div()
@@ -113,7 +113,7 @@ fn open_passphrase_dialog(
                         cancel_button("cancel-import-passphrase"),
                         Button::new("decrypt-import")
                             .primary()
-                            .label("Decrypt & Import")
+                            .label("Decrypt & import")
                             .on_click({
                                 let input_state = input_state.clone();
                                 let state = state.clone();

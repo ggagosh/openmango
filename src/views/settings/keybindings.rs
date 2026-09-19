@@ -488,7 +488,7 @@ impl Render for KeybindingsView {
                         Button::new("reset-all-keybindings")
                             .xsmall()
                             .ghost()
-                            .label("Reset All…")
+                            .label("Reset all…")
                             .disabled(override_count == 0)
                             .on_click({
                                 let view = view.clone();

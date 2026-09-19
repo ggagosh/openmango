@@ -63,7 +63,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Edit Value / Type").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Edit value / type").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -87,7 +87,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Add Field/Value").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Add field/value").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -111,7 +111,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Rename Field").w(px(600.0)).child(dialog_view.clone())
+            dialog.title("Rename field").w(px(600.0)).child(dialog_view.clone())
         });
     }
 
@@ -135,7 +135,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Remove Field").w(px(560.0)).child(dialog_view.clone())
+            dialog.title("Remove field").w(px(560.0)).child(dialog_view.clone())
         });
     }
 
@@ -159,7 +159,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Add Element").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Add element").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -183,7 +183,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Remove Matching Values").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Remove matching values").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -744,7 +744,7 @@ impl Render for PropertyActionDialog {
                 PropertyActionKind::AddField => "Add Field",
                 PropertyActionKind::RenameField => "Rename",
                 PropertyActionKind::RemoveField => "Remove",
-                PropertyActionKind::AddElement => "Add Element",
+                PropertyActionKind::AddElement => "Add element",
                 PropertyActionKind::RemoveMatchingValues => "Remove",
             }
         };

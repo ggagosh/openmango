@@ -270,7 +270,7 @@ pub fn open_export_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut
     window.open_dialog(cx, {
         let dialog_state = dialog_state.clone();
         move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Export Connections").w(px(520.0)).child(dialog_state.clone()).footer({
+            dialog.title("Export connections").w(px(520.0)).child(dialog_state.clone()).footer({
                 let dialog_state = dialog_state.clone();
 
                 gpui_kit::component::dialog::DialogFooter::new().children(vec![

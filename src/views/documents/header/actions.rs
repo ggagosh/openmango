@@ -17,7 +17,10 @@ use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
 use crate::components::{Button, WriteConfirmation, busy_label, request_connection_write};
-use crate::keyboard::{DiscardDocumentChanges, RunAggregation, SaveDocument};
+use crate::keyboard::{
+    DiscardDocumentChanges, RunAggregation, SaveDocument, TransferCopy, TransferExport,
+    TransferImport,
+};
 use crate::state::{
     AppCommands, AppState, DocumentViewMode, SessionKey, TransferMode, TransferScope,
 };
@@ -392,7 +395,7 @@ fn render_export_dropdown(
         .rounded(borders::radius_sm())
         .with_size(Size::Small)
         .custom(clean_variant)
-        .label("Export Matching")
+        .label("Export matching")
         .icon(Icon::new(crate::assets::AppIcon::Download).xsmall())
         .tooltip("Export all matching documents to file")
         .disabled(session_key.is_none())
@@ -736,7 +739,7 @@ fn render_documents_actions_clean(
                                 Button::new("col-vis-hide-all")
                                     .ghost()
                                     .xsmall()
-                                    .label("Hide All")
+                                    .label("Hide all")
                                     .on_click(move |_, _window, cx| {
                                         let Some(sk) = sk_hide.clone() else {
                                             return;
@@ -870,8 +873,9 @@ fn render_documents_secondary_menu(
             menu = menu
                 .item(PopupMenuItem::separator())
                 .item(
-                    PopupMenuItem::new("Export entire collection…")
+                    PopupMenuItem::new("Export data…")
                         .icon(Icon::new(crate::assets::AppIcon::Download))
+                        .action(Box::new(TransferExport))
                         .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
@@ -893,8 +897,9 @@ fn render_documents_secondary_menu(
                         }),
                 )
                 .item(
-                    PopupMenuItem::new("Import into collection…")
+                    PopupMenuItem::new("Import data…")
                         .icon(Icon::new(crate::assets::AppIcon::Upload))
+                        .action(Box::new(TransferImport))
                         .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
@@ -916,8 +921,9 @@ fn render_documents_secondary_menu(
                         }),
                 )
                 .item(
-                    PopupMenuItem::new("Copy collection to…")
+                    PopupMenuItem::new("Copy data…")
                         .icon(Icon::new(IconName::Copy))
+                        .action(Box::new(TransferCopy))
                         .on_click({
                             let session_key = session_key.clone();
                             let state_for_transfer = state_for_transfer.clone();
@@ -1112,7 +1118,7 @@ pub fn render_schema_actions(
             MenuButton::new("copy-schema")
                 .ghost()
                 .xsmall()
-                .label("Copy Schema")
+                .label("Copy schema")
                 .dropdown_caret(true)
                 .rounded(borders::radius_sm())
                 .with_size(Size::XSmall)
@@ -1122,7 +1128,7 @@ pub fn render_schema_actions(
                     let state_for_copy = state_for_copy.clone();
                     move |menu: PopupMenu, _window, _cx| {
                         menu.item(
-                            PopupMenuItem::new("JSON Schema")
+                            PopupMenuItem::new("JSON schema")
                                 .icon(Icon::new(crate::assets::AppIcon::Braces))
                                 .on_click({
                                     let session_key = session_key.clone();
@@ -1148,7 +1154,7 @@ pub fn render_schema_actions(
                                 }),
                         )
                         .item(
-                            PopupMenuItem::new("Compass Format")
+                            PopupMenuItem::new("Compass format")
                                 .icon(Icon::new(IconName::Copy))
                                 .on_click({
                                     let session_key = session_key.clone();

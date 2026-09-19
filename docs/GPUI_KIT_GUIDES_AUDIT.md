@@ -165,7 +165,7 @@ one that was kept.
   `app/menus.rs:35,46,205,242,263,284,305,487,509`,
   `views/documents/tree/tree_menus.rs:145,171,194,217,240,263,283`,
   `views/transfer/simple.rs:109,425,477,540`. **S**
-- [ ] One command, three names — Export is "Export Data" / "Export Data..." / "Export entire
+- [x] One command, three names — Export is "Export Data" / "Export Data..." / "Export entire
   collection…", same for Import and Copy: `components/action_bar/providers.rs:230,240,250`,
   `app/menus.rs:242,263,284`, `views/documents/header/actions.rs:873,896,919` (these last also lack
   `.action(...)`, so their shortcuts never show). Pick one name per command. **M**
@@ -176,7 +176,7 @@ one that was kept.
   `:518,530`, `views/documents/workflow.rs:84-85`. Put the object in the title
   (`Drop database "x"?`), leave only the consequence in the body. **S**
 - [x] `views/settings.rs:1858,1860` — title and confirm label are both "Clear all History". **S**
-- [ ] `components/confirm.rs:115-117` — default production-write dialog: title "Confirm Production
+- [x] `components/confirm.rs:115-117` — default production-write dialog: title "Confirm Production
   write", confirm label "Continue". Name the operation and its verb. **M**
 - [x] `views/transfer/mod.rs:250,252` — "Confirm destructive transfer" names no object; "Run
   Transfer" is the only Title Case confirm label. **S**
@@ -299,10 +299,10 @@ parent's, so that is stable and allocates once per row instead of once per contr
 
 ### Copy consistency (Should)
 
-- [ ] Sentence case within a component class: 72 `PopupMenuItem` labels split Title/sentence across
+- [x] Sentence case within a component class: 72 `PopupMenuItem` labels split Title/sentence across
   files (`app/menus.rs`, `tree_menus.rs`, `table/column_menu.rs`); all 30 palette labels are Title
   Case; 14 of 37 dialog titles are Title Case. **M**
-- [ ] Palette items that open a dialog lack `…`: `providers.rs:162,170,180,190,200,230,240,250`;
+- [x] Palette items that open a dialog lack `…`: `providers.rs:162,170,180,190,200,230,240,250`;
   also `aggregation/stage_list/mod.rs:222`. **S**
 - [x] Placeholders: three treatments (`...`, none, `…`). All 68 three-dot UI strings now use `…`;
   truncation markers in data (`format!("{}...")`) were left alone on purpose.

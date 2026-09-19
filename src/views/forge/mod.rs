@@ -146,7 +146,7 @@ impl ForgeView {
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::BookOpen).xsmall())
-                    .label("Query Library")
+                    .label("Query library")
                     .disabled(target.is_none())
                     .on_click({
                         let state = self.app_state.clone();

@@ -45,7 +45,7 @@ impl BulkUpdateDialog {
         let dialog_view =
             cx.new(|cx| Self::new(state.clone(), session_key, selected_doc, window, cx));
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Bulk Update / Replace").w(px(760.0)).child(dialog_view.clone())
+            dialog.title("Bulk update / replace").w(px(760.0)).child(dialog_view.clone())
         });
     }
 
