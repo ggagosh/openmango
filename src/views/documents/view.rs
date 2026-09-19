@@ -995,7 +995,7 @@ impl Render for CollectionView {
         };
 
         let explain_layer =
-            self.render_explain_modal_layer(&explain, session_key.clone(), subview, cx);
+            self.render_explain_modal_layer(&explain, session_key.clone(), subview, window, cx);
 
         let show_builder = filter_builder_open && subview == CollectionSubview::Documents;
         if show_builder
@@ -1087,6 +1087,7 @@ impl CollectionView {
                 schema_filter_state,
                 session_key,
                 self.state.clone(),
+                self.schema_tree_scroll.clone(),
                 window,
                 cx,
             ))

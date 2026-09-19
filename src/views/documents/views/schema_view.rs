@@ -47,6 +47,7 @@ pub fn render_schema_panel(
     schema_filter_state: Option<Entity<EditorState>>,
     session_key: Option<SessionKey>,
     state: Entity<AppState>,
+    tree_scroll: UniformListScrollHandle,
     window: &Window,
     cx: &mut Context<CollectionView>,
 ) -> AnyElement {
@@ -61,10 +62,7 @@ pub fn render_schema_panel(
             .gap(spacing::sm())
             .child(Spinner::new().small())
             .child(
-                div()
-                    .text_sm()
-                    .text_color(app.theme().muted_foreground)
-                    .child("Analyzing schema..."),
+                div().text_sm().text_color(app.theme().muted_foreground).child("Analyzing schema…"),
             )
             .into_any_element();
     }
@@ -127,7 +125,7 @@ pub fn render_schema_panel(
                 Button::new("analyze-schema")
                     .primary()
                     .xsmall()
-                    .label("Analyze Schema")
+                    .label("Analyze schema")
                     .disabled(session_key.is_none())
                     .on_click({
                         let state = state.clone();
@@ -183,8 +181,14 @@ pub fn render_schema_panel(
 
     let row_count = flat_fields.len();
     let sampled = schema.sampled;
-    let tree_list =
-        div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
+    let tree_list = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .overflow_hidden()
+        .child(
             uniform_list("schema-tree-list", row_count, {
                 let flat_fields = flat_fields.clone();
                 let selected_field = selected_field.clone();
@@ -212,8 +216,11 @@ pub fn render_schema_panel(
                 )
             })
             .flex_1()
-            .pb(spacing::sm()),
-        );
+            .pb(spacing::sm())
+            // Without a handle the list's scroll position has no owner and no bar can be drawn.
+            .track_scroll(&tree_scroll),
+        )
+        .vertical_scrollbar(&tree_scroll);
 
     let toolbar = render_tree_toolbar(
         &filter_plan,
@@ -884,6 +891,8 @@ fn render_filter_token_chip(
         crate::views::documents::schema_filter::SchemaFilterTokenKind::Flag(_) => cx.theme().green,
     };
     let chip_text = token.chip_label();
+    // Keyed by the token, not its position: removing one shifts the rest.
+    let clear_id = (ElementId::from("schema-filter-token-clear"), chip_text.clone());
     let tokens = all_tokens.to_vec();
     let query = query.to_string();
 
@@ -899,7 +908,7 @@ fn render_filter_token_chip(
         .border_color(accent.opacity(0.3))
         .child(div().text_xs().text_color(accent).child(chip_text))
         .child(
-            Button::new(("schema-filter-token-clear", index))
+            Button::new(clear_id)
                 .ghost()
                 .xsmall()
                 .icon(gpui_kit::component::Icon::new(gpui_kit::component::IconName::Close).xsmall())

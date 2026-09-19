@@ -55,7 +55,7 @@ impl IndexCreateDialog {
         let dialog_view =
             cx.new(|cx| IndexCreateDialog::new(state.clone(), session_key, window, cx));
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Create Index").w(px(912.0)).child(dialog_view.clone())
+            dialog.title("Create index").w(px(912.0)).child(dialog_view.clone())
         });
     }
 
@@ -70,7 +70,7 @@ impl IndexCreateDialog {
             IndexCreateDialog::new_with_index(state.clone(), session_key, model, window, cx)
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Edit Index").w(px(912.0)).child(dialog_view.clone())
+            dialog.title("Edit index").w(px(912.0)).child(dialog_view.clone())
         });
     }
 

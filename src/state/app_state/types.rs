@@ -717,7 +717,9 @@ pub struct ExplainState {
     pub summary: Option<ExplainSummary>,
     pub rejected_plans: Vec<ExplainRejectedPlan>,
     pub bottlenecks: Vec<ExplainBottleneck>,
-    pub history: Vec<ExplainRun>,
+    /// Shared, not owned: the documents view snapshots this state every frame while the modal
+    /// is open, and each run carries its whole raw plan.
+    pub history: Vec<Arc<ExplainRun>>,
     pub current_run_id: Option<String>,
     pub compare_run_id: Option<String>,
     pub diff: Option<ExplainDiff>,
@@ -734,7 +736,7 @@ impl ExplainState {
     }
 
     pub fn push_run_with_limit(&mut self, run: ExplainRun, max_history: usize) {
-        self.history.push(run);
+        self.history.push(Arc::new(run));
         if max_history > 0 && self.history.len() > max_history {
             let overflow = self.history.len() - max_history;
             self.history.drain(0..overflow);
@@ -1082,6 +1084,9 @@ pub struct SessionData {
     pub query_cancellation: Option<crate::connection::types::CancellationToken>,
     pub filter_raw: String,
     pub filter: Option<Document>,
+    /// `filter` as compact JSON. Kept beside it by `set_filter`: the documents view reads it on
+    /// every frame, and serializing BSON that often is wasted work.
+    pub filter_compiled_raw: String,
     pub sort_raw: String,
     pub sort: Option<Document>,
     pub projection_raw: String,
@@ -1125,6 +1130,7 @@ impl Default for SessionData {
             query_cancellation: None,
             filter_raw: String::new(),
             filter: None,
+            filter_compiled_raw: String::new(),
             sort_raw: String::new(),
             sort: None,
             projection_raw: String::new(),

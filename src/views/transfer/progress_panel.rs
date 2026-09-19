@@ -48,7 +48,7 @@ impl ProgressSnapshot {
         if runtime.cancellation_pending() {
             return Self {
                 state: ProgressState::Running,
-                title: "Cancelling transfer...".to_string(),
+                title: "Cancelling transfer…".to_string(),
                 detail: runtime.error_message.clone().unwrap_or_default(),
                 percentage: None,
                 errors,
@@ -630,7 +630,7 @@ mod tests {
 
         let snapshot = ProgressSnapshot::from_transfer(&transfer);
         assert_eq!(snapshot.state, ProgressState::Running);
-        assert_eq!(snapshot.title, "Cancelling transfer...");
+        assert_eq!(snapshot.title, "Cancelling transfer…");
     }
 
     #[test]

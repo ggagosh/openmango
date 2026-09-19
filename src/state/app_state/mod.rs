@@ -119,6 +119,9 @@ pub struct AppState {
 
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
+    /// Whether the frame-rate HUD is up. Runtime only: it is a diagnostic, not a preference,
+    /// so it never outlives the session. `OPENMANGO_FPS=1` starts with it on.
+    pub show_fps_monitor: bool,
 
     // Passive all-client History recorder
     history_service: Option<Arc<crate::history::HistoryService>>,
@@ -128,6 +131,9 @@ pub struct AppState {
 
     // Agent action persistence
     action_broker: Arc<crate::actions::ActionBroker>,
+    /// Agent actions waiting for approval. Cached, because the broker reads its store from disk
+    /// and the sidebar and tab bar show this count on every frame.
+    pending_agent_actions: usize,
     sync_executor: Arc<crate::sync::SyncExecutor>,
 
     // Config manager for persistence
@@ -243,10 +249,12 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
+            show_fps_monitor: std::env::var("OPENMANGO_FPS").is_ok(),
             history_service: None,
             history_eligibility: HashMap::new(),
             history_usage: HashMap::new(),
             history_inspecting: HashSet::new(),
+            pending_agent_actions: count_pending_agent_actions(&action_broker),
             action_broker,
             sync_executor,
             config,
@@ -343,6 +351,20 @@ impl AppState {
 
     pub fn action_broker(&self) -> Arc<crate::actions::ActionBroker> {
         self.action_broker.clone()
+    }
+
+    pub fn pending_agent_actions(&self) -> usize {
+        self.pending_agent_actions
+    }
+
+    /// Recounts the pending actions and tells the views. Everything that changes the broker's
+    /// store ends here, so nothing has to read the store while rendering.
+    // ponytail: an action that expires with no other activity keeps its badge until the next
+    // change or until Agent Activity is opened. Add a timer on `expires_at` if that matters.
+    pub fn agent_activity_changed(&mut self, cx: &mut Context<Self>) {
+        self.pending_agent_actions = count_pending_agent_actions(&self.action_broker);
+        cx.emit(AppEvent::AgentActivityChanged);
+        cx.notify();
     }
 
     pub fn sync_executor(&self) -> Arc<crate::sync::SyncExecutor> {
@@ -451,3 +473,12 @@ impl Default for AppState {
 
 // Enable reactive UI updates via event subscription
 impl EventEmitter<AppEvent> for AppState {}
+
+fn count_pending_agent_actions(broker: &crate::actions::ActionBroker) -> usize {
+    broker
+        .list_all()
+        .unwrap_or_default()
+        .iter()
+        .filter(|action| action.status == crate::actions::model::ActionStatus::PendingApproval)
+        .count()
+}

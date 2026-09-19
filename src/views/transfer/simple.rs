@@ -106,7 +106,7 @@ impl TransferView {
         );
 
         let edit_button = |id: &'static str, view: Entity<Self>| {
-            Button::new((id, key)).ghost().xsmall().label("Edit...").on_click(move |_, _, cx| {
+            Button::new((id, key)).ghost().xsmall().label("Edit…").on_click(move |_, _, cx| {
                 view.update(cx, |view, cx| {
                     view.options_expanded = true;
                     cx.notify();
@@ -312,7 +312,7 @@ impl TransferView {
             Button::new(("simple-cancelling", key))
                 .ghost()
                 .xsmall()
-                .label("Cancelling...")
+                .label("Cancelling…")
                 .disabled(true)
                 .into_any_element()
         } else if transfer_state.runtime.is_running {
@@ -372,6 +372,7 @@ impl TransferView {
                     .overflow_y_scrollbar()
                     .child(
                         div()
+                            .debug_selector(|| "transfer-form".into())
                             .overflow_hidden()
                             .bg(islands::card_bg(&appearance, cx))
                             .border_1()
@@ -385,6 +386,7 @@ impl TransferView {
             )
             .child(
                 div()
+                    .debug_selector(|| "transfer-footer".into())
                     .flex()
                     .items_center()
                     .justify_between()
@@ -405,7 +407,7 @@ impl TransferView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(input_state) = self.export_path_input_state.as_ref() else {
-            return div().child("Loading...").into_any_element();
+            return div().child("Loading…").into_any_element();
         };
         let current = input_state.read(cx).value().to_string();
         if current != transfer_state.config.file_path {
@@ -422,7 +424,7 @@ impl TransferView {
         let browse = Button::new("simple-export-browse")
             .xsmall()
             .icon(IconName::Folder)
-            .label("Choose...")
+            .label("Choose…")
             .on_click(move |_, _, cx| {
                 let state = state.clone();
                 let settings = settings.clone();
@@ -474,7 +476,7 @@ impl TransferView {
 
         MenuButton::new("simple-filename-tokens")
             .xsmall()
-            .label("Insert...")
+            .label("Insert…")
             .dropdown_caret(true)
             .rounded(borders::radius_sm())
             .with_size(Size::Small)
@@ -537,7 +539,7 @@ impl TransferView {
         let browse = Button::new("simple-import-browse")
             .xsmall()
             .icon(IconName::Folder)
-            .label("Choose...")
+            .label("Choose…")
             .on_click(move |_, _, cx| {
                 let state = state.clone();
                 cx.spawn(async move |cx| {

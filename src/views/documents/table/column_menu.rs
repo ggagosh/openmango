@@ -40,7 +40,7 @@ pub fn build_table_column_menu(
     match kind {
         ColumnMenuKind::Document => {
             menu = menu.item(
-                PopupMenuItem::new("Sort Ascending").icon(Icon::new(IconName::ArrowUp)).on_click({
+                PopupMenuItem::new("Sort ascending").icon(Icon::new(IconName::ArrowUp)).on_click({
                     let state = state.clone();
                     let sk = session_key.clone();
                     let key = col_key.clone();
@@ -63,7 +63,7 @@ pub fn build_table_column_menu(
                 }),
             );
             menu = menu.item(
-                PopupMenuItem::new("Sort Descending")
+                PopupMenuItem::new("Sort descending")
                     .icon(Icon::new(IconName::ArrowDown))
                     .on_click({
                         let state = state.clone();
@@ -112,7 +112,7 @@ pub fn build_table_column_menu(
         }
     }));
     menu =
-        menu.item(PopupMenuItem::new("Hide Column").icon(Icon::new(IconName::EyeOff)).on_click({
+        menu.item(PopupMenuItem::new("Hide column").icon(Icon::new(IconName::EyeOff)).on_click({
             let state = state.clone();
             let sk = session_key.clone();
             let key = col_key.clone();

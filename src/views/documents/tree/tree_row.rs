@@ -85,7 +85,7 @@ pub(crate) fn render_tree_row(
     let chevron_hover = cx.theme().foreground.opacity(0.1);
     let leading = if is_folder {
         div()
-            .id(("doc-chevron", ix))
+            .id("doc-chevron")
             .size(px(18.0))
             .flex()
             .items_center()
@@ -136,7 +136,15 @@ pub(crate) fn render_tree_row(
         None
     };
 
-    let row = div().id(("tree-row", ix)).flex().items_center().w_full().gap(spacing::xs());
+    // Keyed by node, not position: expanding a node inserts rows below it, and a drag or an
+    // inline edit must stay with its node. One keyed id per row; the chevron, key and value
+    // inside take static ids, which this one scopes, so nothing else allocates per frame.
+    let row = div()
+        .id((ElementId::from("tree-row"), item_id.clone()))
+        .flex()
+        .items_center()
+        .w_full()
+        .gap(spacing::xs());
 
     // Consume the whole Kit row, including padding, before Tree handles expansion.
     let on_mouse_down = {
@@ -222,7 +230,6 @@ pub(crate) fn render_tree_row(
     };
     let row = row
         .child(render_key_column(
-            ix,
             depth,
             leading,
             &key_label,
@@ -235,7 +242,6 @@ pub(crate) fn render_tree_row(
             cx,
         ))
         .child(render_value_column(
-            ix,
             &item_id,
             is_editing,
             is_dirty,
@@ -333,7 +339,6 @@ pub(crate) fn render_tree_row(
 
 #[allow(clippy::too_many_arguments)]
 fn render_key_column(
-    ix: usize,
     depth: usize,
     leading: AnyElement,
     key_label: &str,
@@ -351,9 +356,9 @@ fn render_key_column(
         && search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&key_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id);
 
-    // Index-based id avoids allocating + hashing a per-node string every frame.
+    // Static: the row around it is keyed by node.
     let mut key = div()
-        .id(("tree-key", ix))
+        .id("tree-key")
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -415,7 +420,6 @@ fn render_key_column(
 
 #[allow(clippy::too_many_arguments)]
 fn render_value_column(
-    ix: usize,
     item_id: &str,
     is_editing: bool,
     is_dirty: bool,
@@ -437,14 +441,9 @@ fn render_value_column(
         search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&value_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id.as_str());
 
-    // Index-based id avoids allocating + hashing a per-node string every frame.
-    let mut value = div()
-        .id(("tree-value", ix))
-        .flex()
-        .items_center()
-        .gap(spacing::xs())
-        .flex_1()
-        .min_w(px(0.0));
+    // Static: the row around it is keyed by node.
+    let mut value =
+        div().id("tree-value").flex().items_center().gap(spacing::xs()).flex_1().min_w(px(0.0));
     if !selected && !is_editing {
         value = with_value_chrome(
             value,

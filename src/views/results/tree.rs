@@ -7,7 +7,6 @@ use crate::views::documents::tree::lazy_tree::VisibleRow;
 use crate::views::results::types::ToggleNodeCallback;
 
 pub fn render_result_row(
-    ix: usize,
     row: &VisibleRow,
     meta: &crate::views::documents::tree::lazy_row::LazyRowMeta,
     on_toggle_node: ToggleNodeCallback,
@@ -27,7 +26,7 @@ pub fn render_result_row(
         let toggle_node_id = node_id.clone();
         let on_toggle = on_toggle_node.clone();
         div()
-            .id(("result-row-chevron", ix))
+            .id("result-row-chevron")
             .w(px(14.0))
             .flex()
             .items_center()
@@ -49,7 +48,9 @@ pub fn render_result_row(
     };
 
     div()
-        .id(("result-row", ix))
+        // Keyed by node, not position: expanding a folder inserts rows, and hover must not jump
+        // to whichever row slides into this slot. The chevron inside is scoped by this id.
+        .id((ElementId::from("result-row"), node_id.clone()))
         .flex()
         .items_center()
         .w_full()

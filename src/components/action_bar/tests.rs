@@ -21,9 +21,9 @@ fn command(id: &'static str, label: &'static str) -> ActionItem {
 #[test]
 fn groups_lead_with_recent_and_updates_and_cap_long_lists() {
     let mut actions = vec![
-        ActionItem { keywords: &["dump"], ..command("cmd:export", "Export Data") },
+        ActionItem { keywords: &["dump"], ..command("cmd:export", "Export data") },
         command("cmd:settings", "Settings"),
-        ActionItem { highlighted: true, ..command("cmd:install-update", "Restart to Update") },
+        ActionItem { highlighted: true, ..command("cmd:install-update", "Restart to update") },
         ActionItem { category: ActionCategory::Tab, ..command("tab:0", "orders") },
     ];
     actions.extend((0..150).map(|ix| ActionItem {

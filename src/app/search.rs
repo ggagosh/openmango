@@ -1,3 +1,4 @@
+use gpui_kit::SharedString;
 use uuid::Uuid;
 
 use crate::models::TreeNodeId;
@@ -5,7 +6,7 @@ use crate::models::TreeNodeId;
 #[derive(Clone, Debug)]
 pub(crate) struct SidebarEntry {
     pub(crate) id: TreeNodeId,
-    pub(crate) label: String,
+    pub(crate) label: SharedString,
     pub(crate) search_label: String,
     pub(crate) depth: usize,
     pub(crate) is_folder: bool,
@@ -15,7 +16,7 @@ pub(crate) struct SidebarEntry {
 impl SidebarEntry {
     pub(crate) fn new(
         id: TreeNodeId,
-        label: impl Into<String>,
+        label: impl Into<SharedString>,
         depth: usize,
         is_folder: bool,
         is_expanded: bool,

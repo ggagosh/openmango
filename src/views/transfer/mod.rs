@@ -1,6 +1,8 @@
 //! Transfer view for import, export, and copy operations.
 
 mod helpers;
+#[cfg(test)]
+mod layout_tests;
 mod options;
 mod progress_panel;
 mod query_modal;
@@ -226,9 +228,9 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
     };
     if let Some(connection_id) = write_connection {
         let ordinary = requires_confirmation.then(|| WriteConfirmation {
-            title: "Confirm destructive transfer".to_string(),
+            title: "Run destructive transfer?".to_string(),
             message,
-            confirm_label: "Run Transfer".to_string(),
+            confirm_label: "Run transfer".to_string(),
             destructive: true,
         });
         request_connection_write(
@@ -247,9 +249,9 @@ fn run_active_transfer(state: Entity<AppState>, window: &mut Window, cx: &mut Ap
         open_confirm_dialog(
             window,
             cx,
-            "Confirm destructive transfer",
+            "Run destructive transfer?",
             message,
-            "Run Transfer",
+            "Run transfer",
             true,
             run,
         );
@@ -675,7 +677,11 @@ impl Render for TransferView {
             .flex()
             .flex_col()
             .flex_1()
+            // A view's root has to claim the shell's height itself; `flex_1` alone leaves it
+            // content-sized, and the form's scroll region below then collapses to nothing.
+            .size_full()
             .min_w(px(0.0))
+            .min_h(px(0.0))
             .key_context(transfer_key_context)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &RunTransfer, window, cx| {

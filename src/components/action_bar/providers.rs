@@ -104,7 +104,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                 ("Connections".to_string(), "Manage MongoDB connections".to_string())
             }
             TabKey::Settings => ("Settings".to_string(), "Application settings".to_string()),
-            TabKey::Changelog => ("What's New".to_string(), "Changelog".to_string()),
+            TabKey::Changelog => ("What's new".to_string(), "Changelog".to_string()),
         };
 
         actions.push(ActionItem {
@@ -159,7 +159,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:new-connection"),
             keywords: &["add", "create", "uri"],
-            label: SharedString::from("New Connection"),
+            label: SharedString::from("New connection"),
             category: ActionCategory::Command,
             available: true,
             ..Default::default()
@@ -167,7 +167,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:create-database"),
             keywords: &["new", "add", "db"],
-            label: SharedString::from("Create Database"),
+            label: SharedString::from("Create database"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &CreateDatabase),
             available: is_connected,
@@ -177,7 +177,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:create-collection"),
             keywords: &["new", "add", "table"],
-            label: SharedString::from("Create Collection"),
+            label: SharedString::from("Create collection"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &CreateCollection),
             available: is_connected && state.selected_database().is_some(),
@@ -187,7 +187,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:insert-document"),
             keywords: &["add", "new", "create", "record"],
-            label: SharedString::from("Insert Document"),
+            label: SharedString::from("Insert document"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &InsertDocument),
             available: has_collection,
@@ -197,7 +197,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:create-index"),
             keywords: &["new", "add"],
-            label: SharedString::from("Create Index"),
+            label: SharedString::from("Create index"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &CreateIndex),
             available: has_collection,
@@ -207,7 +207,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:run-aggregation"),
             keywords: &["pipeline"],
-            label: SharedString::from("Run Aggregation"),
+            label: SharedString::from("Run aggregation"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &RunAggregation),
             available: has_collection,
@@ -227,7 +227,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:transfer-export"),
             keywords: &["dump", "backup", "download", "json", "csv"],
-            label: SharedString::from("Export Data"),
+            label: SharedString::from("Export data…"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &TransferExport),
             available: has_database,
@@ -237,7 +237,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:transfer-import"),
             keywords: &["restore", "load", "upload"],
-            label: SharedString::from("Import Data"),
+            label: SharedString::from("Import data…"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &TransferImport),
             available: has_database,
@@ -247,7 +247,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:transfer-copy"),
             keywords: &["clone", "duplicate", "migrate"],
-            label: SharedString::from("Copy Data"),
+            label: SharedString::from("Copy data…"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &TransferCopy),
             available: has_database,
@@ -257,7 +257,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:save-document"),
             keywords: &["commit", "apply"],
-            label: SharedString::from("Save Document Changes"),
+            label: SharedString::from("Save document changes"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &SaveDocument),
             available: is_documents
@@ -268,7 +268,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:discard-document"),
             keywords: &["revert", "undo"],
-            label: SharedString::from("Discard Document Changes"),
+            label: SharedString::from("Discard document changes"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &DiscardDocumentChanges),
             available: is_documents
@@ -278,7 +278,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:close-tab"),
-            label: SharedString::from("Close Tab"),
+            label: SharedString::from("Close tab"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &CloseTab),
             available: can_close_tab,
@@ -287,7 +287,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:focus-sidebar"),
-            label: SharedString::from("Focus Sidebar"),
+            label: SharedString::from("Focus sidebar"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &FocusSidebar),
             available: true,
@@ -296,7 +296,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:focus-content"),
-            label: SharedString::from("Focus Content"),
+            label: SharedString::from("Focus content"),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &FocusContent),
             available: true,
@@ -325,7 +325,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:query-library"),
             keywords: &["history", "saved", "snippets"],
-            label: SharedString::from("Query Library"),
+            label: SharedString::from("Query library"),
             detail: Some(SharedString::from("Search query history and saved queries")),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &OpenQueryLibrary),
@@ -347,7 +347,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:ai"),
             keywords: &["chat", "assistant"],
-            label: SharedString::from("AI Assistant"),
+            label: SharedString::from("AI assistant"),
             detail: Some(SharedString::from("Toggle assistant side panel")),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &ToggleAiPanel),
@@ -357,7 +357,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:whats-new"),
-            label: SharedString::from("What's New"),
+            label: SharedString::from("What's new"),
             detail: Some(SharedString::from("View changelog")),
             category: ActionCategory::Command,
             available: true,
@@ -365,9 +365,19 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("cmd:fps-monitor"),
+            keywords: &["fps", "frame", "performance", "debug", "hud"],
+            label: SharedString::from("Toggle FPS monitor"),
+            detail: Some(SharedString::from("Frame time, CPU and memory overlay")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 106,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:check-updates"),
             keywords: &["upgrade", "version"],
-            label: SharedString::from("Check for Updates"),
+            label: SharedString::from("Check for updates"),
             category: ActionCategory::Command,
             available: true,
             priority: 110,
@@ -375,7 +385,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:download-update"),
-            label: SharedString::from("Download Update"),
+            label: SharedString::from("Download update"),
             detail: match &state.update_status {
                 UpdateStatus::Available(release) => Some(SharedString::from(release.label())),
                 _ => None,
@@ -388,7 +398,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("cmd:install-update"),
-            label: SharedString::from("Restart to Update"),
+            label: SharedString::from("Restart to update"),
             detail: match &state.update_status {
                 UpdateStatus::ReadyToInstall(download) => {
                     Some(SharedString::from(download.release.label()))
@@ -404,7 +414,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:connect"),
             keywords: &["open", "connections"],
-            label: SharedString::from("Switch Connection…"),
+            label: SharedString::from("Switch connection…"),
             detail: Some(SharedString::from("Open or connect to a saved connection")),
             category: ActionCategory::Command,
             shortcut: registered_shortcut(window, &OpenConnectionSwitcher),
@@ -415,7 +425,7 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         ActionItem {
             id: SharedString::from("cmd:change-theme"),
             keywords: &["appearance", "dark", "light", "color"],
-            label: SharedString::from("Change Theme…"),
+            label: SharedString::from("Change theme…"),
             category: ActionCategory::Command,
             available: true,
             priority: 90,
@@ -431,7 +441,7 @@ pub fn theme_actions(state: &AppState) -> Vec<ActionItem> {
     let light = AppTheme::light_themes().iter().map(|theme| (theme, ActionCategory::LightTheme));
     let system = ActionItem {
         id: SharedString::from("theme:system"),
-        label: SharedString::from("Match System Appearance"),
+        label: SharedString::from("Match system appearance"),
         detail: Some(SharedString::from("Mango Dark or Mango Light")),
         keywords: &["auto", "os", "macos"],
         category: ActionCategory::Command,
@@ -479,7 +489,7 @@ pub fn connection_switcher_actions(state: &AppState, window: &Window) -> Vec<Act
 
     actions.push(ActionItem {
         id: SharedString::from("cmd:new-connection"),
-        label: SharedString::from("New Connection"),
+        label: SharedString::from("New connection"),
         category: ActionCategory::Command,
         shortcut: registered_shortcut(window, &NewConnection),
         available: true,
@@ -488,7 +498,7 @@ pub fn connection_switcher_actions(state: &AppState, window: &Window) -> Vec<Act
     });
     actions.push(ActionItem {
         id: SharedString::from("cmd:manage-connections"),
-        label: SharedString::from("Manage Connections"),
+        label: SharedString::from("Manage connections"),
         category: ActionCategory::Command,
         available: true,
         priority: 1,
@@ -520,7 +530,7 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     vec![
         ActionItem {
             id: SharedString::from("view:documents"),
-            label: SharedString::from("Show Documents"),
+            label: SharedString::from("Show documents"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowDocumentsSubview),
             available: has_collection,
@@ -528,7 +538,7 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("view:indexes"),
-            label: SharedString::from("Show Indexes"),
+            label: SharedString::from("Show indexes"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowIndexesSubview),
             available: has_collection,
@@ -537,7 +547,7 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("view:stats"),
-            label: SharedString::from("Show Stats"),
+            label: SharedString::from("Show stats"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowStatsSubview),
             available: has_collection,
@@ -546,7 +556,7 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("view:aggregation"),
-            label: SharedString::from("Show Aggregation"),
+            label: SharedString::from("Show aggregation"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowAggregationSubview),
             available: has_collection,
@@ -564,7 +574,7 @@ pub fn view_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
         },
         ActionItem {
             id: SharedString::from("view:schema"),
-            label: SharedString::from("Show Schema"),
+            label: SharedString::from("Show schema"),
             category: ActionCategory::View,
             shortcut: registered_shortcut(window, &ShowSchemaSubview),
             available: has_collection,

@@ -34,6 +34,9 @@ pub struct CollectionView {
     pub(crate) aggregation_focus: FocusHandle,
     pub(crate) aggregation_stage_list_scroll: ScrollHandle,
     pub(crate) filter_state: Option<Entity<EditorState>>,
+    /// The last filter text checked, whether it compiles, and the `_id` it spells if any. The
+    /// filter row is drawn every frame; the text is parsed only when it changes.
+    pub(crate) filter_check: std::cell::RefCell<(String, bool, Option<mongodb::bson::Bson>)>,
     pub(crate) filter_completions: Option<std::rc::Rc<super::query_editor::QueryEditorCompletions>>,
     pub(crate) filter_completion_menu:
         Option<Entity<crate::views::editor_completion::EditorCompletionMenu>>,
@@ -96,6 +99,12 @@ pub struct CollectionView {
     pub(crate) search_subscription: Option<Subscription>,
     pub(crate) aggregation_stage_body_state: Option<Entity<EditorState>>,
     pub(crate) aggregation_results_scroll: UniformListScrollHandle,
+    pub(crate) schema_tree_scroll: UniformListScrollHandle,
+    /// The Explain modal's own focus target, so its Escape works the moment it opens.
+    pub(crate) explain_focus: FocusHandle,
+    /// Whether the modal was showing at the last draw, to focus it once on open and hand focus
+    /// back once on close.
+    pub(crate) explain_was_open: bool,
     pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
     pub(crate) aggregation_results_signature: Option<usize>,
     /// Cached SessionDocument list for the aggregation results tree, rebuilt
@@ -436,6 +445,7 @@ impl CollectionView {
             aggregation_focus: cx.focus_handle().tab_stop(true),
             aggregation_stage_list_scroll: ScrollHandle::new(),
             filter_state: None,
+            filter_check: std::cell::RefCell::new((String::new(), true, None)),
             filter_completions: None,
             filter_completion_menu: None,
             filter_expanded: false,
@@ -485,6 +495,9 @@ impl CollectionView {
             search_subscription: None,
             aggregation_stage_body_state: None,
             aggregation_results_scroll: UniformListScrollHandle::new(),
+            schema_tree_scroll: UniformListScrollHandle::new(),
+            explain_focus: cx.focus_handle(),
+            explain_was_open: false,
             aggregation_results_expanded_nodes: HashSet::new(),
             aggregation_results_signature: None,
             aggregation_results_documents: None,

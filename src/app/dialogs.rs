@@ -88,7 +88,7 @@ pub(crate) fn open_create_database_dialog(
     window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
         let busy = run.read(cx).busy;
         dialog
-            .title("Create Database")
+            .title("Create database")
             .min_w(px(420.0))
             .child(
                 div()

@@ -18,7 +18,7 @@ use crate::theme::spacing;
 use super::bulk_update_support::{
     BulkUpdateMode, BulkUpdateScope, parse_update_doc, validate_update_doc,
 };
-use super::shared::{dialog_error, escape_key_subscription, status_text, styled_dropdown_button};
+use super::shared::{dialog_error, status_text, styled_dropdown_button};
 
 pub struct BulkUpdateDialog {
     state: Entity<AppState>,
@@ -45,7 +45,7 @@ impl BulkUpdateDialog {
         let dialog_view =
             cx.new(|cx| Self::new(state.clone(), session_key, selected_doc, window, cx));
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Bulk Update / Replace").w(px(760.0)).child(dialog_view.clone())
+            dialog.title("Bulk update / replace").w(px(760.0)).child(dialog_view.clone())
         });
     }
 
@@ -127,8 +127,6 @@ impl BulkUpdateDialog {
                 }
             });
         dialog._subscriptions.push(subscription);
-
-        dialog._subscriptions.push(escape_key_subscription(cx));
 
         dialog
     }
@@ -490,7 +488,7 @@ impl Render for BulkUpdateDialog {
         let has_filter = !self.current_filter(cx).is_empty();
 
         let status =
-            status_text(self.error_message.as_ref(), self.updating, "Applying update...", "", cx);
+            status_text(self.error_message.as_ref(), self.updating, "Applying update…", "", cx);
 
         let scope_row = div()
             .flex()

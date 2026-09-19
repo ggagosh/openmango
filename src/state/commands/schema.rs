@@ -29,12 +29,21 @@ impl AppCommands {
         let collection = session_key.collection.clone();
         let manager = state.read(cx).connection_manager();
 
-        state.update(cx, |state, cx| {
+        // One sample per session at a time. Two overlapping samples would race, and the slower,
+        // older one would overwrite the newer result.
+        let already_loading = state.update(cx, |state, cx| {
             let session = state.ensure_session(session_key.clone());
+            if session.data.schema_loading {
+                return true;
+            }
             session.data.schema_loading = true;
             session.data.schema_error = None;
             cx.notify();
+            false
         });
+        if already_loading {
+            return;
+        }
 
         let task = cx.background_spawn({
             let database = database.clone();

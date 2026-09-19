@@ -76,6 +76,7 @@ pub(super) fn render_stage_rows(
             rows.push(preview_divider(cx));
         }
         let row = StageRow {
+            id: stage.id,
             idx,
             count,
             operator: stage.operator.trim().to_string(),
@@ -119,6 +120,8 @@ fn preview_divider(cx: &App) -> AnyElement {
 }
 
 struct StageRow {
+    /// The stage's own id. `idx` is where it sits now, which a drag changes.
+    id: u64,
     idx: usize,
     count: usize,
     operator: String,
@@ -225,7 +228,7 @@ fn render_stage_row(
             header.child(Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.danger))
         })
         .child(
-            Button::new(("agg-stage-remove", idx))
+            Button::new("agg-stage-remove")
                 .ghost()
                 .xsmall()
                 .icon(Icon::new(AppIcon::Trash))
@@ -248,7 +251,10 @@ fn render_stage_row(
         );
 
     let mut element = div()
-        .id(("agg-stage-row", idx))
+        // Keyed by stage, not position: the row is dragged to reorder, and a position key would
+        // change under the drag the moment it lands. The handle and remove button inside are
+        // scoped by this id.
+        .id(("agg-stage-row", row.id))
         .role(Role::ListItem)
         .aria_label(accessible)
         .aria_selected(selected)
@@ -456,7 +462,7 @@ fn drag_handle(
     cx: &App,
 ) -> AnyElement {
     let handle = div()
-        .id(("agg-stage-handle", idx))
+        .id("agg-stage-handle")
         .flex()
         .items_center()
         .justify_center()

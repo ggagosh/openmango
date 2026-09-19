@@ -89,7 +89,6 @@ fn bson_value_color(value: &Bson, cx: &App) -> Hsla {
 ///
 /// Works with VisibleRow and computes metadata on demand.
 pub fn render_lazy_readonly_row(
-    ix: usize,
     row: &VisibleRow,
     meta: &LazyRowMeta,
     _selected: bool,
@@ -111,7 +110,7 @@ pub fn render_lazy_readonly_row(
         let toggle_node_id = node_id.clone();
         let toggle_view = view_entity.clone();
         div()
-            .id(("agg-row-chevron", ix))
+            .id("agg-row-chevron")
             .size(px(18.0))
             .flex()
             .items_center()
@@ -143,7 +142,8 @@ pub fn render_lazy_readonly_row(
     };
 
     div()
-        .id(("agg-result-row", ix))
+        // Keyed by node, not position; the chevron inside is scoped by this id.
+        .id((ElementId::from("agg-result-row"), node_id.clone()))
         .flex()
         .items_center()
         .w_full()

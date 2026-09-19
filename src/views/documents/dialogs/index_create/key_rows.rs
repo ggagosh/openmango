@@ -110,11 +110,12 @@ impl IndexCreateDialog {
         }
 
         let mut row_children = Vec::new();
-        for (index, suggestion) in suggestions.into_iter().enumerate() {
+        for suggestion in suggestions {
             let label = format!("{} ({})", suggestion.path, suggestion.count);
             let target = suggestion.path.clone();
             row_children.push(
-                Button::new((SharedString::from(format!("index-suggestion-{row_id}")), index))
+                // Keyed by path: the suggestions are re-sorted whenever the schema refreshes.
+                Button::new(format!("index-suggestion-{row_id}-{}", suggestion.path))
                     .ghost()
                     .xsmall()
                     .label(label)

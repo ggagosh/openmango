@@ -8,23 +8,48 @@ use serde::{Deserialize, Serialize};
 
 use super::types::DocumentViewMode;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct PipelineStage {
+    /// Which stage this is, for the UI: stages are dragged to reorder, so a row keyed by position
+    /// would change identity in the middle of the drag. Runtime only. It is never saved, and it
+    /// is not part of equality, so a reloaded pipeline still equals the one that was stored.
+    #[serde(skip, default = "next_stage_id")]
+    pub id: u64,
     pub operator: String,
     pub body: String,
     #[serde(default = "stage_enabled_default")]
     pub enabled: bool,
 }
 
+impl PartialEq for PipelineStage {
+    fn eq(&self, other: &Self) -> bool {
+        self.operator == other.operator && self.body == other.body && self.enabled == other.enabled
+    }
+}
+
 fn stage_enabled_default() -> bool {
     true
+}
+
+fn next_stage_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl PipelineStage {
     pub fn new(operator: impl Into<String>) -> Self {
         let operator = operator.into();
         let body = default_stage_body(&operator).unwrap_or("{}").to_string();
-        Self { operator, body, enabled: true }
+        Self::with(operator, body, true)
+    }
+
+    pub fn with(operator: impl Into<String>, body: impl Into<String>, enabled: bool) -> Self {
+        Self { id: next_stage_id(), operator: operator.into(), body: body.into(), enabled }
+    }
+
+    /// A copy that is its own stage, for Duplicate: a plain clone keeps the original's id.
+    pub fn duplicate(&self) -> Self {
+        Self { id: next_stage_id(), ..self.clone() }
     }
 }
 
@@ -203,4 +228,28 @@ pub struct StageDocCounts {
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub time_ms: Option<u64>,
+}
+
+#[cfg(test)]
+mod stage_id_tests {
+    use super::PipelineStage;
+
+    #[test]
+    fn a_stage_id_is_runtime_only() {
+        let stage = PipelineStage::with("$match", "{ a: 1 }", true);
+        let other = PipelineStage::with("$match", "{ a: 1 }", true);
+        assert_ne!(stage.id, other.id, "every stage is its own");
+        assert_eq!(stage, other, "identity is not part of equality");
+
+        let saved = serde_json::to_string(&stage).unwrap();
+        assert!(!saved.contains("\"id\""), "the id was persisted: {saved}");
+        let loaded: PipelineStage = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded, stage);
+        assert_ne!(loaded.id, stage.id, "a loaded stage gets a fresh id");
+
+        assert_eq!(stage.clone().id, stage.id, "a snapshot keeps the id");
+        let copy = stage.duplicate();
+        assert_ne!(copy.id, stage.id, "a duplicate is a second stage");
+        assert_eq!(copy, stage);
+    }
 }

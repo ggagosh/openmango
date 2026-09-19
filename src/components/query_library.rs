@@ -227,7 +227,7 @@ impl QueryLibraryDialog {
             }
             let size = window.viewport_size();
             dialog
-                .title("Query Library")
+                .title("Query library")
                 .overlay_closable(true)
                 .w((size.width - px(160.0)).max(px(720.0)).min(px(1040.0)))
                 .h((size.height - px(180.0)).max(px(520.0)))

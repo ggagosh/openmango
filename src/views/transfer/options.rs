@@ -219,7 +219,7 @@ pub(super) fn render_export_options(
             Select::new(exclude_state)
                 .small()
                 .w_full()
-                .placeholder("Search collections to exclude...")
+                .placeholder("Search collections to exclude…")
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -229,12 +229,12 @@ pub(super) fn render_export_options(
         let excluded_tags = {
             let state = state.clone();
             div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
-                transfer_state.options.exclude_collections.iter().enumerate().map(|(idx, coll)| {
+                transfer_state.options.exclude_collections.iter().map(|coll| {
                     let coll_name = coll.clone();
                     let state = state.clone();
 
                     div()
-                        .id(("exclude-tag", idx))
+                        .id((ElementId::from("exclude-tag"), coll_name.clone()))
                         .flex()
                         .items_center()
                         .gap(spacing::xs())
@@ -248,7 +248,7 @@ pub(super) fn render_export_options(
                         .child(coll.clone())
                         .child(
                             div()
-                                .id(("exclude-tag-remove", idx))
+                                .id("exclude-tag-remove")
                                 .cursor_pointer()
                                 .text_color(cx.theme().muted_foreground)
                                 .hover(|s| s.text_color(cx.theme().foreground))
@@ -604,7 +604,7 @@ pub(super) fn render_copy_options(
             Select::new(exclude_state)
                 .small()
                 .w_full()
-                .placeholder("Search collections to exclude...")
+                .placeholder("Search collections to exclude…")
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -619,12 +619,12 @@ pub(super) fn render_copy_options(
             let tag_text_hover = cx.theme().foreground;
 
             div().flex().flex_wrap().gap(spacing::xs()).mt(spacing::xs()).children(
-                transfer_state.options.exclude_collections.iter().enumerate().map(|(idx, coll)| {
+                transfer_state.options.exclude_collections.iter().map(|coll| {
                     let coll_name = coll.clone();
                     let state = state.clone();
 
                     div()
-                        .id(("exclude-tag-copy-2", idx))
+                        .id((ElementId::from("exclude-tag-copy-2"), coll_name.clone()))
                         .flex()
                         .items_center()
                         .gap(spacing::xs())
@@ -638,7 +638,7 @@ pub(super) fn render_copy_options(
                         .child(coll.clone())
                         .child(
                             div()
-                                .id(("exclude-tag-copy-remove-2", idx))
+                                .id("exclude-tag-copy-remove-2")
                                 .cursor_pointer()
                                 .text_color(tag_text)
                                 .hover(move |s| s.text_color(tag_text_hover))

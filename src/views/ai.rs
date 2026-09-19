@@ -14,6 +14,7 @@ use gpui_kit::component::message::{
     Message, MessageAlignment, MessageContent, MessageFooter, MessageHeader,
 };
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
@@ -1143,7 +1144,7 @@ impl Render for AiView {
                 .flex_col()
                 .flex_shrink_0()
                 .max_h(px(260.0))
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .mx(spacing::md())
                 .mt(spacing::sm())
                 .p(spacing::xs())
@@ -1430,7 +1431,7 @@ impl Render for AiView {
                         gpui_kit::transparent_black()
                     };
                     div()
-                        .id(ElementId::Name(format!("mention-item-{i}").into()))
+                        .id((ElementId::from("mention-item"), col_name.clone()))
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
@@ -1550,15 +1551,12 @@ impl Render for AiView {
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::PreviousAiMention, window, cx| {
                 this.navigate_mention(-1, window, cx);
-                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::NextAiMention, window, cx| {
                 this.navigate_mention(1, window, cx);
-                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &crate::keyboard::ConfirmAiMention, window, cx| {
                 this.confirm_mention_or_send(window, cx);
-                cx.stop_propagation();
             }))
             .flex()
             .flex_col()
@@ -2104,7 +2102,7 @@ fn assistant_footer(
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::Redo).xsmall())
-                    .label("Try again")
+                    .label("Retry")
                     .tooltip("Ask the same question again")
                     .on_click(move |_, _, cx| {
                         let prompt = retry_prompt.clone();
@@ -2415,12 +2413,12 @@ fn render_tool_group(
 
     // Header label
     let label = if any_awaiting {
-        "Awaiting confirmation...".to_string()
+        "Awaiting confirmation…".to_string()
     } else if any_running {
         if tools.len() == 1 {
-            format!("Running {}...", display_tool_name(&tools[0].tool_name))
+            format!("Running {}…", display_tool_name(&tools[0].tool_name))
         } else {
-            "Running tools...".to_string()
+            "Running tools…".to_string()
         }
     } else if tools.len() == 1 {
         format!("Used {}", display_tool_name(&tools[0].tool_name))
@@ -2582,7 +2580,7 @@ fn render_tool_group(
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
-                            .label("Open Collection")
+                            .label("Open collection")
                             .on_click(move |_, _, cx| {
                                 let col = col.clone();
                                 let should_load = st.update(cx, |state, cx| {
@@ -2623,7 +2621,7 @@ fn render_tool_group(
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::SquareTerminal).xsmall())
-                            .label("Open in Aggregation")
+                            .label("Open in aggregation")
                             .on_click(move |_, _, cx| {
                                 let col = col_for_agg.clone();
                                 let stages = stages_for_agg.clone();
@@ -3142,11 +3140,7 @@ fn parse_pipeline_from_args(
             let obj = stage.as_object()?;
             let (op, body_val) = obj.iter().next()?;
             let body = serde_json::to_string_pretty(body_val).ok()?;
-            Some(crate::state::app_state::PipelineStage {
-                operator: op.clone(),
-                body,
-                enabled: true,
-            })
+            Some(crate::state::app_state::PipelineStage::with(op.clone(), body, true))
         })
         .collect();
 
@@ -3264,7 +3258,7 @@ fn download_report_as_excel(
             cx.update(|cx| {
                 state.update(cx, |s, cx| {
                     s.set_status_message(Some(crate::state::StatusMessage::info(
-                        "Exporting report...",
+                        "Exporting report…",
                     )));
                     cx.notify();
                 });

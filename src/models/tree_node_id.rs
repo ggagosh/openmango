@@ -76,6 +76,22 @@ impl TreeNodeId {
         }
     }
 
+    /// The node one level up, or `None` for a connection.
+    pub fn parent(&self) -> Option<Self> {
+        match self {
+            Self::Connection(_) => None,
+            Self::Database { connection, .. } => Some(Self::Connection(*connection)),
+            Self::Collection { connection, database, .. } => {
+                Some(Self::database(*connection, database.clone()))
+            }
+        }
+    }
+
+    /// Whether `ancestor` sits anywhere above this node.
+    pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
+        std::iter::successors(self.parent(), Self::parent).any(|node| &node == ancestor)
+    }
+
     /// Convert to a string representation for use as tree item ID.
     /// Format: "conn:{uuid}" | "db:{uuid}:{database}" | "col:{uuid}:{database}:{collection}"
     pub fn to_tree_id(&self) -> String {
@@ -149,5 +165,20 @@ mod tests {
 
         let col = TreeNodeId::collection(uuid, "mydb", "mycol");
         assert_eq!(TreeNodeId::from_tree_id(&col.to_tree_id()), Some(col.clone()));
+    }
+
+    #[test]
+    fn parents_walk_up_to_the_connection() {
+        let uuid = Uuid::new_v4();
+        let conn = TreeNodeId::connection(uuid);
+        let db = TreeNodeId::database(uuid, "mydb");
+        let col = TreeNodeId::collection(uuid, "mydb", "mycol");
+
+        assert_eq!(col.parent(), Some(db.clone()));
+        assert_eq!(db.parent(), Some(conn.clone()));
+        assert_eq!(conn.parent(), None);
+        assert!(col.is_descendant_of(&conn));
+        assert!(!db.is_descendant_of(&TreeNodeId::database(uuid, "other")));
+        assert!(!conn.is_descendant_of(&conn));
     }
 }

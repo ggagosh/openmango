@@ -176,7 +176,9 @@ impl TableDelegate for DocumentTableDelegate {
         let icon_color = if is_pinned { cx.theme().primary } else { cx.theme().muted_foreground };
 
         div()
-            .id(("th-pin", col_ix))
+            // Keyed by column, not position: pinning moves the column, and the button must not
+            // change identity under the pointer that is clicking it.
+            .id((ElementId::from("th-pin"), col_key.clone()))
             .size_full()
             .flex()
             .items_center()
@@ -185,7 +187,7 @@ impl TableDelegate for DocumentTableDelegate {
             .child(name)
             .child(
                 div()
-                    .id(("pin-btn", col_ix))
+                    .id("pin-btn")
                     .flex_shrink_0()
                     .cursor_pointer()
                     .rounded(crate::theme::borders::radius_sm())

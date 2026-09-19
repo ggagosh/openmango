@@ -711,7 +711,7 @@ fn render_support_section(state: Entity<AppState>, cx: &App) -> impl IntoElement
     let log_path = crate::helpers::support::app_log_path();
     let export_button = Button::new("export-support-bundle")
         .xsmall()
-        .label("Export Support Bundle...")
+        .label("Export support bundle…")
         .on_click(move |_, _, cx| {
             let state = state.clone();
             cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
@@ -1855,9 +1855,9 @@ fn render_agent_connections_section(
                             open_confirm_dialog(
                                 window,
                                 cx,
-                                "Clear all History",
+                                "Clear all history?",
                                 "Delete every non-active local encrypted History batch, gap, and resume cursor. Recording restarts from the current point. This cannot be undone.",
-                                "Clear all History",
+                                "Clear all",
                                 true,
                                 move |_, cx| {
                                     AppCommands::clear_all_history(state_for_clear.clone(), cx);
@@ -1960,7 +1960,7 @@ fn render_transfer_section(
         let state_for_browse = state.clone();
         let browse_button = crate::components::Button::new("browse-folder")
             .xsmall()
-            .label("Browse...")
+            .label("Browse…")
             .on_click(move |_, _, cx| {
                 let state = state_for_browse.clone();
                 cx.spawn(async move |cx| {
@@ -2373,7 +2373,7 @@ fn render_ai_section(
         let view = view.clone();
         Button::new("ai-test-provider")
             .xsmall()
-            .label(if ai_test_in_flight { "Testing..." } else { "Test provider" })
+            .label(if ai_test_in_flight { "Testing…" } else { "Test provider" })
             .disabled(ai_test_in_flight || !ai_enabled)
             .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
                 view.update(cx, |this, cx| {

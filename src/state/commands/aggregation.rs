@@ -678,9 +678,9 @@ mod tests {
     #[test]
     fn pipeline_has_write_stage_respects_selection_and_enabled() {
         let stages = vec![
-            PipelineStage { operator: "$match".to_string(), body: "{}".to_string(), enabled: true },
-            PipelineStage { operator: "$out".to_string(), body: "{}".to_string(), enabled: true },
-            PipelineStage { operator: "$merge".to_string(), body: "{}".to_string(), enabled: true },
+            PipelineStage::with("$match".to_string(), "{}".to_string(), true),
+            PipelineStage::with("$out".to_string(), "{}".to_string(), true),
+            PipelineStage::with("$merge".to_string(), "{}".to_string(), true),
         ];
 
         assert!(pipeline_has_write_stage(&stages, Some(2)));
@@ -696,31 +696,27 @@ mod tests {
     #[test]
     fn build_stage_doc_parses_and_handles_empty_body() {
         let parsed = build_stage_doc(
-            &PipelineStage {
-                operator: "$match".to_string(),
-                body: r#"{ "status": "active" }"#.to_string(),
-                enabled: true,
-            },
+            &PipelineStage::with(
+                "$match".to_string(),
+                r#"{ "status": "active" }"#.to_string(),
+                true,
+            ),
             0,
         )
         .expect("stage should parse");
         assert_eq!(parsed, doc! { "$match": { "status": "active" } });
 
-        let empty = build_stage_doc(
-            &PipelineStage { operator: "$match".to_string(), body: "".to_string(), enabled: true },
-            1,
-        )
-        .expect("empty body should become {}");
+        let empty =
+            build_stage_doc(&PipelineStage::with("$match".to_string(), "".to_string(), true), 1)
+                .expect("empty body should become {}");
         assert_eq!(empty, doc! { "$match": {} });
     }
 
     #[test]
     fn build_stage_doc_errors_on_empty_operator() {
-        let err = build_stage_doc(
-            &PipelineStage { operator: "   ".to_string(), body: "{}".to_string(), enabled: true },
-            2,
-        )
-        .expect_err("empty operator should error");
+        let err =
+            build_stage_doc(&PipelineStage::with("   ".to_string(), "{}".to_string(), true), 2)
+                .expect_err("empty operator should error");
         assert_eq!(err.stage(), Some(2));
         assert!(err.to_string().contains("Stage 3 has no operator"));
     }

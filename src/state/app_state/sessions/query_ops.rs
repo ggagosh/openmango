@@ -14,7 +14,7 @@ impl AppState {
         self.promote_preview_collection_tab(session_key);
         if let Some(session) = self.session_mut(session_key) {
             session.data.filter_raw = raw;
-            session.data.filter = filter;
+            session.data.set_filter(filter);
             session.data.page = 0;
             session.data.explain.mark_stale();
         }
@@ -25,7 +25,7 @@ impl AppState {
         self.promote_preview_collection_tab(session_key);
         if let Some(session) = self.session_mut(session_key) {
             session.data.filter_raw.clear();
-            session.data.filter = None;
+            session.data.set_filter(None);
             session.data.page = 0;
             session.data.explain.mark_stale();
         }
