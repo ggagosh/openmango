@@ -219,7 +219,7 @@ pub(super) fn render_export_options(
             Select::new(exclude_state)
                 .small()
                 .w_full()
-                .placeholder("Search collections to exclude...")
+                .placeholder("Search collections to exclude…")
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -604,7 +604,7 @@ pub(super) fn render_copy_options(
             Select::new(exclude_state)
                 .small()
                 .w_full()
-                .placeholder("Search collections to exclude...")
+                .placeholder("Search collections to exclude…")
                 .into_any_element()
         } else {
             div().into_any_element()

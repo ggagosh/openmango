@@ -477,7 +477,7 @@ impl Render for ForgeView {
         let status_text = if self.state.runtime.mongosh_error.is_some() {
             "Shell error"
         } else if self.state.runtime.is_running {
-            "Running..."
+            "Running…"
         } else {
             "Ready"
         };

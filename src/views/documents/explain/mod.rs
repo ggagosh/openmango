@@ -243,7 +243,7 @@ impl CollectionView {
                                             div().into_any_element()
                                         })
                                         .child(if explain.loading {
-                                            explain_info_chip("Running...", cx.theme().primary, cx)
+                                            explain_info_chip("Running…", cx.theme().primary, cx)
                                                 .into_any_element()
                                         } else {
                                             div().into_any_element()

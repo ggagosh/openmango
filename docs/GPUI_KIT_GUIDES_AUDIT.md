@@ -121,9 +121,9 @@ and `P95`.
 - [ ] `views/documents/views/schema_view.rs:186-215` — `uniform_list` with no `track_scroll` and no
   scrollbar: scroll position is unowned. Add a `UniformListScrollHandle`, `.track_scroll`, and
   `.vertical_scrollbar` on the wrapper (`:187`). **M**
-- [ ] `views/documents/views/aggregation/results_view.rs:606-631` — list tracks a handle nothing
+- [x] `views/documents/views/aggregation/results_view.rs:606-631` — list tracks a handle nothing
   draws a scrollbar for. `.vertical_scrollbar(&view.aggregation_results_scroll)`. **S**
-- [ ] `views/results/mod.rs:68-88` — same, Forge result trees. **S**
+- [x] `views/results/mod.rs:68-88` — same, Forge result trees. **S**
 - [ ] `views/databases.rs:283-293`, `:350-356`, `:456-464` — the scroll region sits inside a padded
   section, so its scrollbar floats inset from the panel edge; the header row is padded twice, so
   column labels sit 2×lg in while rows sit 1×lg in. One padding owner. **M**
@@ -138,19 +138,19 @@ and `P95`.
   not keyboard reachable. Ghost icon `Button` + tooltip. **S**
 - [ ] `views/databases.rs:398` — collection row is a clickable `div` with no selected state, focus or
   keyboard. `ListItem` + selected. **M**
-- [ ] Six icon-only buttons with no name or tooltip: `views/documents/header/actions.rs:1050`,
+- [x] Six icon-only buttons with no name or tooltip: `views/documents/header/actions.rs:1050`,
   `:1080`, `:1200` (three refreshes, same icon), `components/filter_builder/panel.rs:2694`,
   `views/transfer/helpers.rs:148`, `views/transfer/query_modal.rs:207`. **S**
 
 ### H. Theme
 
-- [ ] ✔ `components/connection_manager/export_dialog.rs:246` — `hsla(0,0,0.25,1)` marks the active
+- [x] ✔ `components/connection_manager/export_dialog.rs:246` — `hsla(0,0,0.25,1)` marks the active
   button; invisible on the light themes. The only raw color in the app. `cx.theme().secondary` or
   `.primary()`. **S**
 
 ### I. Interface copy (Must-level)
 
-- [ ] 20 labels use `...` where the guide requires `…`, and both ship side by side:
+- [x] 20 labels use `...` where the guide requires `…`, and both ship side by side:
   `app/menus.rs:35,46,205,242,263,284,305,487,509`,
   `views/documents/tree/tree_menus.rs:145,171,194,217,240,263,283`,
   `views/transfer/simple.rs:109,425,477,540`. **S**
@@ -204,8 +204,9 @@ The stable id is already in scope at nearly every site.
 
 ### Scrolling
 
-- [ ] Raw `overflow_y_scroll()` on panel regions, so no scrollbar is ever drawn — swap for the kit's
-  `overflow_y_scrollbar()`: `aggregation/stage_list/mod.rs:106-119`,
+- [ ] Raw `overflow_y_scroll()` on panel regions, so no scrollbar is ever drawn. **Not a drop-in
+  swap** (looked at it): `overflow_y_scrollbar()` changes the element type, and the stage list, which
+  tracks a handle, needs a wrapper element to hold the bar. Do it with the app running: `aggregation/stage_list/mod.rs:106-119`,
   `components/ai_blocks/datatable.rs:154`, `components/ai_blocks/report.rs:226`,
   `components/error_history.rs:95`, `views/ai.rs:1146`. **S**
 - [ ] Unbounded lists built one element per item per frame — virtualize:
@@ -285,7 +286,8 @@ The stable id is already in scope at nearly every site.
   Case; 14 of 37 dialog titles are Title Case. **M**
 - [ ] Palette items that open a dialog lack `…`: `providers.rs:162,170,180,190,200,230,240,250`;
   also `aggregation/stage_list/mod.rs:222`. **S**
-- [ ] Placeholders: three treatments (`...`, none, `…`), one with a period. Strip. **S**
+- [x] Placeholders: three treatments (`...`, none, `…`). All 68 three-dot UI strings now use `…`;
+  truncation markers in data (`format!("{}...")`) were left alone on purpose.
 - [ ] `views/transfer/simple.rs:315,408` — "Cancelling...", "Loading..." instead of a spinner. **S**
 - [ ] Error strings: ~19 of 36 lack the final period; several name no cause or next step ("Drop
   failed: not allowed", "Export failed: {}"). **M**

@@ -757,7 +757,7 @@ impl Render for PropertyActionDialog {
         let status = status_text(
             self.error_message.as_ref(),
             self.updating,
-            "Applying update...",
+            "Applying update…",
             default_label,
             cx,
         );

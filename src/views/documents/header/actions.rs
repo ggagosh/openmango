@@ -1050,6 +1050,7 @@ pub fn render_indexes_actions(state: Entity<AppState>, session_key: Option<Sessi
             Button::new("refresh-indexes")
                 .ghost()
                 .icon(Icon::new(IconName::Redo).xsmall())
+                .tooltip("Refresh indexes")
                 .disabled(session_key.is_none())
                 .on_click({
                     let session_key = session_key.clone();
@@ -1080,6 +1081,7 @@ pub fn render_stats_actions(
         Button::new("refresh-stats")
             .ghost()
             .icon(Icon::new(IconName::Redo).xsmall())
+            .tooltip("Refresh stats")
             .disabled(session_key.is_none() || stats_loading)
             .on_click({
                 let session_key = session_key.clone();
@@ -1200,6 +1202,7 @@ pub fn render_schema_actions(
             Button::new("refresh-schema")
                 .ghost()
                 .icon(Icon::new(IconName::Redo).xsmall())
+                .tooltip("Refresh schema")
                 .disabled(session_key.is_none() || schema_loading)
                 .on_click({
                     let session_key = session_key.clone();

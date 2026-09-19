@@ -1,6 +1,7 @@
 //! Export connections dialog.
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
@@ -240,13 +241,13 @@ fn mode_button(
     current: ExportMode,
     view: Entity<ExportDialogState>,
 ) -> Button {
-    let is_active = current == target;
-    let mut btn = Button::new(SharedString::new_static(label)).xsmall().label(label);
-    if is_active {
-        btn = btn.bg(gpui_kit::hsla(0.0, 0.0, 0.25, 1.0));
-    } else {
-        btn = btn.ghost();
-    }
+    // The chosen mode is the button's selected state, which every theme styles; a fixed gray
+    // vanished on the light ones.
+    let btn = Button::new(SharedString::new_static(label))
+        .xsmall()
+        .label(label)
+        .ghost()
+        .selected(current == target);
     btn.on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
             this.mode = target;

@@ -142,7 +142,7 @@ pub(super) fn build_property_menu(
     let can_add_field = !is_array_element;
 
     menu = menu.item(
-        PopupMenuItem::new("Edit Value / Type...")
+        PopupMenuItem::new("Edit Value / Type…")
             .icon(Icon::new(IconName::Settings2))
             .action(Box::new(EditValueType))
             .disabled(!can_edit_value)
@@ -168,7 +168,7 @@ pub(super) fn build_property_menu(
 
     if can_rename_field {
         menu = menu.item(
-            PopupMenuItem::new("Rename Field...")
+            PopupMenuItem::new("Rename Field…")
                 .icon(Icon::new(IconName::Settings2))
                 .action(Box::new(RenameField))
                 .on_click({
@@ -191,7 +191,7 @@ pub(super) fn build_property_menu(
 
     if can_remove_field {
         menu = menu.item(
-            PopupMenuItem::new("Remove Field...")
+            PopupMenuItem::new("Remove Field…")
                 .icon(Icon::new(IconName::Minus))
                 .action(Box::new(RemoveSelectedField))
                 .on_click({
@@ -214,7 +214,7 @@ pub(super) fn build_property_menu(
 
     if can_remove_element {
         menu = menu.item(
-            PopupMenuItem::new("Remove Element...")
+            PopupMenuItem::new("Remove Element…")
                 .icon(Icon::new(IconName::Minus))
                 .action(Box::new(RemoveSelectedField))
                 .on_click({
@@ -237,7 +237,7 @@ pub(super) fn build_property_menu(
 
     if can_add_field {
         menu = menu.item(
-            PopupMenuItem::new("Add Field/Value...")
+            PopupMenuItem::new("Add Field/Value…")
                 .icon(Icon::new(IconName::Plus))
                 .action(Box::new(AddField))
                 .on_click({
@@ -260,7 +260,7 @@ pub(super) fn build_property_menu(
 
     if is_array && !is_array_element {
         menu = menu.item(
-            PopupMenuItem::new("Add Element...")
+            PopupMenuItem::new("Add Element…")
                 .icon(Icon::new(IconName::Plus))
                 .action(Box::new(AddElement))
                 .on_click({
@@ -280,7 +280,7 @@ pub(super) fn build_property_menu(
                 }),
         );
         menu = menu.item(
-            PopupMenuItem::new("Remove Matching Values...")
+            PopupMenuItem::new("Remove Matching Values…")
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(RemoveMatchingValues))
                 .on_click({

@@ -488,7 +488,7 @@ impl Render for BulkUpdateDialog {
         let has_filter = !self.current_filter(cx).is_empty();
 
         let status =
-            status_text(self.error_message.as_ref(), self.updating, "Applying update...", "", cx);
+            status_text(self.error_message.as_ref(), self.updating, "Applying update…", "", cx);
 
         let scope_row = div()
             .flex()

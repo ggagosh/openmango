@@ -2415,12 +2415,12 @@ fn render_tool_group(
 
     // Header label
     let label = if any_awaiting {
-        "Awaiting confirmation...".to_string()
+        "Awaiting confirmation…".to_string()
     } else if any_running {
         if tools.len() == 1 {
-            format!("Running {}...", display_tool_name(&tools[0].tool_name))
+            format!("Running {}…", display_tool_name(&tools[0].tool_name))
         } else {
-            "Running tools...".to_string()
+            "Running tools…".to_string()
         }
     } else if tools.len() == 1 {
         format!("Used {}", display_tool_name(&tools[0].tool_name))
@@ -3264,7 +3264,7 @@ fn download_report_as_excel(
             cx.update(|cx| {
                 state.update(cx, |s, cx| {
                     s.set_status_message(Some(crate::state::StatusMessage::info(
-                        "Exporting report...",
+                        "Exporting report…",
                     )));
                     cx.notify();
                 });

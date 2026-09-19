@@ -319,7 +319,7 @@ impl TransferView {
 
         let export_path_input_state = cx.new(|cx| {
             let mut input_state =
-                InputState::new(window, cx).placeholder("Select folder or enter path...");
+                InputState::new(window, cx).placeholder("Select folder or enter path…");
             input_state.set_value(current_file_path, window, cx);
             input_state
         });
@@ -340,13 +340,13 @@ impl TransferView {
         };
 
         let dest_db_input_state = cx.new(|cx| {
-            let mut input_state = InputState::new(window, cx).placeholder("Database name...");
+            let mut input_state = InputState::new(window, cx).placeholder("Database name…");
             input_state.set_value(current_dest_database, window, cx);
             input_state
         });
 
         let dest_coll_input_state = cx.new(|cx| {
-            let mut input_state = InputState::new(window, cx).placeholder("Collection name...");
+            let mut input_state = InputState::new(window, cx).placeholder("Collection name…");
             input_state.set_value(current_dest_collection, window, cx);
             input_state
         });

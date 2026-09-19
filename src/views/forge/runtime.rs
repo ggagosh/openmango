@@ -311,7 +311,7 @@ impl ForgeView {
         self.state.runtime.is_running = true;
         self.state.output.last_error = None;
         super::controller::ForgeController::clear_result_pages(self, true);
-        self.state.output.last_result = Some("Restarting shell...".to_string());
+        self.state.output.last_result = Some("Restarting shell…".to_string());
         super::controller::ForgeController::sync_output_tab(self);
         cx.notify();
 

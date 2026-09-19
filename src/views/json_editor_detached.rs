@@ -349,7 +349,7 @@ impl DetachedJsonEditorView {
                 self.awaiting_create_as_new = false;
                 self.set_save_in_flight(true);
                 self.clear_sync_issue();
-                self.set_notice(false, "Inserting...");
+                self.set_notice(false, "Inserting…");
                 AppCommands::insert_document_for_editor(
                     self.state.clone(),
                     session.session_key,
@@ -418,7 +418,7 @@ impl DetachedJsonEditorView {
 
         self.awaiting_create_as_new = false;
         self.set_save_in_flight(true);
-        self.set_notice(false, "Checking latest document...");
+        self.set_notice(false, "Checking latest document…");
 
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
@@ -466,7 +466,7 @@ impl DetachedJsonEditorView {
                                     move |_window, cx| {
                                         let _ = view_for_save.update(cx, |this, cx| {
                                             this.set_save_in_flight(true);
-                                            this.set_notice(false, "Saving...");
+                                            this.set_notice(false, "Saving…");
                                             AppCommands::save_document_for_editor(
                                                 this.state.clone(),
                                                 session_key,
@@ -722,7 +722,7 @@ impl DetachedJsonEditorView {
                 view.update(cx, |this, cx| {
                     this.awaiting_create_as_new = true;
                     this.set_save_in_flight(true);
-                    this.set_notice(false, "Creating as new document...");
+                    this.set_notice(false, "Creating as new document…");
                     AppCommands::insert_document_for_editor(
                         this.state.clone(),
                         session.session_key,
@@ -810,7 +810,7 @@ impl Render for DetachedJsonEditorView {
                 .justify_center()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Editor is initializing...");
+                .child("Editor is initializing…");
         };
 
         let view = cx.entity();

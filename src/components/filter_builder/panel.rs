@@ -2706,12 +2706,13 @@ fn render_token_chip(
         .bg(cx.theme().primary.opacity(0.12))
         .px(spacing::xs())
         .py(px(2.0))
-        .child(div().text_xs().text_color(cx.theme().primary).child(label))
+        .child(div().text_xs().text_color(cx.theme().primary).child(label.clone()))
         .child(
             Button::new("remove-token")
                 .ghost()
                 .small()
                 .icon(Icon::new(IconName::Close).small())
+                .tooltip(format!("Remove {label}"))
                 .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                     on_remove(window, cx);
                 }),

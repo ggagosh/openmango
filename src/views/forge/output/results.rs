@@ -207,7 +207,7 @@ impl ForgeView {
                     .gap(spacing::sm())
                     .child(Spinner::new().small())
                     .child(
-                        div().text_sm().text_color(cx.theme().muted_foreground).child("Running..."),
+                        div().text_sm().text_color(cx.theme().muted_foreground).child("Running…"),
                     ),
             );
         } else {

@@ -61,10 +61,7 @@ pub fn render_schema_panel(
             .gap(spacing::sm())
             .child(Spinner::new().small())
             .child(
-                div()
-                    .text_sm()
-                    .text_color(app.theme().muted_foreground)
-                    .child("Analyzing schema..."),
+                div().text_sm().text_color(app.theme().muted_foreground).child("Analyzing schema…"),
             )
             .into_any_element();
     }

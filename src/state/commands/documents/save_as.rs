@@ -99,7 +99,7 @@ impl AppCommands {
                     format,
                     cancellation: cancellation.clone(),
                 }));
-                state.set_status_message(Some(StatusMessage::info("Exporting...")));
+                state.set_status_message(Some(StatusMessage::info("Exporting…")));
                 cx.notify();
             });
         });
@@ -280,7 +280,7 @@ impl AppCommands {
 
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
-                        state.set_status_message(Some(StatusMessage::info("Exporting...")));
+                        state.set_status_message(Some(StatusMessage::info("Exporting…")));
                         cx.notify();
                     });
 

@@ -131,7 +131,7 @@ impl AppCommands {
                 tab.runtime.error_message = None;
                 tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
-            state.set_status_message(Some(StatusMessage::info("Importing...")));
+            state.set_status_message(Some(StatusMessage::info("Importing…")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
             cx.notify();
             operation_generation

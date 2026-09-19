@@ -116,7 +116,7 @@ pub(crate) fn request_delete_confirmation(
     };
 
     state.update(cx, |state, cx| {
-        state.set_status_message(Some(StatusMessage::info("Counting documents...")));
+        state.set_status_message(Some(StatusMessage::info("Counting documents…")));
         cx.notify();
     });
     let database = session_key.database.clone();

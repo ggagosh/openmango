@@ -15,7 +15,7 @@ impl AppState {
         match event {
             AppEvent::Connecting(connection_id) => {
                 self.set_connection_failure(*connection_id, None);
-                self.set_status_message(Some(StatusMessage::info("Connecting...")));
+                self.set_status_message(Some(StatusMessage::info("Connecting…")));
             }
             AppEvent::Connected(connection_id) => {
                 self.set_connection_failure(*connection_id, None);
@@ -185,7 +185,7 @@ impl AppState {
             AppEvent::ExplainStarted { session, scope } => {
                 let _ = session;
                 self.set_status_message(Some(StatusMessage::info(format!(
-                    "Running {} explain...",
+                    "Running {} explain…",
                     scope.label()
                 ))));
             }

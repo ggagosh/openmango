@@ -220,7 +220,7 @@ impl DatabaseView {
 
         if stats_loading {
             row = row.child(Spinner::new().small()).child(
-                div().text_sm().text_color(cx.theme().muted_foreground).child("Loading stats..."),
+                div().text_sm().text_color(cx.theme().muted_foreground).child("Loading stats…"),
             );
             return section.child(row).into_any_element();
         }
@@ -307,7 +307,7 @@ impl DatabaseView {
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Loading collections..."),
+                                .child("Loading collections…"),
                         ),
                 )
                 .into_any_element();
