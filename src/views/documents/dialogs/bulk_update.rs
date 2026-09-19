@@ -18,7 +18,7 @@ use crate::theme::spacing;
 use super::bulk_update_support::{
     BulkUpdateMode, BulkUpdateScope, parse_update_doc, validate_update_doc,
 };
-use super::shared::{dialog_error, escape_key_subscription, status_text, styled_dropdown_button};
+use super::shared::{dialog_error, status_text, styled_dropdown_button};
 
 pub struct BulkUpdateDialog {
     state: Entity<AppState>,
@@ -127,8 +127,6 @@ impl BulkUpdateDialog {
                 }
             });
         dialog._subscriptions.push(subscription);
-
-        dialog._subscriptions.push(escape_key_subscription(cx));
 
         dialog
     }

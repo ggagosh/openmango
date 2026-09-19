@@ -19,7 +19,7 @@ use super::property_dialog_support::{
     PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
     format_bson_for_input, parent_path,
 };
-use super::shared::{dialog_error, escape_key_subscription, status_text, styled_dropdown_button};
+use super::shared::{dialog_error, status_text, styled_dropdown_button};
 
 pub struct PropertyActionDialog {
     state: Entity<AppState>,
@@ -334,7 +334,6 @@ impl PropertyActionDialog {
             });
         dialog._subscriptions.push(subscription);
 
-        dialog._subscriptions.push(escape_key_subscription(cx));
         // The value field is multi-line, so Cmd/Ctrl+Enter submits, as in other multi-line
         // query and value editors.
         let weak = cx.entity().downgrade();

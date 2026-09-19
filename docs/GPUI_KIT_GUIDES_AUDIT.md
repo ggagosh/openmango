@@ -66,24 +66,30 @@ and `P95`.
 
 ### C. Focus and keyboard correctness
 
-- [ ] ✔ `components/filter_builder/panel.rs:2462` — `cx.focus_handle()` created fresh inside
+- [x] ✔ `components/filter_builder/panel.rs:2462` — `cx.focus_handle()` created fresh inside
   `render`, never tracked; Cmd+Enter focuses a handle attached to nothing, so focus is dropped.
   Store one handle on `BulkValueEditor`. **S**
 - [ ] `views/documents/explain/mod.rs:162-188` — modal overlay with no focus handle, `track_focus`
   or key context: its Escape handler is off the dispatch path until clicked; no focus transfer on
   open, no restore on close, no trap. `:165-167` the scrim swallows clicks without dismissing. **M**
-- [ ] `views/documents/dialogs/shared.rs:48-56` — window-global Escape intercept closes *a* dialog
+- [x] `views/documents/dialogs/shared.rs:48-56` — window-global Escape intercept closes *a* dialog
   on any Escape regardless of which is topmost; the kit's Dialog already binds Escape on its own
   region. Delete the helper and its call sites (`property_dialog.rs:337`, `bulk_update.rs:131`). **S**
-- [ ] `views/json_editor_detached.rs:835-859` — Cmd+W / Cmd+S handled by raw key match next to the
-  identical `on_action` handlers at `:827/:831`; Cmd+C, Cmd+Shift+F, Cmd+N are raw-only, so not
-  rebindable. **M**
+- [x] `views/json_editor_detached.rs:835-859` — Cmd+W / Cmd+S handled by raw key match next to the
+  identical `on_action` handlers. Done, with a correction: Cmd+S was **not** a duplicate.
+  `SaveDocument` is bound only under `Documents && !Input`, which never matches in a detached editor
+  with the editor focused, so the raw branch was the only thing saving there. Bound Save in
+  `JsonEditorWindow` first, then removed both raw branches.
+- [ ] same file — Cmd+C, Cmd+Shift+F are still raw-only, so not rebindable. Needs two new actions. **M**
 - [ ] `views/documents/state.rs:137-306` — window-global `intercept_keystrokes` owns Escape, Enter,
   Tab, arrows and every Cmd chord for the view's lifetime with no "focus is inside this view" guard,
   so it fires while a dialog or the sidebar has focus. Move to `on_action` on the element that
-  carries the key context (`view.rs:803`). Quick wins inside it: delete the Cmd+F branch
-  (`:178-181`) and the Escape→close-search branch (`:212-216`), both already covered by bound
-  actions. **L** (the two deletions are **S**)
+  carries the key context (`view.rs:803`). **L**
+  - **Do not delete the Cmd+F branch (`:178-181`).** The audit suggested it; it is wrong. That
+    branch is a deliberate fix (commit 78bf57b, "keep Cmd+F out of the query editors") and its
+    comment explains why: the `!Input` binding predicate does not cover it.
+  - The Escape→close-search branch (`:212-216`) has the same shape; verify in the running app that
+    the bound `CloseSearch` fires with the search input focused before removing it.
 
 ### D. One command, several implementations that already disagree
 
@@ -213,7 +219,7 @@ The stable id is already in scope at nearly every site.
 - [ ] `components/query_library.rs:991` → `:312-366` — `items()` per frame, O(n²) lookup. Cache. **M**
 - [ ] `views/documents/table/cell_renderer.rs:39` — deep-clones nested BSON per cell per frame for a
   tooltip closure. `Arc<Document>` + path. **M**
-- [ ] `components/filter_builder/panel.rs:2451-2452` — `parsed_values` runs twice per frame. **S**
+- [x] `components/filter_builder/panel.rs:2451-2452` — `parsed_values` runs twice per frame. **S**
 - [ ] `views/transfer/mod.rs:297`, `views/settings.rs:1418` — full connection snapshots in render. **S**
 - [ ] `state/commands/updater.rs:179-213` — every download chunk notifies `AppState`, redrawing the
   window. Batch like the transfer path does. **S**

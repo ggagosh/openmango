@@ -2438,18 +2438,32 @@ impl BulkValueEditor {
         parse_bulk_values(self.input_state.read(cx).value().as_ref())
     }
 
-    fn invalid_count(&self, cx: &App) -> usize {
-        self.parsed_values(cx)
-            .iter()
-            .filter(|value| !is_valid_value_for_field_type(self.field_type, value))
-            .count()
+    fn invalid_count(&self, values: &[String]) -> usize {
+        values.iter().filter(|value| !is_valid_value_for_field_type(self.field_type, value)).count()
     }
+}
+
+/// Saves the values and closes the dialog, unless some are invalid. The Save button and
+/// Cmd/Ctrl+Enter both end here.
+fn save_bulk_values(
+    input_state: &Entity<EditorState>,
+    field_type: FieldType,
+    on_save: &BulkValueSave,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let values = parse_bulk_values(input_state.read(cx).value().as_ref());
+    if values.iter().any(|value| !is_valid_value_for_field_type(field_type, value)) {
+        return;
+    }
+    (on_save)(values, window, cx);
+    window.close_dialog(cx);
 }
 
 impl Render for BulkValueEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let values = self.parsed_values(cx);
-        let invalid_count = self.invalid_count(cx);
+        let invalid_count = self.invalid_count(&values);
         let count = values.len();
         let field_type = self.field_type;
 
@@ -2459,7 +2473,8 @@ impl Render for BulkValueEditor {
             .gap(spacing::sm())
             .p(spacing::md())
             .on_key_down({
-                let save_focus = cx.focus_handle();
+                let input_state = self.input_state.clone();
+                let on_save = self.on_save.clone();
                 move |event: &KeyDownEvent, window, cx| {
                     let key = event.keystroke.key.to_ascii_lowercase();
                     if key == "escape" {
@@ -2467,7 +2482,7 @@ impl Render for BulkValueEditor {
                         window.close_dialog(cx);
                     } else if key == "enter" && event.keystroke.modifiers.secondary() {
                         cx.stop_propagation();
-                        window.focus(&save_focus, cx);
+                        save_bulk_values(&input_state, field_type, &on_save, window, cx);
                     }
                 }
             })
@@ -2559,11 +2574,13 @@ impl Render for BulkValueEditor {
                                         let input_state = self.input_state.clone();
                                         let on_save = self.on_save.clone();
                                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                            let values = parse_bulk_values(
-                                                input_state.read(cx).value().as_ref(),
+                                            save_bulk_values(
+                                                &input_state,
+                                                field_type,
+                                                &on_save,
+                                                window,
+                                                cx,
                                             );
-                                            (on_save)(values, window, cx);
-                                            window.close_dialog(cx);
                                         }
                                     }),
                             ),

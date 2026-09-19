@@ -838,17 +838,10 @@ impl Render for DetachedJsonEditorView {
                     let key = event.keystroke.key.to_ascii_lowercase();
                     let modifiers = event.keystroke.modifiers;
                     let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-                    if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "w" {
-                        cx.stop_propagation();
-                        view.update(cx, |this, cx| {
-                            this.request_close_window(window, cx);
-                        });
-                    } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "n" {
+                    // Close and Save are actions bound in this window's key context.
+                    if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "n" {
                         // Prevent spawning additional app/editor windows from detached editor focus.
                         cx.stop_propagation();
-                    } else if cmd_or_ctrl && key == "s" {
-                        cx.stop_propagation();
-                        view.update(cx, |this, cx| this.save_or_insert(window, cx));
                     } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "c" {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.copy_json(window, cx));

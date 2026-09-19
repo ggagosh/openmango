@@ -1,7 +1,7 @@
 //! Shared utilities for document dialogs.
 
 use gpui_kit::component::button::{Button as MenuButton, ButtonCustomVariant, ButtonVariants};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, StyledExt as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, StyledExt as _};
 use gpui_kit::*;
 
 use crate::theme::{borders, spacing};
@@ -42,17 +42,6 @@ pub fn styled_dropdown_button(
         .rounded(borders::radius_sm())
         .with_size(Size::XSmall)
         .refine_style(&dropdown_style())
-}
-
-/// Creates an escape key subscription that closes the dialog.
-pub fn escape_key_subscription<V: 'static>(cx: &mut Context<V>) -> Subscription {
-    cx.intercept_keystrokes(move |event, window, cx| {
-        let key = event.keystroke.key.to_ascii_lowercase();
-        if key == "escape" {
-            window.close_dialog(cx);
-            cx.stop_propagation();
-        }
-    })
 }
 
 /// The dialog's own error, shown above its buttons.
