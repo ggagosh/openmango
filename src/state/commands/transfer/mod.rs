@@ -247,6 +247,12 @@ impl AppCommands {
             let Some(tab) = state_ref.transfer_tab(transfer_id) else {
                 return;
             };
+            // Every start comes through here. The Run button is disabled while a transfer runs,
+            // but a second click can land before that frame is drawn, and with drop-before-import
+            // a second run is a second drop.
+            if tab.runtime.is_running {
+                return;
+            }
             (validate_transfer(tab), crate::state::resolved_export_destination(tab))
         };
 
@@ -419,7 +425,58 @@ pub(super) fn detect_format_from_path(path: &str) -> Option<TransferFormat> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use gpui_kit::{AppContext as _, TestAppContext};
+
     use super::transfer_message_matches_generation;
+    use crate::state::{AppCommands, AppState, ConfigManager, TabKey};
+
+    /// A second Run that lands before the button is drawn disabled must not start a second
+    /// transfer: with drop-before-import that would be a second drop.
+    #[gpui_kit::test]
+    fn a_running_transfer_cannot_be_started_again(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = cx.new(|_| {
+            AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                ConfigManager::with_config_dir(dir.path().into()),
+            )
+        });
+        let transfer_id = state.update(cx, |state, cx| {
+            state.open_transfer_tab(cx);
+            let id = state
+                .open_tabs()
+                .iter()
+                .find_map(|tab| match tab {
+                    TabKey::Transfer(key) => Some(key.id),
+                    _ => None,
+                })
+                .expect("a transfer tab");
+            state.transfer_tab_mut(id).unwrap().runtime.is_running = true;
+            id
+        });
+        // What a start would touch: the generation, and, since this bare tab is not runnable,
+        // the validation error it would report.
+        let observed = |cx: &mut TestAppContext| {
+            state.read_with(cx, |state, _| {
+                let runtime = &state.transfer_tab(transfer_id).unwrap().runtime;
+                (
+                    runtime.transfer_generation.load(Ordering::SeqCst),
+                    runtime.has_started,
+                    runtime.error_message.clone(),
+                )
+            })
+        };
+        let before = observed(cx);
+        assert_eq!(before.2, None);
+
+        cx.update(|cx| AppCommands::execute_transfer(state.clone(), transfer_id, cx));
+        cx.run_until_parked();
+
+        assert_eq!(observed(cx), before, "a running transfer was started again");
+    }
 
     #[test]
     fn stale_completion_is_rejected_after_cancellation_or_restart() {

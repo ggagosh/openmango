@@ -52,16 +52,16 @@ and `P95`.
 
 ### B. Async safety
 
-- [ ] ✔ `state/commands/transfer/export.rs:112`, `import.rs:118`, `copy.rs:87` — `execute_*` set
+- [x] ✔ `state/commands/transfer/export.rs:112`, `import.rs:118`, `copy.rs:87` — `execute_*` set
   `is_running = true` without checking it first; the only guard is in the UI. A double click between
   frames can start two runs, and with drop-before-import that is a destructive double submit.
   Early-return when already running. **S**
-- [ ] `state/commands/schema.rs:20-37` — no in-flight guard and no generation: an older, slower
+- [x] `state/commands/schema.rs:20-37` — no in-flight guard and no generation: an older, slower
   sample can overwrite a newer result. Copy the pattern in `indexes.rs:23-39`. **S**
-- [ ] `state/commands/explain.rs:37,164` — `explain.loading` is set but never checked; on completion
+- [x] `state/commands/explain.rs:37,164` — `explain.loading` is set but never checked; on completion
   the run is marked current without comparing its signature to the session's current query, so a
   plan for the previous filter is shown as current. **S**
-- [ ] `app/root.rs:380,388,394,404` — four `start_history` failure exits only `log::error!`; the
+- [x] `app/root.rs:380,388,394,404` — four `start_history` failure exits only `log::error!`; the
   user gets a History feature that silently never works. Surface it. **S**
 
 ### C. Focus and keyboard correctness

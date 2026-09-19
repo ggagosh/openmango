@@ -377,7 +377,7 @@ impl AppRoot {
                 Ok(Some(key)) => match <[u8; 32]>::try_from(key) {
                     Ok(key) => key,
                     Err(_) => {
-                        log::error!("History key has an invalid length");
+                        history_unavailable(&state, "Its encryption key is damaged.", cx);
                         return;
                     }
                 },
@@ -385,13 +385,16 @@ impl AppRoot {
                     let key: [u8; 32] = rand::random();
                     let write = cx.update(|cx| KeyStore::write_history_key(cx, &key));
                     if write.await.is_err() {
-                        log::error!("History key could not be stored");
+                        let reason = "Its encryption key could not be saved to the keychain.";
+                        history_unavailable(&state, reason, cx);
                         return;
                     }
                     key
                 }
                 Err(error) => {
                     log::error!("History key could not be read: {error}");
+                    let reason = "Its encryption key could not be read from the keychain.";
+                    history_unavailable(&state, reason, cx);
                     return;
                 }
             };
@@ -401,7 +404,7 @@ impl AppRoot {
                 })
                 .await;
             let Ok(Ok(service)) = opened else {
-                log::error!("History could not be initialized");
+                history_unavailable(&state, "Its database could not be opened.", cx);
                 return;
             };
             let _ = service.reconcile();
@@ -1347,6 +1350,18 @@ impl Render for AppRoot {
 
         root
     }
+}
+
+/// History failing to start is otherwise invisible: the feature is simply never there. Say so.
+fn history_unavailable(state: &Entity<AppState>, reason: &str, cx: &mut AsyncApp) {
+    log::error!("History is unavailable: {reason}");
+    cx.update(|cx| {
+        state.update(cx, |state, cx| {
+            let message = format!("History is off. {reason}");
+            state.set_status_message(Some(crate::state::StatusMessage::error(message)));
+            cx.notify();
+        });
+    });
 }
 
 fn render_key_debug_overlay(

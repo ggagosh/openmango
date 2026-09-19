@@ -44,6 +44,10 @@ impl AppCommands {
             let Some(session) = state_ref.session(&session_key) else {
                 return;
             };
+            // One explain per session at a time; the button is disabled, other entry points are not.
+            if session.data.explain.loading {
+                return;
+            }
             (
                 session_key.database.clone(),
                 session_key.collection.clone(),
@@ -102,13 +106,16 @@ impl AppCommands {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
                             };
+                            // The query may have changed while the plan was computed.
+                            let still_current =
+                                signature_for_find(&session_key, session) == signature;
                             let explain = &mut session.data.explain;
                             explain.loading = false;
                             explain.error = None;
                             explain.scope = ExplainScope::Find;
                             explain.open_mode = ExplainOpenMode::Modal;
                             explain.view_mode = ExplainViewMode::Tree;
-                            explain.stale = false;
+                            explain.stale = !still_current;
                             let run = ExplainRun {
                                 id: format!("{}-{signature:016x}", prepared.generated_at_unix_ms),
                                 generated_at_unix_ms: prepared.generated_at_unix_ms,
@@ -175,6 +182,9 @@ impl AppCommands {
             let Some(session) = state_ref.session(&session_key) else {
                 return;
             };
+            if session.data.explain.loading {
+                return;
+            }
             let stages = &session.data.aggregation.stages;
             let selected_stage = session.data.aggregation.selected_stage;
             let pipeline = match build_explain_pipeline(stages, selected_stage) {
@@ -251,13 +261,19 @@ impl AppCommands {
                             let Some(session) = state.session_mut(&session_key) else {
                                 return;
                             };
+                            // The pipeline may have changed while the plan was computed.
+                            let still_current = signature_for_aggregation(
+                                &session_key,
+                                &session.data.aggregation.stages,
+                                session.data.aggregation.selected_stage,
+                            ) == signature;
                             let explain = &mut session.data.explain;
                             explain.loading = false;
                             explain.error = None;
                             explain.scope = ExplainScope::Aggregation;
                             explain.open_mode = ExplainOpenMode::Modal;
                             explain.view_mode = ExplainViewMode::Tree;
-                            explain.stale = false;
+                            explain.stale = !still_current;
                             let run = ExplainRun {
                                 id: format!("{}-{signature:016x}", prepared.generated_at_unix_ms),
                                 generated_at_unix_ms: prepared.generated_at_unix_ms,
