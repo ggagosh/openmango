@@ -394,8 +394,11 @@ parent's, so that is stable and allocates once per row instead of once per contr
 
 Done 2026-09-19 on request, from the code alone. Each is small and easy to revert.
 
-- **Explain modal** takes focus when it opens and hands it back to the documents view when it
-  closes, so Escape works without clicking first. Click-outside-to-close was *not* added: the scrim
+- **Explain modal**: Escape closes it. The first attempt (give the modal focus) did nothing, and
+  the reason is worth keeping: `escape` is bound to `CloseSearch` across the whole Documents
+  context, so a key handler inside that context never sees Escape. The action closes the modal
+  now. Covered by `explain_escape_tests`, which presses the real key and fails without the fix.
+  The modal also takes focus on open and hands it back on close. Click-outside-to-close was *not* added: the scrim
   is a thin margin around a nearly full-size panel, and it risks closing on clicks inside it.
 - **Databases page**: the collections table now reaches the panel edges, so its scrollbar sits at
   the edge and the header's background and rule span the full width. The table's content moved left
@@ -406,3 +409,13 @@ Done 2026-09-19 on request, from the code alone. Each is small and easy to rever
 - Left alone: the two AI result tables (`components/ai_blocks/datatable.rs`, `report.rs`). They
   scroll inside the transcript, which scrolls too; whether a swipe hands off correctly has to be
   watched, not read.
+
+## Found while checking on screen
+
+- **The Transfer page (Export / Import / Copy) showed no form.** Its root had `flex_1` but not
+  `size_full`, so it shrank to its content and the form's `flex_1` + `min_h(0)` scroll region
+  collapsed to zero height under the footer. The views that work all claim the height themselves.
+  That line is identical on `main`, so this predates the branch. Covered by
+  `transfer::layout_tests`, which checks where the footer lands at three window sizes. Lesson for
+  layout tests: a card keeps its natural height even when its scroll region has collapsed and
+  clips it, so measure the neighbour, not the card.

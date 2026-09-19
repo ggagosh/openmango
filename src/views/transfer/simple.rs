@@ -372,6 +372,7 @@ impl TransferView {
                     .overflow_y_scrollbar()
                     .child(
                         div()
+                            .debug_selector(|| "transfer-form".into())
                             .overflow_hidden()
                             .bg(islands::card_bg(&appearance, cx))
                             .border_1()
@@ -385,6 +386,7 @@ impl TransferView {
             )
             .child(
                 div()
+                    .debug_selector(|| "transfer-footer".into())
                     .flex()
                     .items_center()
                     .justify_between()

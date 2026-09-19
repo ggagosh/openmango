@@ -16,6 +16,26 @@ use crate::theme::spacing;
 use crate::views::CollectionView;
 
 impl CollectionView {
+    /// Closes the Explain modal if it is showing. Returns whether it was.
+    pub(in crate::views::documents) fn close_explain_modal(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session_key) = self.view_model.current_session() else {
+            return false;
+        };
+        let open = self.state.read(cx).session(&session_key).is_some_and(|session| {
+            matches!(session.data.explain.open_mode, ExplainOpenMode::Modal)
+        });
+        if open {
+            self.state.update(cx, |state, cx| {
+                state.set_explain_open_mode(&session_key, ExplainOpenMode::Closed);
+                cx.notify();
+            });
+        }
+        open
+    }
+
     pub(in crate::views::documents) fn render_explain_modal_layer(
         &mut self,
         explain: &ExplainState,

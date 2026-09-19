@@ -55,6 +55,12 @@ impl CollectionView {
             this.set_ask_mode(on, window, cx);
         }))
         .on_action(cx.listener(|this, _: &CloseSearch, window, cx| {
+            // Escape is bound to this action across the whole Documents context, so it is what
+            // Escape *is* here: it closes the topmost thing. The Explain modal sits above
+            // everything, and its own key handler never sees Escape because this binding wins.
+            if this.close_explain_modal(cx) {
+                return;
+            }
             if !this.search_visible {
                 return;
             }
