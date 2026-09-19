@@ -5,6 +5,7 @@ mod stage_row;
 
 use gpui_kit::component::button::{Button as MenuButton, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -103,20 +104,35 @@ impl CollectionView {
             })
             .child(header)
             .child(
+                // The wrapper holds the scrollbar; the list inside scrolls and keeps its handle.
                 div()
-                    .id("agg-stage-rows")
-                    .role(Role::List)
-                    .aria_label("Pipeline stages")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.aggregation_stage_list_scroll)
-                    .px(spacing::xs())
-                    .pb(spacing::sm())
-                    .children(render_stage_rows(self, pipeline, session_key, focused, window, cx))
-                    .child(div().pt(spacing::xs()).child(add_stage)),
+                    .child(
+                        div()
+                            .id("agg-stage-rows")
+                            .role(Role::List)
+                            .aria_label("Pipeline stages")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.aggregation_stage_list_scroll)
+                            .px(spacing::xs())
+                            .pb(spacing::sm())
+                            .children(render_stage_rows(
+                                self,
+                                pipeline,
+                                session_key,
+                                focused,
+                                window,
+                                cx,
+                            ))
+                            .child(div().pt(spacing::xs()).child(add_stage)),
+                    )
+                    .vertical_scrollbar(&self.aggregation_stage_list_scroll),
             )
             .into_any_element()
     }

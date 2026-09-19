@@ -14,6 +14,7 @@ use gpui_kit::component::message::{
     Message, MessageAlignment, MessageContent, MessageFooter, MessageHeader,
 };
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewStyle};
@@ -1143,7 +1144,7 @@ impl Render for AiView {
                 .flex_col()
                 .flex_shrink_0()
                 .max_h(px(260.0))
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .mx(spacing::md())
                 .mt(spacing::sm())
                 .p(spacing::xs())

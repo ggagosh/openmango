@@ -21,9 +21,18 @@ impl CollectionView {
         explain: &ExplainState,
         session_key: Option<SessionKey>,
         active_subview: CollectionSubview,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !matches!(explain.open_mode, ExplainOpenMode::Modal) {
+        // A modal takes focus when it opens and gives it back when it closes. Without that its
+        // Escape handler sat off the focus path until the user clicked inside.
+        let open = matches!(explain.open_mode, ExplainOpenMode::Modal);
+        if open != self.explain_was_open {
+            self.explain_was_open = open;
+            let target = if open { &self.explain_focus } else { &self.documents_focus };
+            window.focus(target, cx);
+        }
+        if !open {
             return div().into_any_element();
         }
 
@@ -162,6 +171,7 @@ impl CollectionView {
         div()
             .absolute()
             .inset_0()
+            .track_focus(&self.explain_focus)
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })

@@ -288,12 +288,19 @@ impl DatabaseView {
             .min_h(px(0.0))
             .overflow_hidden()
             .gap(spacing::sm())
-            .px(spacing::lg())
+            // No side padding here: the table below is the scroll owner and has to reach the
+            // panel edges, or its scrollbar and the header's rule float inside the panel. The
+            // caption and the state messages carry the inset themselves.
             .pt(spacing::lg())
             .pb(spacing::lg());
 
-        section = section
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Collections"));
+        section = section.child(
+            div()
+                .px(spacing::lg())
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("Collections"),
+        );
 
         if collections_loading {
             return section
@@ -302,6 +309,7 @@ impl DatabaseView {
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
+                        .px(spacing::lg())
                         .child(Spinner::new().small())
                         .child(
                             div()
@@ -326,12 +334,14 @@ impl DatabaseView {
             });
             return section
                 .child(
-                    ErrorCallout::new(
-                        "db-collections-error",
-                        ErrorReport::from_message("Couldn't load collections", &error),
-                    )
-                    .action(retry)
-                    .state(state.clone()),
+                    div().px(spacing::lg()).child(
+                        ErrorCallout::new(
+                            "db-collections-error",
+                            ErrorReport::from_message("Couldn't load collections", &error),
+                        )
+                        .action(retry)
+                        .state(state.clone()),
+                    ),
                 )
                 .into_any_element();
         }
@@ -340,6 +350,7 @@ impl DatabaseView {
             return section
                 .child(
                     div()
+                        .px(spacing::lg())
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child("No collections yet. Use the sidebar menu to create one."),

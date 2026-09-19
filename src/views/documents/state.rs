@@ -99,6 +99,12 @@ pub struct CollectionView {
     pub(crate) search_subscription: Option<Subscription>,
     pub(crate) aggregation_stage_body_state: Option<Entity<EditorState>>,
     pub(crate) aggregation_results_scroll: UniformListScrollHandle,
+    pub(crate) schema_tree_scroll: UniformListScrollHandle,
+    /// The Explain modal's own focus target, so its Escape works the moment it opens.
+    pub(crate) explain_focus: FocusHandle,
+    /// Whether the modal was showing at the last draw, to focus it once on open and hand focus
+    /// back once on close.
+    pub(crate) explain_was_open: bool,
     pub(crate) aggregation_results_expanded_nodes: HashSet<String>,
     pub(crate) aggregation_results_signature: Option<usize>,
     /// Cached SessionDocument list for the aggregation results tree, rebuilt
@@ -489,6 +495,9 @@ impl CollectionView {
             search_subscription: None,
             aggregation_stage_body_state: None,
             aggregation_results_scroll: UniformListScrollHandle::new(),
+            schema_tree_scroll: UniformListScrollHandle::new(),
+            explain_focus: cx.focus_handle(),
+            explain_was_open: false,
             aggregation_results_expanded_nodes: HashSet::new(),
             aggregation_results_signature: None,
             aggregation_results_documents: None,

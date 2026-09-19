@@ -69,7 +69,7 @@ and `P95`.
 - [x] ✔ `components/filter_builder/panel.rs:2462` — `cx.focus_handle()` created fresh inside
   `render`, never tracked; Cmd+Enter focuses a handle attached to nothing, so focus is dropped.
   Store one handle on `BulkValueEditor`. **S**
-- [ ] `views/documents/explain/mod.rs:162-188` — modal overlay with no focus handle, `track_focus`
+- [x] `views/documents/explain/mod.rs:162-188` — modal overlay with no focus handle, `track_focus`
   or key context: its Escape handler is off the dispatch path until clicked; no focus transfer on
   open, no restore on close, no trap. `:165-167` the scrim swallows clicks without dismissing. **M**
 - [x] `views/documents/dialogs/shared.rs:48-56` — window-global Escape intercept closes *a* dialog
@@ -127,13 +127,13 @@ one that was kept.
 
 ### F. Scroll regions with no scrollbar or a misplaced one
 
-- [ ] `views/documents/views/schema_view.rs:186-215` — `uniform_list` with no `track_scroll` and no
+- [x] `views/documents/views/schema_view.rs:186-215` — `uniform_list` with no `track_scroll` and no
   scrollbar: scroll position is unowned. Add a `UniformListScrollHandle`, `.track_scroll`, and
   `.vertical_scrollbar` on the wrapper (`:187`). **M**
 - [x] `views/documents/views/aggregation/results_view.rs:606-631` — list tracks a handle nothing
   draws a scrollbar for. `.vertical_scrollbar(&view.aggregation_results_scroll)`. **S**
 - [x] `views/results/mod.rs:68-88` — same, Forge result trees. **S**
-- [ ] `views/databases.rs:283-293`, `:350-356`, `:456-464` — the scroll region sits inside a padded
+- [x] `views/databases.rs:283-293`, `:350-356`, `:456-464` — the scroll region sits inside a padded
   section, so its scrollbar floats inset from the panel edge; the header row is padded twice, so
   column labels sit 2×lg in while rows sit 1×lg in. One padding owner. **M**
 
@@ -222,7 +222,7 @@ parent's, so that is stable and allocates once per row instead of once per contr
 
 ### Scrolling
 
-- [ ] Raw `overflow_y_scroll()` on panel regions, so no scrollbar is ever drawn. **Not a drop-in
+- [x] (stage list, error history, chat history done; the two AI result tables left, see below) Raw `overflow_y_scroll()` on panel regions, so no scrollbar is ever drawn. **Not a drop-in
   swap** (looked at it): `overflow_y_scrollbar()` changes the element type, and the stage list, which
   tracks a handle, needs a wrapper element to hold the bar. Do it with the app running: `aggregation/stage_list/mod.rs:106-119`,
   `components/ai_blocks/datatable.rs:154`, `components/ai_blocks/report.rs:226`,
@@ -389,3 +389,20 @@ parent's, so that is stable and allocates once per row instead of once per contr
 - Does Escape close one dialog or two with `escape_key_subscription` in place?
 - Vertical swipe over an AI result table inside a long conversation: does it hand off?
 - Are the clustered alphas (.78/.80/.82) visually distinguishable, i.e. is collapsing them lossless?
+
+## Changed without being seen on screen — check these in the running app
+
+Done 2026-09-19 on request, from the code alone. Each is small and easy to revert.
+
+- **Explain modal** takes focus when it opens and hands it back to the documents view when it
+  closes, so Escape works without clicking first. Click-outside-to-close was *not* added: the scrim
+  is a thin margin around a nearly full-size panel, and it risks closing on clicks inside it.
+- **Databases page**: the collections table now reaches the panel edges, so its scrollbar sits at
+  the edge and the header's background and rule span the full width. The table's content moved left
+  by one step, in line with the stats above it. Audit correction: the column titles and rows were
+  never misaligned with each other, both carried the same padding.
+- **Schema tree**, **aggregation stage list**, **error history**, **chat history**: now draw a
+  scrollbar. The stage list got a wrapper element to hold it.
+- Left alone: the two AI result tables (`components/ai_blocks/datatable.rs`, `report.rs`). They
+  scroll inside the transcript, which scrolls too; whether a swipe hands off correctly has to be
+  watched, not read.
