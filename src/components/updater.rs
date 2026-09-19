@@ -1,5 +1,6 @@
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::link::Link;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
@@ -240,10 +241,8 @@ impl Render for UpdatePanel {
                 .justify_between()
                 .gap(spacing::sm())
                 .child(
-                    Button::new("update-notes")
-                        .ghost()
-                        .label("Release notes")
-                        .on_click(move |_, _, cx| cx.open_url(&notes_url)),
+                    // A web page, so a Link: Button is for commands inside the app.
+                    Link::new("update-notes").href(notes_url).child("Release notes"),
                 )
                 .child(actions),
         )

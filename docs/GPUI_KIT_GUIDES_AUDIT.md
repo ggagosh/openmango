@@ -130,10 +130,12 @@ and `P95`.
 
 ### G. Wrong or missing semantic component
 
-- [ ] `components/updater.rs:243` — "Release notes" is a `Button` that only opens a URL; the guide
+- [x] `components/updater.rs:243` — "Release notes" is a `Button` that only opens a URL; the guide
   reserves that for `Link`. Only `open_url` in the repo. **S**
-- [ ] `components/connection_manager/export_dialog.rs:115` — row `on_click` and the inner `Checkbox`
-  (`:135`) both toggle the same field. Delete the row handler; let the checkbox own the label. **S**
+- [x] ~~`components/connection_manager/export_dialog.rs:115` — row `on_click` and the inner
+  `Checkbox` both toggle the same field.~~ **Not a bug; left alone.** The kit's enabled Checkbox
+  consumes the click (its own test, `facade_disabled_is_inert_and_pointer_activation_bubbles`, shows
+  only a *disabled* one bubbles), so nothing double-toggles. The row handler is a larger hit target.
 - [ ] `views/forge/mod.rs:277,306` — result-tab pin/close are hand-built `div`s: no tooltip, no name,
   not keyboard reachable. Ghost icon `Button` + tooltip. **S**
 - [ ] `views/databases.rs:398` — collection row is a clickable `div` with no selected state, focus or
@@ -158,7 +160,10 @@ and `P95`.
   collection…", same for Import and Copy: `components/action_bar/providers.rs:230,240,250`,
   `app/menus.rs:242,263,284`, `views/documents/header/actions.rs:873,896,919` (these last also lack
   `.action(...)`, so their shortcuts never show). Pick one name per command. **M**
-- [ ] Four confirm dialogs whose body re-asks the title: `app/menus.rs:57-60`, `:314,324`,
+- [ ] **Do with group D, not before.** These dialogs are built in five files (`app/menus.rs`,
+  `app/root.rs`, `app/sidebar/mod.rs`, `views/documents/actions.rs`,
+  `components/connection_manager/actions.rs`) because the commands are. Give each command one owner,
+  then fix the wording once. Four confirm dialogs whose body re-asks the title: `app/menus.rs:57-60`, `:314,324`,
   `:518,530`, `views/documents/workflow.rs:84-85`. Put the object in the title
   (`Drop database "x"?`), leave only the consequence in the body. **S**
 - [x] `views/settings.rs:1858,1860` — title and confirm label are both "Clear all History". **S**
