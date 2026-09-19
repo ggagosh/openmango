@@ -1,14 +1,13 @@
 use futures::TryStreamExt as _;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable, parse_json_to_doc,
-    require_confirmation, resolve_collection,
+    MAX_WRITE_DOCUMENTS, MongoContext, StreamEvent, ToolError, doc_to_json, ensure_writable,
+    parse_json_to_doc, require_confirmation, resolve_collection,
 };
 
 pub struct ReplaceDocumentsTool(MongoContext);
@@ -49,38 +48,42 @@ impl Tool for ReplaceDocumentsTool {
     type Args = ReplaceArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Replace up to 100 documents matching a filter with a complete document. \
+    fn description(&self) -> String {
+        "Replace up to 100 documents matching a filter with a complete document. \
                 Each original _id is preserved and local confirmation is required."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "description": "MongoDB filter as a JSON string"
-                    },
-                    "replacement": {
-                        "type": "string",
-                        "description": "Complete replacement document as a JSON string; omit _id"
-                    },
-                    "many": {
-                        "type": "boolean",
-                        "description": "Replace every match by default; false replaces the first _id-sorted match"
-                    }
-                },
-                "required": ["filter", "replacement"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: ReplaceArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "MongoDB filter as a JSON string"
+                },
+                "replacement": {
+                    "type": "string",
+                    "description": "Complete replacement document as a JSON string; omit _id"
+                },
+                "many": {
+                    "type": "boolean",
+                    "description": "Replace every match by default; false replaces the first _id-sorted match"
+                }
+            },
+            "required": ["filter", "replacement"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: ReplaceArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;
@@ -91,7 +94,11 @@ impl Tool for ReplaceDocumentsTool {
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col_name);
         let many = args.many.unwrap_or(true);
         let matching_count = collection.count_documents(filter.clone()).await?;
-        let affected_count = if many { matching_count } else { matching_count.min(1) };
+        let affected_count = if many {
+            matching_count.min(MAX_WRITE_DOCUMENTS as u64)
+        } else {
+            matching_count.min(1)
+        };
         let cursor = collection
             .find(filter.clone())
             .sort(target_sort())
@@ -113,7 +120,9 @@ impl Tool for ReplaceDocumentsTool {
         .unwrap_or_default();
         require_confirmation(&self.0, Self::NAME, &args_json, preview).await?;
 
-        let limit = if many { 0 } else { 1 };
+        // Never unlimited: `0` would rewrite every match, which is not what the model was
+        // told it could do, nor what the user approved in the preview.
+        let limit = if many { MAX_WRITE_DOCUMENTS as i64 } else { 1 };
         let cursor = collection.find(filter).sort(target_sort()).limit(limit).await?;
         let documents: Vec<bson::Document> = cursor.try_collect().await?;
         let mut matched_count = 0u64;

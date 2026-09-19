@@ -8,7 +8,7 @@ use gpui_kit::{
     VisualTestContext, Window, div, point, px, size,
 };
 
-use super::{query_editor, query_find_button};
+use super::{query_action_button, query_editor};
 use crate::views::documents::query_editor::{
     format_query_editor, new_field_filter_editor, new_query_editor,
 };
@@ -49,7 +49,11 @@ impl Render for QueryHarness {
                 .child(div().flex_1().min_w(px(0.)).debug_selector(|| "editor".into()).child(
                     query_editor(&self.input, rows, "MongoDB filter", false, false, window, cx),
                 ))
-                .child(div().debug_selector(|| "find".into()).child(query_find_button(window))),
+                .child(div().debug_selector(|| "find".into()).child(query_action_button(
+                    window,
+                    "Find",
+                    gpui_kit::component::IconName::Search,
+                ))),
         )
     }
 }

@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::ai::errors::AiError;
 use crate::helpers::keystore::KeyStore;
 
+/// Ollama has no catalogue, so a common local model stands in as its default.
+const LOCAL_DEFAULT_MODEL: &str = "qwen3:32b";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AiProvider {
@@ -11,6 +14,7 @@ pub enum AiProvider {
     Gemini,
     OpenAi,
     Anthropic,
+    OpenRouter,
     Ollama,
 }
 
@@ -20,6 +24,7 @@ impl AiProvider {
             Self::Gemini => "Gemini",
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",
+            Self::OpenRouter => "OpenRouter",
             Self::Ollama => "Ollama",
         }
     }
@@ -29,17 +34,62 @@ impl AiProvider {
             Self::Gemini => Some("GEMINI_API_KEY"),
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::Ollama => None,
         }
     }
 
+    /// The model a provider starts on: its balanced preset.
     pub fn default_model(self) -> &'static str {
         match self {
-            Self::Gemini => "gemini-3-flash-preview",
-            Self::OpenAi => "gpt-5.4",
-            Self::Anthropic => "claude-sonnet-4-6",
-            Self::Ollama => "qwen3:32b",
+            // A predictable starting point among hundreds; `openrouter/auto` routes anywhere and
+            // can answer with images, which is not what this assistant is for.
+            Self::OpenRouter => "anthropic/claude-sonnet-5",
+            Self::Ollama => LOCAL_DEFAULT_MODEL,
+            provider => provider.preset_model(ModelPreset::Balanced).unwrap_or(LOCAL_DEFAULT_MODEL),
         }
+    }
+
+    /// An aggregator serves models it did not train, open weights included; a first-party API
+    /// only lists what it runs itself.
+    pub fn is_aggregator(self) -> bool {
+        matches!(self, Self::OpenRouter)
+    }
+
+    /// models.dev keys Gemini under "google"; Ollama serves its own list over HTTP.
+    pub fn catalog_key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Gemini => "google",
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
+            Self::Ollama => return None,
+        })
+    }
+
+    /// The curated model behind each preset. Refresh these with `scripts/update_ai_models.sh`
+    /// when models.dev ships newer ones; the catalogue tests fail if an id goes stale.
+    pub fn preset_model(self, preset: ModelPreset) -> Option<&'static str> {
+        Some(match (self, preset) {
+            (Self::Gemini, ModelPreset::Fast) => "gemini-3.5-flash-lite",
+            (Self::Gemini, ModelPreset::Balanced) => "gemini-3.8-flash",
+            (Self::Gemini, ModelPreset::Powerful) => "gemini-3.1-pro-preview",
+            (Self::OpenAi, ModelPreset::Fast) => "gpt-5.6-luna",
+            (Self::OpenAi, ModelPreset::Balanced) => "gpt-5.6",
+            (Self::OpenAi, ModelPreset::Powerful) => "gpt-6-astra",
+            (Self::Anthropic, ModelPreset::Fast) => "claude-haiku-4-5",
+            (Self::Anthropic, ModelPreset::Balanced) => "claude-sonnet-5",
+            (Self::Anthropic, ModelPreset::Powerful) => "claude-opus-5",
+            // OpenRouter is a catalogue of hundreds of models from every lab; picking three for
+            // the user would be arbitrary, so it offers the full searchable list instead.
+            // Local models are whatever Ollama is serving, so they have no presets either.
+            (Self::OpenRouter | Self::Ollama, _) => return None,
+        })
+    }
+
+    /// The preset this model belongs to, or `None` when it was chosen by hand.
+    pub fn preset_for_model(self, model: &str) -> Option<ModelPreset> {
+        ModelPreset::ALL.into_iter().find(|preset| self.preset_model(*preset) == Some(model))
     }
 
     pub fn keystore_id(self) -> &'static str {
@@ -47,71 +97,41 @@ impl AiProvider {
             Self::Gemini => "gemini",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
             Self::Ollama => "ollama",
         }
     }
 
-    pub const ALL: [Self; 4] = [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::Ollama];
+    pub const ALL: [Self; 5] =
+        [Self::Gemini, Self::OpenAi, Self::Anthropic, Self::OpenRouter, Self::Ollama];
+}
 
-    pub fn model_display_name(self, model: &str) -> String {
-        let label = match (self, model) {
-            (Self::Gemini, "gemini-3-flash-preview") => "3.1 Flash",
-            (Self::Gemini, "gemini-3.1-pro-preview") => "3.1 Pro",
-            (Self::Gemini, "gemini-3.1-flash-lite-preview") => "3.1 Flash Lite",
-            (Self::OpenAi, "gpt-5-mini") => "GPT-5 Mini",
-            (Self::OpenAi, "gpt-5.4") => "GPT-5.4",
-            (Self::Anthropic, "claude-opus-4-6") => "Opus 4.6",
-            (Self::Anthropic, "claude-sonnet-4-6") => "Sonnet 4.6",
-            (Self::Anthropic, "claude-haiku-4-5") => "Haiku 4.5",
-            _ => model,
-        };
-        format!("{}: {}", self.label(), label)
+/// How much model to spend on a question. Each provider maps these to a curated model id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPreset {
+    Fast,
+    Balanced,
+    Powerful,
+}
+
+impl ModelPreset {
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Balanced, Self::Powerful];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "Fast",
+            Self::Balanced => "Balanced",
+            Self::Powerful => "Powerful",
+        }
     }
 
-    pub fn model_options(self, current_model: &str) -> Vec<String> {
-        let mut options: Vec<String> = match self {
-            Self::Gemini => {
-                vec![
-                    "gemini-3-flash-preview",
-                    "gemini-3.1-pro-preview",
-                    "gemini-3.1-flash-lite-preview",
-                ]
-            }
-            Self::OpenAi => vec!["gpt-5-mini", "gpt-5.4"],
-            Self::Anthropic => {
-                vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
-            }
-            Self::Ollama => vec![], // dynamic only
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Fast => "Cheapest and quickest, for short questions",
+            Self::Balanced => "The default: good answers at a sane price",
+            Self::Powerful => "Most capable, for hard multi-step work",
         }
-        .into_iter()
-        .map(String::from)
-        .collect();
-
-        if self != Self::OpenAi
-            && !current_model.trim().is_empty()
-            && !options.iter().any(|model| model == current_model)
-        {
-            options.push(current_model.to_string());
-        }
-        options
-    }
-
-    /// Short description for a known model, shown in dropdown menus.
-    pub fn model_note(model: &str) -> Option<&'static str> {
-        Some(match model {
-            // Gemini
-            "gemini-3-flash-preview" => "Fast flagship, pro-grade reasoning",
-            "gemini-3.1-pro-preview" => "Most capable, complex tasks",
-            "gemini-3.1-flash-lite-preview" => "Fastest, budget-friendly",
-            // OpenAI
-            "gpt-5-mini" => "Medium preset",
-            "gpt-5.4" => "Smart preset",
-            // Anthropic
-            "claude-opus-4-6" => "Most capable, deep reasoning",
-            "claude-sonnet-4-6" => "Balanced, fast and smart",
-            "claude-haiku-4-5" => "Fastest, lightweight tasks",
-            _ => return None,
-        })
     }
 }
 
@@ -131,6 +151,13 @@ pub struct AiSettings {
     pub share_selected_documents: bool,
     #[serde(default)]
     pub share_sample_documents: bool,
+    /// Whether conversations are kept between runs. On by default, visible and reversible in
+    /// Settings; turning it off keeps the assistant's memory to the current run.
+    #[serde(default = "default_remember_conversations")]
+    pub remember_conversations: bool,
+    /// Days a stored conversation is kept. `0` keeps conversations until they are deleted.
+    #[serde(default = "default_memory_retention_days")]
+    pub memory_retention_days: u32,
 }
 
 impl Default for AiSettings {
@@ -144,6 +171,8 @@ impl Default for AiSettings {
             ollama_base_url: default_ollama_base_url(),
             share_selected_documents: false,
             share_sample_documents: false,
+            remember_conversations: default_remember_conversations(),
+            memory_retention_days: default_memory_retention_days(),
         }
     }
 }
@@ -162,6 +191,16 @@ impl AiSettings {
 
     pub fn set_model(&mut self, value: String) {
         self.model = value;
+    }
+
+    /// The model to actually use. Settings written by an older version — or by hand — can leave
+    /// this empty, and "no model" is not a state worth showing anyone.
+    pub fn resolved_model(&self) -> String {
+        if self.model.trim().is_empty() {
+            self.provider.default_model().to_string()
+        } else {
+            self.model.clone()
+        }
     }
 
     pub fn set_api_key(&mut self, value: String, cx: &App) {
@@ -231,6 +270,14 @@ impl AiSettings {
 
 fn default_model() -> String {
     AiProvider::Gemini.default_model().to_string()
+}
+
+fn default_remember_conversations() -> bool {
+    true
+}
+
+fn default_memory_retention_days() -> u32 {
+    crate::ai::memory::DEFAULT_RETENTION_DAYS as u32
 }
 
 fn default_ollama_base_url() -> String {
@@ -328,21 +375,38 @@ mod tests {
     }
 
     #[test]
-    fn openai_model_options_are_curated_pair() {
-        let options = AiProvider::OpenAi.model_options("gpt-5.2");
-        assert_eq!(options, vec!["gpt-5-mini".to_string(), "gpt-5.4".to_string()]);
+    fn presets_round_trip_through_model_ids() {
+        for provider in AiProvider::ALL {
+            for preset in ModelPreset::ALL {
+                let Some(model) = provider.preset_model(preset) else { continue };
+                assert_eq!(provider.preset_for_model(model), Some(preset));
+            }
+        }
+        assert_eq!(AiProvider::Anthropic.preset_for_model("some-custom-model"), None);
+        assert!(AiProvider::Ollama.preset_model(ModelPreset::Fast).is_none());
     }
 
     #[test]
-    fn model_display_names_are_human_readable() {
-        assert_eq!(
-            AiProvider::Gemini.model_display_name("gemini-3.1-flash-lite-preview"),
-            "Gemini: 3.1 Flash Lite"
-        );
-        assert_eq!(AiProvider::OpenAi.model_display_name("gpt-5-mini"), "OpenAI: GPT-5 Mini");
-        assert_eq!(
-            AiProvider::Anthropic.model_display_name("claude-sonnet-4-6"),
-            "Anthropic: Sonnet 4.6"
-        );
+    fn every_provider_starts_on_a_model_it_can_actually_use() {
+        let catalog = crate::ai::catalog::ModelCatalog::bundled();
+        for provider in AiProvider::ALL {
+            let model = provider.default_model();
+            assert!(!model.trim().is_empty(), "{} has no default model", provider.label());
+
+            if let Some(preset) = provider.preset_model(ModelPreset::Balanced) {
+                assert_eq!(model, preset, "a provider with presets starts on the balanced one");
+            }
+            // A provider with a catalogue must start on a model that is in it.
+            if provider.catalog_key().is_some() {
+                let info = catalog.model(provider, model).unwrap_or_else(|| {
+                    panic!("{} default {model} is not listed", provider.label())
+                });
+                assert!(
+                    info.is_chat_model(provider.is_aggregator()),
+                    "{} default {model} cannot hold a tool-calling conversation",
+                    provider.label()
+                );
+            }
+        }
     }
 }

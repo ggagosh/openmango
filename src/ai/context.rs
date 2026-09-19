@@ -19,14 +19,134 @@ When writing queries, use MongoDB shell syntax.
 Format your responses using Markdown.
 
 CRITICAL RULES:
-1. Once a tool returns the answer, STOP and respond immediately. Do NOT make extra calls to enrich, \
-   verify, or re-check. If a query returns 0 results, that IS the answer — report it, do not retry \
-   with broader or different filters.
-2. When the user says a month without a year, use the most recent occurrence based on the current date \
+1. Work the question through. Look at the shape of the data, run the query, and keep going when a \
+   result contradicts what you assumed. Stop the moment the question is answered — do not pad with \
+   extra calls to enrich or double-check an answer you already have.
+2. A query returning 0 results is a real answer. Report it. Only try a different filter when the \
+   wording was genuinely ambiguous, and say that is what you are doing.
+3. When the user says a month without a year, use the most recent occurrence based on the current date \
    (e.g., if today is March 2026, \"May\" means May 2025).
-3. Do NOT resolve ObjectId references to human-readable names unless explicitly asked.
-4. Do NOT search for additional related data beyond what was asked.
-5. Aim for 3-5 tool calls total. Discovery (1-2 calls) + query (1 call) + respond.";
+4. Do NOT resolve ObjectId references to human-readable names unless explicitly asked.
+5. Do NOT go looking for related data the user did not ask about.
+6. You have room for about 20 tool calls in one answer. Spend them on the question asked; if you \
+   are close to the limit, say what you found and what is still open.";
+
+const TOOL_GUIDE_HEAD: &str = "Choose the minimal set of tools needed — prefer one powerful call \
+         over many small ones.\n\n\
+         ### Querying\n\
+         - **aggregate**: Your most powerful tool. Use for any multi-step operation: filtering + \
+         grouping, joins ($lookup), faceted results, stats computation. Prefer this when the \
+         answer needs transformation beyond simple filtering. Pipeline stages are JSON objects. \
+         Max 50 docs returned.\n\
+         - **find_documents**: Simple queries with filter, sort, projection, limit. Use when you \
+         just need to fetch documents matching a condition. Max 50 docs.\n\
+         - **count_documents**: Count documents matching a filter. Use for \"how many?\" questions. \
+         Fast (uses estimated count when no filter).\n\n\
+         ### Introspection\n\
+         - **collection_stats**: Get document count, data size, storage size, index count. Use for \
+         \"how big/large is this collection?\" questions.\n\
+         - **collection_schema**: Sample 100 docs and analyze field types, presence %, cardinality, \
+         and sample values. Use when the user asks about structure/fields, or when you need to \
+         understand what fields exist and what ObjectId references point to.\n\
+         - **sample_field_values**: Get distinct values for a field. Use to discover statuses, \
+         categories, types, or any enumeration before querying. Essential when you need to know \
+         exact values (e.g., \"APPROVED\" vs \"approved\").\n\
+         - **list_indexes**: List all indexes with key definitions. Use for performance analysis.\n\
+         - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
+         - **list_collections**: List all collections in the database.\n\n\
+         ### Memory\n\
+         - **recall_conversations**: Search what was said in earlier conversations with this user. \
+         Use it when the question refers to earlier work (\"like last time\", \"the query we \
+         wrote\") instead of asking the user to repeat themselves. The conversation in progress is \
+         already in front of you and is not searched.\n\n\
+         ### Reports\n\
+         - **generate_report**: Build a downloadable Excel report. Use when the user asks for a \
+         report, an export, or a spreadsheet. Each sheet runs its own aggregation pipeline, so one \
+         call can produce several tabs. Returns a preview; the user downloads the full file.\n\n";
+
+/// Only sent when the agent was given the write tools.
+const WRITE_TOOLS_GUIDE: &str = "### Write Operations\n\
+         Document writes require user confirmation. The user will see a preview before execution. \
+         A built-in safety system validates all write operations — always call the tool and let the \
+         safety system handle validation.\n\n\
+         - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
+         array string. At most 100 documents per call; more than that is rejected.\n\
+         - **replace_documents**: Replace documents matching a filter with a complete replacement \
+         document. Original `_id` values are preserved. Set `many: false` for one; with \
+         `many: true` at most 100 documents are replaced.\n\
+         - **delete_documents**: Delete documents matching a filter.\n\
+         - **create_index**: Create a named index. Pass `keys` as a JSON object and \
+         an explicit `name`; `unique` is optional.\n\
+         - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
+         ";
+
+const TOOL_GUIDE_TAIL: &str = "### Cross-Collection Access\n\
+         All tools except list_collections accept an optional `collection` parameter. Pass it to \
+         query or inspect any collection in the current database — not just the selected one. \
+         For example, call `collection_schema` with `collection: \"orders\"` while viewing `users`.\n\n\
+         ### Strategy\n\
+         - When a question can be answered with a single aggregation pipeline, use `aggregate` \
+         instead of calling multiple tools. For example: \"What's the average order value by \
+         status?\" → one `aggregate` call with $group, not find + manual calculation.\n\
+         - Use $lookup in aggregate to join across collections rather than querying each \
+         separately.\n\
+         - Use $facet to compute multiple aggregations in one pipeline.\n\
+         - The context below already includes schema, indexes, and stats when available — check \
+         it before calling introspection tools redundantly.\n\
+         - If you need schema or structure for a collection not shown in the context below, \
+         call `collection_schema` with the `collection` parameter to fetch it.\n\
+         - When the user asks about data, always use tools — never guess or fabricate data.\n\n\
+         ### Discovery Strategy\n\
+         When the user asks about data and you're unsure about collection names, field names, \
+         or values:\n\
+         1. Check the context below first — schemas, sample docs, and collection list may \
+         already be included.\n\
+         2. If the relevant collection isn't obvious, call `list_collections` to see all \
+         available collections.\n\
+         3. If you're unsure about fields, call `collection_schema` on the target collection — \
+         it returns field names, types, and sample values for each field.\n\
+         4. If you need exact enum values for a field (statuses, types, categories), call \
+         `sample_field_values`.\n\
+         5. Only then construct your query with confirmed field names and values.\n\n\
+         ### Resolving References\n\
+         MongoDB collections often use ObjectId references between collections. When a field \
+         contains ObjectId values that reference another collection (e.g., `leaveType: ObjectId(...)` \
+         referencing a `taxonomies` or `categories` collection):\n\
+         1. First query the referenced collection to find the ObjectId matching the user's intent. \
+         Example: `find_documents` on `taxonomies` with a filter like \
+         `{\"name\": {\"$regex\": \"vacation\", \"$options\": \"i\"}}`.\n\
+         2. Then use the discovered ObjectId in your main query filter.\n\
+         3. Alternatively, use `$lookup` in an aggregation pipeline to join collections.\n\n\
+         ### Auto-Rendered Tool Results\n\
+         Tool results from find_documents, aggregate, list_indexes, collection_stats, \
+         count_documents, generate_report, and all write tools are automatically rendered as \
+         native tables \
+         and stats cards in the UI. Do NOT repeat tool result data in your response — just \
+         provide commentary, insights, and analysis.\n\n\
+         ### Rich Response Blocks\n\
+         You can embed custom visualizations using fenced code blocks when you want to \
+         present *transformed* or *curated* data (e.g. a chart from aggregation results).\n\n\
+         **barchart** — for distributions and comparisons:\n\
+         ```barchart\n\
+         {\"title\": \"Actions\", \"data\": [{\"label\": \"insert\", \"value\": 42}, \
+         {\"label\": \"update\", \"value\": 18}]}\n\
+         ```\n\n\
+         **piechart** — for proportional data:\n\
+         ```piechart\n\
+         {\"title\": \"By Type\", \"data\": [{\"label\": \"A\", \"value\": 60}, \
+         {\"label\": \"B\", \"value\": 40}]}\n\
+         ```\n\n\
+         **linechart** — for trends and time series:\n\
+         ```linechart\n\
+         {\"title\": \"Growth\", \"data\": [{\"label\": \"Jan\", \"value\": 10}, \
+         {\"label\": \"Feb\", \"value\": 25}]}\n\
+         ```\n\n\
+         Guidelines:\n\
+         - Data inside blocks must be valid JSON\n\
+         - Use charts for distributions, trends, or comparisons derived from tool results\n\
+         - Do NOT use datatable or stats blocks — those are auto-rendered from tool results\n\
+         - Place blocks naturally in your response — they render inline\n\
+         - You can mix rich blocks with normal markdown text";
 
 // ---------------------------------------------------------------------------
 // BudgetWriter
@@ -76,131 +196,43 @@ impl BudgetWriter {
 // ---------------------------------------------------------------------------
 
 /// Build a dynamic system prompt from the current application state.
-pub fn build_ai_context(state: &AppState, mentioned_collections: &[String]) -> String {
+/// `writable` has to match what `build_agent` registers: describing write tools the agent was
+/// not given only earns a "tool not found" round trip.
+pub fn build_ai_context(
+    state: &AppState,
+    mentioned_collections: &[String],
+    writable: bool,
+) -> String {
     let mut w = BudgetWriter::new(BUDGET);
 
-    // ── 1. Base prompt + identity ──────────────────────────────────────────
+    // The stable part comes first — the rules and the tool guide are identical from turn to
+    // turn, and providers only reuse a cached prompt while its leading text is unchanged. Today's
+    // date and everything about the current collection follow, because those move.
     w.raw(BASE_PROMPT);
 
     let now = chrono::Local::now();
-    let date_info =
-        format!("Current date: {} ({})", now.format("%Y-%m-%d %H:%M"), now.format("%Z"),);
-    w.section("## Date & Time", &date_info);
+    let date_info = format!("Today is {} ({})", now.format("%Y-%m-%d, %A"), now.format("%Z"));
 
     let conn_id = match state.selected_connection_id() {
         Some(id) => id,
-        None => return w.finish(),
+        None => {
+            w.section("## Date", &date_info);
+            return w.finish();
+        }
     };
     let active = match state.active_connection_by_id(conn_id) {
         Some(c) => c,
-        None => return w.finish(),
+        None => {
+            w.section("## Date", &date_info);
+            return w.finish();
+        }
     };
 
     // Tools section — when connected, the AI has MongoDB tools available.
-    w.section(
-        "## Tool Usage Guide",
-        "You have 14 MongoDB tools. Choose the minimal set needed — prefer one powerful call \
-         over many small ones.\n\n\
-         ### Querying\n\
-         - **aggregate**: Your most powerful tool. Use for any multi-step operation: filtering + \
-         grouping, joins ($lookup), faceted results, stats computation. Prefer this when the \
-         answer needs transformation beyond simple filtering. Pipeline stages are JSON objects. \
-         Max 50 docs returned.\n\
-         - **find_documents**: Simple queries with filter, sort, projection, limit. Use when you \
-         just need to fetch documents matching a condition. Max 50 docs.\n\
-         - **count_documents**: Count documents matching a filter. Use for \"how many?\" questions. \
-         Fast (uses estimated count when no filter).\n\n\
-         ### Introspection\n\
-         - **collection_stats**: Get document count, data size, storage size, index count. Use for \
-         \"how big/large is this collection?\" questions.\n\
-         - **collection_schema**: Sample 100 docs and analyze field types, presence %, cardinality, \
-         and sample values. Use when the user asks about structure/fields, or when you need to \
-         understand what fields exist and what ObjectId references point to.\n\
-         - **sample_field_values**: Get distinct values for a field. Use to discover statuses, \
-         categories, types, or any enumeration before querying. Essential when you need to know \
-         exact values (e.g., \"APPROVED\" vs \"approved\").\n\
-         - **list_indexes**: List all indexes with key definitions. Use for performance analysis.\n\
-         - **explain_query**: Explain a find query's execution plan. Use to diagnose slow queries.\n\
-         - **list_collections**: List all collections in the database.\n\n\
-         ### Write Operations\n\
-         Document writes require user confirmation. The user will see a preview before execution. \
-         A built-in safety system validates all write operations — always call the tool and let the \
-         safety system handle validation.\n\n\
-         - **insert_documents**: Insert documents into a collection. Pass `documents` as a JSON \
-         array string. Max 100 documents per call.\n\
-         - **replace_documents**: Replace up to 100 documents matching a filter with a complete \
-         replacement document. Original `_id` values are preserved. Set `many: false` for one.\n\
-         - **delete_documents**: Delete documents matching a filter.\n\
-         - **create_index**: Create a named index. Pass `keys` as a JSON object and \
-         an explicit `name`; `unique` is optional.\n\
-         - **drop_index**: Drop an index by name. The _id_ index cannot be dropped.\n\n\
-         ### Cross-Collection Access\n\
-         All tools except list_collections accept an optional `collection` parameter. Pass it to \
-         query or inspect any collection in the current database — not just the selected one. \
-         For example, call `collection_schema` with `collection: \"orders\"` while viewing `users`.\n\n\
-         ### Strategy\n\
-         - When a question can be answered with a single aggregation pipeline, use `aggregate` \
-         instead of calling multiple tools. For example: \"What's the average order value by \
-         status?\" → one `aggregate` call with $group, not find + manual calculation.\n\
-         - Use $lookup in aggregate to join across collections rather than querying each \
-         separately.\n\
-         - Use $facet to compute multiple aggregations in one pipeline.\n\
-         - The context below already includes schema, indexes, and stats when available — check \
-         it before calling introspection tools redundantly.\n\
-         - If you need schema or structure for a collection not shown in the context below, \
-         call `collection_schema` with the `collection` parameter to fetch it.\n\
-         - When the user asks about data, always use tools — never guess or fabricate data.\n\n\
-         ### Discovery Strategy\n\
-         When the user asks about data and you're unsure about collection names, field names, \
-         or values:\n\
-         1. Check the context below first — schemas, sample docs, and collection list may \
-         already be included.\n\
-         2. If the relevant collection isn't obvious, call `list_collections` to see all \
-         available collections.\n\
-         3. If you're unsure about fields, call `collection_schema` on the target collection — \
-         it returns field names, types, and sample values for each field.\n\
-         4. If you need exact enum values for a field (statuses, types, categories), call \
-         `sample_field_values`.\n\
-         5. Only then construct your query with confirmed field names and values.\n\n\
-         ### Resolving References\n\
-         MongoDB collections often use ObjectId references between collections. When a field \
-         contains ObjectId values that reference another collection (e.g., `leaveType: ObjectId(...)` \
-         referencing a `taxonomies` or `categories` collection):\n\
-         1. First query the referenced collection to find the ObjectId matching the user's intent. \
-         Example: `find_documents` on `taxonomies` with a filter like \
-         `{\"name\": {\"$regex\": \"vacation\", \"$options\": \"i\"}}`.\n\
-         2. Then use the discovered ObjectId in your main query filter.\n\
-         3. Alternatively, use `$lookup` in an aggregation pipeline to join collections.\n\n\
-         ### Auto-Rendered Tool Results\n\
-         Tool results from find_documents, aggregate, list_indexes, collection_stats, \
-         count_documents, and all write tools are automatically rendered as native tables \
-         and stats cards in the UI. Do NOT repeat tool result data in your response — just \
-         provide commentary, insights, and analysis.\n\n\
-         ### Rich Response Blocks\n\
-         You can embed custom visualizations using fenced code blocks when you want to \
-         present *transformed* or *curated* data (e.g. a chart from aggregation results).\n\n\
-         **barchart** — for distributions and comparisons:\n\
-         ```barchart\n\
-         {\"title\": \"Actions\", \"data\": [{\"label\": \"insert\", \"value\": 42}, \
-         {\"label\": \"update\", \"value\": 18}]}\n\
-         ```\n\n\
-         **piechart** — for proportional data:\n\
-         ```piechart\n\
-         {\"title\": \"By Type\", \"data\": [{\"label\": \"A\", \"value\": 60}, \
-         {\"label\": \"B\", \"value\": 40}]}\n\
-         ```\n\n\
-         **linechart** — for trends and time series:\n\
-         ```linechart\n\
-         {\"title\": \"Growth\", \"data\": [{\"label\": \"Jan\", \"value\": 10}, \
-         {\"label\": \"Feb\", \"value\": 25}]}\n\
-         ```\n\n\
-         Guidelines:\n\
-         - Data inside blocks must be valid JSON\n\
-         - Use charts for distributions, trends, or comparisons derived from tool results\n\
-         - Do NOT use datatable or stats blocks — those are auto-rendered from tool results\n\
-         - Place blocks naturally in your response — they render inline\n\
-         - You can mix rich blocks with normal markdown text",
-    );
+    let write_tools = if writable { WRITE_TOOLS_GUIDE } else { "" };
+    w.section("## Tool Usage Guide", &format!("{TOOL_GUIDE_HEAD}{write_tools}{TOOL_GUIDE_TAIL}"));
+
+    w.section("## Date", &date_info);
 
     let conn_name = state.connection_name(conn_id).unwrap_or_default();
     let db_name = state.selected_database_name();
@@ -609,4 +641,40 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     }
     let end = s.floor_char_boundary(max_bytes);
     &s[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TOOL_GUIDE_HEAD, TOOL_GUIDE_TAIL, WRITE_TOOLS_GUIDE};
+    use crate::ai::tools::TOOL_NAMES;
+
+    /// Providers reuse a cached prompt only while its leading text is unchanged, so the parts
+    /// that move — the date, the current collection — must not sit in front of the tool guide.
+    #[test]
+    fn the_unchanging_rules_come_before_anything_that_moves() {
+        use crate::state::AppState;
+        let prompt = super::build_ai_context(&AppState::new(), &[], true);
+        let date = prompt.find("## Date").expect("the date is in the prompt");
+        let rules = prompt.find("CRITICAL RULES").expect("the rules are in the prompt");
+        assert!(rules < date, "the rules have to lead");
+    }
+
+    /// A tool the prompt never mentions is a tool the model never calls.
+    #[test]
+    fn the_prompt_describes_every_registered_tool() {
+        let guide = format!("{TOOL_GUIDE_HEAD}{WRITE_TOOLS_GUIDE}{TOOL_GUIDE_TAIL}");
+        for name in TOOL_NAMES {
+            assert!(guide.contains(*name), "{name} is registered but undocumented in the prompt");
+        }
+    }
+
+    /// On a read-only connection the write tools are not registered, so the prompt must not
+    /// advertise them.
+    #[test]
+    fn the_read_only_guide_offers_no_write_tools() {
+        let guide = format!("{TOOL_GUIDE_HEAD}{TOOL_GUIDE_TAIL}");
+        for name in ["insert_documents", "replace_documents", "delete_documents", "drop_index"] {
+            assert!(!guide.contains(name), "{name} is offered without the tool being registered");
+        }
+    }
 }

@@ -1213,7 +1213,8 @@ pub struct SessionSnapshot {
     pub selected_doc: Option<DocumentKey>,
     pub selected_docs: HashSet<DocumentKey>,
     pub selected_count: usize,
-    pub any_selected_dirty: bool,
+    /// Documents in this tab with unsaved edits.
+    pub dirty_count: usize,
     pub filter_raw: String,
     pub filter_compiled_raw: String,
     pub sort_raw: String,

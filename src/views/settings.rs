@@ -3,19 +3,21 @@
 mod keybindings;
 
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, Size};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::ai::bridge::AiBridge;
 use crate::ai::model_registry::{self, ModelCache};
 use crate::ai::provider::{AiGenerationRequest, generate_text};
+use crate::ai::settings::ModelPreset;
+use crate::components::model_select::{ModelSelectState, ModelSelector};
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::settings::CollectionDoubleClickAction;
 use crate::state::{
@@ -44,6 +46,7 @@ pub struct SettingsView {
     ai_ollama_base_url_input_state: Option<Entity<InputState>>,
     ai_test_in_flight: bool,
     ai_test_result: Option<AiTestResult>,
+    model_selector: Option<ModelSelector>,
     last_seen_provider: AiProvider,
 }
 
@@ -66,6 +69,7 @@ impl SettingsView {
             _subscriptions: subscriptions,
             keybindings_view,
             template_input_state: None,
+            model_selector: None,
             batch_size_input_state: None,
             query_timeout_input_state: None,
             ai_api_key_input_state: None,
@@ -77,6 +81,19 @@ impl SettingsView {
     }
 
     /// Initialize input states on first render (when window is available)
+    /// The model picker keeps its own search state, so it is built once and then synced.
+    fn ensure_model_selector(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ModelSelectState> {
+        let state = self.state.clone();
+        let selector =
+            self.model_selector.get_or_insert_with(|| ModelSelector::new(&state, window, cx));
+        selector.sync(&state, window, cx);
+        selector.entity()
+    }
+
     fn ensure_input_states(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.template_input_state.is_some()
             && self.batch_size_input_state.is_some()
@@ -253,6 +270,10 @@ impl SettingsView {
                     system_prompt: "You are a health-check assistant. Respond briefly.".to_string(),
                     history: Vec::new(),
                     user_prompt: "Return exactly: AI test passed.".to_string(),
+                    conversation_id: "provider-test".to_string(),
+                    memory: None,
+                    context_tokens: None,
+                    price: None,
                 };
                 generate_text(&settings, request).await
             })
@@ -278,6 +299,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_input_states(window, cx);
+        let model_select = self.ensure_model_selector(window, cx);
 
         let view = cx.entity();
         let state = self.state.clone();
@@ -361,6 +383,7 @@ impl Render for SettingsView {
         let ai_state = state.clone();
         let ai_view = view.clone();
         let ai_ui = AiSectionUiState {
+            model_select,
             api_key_input_state: self.ai_api_key_input_state.clone().unwrap(),
             ollama_base_url_input_state: self.ai_ollama_base_url_input_state.clone().unwrap(),
             ai_test_in_flight: self.ai_test_in_flight,
@@ -2101,6 +2124,7 @@ fn render_transfer_section(
 struct AiSectionUiState {
     api_key_input_state: Entity<InputState>,
     ollama_base_url_input_state: Entity<InputState>,
+    model_select: Entity<ModelSelectState>,
     ai_test_in_flight: bool,
     ai_test_result: Option<AiTestResult>,
 }
@@ -2115,6 +2139,7 @@ fn render_ai_section(
     let AiSectionUiState {
         api_key_input_state,
         ollama_base_url_input_state,
+        model_select,
         ai_test_in_flight,
         ai_test_result,
     } = ai_ui;
@@ -2165,6 +2190,62 @@ fn render_ai_section(
         )
     };
 
+    let remember_conversations_checkbox = {
+        let state = state.clone();
+        let checked = settings.ai.remember_conversations;
+        gpui_kit::component::checkbox::Checkbox::new("ai-remember-conversations")
+            .checked(checked)
+            .on_click(move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.settings.ai.remember_conversations = !checked;
+                    state.save_settings();
+                    cx.notify();
+                });
+            })
+    };
+
+    let forget_conversations_button = {
+        let state = state.clone();
+        let stored = state
+            .read(cx)
+            .ai_chat
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.conversation_count().ok().filter(|count| *count > 0));
+        Button::new("ai-forget-conversations")
+            .xsmall()
+            .danger()
+            .label(match stored {
+                Some(1) => "Delete 1 conversation".to_string(),
+                Some(count) => format!("Delete {count} conversations"),
+                None => "Delete all".to_string(),
+            })
+            .disabled(stored.is_none())
+            .on_click(move |_, window, cx| {
+                let state = state.clone();
+                open_confirm_dialog(
+                    window,
+                    cx,
+                    "Delete stored conversations",
+                    "The assistant forgets every earlier conversation on this machine. The chat \
+                     you can see stays as it is.",
+                    "Delete",
+                    true,
+                    move |_, cx| {
+                        state.update(cx, |state, cx| {
+                            if let Some(memory) = &state.ai_chat.memory
+                                && let Err(error) = memory.forget_everything()
+                            {
+                                log::error!("Could not delete stored conversations: {error}");
+                            }
+                            state.ai_chat.conversation_id = None;
+                            cx.notify();
+                        });
+                    },
+                );
+            })
+    };
+
     let selected_documents_checkbox = {
         let state = state.clone();
         let checked = settings.ai.share_selected_documents;
@@ -2204,12 +2285,9 @@ fn render_ai_section(
             .rounded(islands::radius_sm(&settings.appearance))
             .with_size(Size::Small)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                let providers = [
-                    AiProvider::Gemini,
-                    AiProvider::OpenAi,
-                    AiProvider::Anthropic,
-                    AiProvider::Ollama,
-                ];
+                // Every provider the app knows, so adding one does not mean remembering to add
+                // it here as well.
+                let providers = AiProvider::ALL;
                 let mut menu = menu;
                 for provider in providers {
                     let state = state.clone();
@@ -2233,112 +2311,49 @@ fn render_ai_section(
             })
     };
 
-    let model_dropdown = {
+    // Presets are what most people want; the picker below is for naming an exact model.
+    let has_presets = current_provider.preset_model(ModelPreset::Balanced).is_some();
+    let preset_picker = has_presets.then(|| {
+        let selected = current_provider.preset_for_model(&settings.ai.model);
         let state = state.clone();
-        let current_model = settings.ai.model.clone();
-
-        let models: Vec<String> = match current_provider {
-            AiProvider::Ollama => match cached {
-                ModelCache::Loaded(list) => {
-                    let mut m = list.clone();
-                    if !current_model.trim().is_empty() && !m.contains(&current_model) {
-                        m.push(current_model.clone());
-                        m.sort();
-                    }
-                    m
-                }
-                _ => {
-                    if !current_model.trim().is_empty() {
-                        vec![current_model.clone()]
-                    } else {
-                        vec![]
-                    }
-                }
-            },
-            _ => current_provider.model_options(&current_model),
-        };
-
-        let cached_hint: Option<String> = if current_provider == AiProvider::Ollama {
-            match cached {
-                ModelCache::Loading => Some("Loading models...".to_string()),
-                ModelCache::Error(msg) => {
-                    let hint = crate::helpers::truncate_chars(msg, 60);
-                    Some(hint)
-                }
-                ModelCache::NotFetched => Some("Fetching models...".to_string()),
-                _ => None,
-            }
-        } else if matches!(cached, ModelCache::NoKey) {
-            Some("Add API key in Settings".to_string())
-        } else {
-            None
-        };
-
-        gpui_kit::component::button::Button::new("ai-model-dropdown")
-            .ghost()
-            .xsmall()
-            .label(current_model)
-            .dropdown_caret(true)
-            .rounded(islands::radius_sm(&settings.appearance))
-            .with_size(Size::Small)
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                let mut menu = menu;
-                if let Some(hint) = &cached_hint {
-                    menu = menu.item(PopupMenuItem::new(hint.clone()).disabled(true));
-                }
-                for model in &models {
-                    let state = state.clone();
-                    let m = model.clone();
-                    let note = AiProvider::model_note(model);
-                    let item = if let Some(note) = note {
-                        let model_label = model.clone();
-                        let note = note.to_string();
-                        PopupMenuItem::element(move |_window, cx| {
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .child(model_label.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(note.clone()),
-                                )
-                        })
-                    } else {
-                        PopupMenuItem::new(model.clone())
+        ButtonGroup::new("ai-model-presets")
+            .compact()
+            .children(ModelPreset::ALL.into_iter().map(|preset| {
+                gpui_kit::component::button::Button::new(SharedString::from(preset.label()))
+                    .label(preset.label())
+                    .tooltip(preset.description())
+                    .selected(selected == Some(preset))
+                    .with_size(Size::Small)
+            }))
+            .on_click(move |selection, _window, cx| {
+                let Some(preset) = selection.first().and_then(|index| ModelPreset::ALL.get(*index))
+                else {
+                    return;
+                };
+                state.update(cx, |app_state, cx| {
+                    let provider = app_state.settings.ai.provider;
+                    let Some(model) = provider.preset_model(*preset) else {
+                        return;
                     };
-                    menu = menu.item(item.on_click(move |_, _, cx| {
-                        state.update(cx, |app_state, cx| {
-                            app_state.settings.ai.set_model(m.clone());
-                            app_state.save_settings();
-                            cx.notify();
-                        });
-                    }));
-                }
-                menu
+                    app_state.settings.ai.set_model(model.to_string());
+                    app_state.save_settings();
+                    cx.notify();
+                });
             })
-    };
+    });
+
+    let model_dropdown =
+        crate::components::model_select::model_select(&model_select, Size::Small, px(260.0));
 
     let model_status_badge = {
         let (label, accent) = match (current_provider, cached) {
             (AiProvider::Ollama, ModelCache::Loaded(list)) => {
                 (format!("{} models", list.len()), cx.theme().primary)
             }
-            (AiProvider::Ollama, ModelCache::Loading) => {
+            (_, ModelCache::Loading) | (_, ModelCache::NotFetched) => {
                 ("Loading models".to_string(), cx.theme().warning)
             }
-            (AiProvider::Ollama, ModelCache::NotFetched) => {
-                ("Fetching models".to_string(), cx.theme().warning)
-            }
-            (AiProvider::Ollama, ModelCache::Error(_)) => {
-                ("Model fetch error".to_string(), cx.theme().danger)
-            }
+            (_, ModelCache::Error(_)) => ("Model list unavailable".to_string(), cx.theme().danger),
             (_, ModelCache::NoKey) => ("API key missing".to_string(), cx.theme().warning),
             _ => ("Ready".to_string(), cx.theme().muted_foreground),
         };
@@ -2410,6 +2425,7 @@ fn render_ai_section(
                                             .text_color(cx.theme().secondary_foreground)
                                             .child("Model"),
                                     )
+                                    .children(preset_picker)
                                     .child(model_dropdown),
                             )
                             .child(model_status_badge),
@@ -2441,6 +2457,21 @@ fn render_ai_section(
                         "Share document samples",
                         "Include up to five documents from the current result set in automatic AI context.",
                         sample_documents_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row_with_description(
+                        "Remember conversations",
+                        "Keep conversations between runs so the assistant can follow up on earlier \
+                         work. What you and the assistant said is encrypted on this machine; tool \
+                         results, which hold your data, are never written to disk. Conversations \
+                         are deleted after 30 days.",
+                        remember_conversations_checkbox,
+                        cx,
+                    ))
+                    .child(setting_row_with_description(
+                        "Stored conversations",
+                        "Delete every conversation the assistant has kept on this machine.",
+                        forget_conversations_button,
                         cx,
                     )),
                 &settings.appearance,

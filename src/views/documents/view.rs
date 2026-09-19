@@ -117,7 +117,7 @@ impl Render for CollectionView {
             selected_doc,
             selected_docs,
             selected_count,
-            any_selected_dirty,
+            dirty_count,
             filter_raw,
             filter_compiled_raw,
             sort_raw,
@@ -159,7 +159,7 @@ impl Render for CollectionView {
                 snapshot.selected_doc,
                 snapshot.selected_docs,
                 snapshot.selected_count,
-                snapshot.any_selected_dirty,
+                snapshot.dirty_count,
                 snapshot.filter_raw,
                 snapshot.filter_compiled_raw,
                 snapshot.sort_raw,
@@ -202,7 +202,7 @@ impl Render for CollectionView {
                 None,
                 std::collections::HashSet::new(),
                 0,
-                false,
+                0,
                 String::new(),
                 String::new(),
                 String::new(),
@@ -303,6 +303,13 @@ impl Render for CollectionView {
                             if view.syncing_query_inputs {
                                 return;
                             }
+                            // Prose is not JSON: no auto-pairing, no validation, no date picker,
+                            // and no field-name menu over the top of what is being typed.
+                            if view.ask_mode {
+                                view.dismiss_filter_completions(cx);
+                                cx.notify();
+                                return;
+                            }
                             let typed = view
                                 .filter_completions
                                 .as_ref()
@@ -379,6 +386,10 @@ impl Render for CollectionView {
                         InputEvent::PressEnter { shift: false, .. } => {
                             if let Some(provider) = &view.filter_completions {
                                 provider.dismiss(cx);
+                            }
+                            if view.ask_mode {
+                                view.submit_ask_ai(window, cx);
+                                return;
                             }
                             let raw = state.read(cx).value().to_string();
                             if let Some(err) = strict_filter_query_validation_error(&raw) {
@@ -675,6 +686,10 @@ impl Render for CollectionView {
                 });
             }
             self.filter_expanded = false;
+            // A different collection has a different filter; there is nothing to go back to.
+            self.ask_mode = false;
+            self.ask_ai_filter = None;
+            self.ask_ai_error = None;
             self.input_session = session_key.clone();
             self.syncing_query_inputs = true;
             if let Some(filter_state) = self.filter_state.clone() {
@@ -710,7 +725,10 @@ impl Render for CollectionView {
                 let expected =
                     if filter_raw.trim().is_empty() { String::new() } else { filter_raw.clone() };
                 let current = filter_state.read(cx).value().to_string();
-                if !self.calendar_open && !query_drafts_equal(&current, &expected) {
+                // While the bar is being asked a question it holds the question, not the filter.
+                // Syncing it to the stored filter here overwrote every keystroke as it was typed.
+                if !self.ask_mode && !self.calendar_open && !query_drafts_equal(&current, &expected)
+                {
                     self.syncing_query_inputs = true;
                     filter_state.update(cx, |state, cx| {
                         state.replace_all(expected.clone(), window, cx);
@@ -795,7 +813,7 @@ impl Render for CollectionView {
                     session_key.clone(),
                     selected_doc,
                     selected_count,
-                    any_selected_dirty,
+                    dirty_count,
                     is_loading,
                     sort_state,
                     projection_state,

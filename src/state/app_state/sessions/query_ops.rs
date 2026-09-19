@@ -86,6 +86,12 @@ impl AppState {
         }
     }
 
+    pub fn set_query_options_open(&mut self, session_key: &SessionKey, open: bool) {
+        if let Some(session) = self.session_mut(session_key) {
+            session.view.query_options_open = open;
+        }
+    }
+
     pub fn toggle_query_options_open(&mut self, session_key: &SessionKey) {
         self.promote_preview_collection_tab(session_key);
         let mut changed = false;

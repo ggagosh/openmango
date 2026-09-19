@@ -63,7 +63,10 @@ impl AppState {
         // Persist AI panel state at workspace level
         self.workspace.ai_panel_open = self.ai_chat.panel_open;
         self.workspace.ai_draft_input = self.ai_chat.draft_input.replace(['\n', '\r'], " ");
-        self.workspace.ai_entries = self.ai_chat.entries.clone();
+        // The conversation itself goes to the assistant's encrypted store; the workspace keeps
+        // only the name of it.
+        self.workspace.ai_conversation_id = self.ai_chat.conversation_id;
+        self.ai_chat.save_conversation();
 
         self.update_workspace_selection();
     }
@@ -103,13 +106,8 @@ impl AppState {
                     // skip pushing as a tab.
                     self.ai_chat.panel_open = true;
                     self.ai_chat.draft_input = tab.ai_draft_input.replace(['\n', '\r'], " ");
-                    self.ai_chat.entries = tab.resolved_ai_entries();
                     self.ai_chat.is_loading = false;
                     self.ai_chat.last_error = None;
-                    if self.ai_chat.entries.len() > 200 {
-                        let extra = self.ai_chat.entries.len().saturating_sub(200);
-                        self.ai_chat.entries.drain(0..extra);
-                    }
                 }
                 WorkspaceTabKind::Transfer => {
                     let mut transfer_state = tab.transfer.clone().unwrap_or_default();
@@ -155,7 +153,16 @@ impl AppState {
         if !self.ai_chat.panel_open {
             self.ai_chat.panel_open = self.workspace.ai_panel_open;
             self.ai_chat.draft_input = self.workspace.ai_draft_input.replace(['\n', '\r'], " ");
-            self.ai_chat.entries = self.workspace.ai_entries.clone();
+            self.ai_chat.conversation_id = self.workspace.ai_conversation_id;
+            self.ai_chat.entries = match (&self.ai_chat.memory, self.ai_chat.conversation_id) {
+                (Some(memory), Some(id)) => {
+                    memory.load_timeline(&id.to_string()).unwrap_or_else(|error| {
+                        log::warn!("Could not read the stored conversation: {error}");
+                        Vec::new()
+                    })
+                }
+                _ => Vec::new(),
+            };
             self.ai_chat.is_loading = false;
             self.ai_chat.last_error = None;
             if self.ai_chat.entries.len() > 200 {
@@ -302,8 +309,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths,
                     table_column_order,
                     table_pinned_columns,
@@ -325,8 +330,6 @@ impl AppState {
                 forge_content: String::new(),
                 ai_panel_open: false,
                 ai_draft_input: String::new(),
-                ai_entries: Vec::new(),
-                ai_messages: Vec::new(),
                 table_column_widths: HashMap::new(),
                 table_column_order: Vec::new(),
                 table_pinned_columns: HashSet::new(),
@@ -349,8 +352,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -378,8 +379,6 @@ impl AppState {
                     forge_content: content,
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -403,8 +402,6 @@ impl AppState {
                     forge_content: String::new(),
                     ai_panel_open: false,
                     ai_draft_input: String::new(),
-                    ai_entries: Vec::new(),
-                    ai_messages: Vec::new(),
                     table_column_widths: HashMap::new(),
                     table_column_order: Vec::new(),
                     table_pinned_columns: HashSet::new(),
@@ -594,8 +591,6 @@ mod tests {
             forge_content: String::new(),
             ai_panel_open: false,
             ai_draft_input: String::new(),
-            ai_entries: Vec::new(),
-            ai_messages: Vec::new(),
             table_column_widths: HashMap::new(),
             table_column_order: Vec::new(),
             table_pinned_columns: HashSet::new(),
@@ -619,17 +614,26 @@ mod tests {
         state.conn.selected_database = Some("db".to_string());
         state.conn.selected_collection = Some("col".to_string());
 
+        // The conversation travels through the assistant's store, not the workspace file: both
+        // sides share one store, as they do in the app.
+        let memory = crate::ai::memory::ChatMemory::in_memory().expect("memory");
+        state.ai_chat.memory = Some(memory.clone());
         state.ai_chat.panel_open = true;
         state.ai_chat.draft_input = "draft question".to_string();
+        state.ai_chat.conversation_id = Some(Uuid::new_v4());
         state.ai_chat.begin_turn("hello");
 
         state.update_workspace_tabs();
-        // AI state is now persisted at workspace level, not as a tab
         assert!(state.workspace.ai_panel_open);
         assert_eq!(state.workspace.ai_draft_input, "draft question");
+        assert_eq!(state.workspace.ai_conversation_id, state.ai_chat.conversation_id);
+
+        let saved = serde_json::to_string(&state.workspace).expect("workspace json");
+        assert!(!saved.contains("hello"), "the question must not be written to the workspace file");
 
         let mut restored = AppState::new();
-        restored.workspace = state.workspace.clone();
+        restored.ai_chat.memory = Some(memory);
+        restored.workspace = serde_json::from_str(&saved).expect("workspace");
         let _active = restored.restore_tabs_from_workspace(conn_id, &["db".to_string()]);
         assert!(restored.ai_chat.panel_open);
         assert_eq!(restored.ai_chat.draft_input, "draft question");
@@ -659,8 +663,6 @@ mod tests {
             forge_content: String::new(),
             ai_panel_open: true,
             ai_draft_input: "old draft".to_string(),
-            ai_entries: Vec::new(),
-            ai_messages: Vec::new(),
             table_column_widths: HashMap::new(),
             table_column_order: Vec::new(),
             table_pinned_columns: HashSet::new(),

@@ -1,7 +1,6 @@
 use futures::TryStreamExt;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
@@ -31,30 +30,34 @@ impl Tool for AggregateTool {
     type Args = AggregateArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Run a MongoDB aggregation pipeline. A $limit stage (max 50) is \
+    fn description(&self) -> String {
+        "Run a MongoDB aggregation pipeline. A $limit stage (max 50) is \
                 appended if the pipeline does not already contain one."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "pipeline": {
-                        "type": "string",
-                        "description": "Aggregation pipeline as a JSON array of stage objects"
-                    }
-                },
-                "required": ["pipeline"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: AggregateArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "pipeline": {
+                    "type": "string",
+                    "description": "Aggregation pipeline as a JSON array of stage objects"
+                }
+            },
+            "required": ["pipeline"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: AggregateArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         let col = resolve_collection(&args.collection, &self.0)?;
 
         let value: serde_json::Value = serde_json::from_str(&args.pipeline)?;

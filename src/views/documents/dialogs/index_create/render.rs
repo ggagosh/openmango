@@ -5,11 +5,11 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{Editor, Input};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::{Button, cancel_button};
+use crate::components::{Button, busy_label, cancel_button};
 use crate::state::AppCommands;
 use crate::theme::{fonts, spacing};
 use crate::views::documents::dialogs::shared::styled_dropdown_button;
@@ -438,18 +438,19 @@ impl Render for IndexCreateDialog {
                     .flex_shrink_0()
                     .child(cancel_button("cancel-index"))
                     .child(
-                        Button::new("create-index")
-                            .primary()
-                            .label(primary_label)
-                            .loading(self.creating)
-                            .disabled(self.creating)
-                            .tooltip(format!("{primary_label} ({SUBMIT_SHORTCUT})"))
-                            .on_click({
-                                let view = view.clone();
-                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                    Self::submit(view.clone(), window, cx);
-                                }
-                            }),
+                        busy_label(
+                            Button::new("create-index").primary(),
+                            Size::Medium,
+                            primary_label,
+                            self.creating,
+                        )
+                        .tooltip(format!("{primary_label} ({SUBMIT_SHORTCUT})"))
+                        .on_click({
+                            let view = view.clone();
+                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                Self::submit(view.clone(), window, cx);
+                            }
+                        }),
                     ),
             );
 

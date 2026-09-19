@@ -13,7 +13,7 @@ use openmango::ai::tools::insert::{InsertArgs, InsertDocumentsTool};
 use openmango::ai::tools::replace::{ReplaceArgs, ReplaceDocumentsTool};
 use openmango::ai::tools::{MongoContext, StreamEvent};
 use openmango::models::{ConnectionWriteIdentity, SavedConnection};
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 
 fn write_identity(read_only: bool) -> ConnectionWriteIdentity {
     let mut connection =
@@ -33,6 +33,8 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
 
     let tool = ReplaceDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_update".to_string()),
         write_identity: write_identity(true),
@@ -40,12 +42,15 @@ async fn read_only_ai_replacement_is_rejected_without_mutating_data() {
         event_tx: None,
     });
     let error = tool
-        .call(ReplaceArgs {
-            collection: None,
-            filter: r#"{"_id":"one"}"#.to_string(),
-            replacement: r#"{"status":"after"}"#.to_string(),
-            many: Some(false),
-        })
+        .call(
+            &mut ToolContext::default(),
+            ReplaceArgs {
+                collection: None,
+                filter: r#"{"_id":"one"}"#.to_string(),
+                replacement: r#"{"status":"after"}"#.to_string(),
+                many: Some(false),
+            },
+        )
         .await
         .expect_err("Read-only AI replacement must be rejected");
 
@@ -61,6 +66,8 @@ async fn read_only_ai_index_creation_is_rejected() {
     collection.insert_one(doc! { "email": "ada@example.com" }).await.unwrap();
     let tool = CreateIndexTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_index".to_string()),
         write_identity: write_identity(true),
@@ -69,17 +76,51 @@ async fn read_only_ai_index_creation_is_rejected() {
     });
 
     let error = tool
-        .call(CreateIndexArgs {
-            collection: None,
-            keys: r#"{"email":1}"#.to_string(),
-            unique: Some(true),
-            name: Some("email_unique".to_string()),
-        })
+        .call(
+            &mut ToolContext::default(),
+            CreateIndexArgs {
+                collection: None,
+                keys: r#"{"email":1}"#.to_string(),
+                unique: Some(true),
+                name: Some("email_unique".to_string()),
+            },
+        )
         .await
         .expect_err("Read-only AI index creation must be rejected");
 
     assert!(error.to_string().contains("read-only"));
     assert!(!collection.list_index_names().await.unwrap().contains(&"email_unique".to_string()));
+}
+
+#[tokio::test]
+async fn ai_insert_refuses_more_documents_than_it_promises() {
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "ai_insert_cap");
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let tool = InsertDocumentsTool::new(MongoContext {
+        client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
+        database: mongo.db_name("test_db"),
+        collection: Some("ai_insert_cap".to_string()),
+        write_identity: write_identity(false),
+        read_only: false,
+        event_tx: Some(event_tx),
+    });
+
+    // The tool tells the model "at most 100 per call"; 101 has to be refused, not truncated
+    // and not written, and it is refused before any confirmation is asked for.
+    let documents: Vec<String> = (0..101).map(|index| format!(r#"{{"n":{index}}}"#)).collect();
+    let error = tool
+        .call(
+            &mut ToolContext::default(),
+            InsertArgs { collection: None, documents: format!("[{}]", documents.join(",")) },
+        )
+        .await
+        .expect_err("an oversized insert must be rejected");
+
+    assert!(error.to_string().contains("100"), "the limit belongs in the message: {error}");
+    assert_eq!(collection.count_documents(doc! {}).await.unwrap(), 0, "nothing was written");
 }
 
 #[tokio::test]
@@ -89,6 +130,8 @@ async fn ai_write_requires_confirmation_but_not_history() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = InsertDocumentsTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_confirmed_insert".to_string()),
         write_identity: write_identity(false),
@@ -96,8 +139,11 @@ async fn ai_write_requires_confirmation_but_not_history() {
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {
-        tool.call(InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() })
-            .await
+        tool.call(
+            &mut ToolContext::default(),
+            InsertArgs { collection: None, documents: r#"[{"_id":"one"}]"#.to_string() },
+        )
+        .await
     });
     let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
         .await
@@ -119,6 +165,8 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
 
     let tool = AggregateTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_read_only_aggregate".to_string()),
         write_identity: write_identity(true),
@@ -126,10 +174,13 @@ async fn read_only_ai_output_stage_is_rejected_without_creating_target() {
         event_tx: None,
     });
     let error = tool
-        .call(AggregateArgs {
-            collection: None,
-            pipeline: r#"[{"$out":"ai_read_only_output"}]"#.to_string(),
-        })
+        .call(
+            &mut ToolContext::default(),
+            AggregateArgs {
+                collection: None,
+                pipeline: r#"[{"$out":"ai_read_only_output"}]"#.to_string(),
+            },
+        )
         .await
         .expect_err("Read-only AI output stage must be rejected");
 
@@ -150,6 +201,8 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let tool = AggregateTool::new(MongoContext {
         client: mongo.client.clone(),
+        memory: None,
+        conversation_id: "test".to_string(),
         database: mongo.db_name("test_db"),
         collection: Some("ai_confirmed_aggregate".to_string()),
         write_identity: write_identity(false),
@@ -157,10 +210,13 @@ async fn writable_ai_output_stage_requires_confirmation_before_execution() {
         event_tx: Some(event_tx),
     });
     let call = tokio::spawn(async move {
-        tool.call(AggregateArgs {
-            collection: None,
-            pipeline: r#"[{"$limit":2},{"$out":"ai_confirmed_output"}]"#.to_string(),
-        })
+        tool.call(
+            &mut ToolContext::default(),
+            AggregateArgs {
+                collection: None,
+                pipeline: r#"[{"$limit":2},{"$out":"ai_confirmed_output"}]"#.to_string(),
+            },
+        )
         .await
     });
 

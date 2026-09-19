@@ -279,6 +279,10 @@ impl CollectionView {
                 provider.dismiss(cx);
             }
             self.calendar_open = false;
+            // Escape out of asking gives the filter that was there back.
+            if self.ask_mode {
+                self.set_ask_mode(false, window, cx);
+            }
             cx.notify();
             return true;
         }
@@ -288,8 +292,11 @@ impl CollectionView {
             }
             return true;
         }
+        // While the bar is being asked a question, Enter sends it and the arrows move the caret:
+        // there is no field-name menu over prose to accept or walk.
         if !command
             && !key.modifiers.alt
+            && !self.ask_mode
             && let Some(menu) = &self.filter_completion_menu
         {
             return menu.update(cx, |menu, cx| match key_name.as_str() {

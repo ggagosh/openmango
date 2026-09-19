@@ -29,6 +29,8 @@ pub enum AiError {
     UnsupportedProvider(String),
     #[error("{provider} authentication failed")]
     Unauthorized { provider: String },
+    #[error("{provider} does not serve model {model}")]
+    UnknownModel { provider: String, model: String },
     #[error("{provider} rate limit reached")]
     RateLimited { provider: String },
     #[error("Provider timeout: {0}")]
@@ -53,6 +55,7 @@ impl AiError {
             Self::MissingApiKey { .. } | Self::InvalidConfig { .. } => AiErrorKind::Config,
             Self::UnsupportedProvider(_) => AiErrorKind::Config,
             Self::Unauthorized { .. } => AiErrorKind::Auth,
+            Self::UnknownModel { .. } => AiErrorKind::Config,
             Self::RateLimited { .. } => AiErrorKind::RateLimit,
             Self::Timeout(_) => AiErrorKind::Timeout,
             Self::Network(_) => AiErrorKind::Network,
@@ -70,7 +73,7 @@ impl AiError {
                 "AI assistant is disabled by feature policy for this build.".to_string()
             }
             Self::MissingApiKey { provider } => {
-                format!("Missing API key for {provider}. Add it in Settings > AI.")
+                format!("No API key for {provider} yet. Add one in Settings > AI.")
             }
             Self::InvalidConfig { field, message } => {
                 format!("Invalid AI setting '{field}': {message}")
@@ -78,18 +81,38 @@ impl AiError {
             Self::UnsupportedProvider(provider) => {
                 format!("Provider '{provider}' is not supported yet.")
             }
-            Self::Unauthorized { provider } => {
-                format!("{provider} rejected credentials. Check your API key.")
+            Self::Unauthorized { provider } => format!(
+                "{provider} did not accept the API key. Check it in Settings > AI — a key that \
+                 was revoked or belongs to another account fails this way."
+            ),
+            Self::UnknownModel { provider, model } => format!(
+                "{provider} has no model called \"{model}\". Pick another one from the model \
+                 list, or Refresh it — a model can be retired, or need access your key does not \
+                 have yet."
+            ),
+            Self::RateLimited { provider } => format!(
+                "{provider} is rate limiting this key. It was already retried a few times; wait \
+                 a moment, or switch to another model while it clears."
+            ),
+            Self::Timeout(_) => {
+                "The provider did not answer in time. Ask again, or pick the Fast model for a \
+                 question that does not need the big one."
+                    .to_string()
             }
-            Self::RateLimited { provider } => {
-                format!("{provider} rate limit reached. Retry shortly.")
-            }
-            Self::Timeout(_) => "AI request timed out. Retry or choose a faster model.".to_string(),
-            Self::Network(_) => "Network error while calling AI provider.".to_string(),
-            Self::Cancelled => "AI request was cancelled.".to_string(),
-            Self::Provider(message) => format!("AI provider error: {message}"),
-            Self::Parse(_) => "AI provider returned an invalid response.".to_string(),
-            Self::Runtime(message) => format!("AI runtime failure: {message}"),
+            Self::Network(message) => format!(
+                "Could not reach the provider: {message}. Check the network, and any proxy or \
+                 VPN between this machine and it."
+            ),
+            Self::Cancelled => "Stopped.".to_string(),
+            Self::Provider(message) => format!(
+                "The provider refused the request: {message}. Trying again often clears it; if \
+                 it does not, another model will."
+            ),
+            Self::Parse(message) => format!(
+                "The provider sent something this app could not read: {message}. Try again, or \
+                 another model."
+            ),
+            Self::Runtime(message) => format!("Something went wrong inside OpenMango: {message}"),
         }
     }
 }
@@ -102,6 +125,6 @@ mod tests {
     fn cancelled_error_maps_to_cancelled_kind_and_message() {
         let error = AiError::Cancelled;
         assert_eq!(error.kind(), AiErrorKind::Cancelled);
-        assert_eq!(error.user_message(), "AI request was cancelled.");
+        assert_eq!(error.user_message(), "Stopped.");
     }
 }

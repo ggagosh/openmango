@@ -1,11 +1,12 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{ConnectionManager, ManagerTab, TestStatus};
+use crate::components::busy_label;
 use crate::theme::{islands, spacing};
 
 impl Render for ConnectionManager {
@@ -203,10 +204,7 @@ impl ConnectionManager {
                 )
             })
             .child(
-                Button::new("test-connection")
-                    .small()
-                    .label("Test")
-                    .loading(testing)
+                busy_label(Button::new("test-connection"), Size::Small, "Test", testing)
                     .disabled(busy)
                     .on_click({
                         let view = view.clone();
@@ -226,22 +224,23 @@ impl ConnectionManager {
                 )
             })
             .child(
-                Button::new("save-connect")
-                    .small()
-                    .primary()
-                    .loading(connecting)
-                    .disabled(busy)
-                    .label(if is_active {
+                busy_label(
+                    Button::new("save-connect").primary(),
+                    Size::Small,
+                    if is_active {
                         if dirty { "Save & Reconnect" } else { "Reconnect" }
                     } else if self.creating_new || dirty {
                         "Save & Connect"
                     } else {
                         "Connect"
-                    })
-                    .on_click({
-                        let view = view.clone();
-                        move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
-                    }),
+                    },
+                    connecting,
+                )
+                .disabled(busy)
+                .on_click({
+                    let view = view.clone();
+                    move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
+                }),
             );
         // Hints and the test trace sit behind Details, with Copy for support.
         let failure = failure.map(|report| {

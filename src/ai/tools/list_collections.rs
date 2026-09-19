@@ -1,5 +1,4 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use super::{MongoContext, ToolError};
@@ -21,18 +20,22 @@ impl Tool for ListCollectionsTool {
     type Args = ListCollectionsArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List all collections in the current database.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "List all collections in the current database.".to_string()
     }
 
-    async fn call(&self, _args: ListCollectionsArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: ListCollectionsArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         let db = self.0.client.database(&self.0.database);
         let names: Vec<String> = db.list_collection_names().await?;
 

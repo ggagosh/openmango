@@ -1,12 +1,12 @@
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
 
 use super::{
-    MongoContext, StreamEvent, ToolError, ensure_writable, require_confirmation, resolve_collection,
+    MAX_WRITE_DOCUMENTS, MongoContext, StreamEvent, ToolError, ensure_writable,
+    require_confirmation, resolve_collection,
 };
 
 pub struct InsertDocumentsTool(MongoContext);
@@ -29,30 +29,34 @@ impl Tool for InsertDocumentsTool {
     type Args = InsertArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Insert one or more documents into a MongoDB collection. \
+    fn description(&self) -> String {
+        "Insert one or more documents into a MongoDB collection. \
                 Pass documents as a JSON array string. Max 100 documents per call."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "documents": {
-                        "type": "string",
-                        "description": "JSON array of documents to insert, e.g. [{\"name\": \"Alice\"}, {\"name\": \"Bob\"}]"
-                    }
-                },
-                "required": ["documents"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: InsertArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "documents": {
+                    "type": "string",
+                    "description": "JSON array of documents to insert, e.g. [{\"name\": \"Alice\"}, {\"name\": \"Bob\"}]"
+                }
+            },
+            "required": ["documents"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: InsertArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
 
@@ -86,6 +90,13 @@ impl Tool for InsertDocumentsTool {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        if bson_docs.len() > MAX_WRITE_DOCUMENTS {
+            return Err(ToolError::InvalidInput(format!(
+                "Insert at most {MAX_WRITE_DOCUMENTS} documents per call; this call had {}",
+                bson_docs.len()
+            )));
+        }
 
         // Build preview
         let sample_docs: Vec<serde_json::Value> = docs_array.iter().take(3).cloned().collect();

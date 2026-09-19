@@ -44,6 +44,11 @@ impl ConfigManager {
         self.config_dir.join("agent")
     }
 
+    /// Where the assistant keeps conversations between runs.
+    pub fn ai_memory_path(&self) -> PathBuf {
+        self.config_dir.join("ai-memory.sqlite3")
+    }
+
     pub(crate) fn history_path(&self) -> PathBuf {
         self.config_dir.join("history").join("history.sqlite3")
     }

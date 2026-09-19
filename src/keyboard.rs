@@ -96,6 +96,11 @@ actions!(
         OpenSettings,
         OpenForge,
         ToggleAiPanel,
+        ClearAiChat,
+        PreviousAiMention,
+        NextAiMention,
+        ConfirmAiMention,
+        AskAiFilter,
         RunForgeAll,
         RunForgeSelectionOrStatement,
         CancelForgeRun,
@@ -326,8 +331,10 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-r", RefreshView, Some("Workspace")),
         KeyBinding::new("cmd-q", QuitApp, Some("Workspace")),
         KeyBinding::new("ctrl-q", QuitApp, Some("Workspace")),
-        KeyBinding::new("cmd-f", FindInResults, Some("Documents")),
-        KeyBinding::new("ctrl-f", FindInResults, Some("Documents")),
+        // Not while typing: the query editors have their own find, and taking Cmd+F from an
+        // input to open the document search is not what anyone means by it.
+        KeyBinding::new("cmd-f", FindInResults, Some("Documents && !Input")),
+        KeyBinding::new("ctrl-f", FindInResults, Some("Documents && !Input")),
         KeyBinding::new("escape", CloseSearch, Some("Documents")),
         KeyBinding::new("escape", CloseSearch, Some("Documents && Input")),
         KeyBinding::new("cmd-f", FindInSidebar, Some("Sidebar")),
@@ -389,6 +396,17 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-,", OpenSettings, Some("Workspace")),
         KeyBinding::new("cmd-l", ToggleAiPanel, Some("Workspace")),
         KeyBinding::new("ctrl-l", ToggleAiPanel, Some("Workspace")),
+        // Only while the chat has focus, so it cannot be mistaken for deleting a collection.
+        KeyBinding::new("cmd-shift-backspace", ClearAiChat, Some("AiPanel")),
+        KeyBinding::new("ctrl-shift-backspace", ClearAiChat, Some("AiPanel")),
+        // The @collection list is a list. Without these the arrows moved the caret behind it and
+        // Enter sent the half-typed name as a message.
+        KeyBinding::new("up", PreviousAiMention, Some("AiPanel > Input")),
+        KeyBinding::new("down", NextAiMention, Some("AiPanel > Input")),
+        KeyBinding::new("enter", ConfirmAiMention, Some("AiPanel > Input")),
+        // Turns the filter bar into the one you describe a filter to, and back.
+        KeyBinding::new("cmd-i", AskAiFilter, Some("Documents")),
+        KeyBinding::new("ctrl-i", AskAiFilter, Some("Documents")),
         KeyBinding::new("cmd-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new("ctrl-0", FocusSidebar, Some("Workspace")),
         KeyBinding::new(FOCUS_CONTENT_KEYS[0], FocusContent, Some("Workspace")),
@@ -911,6 +929,35 @@ mod tests {
                     })
             }));
         }
+    }
+
+    /// Cmd+F inside a query editor is the editor's own find. Taking it for the document search
+    /// meant typing a filter and having a search bar open over the results.
+    #[test]
+    fn nothing_view_level_fires_while_a_query_editor_has_focus() {
+        let typing = [
+            KeyContext::parse("Workspace").unwrap(),
+            KeyContext::parse("Documents").unwrap(),
+            KeyContext::parse("Input").unwrap(),
+        ];
+        let not_typing = &typing[..2];
+
+        for binding in default_keybindings() {
+            let Some(predicate) = binding.predicate() else { continue };
+            let keys: String =
+                binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
+            if keys != "cmd-f" && keys != "ctrl-f" {
+                continue;
+            }
+            assert!(
+                predicate.depth_of(&typing).is_none(),
+                "{keys} still reaches {} while typing",
+                binding.action().name()
+            );
+        }
+
+        let search = KeyBindingContextPredicate::parse("Documents && !Input").unwrap();
+        assert!(search.depth_of(not_typing).is_some(), "and still works outside an input");
     }
 
     #[test]

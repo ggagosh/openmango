@@ -3,17 +3,20 @@ pub mod collection_stats;
 pub mod count;
 pub mod create_index;
 pub mod delete;
+pub mod drop_index;
 pub mod explain;
 pub mod find;
 pub mod generate_report;
 pub mod indexes;
 pub mod insert;
 pub mod list_collections;
+pub mod recall;
 pub mod replace;
 pub mod sample_values;
 pub mod schema;
 
-use rig::tool::ToolDyn;
+use rig::agent::{Agent, AgentBuilder, NoToolConfig};
+use rig::tool::Tool as _;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier, classify_tool_call};
 use crate::models::ConnectionWriteIdentity;
@@ -22,6 +25,10 @@ use crate::models::ConnectionWriteIdentity;
 #[derive(Clone)]
 pub struct MongoContext {
     pub client: mongodb::Client,
+    /// Where earlier conversations are kept, for the recall tool.
+    pub memory: Option<crate::ai::memory::ChatMemory>,
+    /// The conversation in progress, so recall can leave it out of its own results.
+    pub conversation_id: String,
     pub database: String,
     pub collection: Option<String>,
     pub write_identity: ConnectionWriteIdentity,
@@ -47,17 +54,22 @@ pub enum ToolError {
 pub enum StreamEvent {
     TextDelta(String),
     ToolCallStart {
+        /// rig's own handle for this call. Two calls to the same tool in one turn are told
+        /// apart by this, not by name.
+        call_id: String,
         name: String,
         args_preview: String,
         args_full: String,
     },
     ToolCallEnd {
+        call_id: String,
         name: String,
         result_preview: String,
         result_json: Option<String>,
     },
     /// The tool returned an error instead of a result.
     ToolCallFailed {
+        call_id: String,
         name: String,
         reason: String,
     },
@@ -81,32 +93,58 @@ pub enum StreamEvent {
     },
 }
 
-/// Build all available MongoDB tools for the given context.
-pub fn build_tools(ctx: MongoContext) -> Vec<Box<dyn ToolDyn>> {
-    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
-        Box::new(find::FindDocumentsTool::new(ctx.clone())),
-        Box::new(aggregate::AggregateTool::new(ctx.clone())),
-        Box::new(count::CountDocumentsTool::new(ctx.clone())),
-        Box::new(list_collections::ListCollectionsTool::new(ctx.clone())),
-        Box::new(collection_stats::CollectionStatsTool::new(ctx.clone())),
-        Box::new(schema::CollectionSchemaTool::new(ctx.clone())),
-        Box::new(indexes::ListIndexesTool::new(ctx.clone())),
-        Box::new(explain::ExplainQueryTool::new(ctx.clone())),
-        Box::new(sample_values::SampleFieldValuesTool::new(ctx.clone())),
-        Box::new(generate_report::GenerateReportTool::new(ctx.clone())),
-    ];
+/// Every tool the agent can be given. It sits next to `build_agent` so the safety rules and the
+/// registry cannot drift apart — a tool the classifier does not know is treated as unsafe.
+pub const TOOL_NAMES: &[&str] = &[
+    find::FindDocumentsTool::NAME,
+    aggregate::AggregateTool::NAME,
+    count::CountDocumentsTool::NAME,
+    list_collections::ListCollectionsTool::NAME,
+    collection_stats::CollectionStatsTool::NAME,
+    schema::CollectionSchemaTool::NAME,
+    indexes::ListIndexesTool::NAME,
+    explain::ExplainQueryTool::NAME,
+    sample_values::SampleFieldValuesTool::NAME,
+    generate_report::GenerateReportTool::NAME,
+    recall::RecallConversationsTool::NAME,
+    insert::InsertDocumentsTool::NAME,
+    replace::ReplaceDocumentsTool::NAME,
+    delete::DeleteDocumentsTool::NAME,
+    create_index::CreateIndexTool::NAME,
+    drop_index::DropIndexTool::NAME,
+];
 
-    if !ctx.read_only {
-        tools.extend([
-            Box::new(insert::InsertDocumentsTool::new(ctx.clone())) as Box<dyn ToolDyn>,
-            Box::new(replace::ReplaceDocumentsTool::new(ctx.clone())),
-            Box::new(delete::DeleteDocumentsTool::new(ctx.clone())),
-            Box::new(create_index::CreateIndexTool::new(ctx.clone())),
-            Box::new(self::drop_index::DropIndexTool::new(ctx)),
-        ]);
+/// Register every MongoDB tool on the agent.
+///
+/// Write tools are left off a read-only connection, so the model is never told they exist —
+/// cheaper and clearer than letting it call one and refusing afterwards.
+pub fn build_agent(builder: AgentBuilder<NoToolConfig>, ctx: Option<MongoContext>) -> Agent {
+    let Some(ctx) = ctx else {
+        return builder.build();
+    };
+    let read_only = ctx.read_only;
+    let builder = builder
+        .tool(find::FindDocumentsTool::new(ctx.clone()))
+        .tool(aggregate::AggregateTool::new(ctx.clone()))
+        .tool(count::CountDocumentsTool::new(ctx.clone()))
+        .tool(list_collections::ListCollectionsTool::new(ctx.clone()))
+        .tool(collection_stats::CollectionStatsTool::new(ctx.clone()))
+        .tool(schema::CollectionSchemaTool::new(ctx.clone()))
+        .tool(indexes::ListIndexesTool::new(ctx.clone()))
+        .tool(explain::ExplainQueryTool::new(ctx.clone()))
+        .tool(sample_values::SampleFieldValuesTool::new(ctx.clone()))
+        .tool(generate_report::GenerateReportTool::new(ctx.clone()))
+        .tool(recall::RecallConversationsTool::new(ctx.clone()));
+    if read_only {
+        return builder.build();
     }
-
-    tools
+    builder
+        .tool(insert::InsertDocumentsTool::new(ctx.clone()))
+        .tool(replace::ReplaceDocumentsTool::new(ctx.clone()))
+        .tool(delete::DeleteDocumentsTool::new(ctx.clone()))
+        .tool(create_index::CreateIndexTool::new(ctx.clone()))
+        .tool(self::drop_index::DropIndexTool::new(ctx))
+        .build()
 }
 
 pub fn ensure_writable(ctx: &MongoContext) -> Result<(), ToolError> {
@@ -261,4 +299,6 @@ pub fn doc_to_json(doc: &mongodb::bson::Document) -> serde_json::Value {
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_FIND_LIMIT: i64 = 50;
 
-pub mod drop_index;
+/// The most documents one write tool call may touch. The model is told this number, so it has
+/// to be enforced rather than advertised.
+pub const MAX_WRITE_DOCUMENTS: usize = 100;

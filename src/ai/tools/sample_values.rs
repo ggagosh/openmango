@@ -1,6 +1,5 @@
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use super::{MAX_OUTPUT_BYTES, MongoContext, ToolError, resolve_collection, truncate_output};
@@ -28,36 +27,40 @@ impl Tool for SampleFieldValuesTool {
     type Args = SampleFieldValuesArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get distinct values for a field in a collection. \
+    fn description(&self) -> String {
+        "Get distinct values for a field in a collection. \
                 Use to discover statuses, categories, types, or any enumeration \
                 before querying. Essential when you need exact values \
                 (e.g., \"APPROVED\" vs \"approved\"). Returns up to 50 values."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "field": {
-                        "type": "string",
-                        "description": "Field name to get distinct values for (e.g., \"status\", \"type\")"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "description": "Optional MongoDB filter as a JSON string to scope the distinct query"
-                    }
-                },
-                "required": ["field"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: SampleFieldValuesArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "field": {
+                    "type": "string",
+                    "description": "Field name to get distinct values for (e.g., \"status\", \"type\")"
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "Optional MongoDB filter as a JSON string to scope the distinct query"
+                }
+            },
+            "required": ["field"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: SampleFieldValuesArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         let col = resolve_collection(&args.collection, &self.0)?;
         let collection =
             self.0.client.database(&self.0.database).collection::<bson::Document>(&col);

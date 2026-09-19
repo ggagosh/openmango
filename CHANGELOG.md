@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Ask AI in the documents filter: the sparkle turns the filter bar into a bar you describe the filter to, Find becomes Generate, and what you typed comes back as the filter in the same box, written from the collection's own field names, types and — for fields that hold a handful of values — examples of those values. A description that asks for an order or for particular fields fills Sort and Projection too and opens the options row to show them. Nothing runs until you press Find, Escape gives back the filter you had, and undo takes it back after that. Cmd/Ctrl+I switches the bar either way without reaching for the mouse
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened
 - Multiple cursors in Forge and the query editors: Alt-click adds a cursor and Shift-Alt-drag selects a column
@@ -14,8 +15,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The command palette also opens with Cmd/Ctrl+Shift+P, lists recently used commands first, finds commands by related words such as "dump" for Export Data, and narrows the search to databases and collections when it starts with `#` or to connections with `@`
 - Mango Dark and Mango Light themes in the openmango.app colors, listed first in each group, with every text color meeting WCAG AA contrast on the surfaces it appears on
 - Match system appearance in Settings and in the command palette's theme list switches between Mango Dark and Mango Light with the system's dark or light mode; choosing a theme turns it off
+- AI models come from a models.dev catalogue: Fast, Balanced and Powerful presets per provider, a searchable picker that shows each model's context size and price, and a Refresh that fetches the latest list; a snapshot ships with the app so the picker is right offline
+- OpenRouter as an AI provider, offering its whole searchable catalogue of tool-calling models instead of presets
+- The assistant remembers a conversation between runs, and can search earlier conversations when you refer to work you did before. Conversations are kept in an encrypted database with a key from the system keychain, and nothing else on disk holds them: not the workspace file, not the log. Tool results, which hold your data, are never written down at all. Conversations are deleted after 30 days, and Settings can turn the memory off or delete everything it has kept
+- Every answer shows what it cost in tokens and in money at the model's list price, and can be copied; an answer that failed can be tried again. The chat header keeps the running total for the whole conversation
+- Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
+- New chat and a list of conversations in the chat header, the open one marked: starting over keeps what came before, and any of the last 20 conversations can be reopened where it left off. Each one is named by the model from its first exchange, says when it was, how many questions were asked and what it spent, and can be deleted from the list
+- Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
 
 ### Changed
+- Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
+- When a request fails, the chat says what to do about it: which key to check, which model to pick, or that it is a rate limit that will clear
 - New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
 - The sidebar lists only open connections, shows a spinner in place of the icon while one connects, keeps the connection color on the icon, and reveals row actions on hover or selection
 - Document values are plain text everywhere with one set of rules: numbers, `true`/`false`, ObjectId hex, dates such as `2024-01-31` or RFC 3339 timestamps, `null`, and mongosh forms like `ISODate("…")` or `NumberLong(42)`, replacing the switches and number steppers in inline tree editing, the edit value dialog, and the filter builder
@@ -25,11 +35,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Indexes tab shows keys as field and direction pairs and properties such as Unique, TTL, or Partial as tags, without disabled actions on the built-in `_id_` index
 - The Create Index and Edit Index dialogs label every field, name key types, explain unavailable options where they apply, submit with Cmd/Ctrl+Enter, and describe how replacing an index works before you confirm
 - The command palette shows shortcuts as keycaps, scrolls its whole list with a scrollbar, follows the mouse with one highlight, checks the current theme, names the open submenu with a back button (Backspace also goes back), and clears the search on the first Escape
+- The assistant works a question through step by step instead of being told to stop after a few tool calls, keeps what its tools found across follow-up questions, and retries a request the provider rate-limited
+- Save and Discard for unsaved document edits sit in the collection header with their keyboard shortcuts shown, and act on every unsaved document in the tab rather than only the selected ones
+- After a query the status bar says how many documents were loaded, out of how many matched, and how long it took
+- The Find button shows a spinner in place of its icon instead of pushing the row aside, and busy buttons keep their size
+- A long run of tool calls shows only its last few while it works, with the rest one click away, instead of pushing the answer off the screen
+- The status bar and the chat are built on gpui-kit's own components, so the chat scrolls, follows new messages and renders markdown the way the rest of the app does
+- Headings in an answer are bigger than the text they introduce, field names in a sentence carry the same blue the document tree gives them, code blocks have room around them, and the answer no longer changes size the moment it finishes streaming
 
 ### Removed
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- Cmd/Ctrl+F while typing in a query editor no longer opens the document search over the results
+- The filter bar keeps a line for its message whether or not it has one, so a query that finishes in milliseconds no longer flashes "Searching collection…" and shifts the documents under it
+- JSON, Insert and Refresh no longer grey out for the length of a query, which made the toolbar blink on every reload while Tree and Table stayed put
+- Running a query no longer rewrites the filter, sort and projection inputs or closes the options row, which made the view blink on every Find
+- The @collection list in the chat answers to the arrow keys, and Enter takes the highlighted collection instead of sending the half-typed name as a message
+- Switching themes now reaches the layer that draws the chat's markdown, so a dark theme no longer renders answers with light tables and washed-out text
 - Installing an update on macOS opened a second copy of OpenMango instead of replacing the running one
 - The Indexes tab rendered every index side by side on a single line
 - Error messages on the Indexes tab and in the index, edit value, and bulk update dialogs were drawn in a color that matched the background in most themes
@@ -38,6 +61,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shortcut hints in the command palette and sidebar tooltips showed the Ctrl variant on macOS
 - Double-clicking a value in the document tree to edit it shifted the text and the rows below
 - The Schema tab's field filter showed its text low, clipped, and indented behind an empty gutter; it now matches the documents filter
+- Replacing documents with `many` now stops at the 100 it promises, instead of rewriting every document that matched the filter
+- Inserting more than 100 documents is refused rather than quietly exceeding the limit the assistant was told about
+- A field's value no longer shifts by a couple of pixels when it is marked as edited or selected, and a document's key no longer moves when it gets unsaved changes
+- Two calls to the same tool in one answer keep their own results
+- On a read-only connection the assistant is no longer told about write tools it does not have
+- Stopping an answer says it stopped, instead of reporting a tool call limit
+- The chat's text box starts the caret at the edge of the box, and grows as you type
+- The model picker opens on the model you are using, and Settings says when the model list could not be loaded instead of showing "Ready"
+- A group of tool calls can be collapsed while the assistant is still working, and no longer blinks open and shut between calls
 
 ## [0.3.0] - 2026-09-14
 

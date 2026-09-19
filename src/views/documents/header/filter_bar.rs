@@ -18,15 +18,25 @@ use crate::views::documents::CollectionView;
 
 use super::super::query_editor::{query_editor, query_editor_height};
 
-fn query_find_button(window: &Window) -> Button {
+/// One line of 12px text at the app's line height, reserved whether or not there is a message.
+const FEEDBACK_LINE_HEIGHT: Pixels = px(18.0);
+
+/// The one button at the end of the filter row, in whichever of its two jobs it is doing. Both
+/// are the same size and in the same place, so switching between them moves nothing.
+fn query_action_button(window: &Window, label: &'static str, icon: impl Into<Icon>) -> Button {
     Button::new("apply-filter")
         .primary()
         .with_size(Size::Medium)
         .h(query_editor_height(1, window))
-        .label("Find")
-        .icon(Icon::new(IconName::Search).small())
-        .tooltip("Find matching documents · Enter")
+        .min_w(QUERY_ACTION_WIDTH)
+        .label(label)
+        .icon(icon.into().small())
 }
+
+/// Wide enough for "Generate", the longer of the two labels this button carries: the app is mono
+/// throughout, so eight characters at the button's text size plus its icon and padding is a
+/// number rather than a guess. Without it the row resized the moment the mode changed.
+const QUERY_ACTION_WIDTH: Pixels = px(112.0);
 
 fn set_query_object_default(
     input: &mut EditorState,
@@ -152,27 +162,66 @@ impl CollectionView {
                 }),
         );
 
-        let find = query_find_button(window).disabled(disabled || !valid).on_click({
+        // The icon turns into the spinner, so working never resizes or shifts the row.
+        let find = if self.ask_mode {
+            let view = view.clone();
+            query_action_button(window, "Generate", crate::assets::AppIcon::Sparkles)
+                .loading(self.ask_ai_busy)
+                .disabled(disabled || text.trim().is_empty())
+                .tooltip("Write this as a filter · Enter")
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| view.submit_ask_ai(window, cx));
+                })
+        } else {
             let state = state.clone();
             let session = session_key.clone();
             let input = filter_state.clone();
-            move |_, window, cx| {
-                if let (Some(session), Some(input)) = (session.clone(), input.clone()) {
-                    CollectionView::apply_filter(state.clone(), session, input, window, cx);
-                }
-            }
+            query_action_button(window, "Find", IconName::Search)
+                .loading(is_loading)
+                .disabled(disabled || !valid)
+                .tooltip("Find matching documents · Enter")
+                .on_click(move |_, window, cx| {
+                    if let (Some(session), Some(input)) = (session.clone(), input.clone()) {
+                        CollectionView::apply_filter(state.clone(), session, input, window, cx);
+                    }
+                })
+        };
+        // Asking turns this bar into the ask bar rather than opening one of its own: same row,
+        // same input, same button, so nothing moves and there is only ever one thing to press.
+        let ai_available = self.state.read(cx).ai_assistant_available();
+        let ask_mode = ai_available && self.ask_mode;
+        let ask_toggle = ai_available.then(|| {
+            let view = view.clone();
+            Button::new("ask-ai-toggle")
+                .ghost()
+                .with_size(Size::Medium)
+                .h(control_height)
+                .icon(Icon::new(crate::assets::AppIcon::Sparkles).small())
+                .selected(ask_mode)
+                .tooltip_with_action(
+                    match ask_mode {
+                        true => "Back to writing the filter",
+                        false => "Describe the filter in words",
+                    },
+                    &crate::keyboard::AskAiFilter,
+                    Some("Documents"),
+                )
+                .disabled(disabled || self.ask_ai_busy)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |view, cx| {
+                        let on = !view.ask_mode;
+                        view.set_ask_mode(on, window, cx);
+                    });
+                })
         });
-        let mut primary =
-            div().flex().items_start().gap(spacing::sm()).child(input_row).child(find);
-        if is_loading {
-            primary = primary.child(
-                div()
-                    .h(control_height)
-                    .flex()
-                    .items_center()
-                    .child(gpui_kit::component::spinner::Spinner::new().small()),
-            );
-        }
+
+        let primary = div()
+            .flex()
+            .items_start()
+            .gap(spacing::sm())
+            .child(input_row)
+            .children(ask_toggle)
+            .child(find);
 
         let mut tools = div()
             .flex()
@@ -294,7 +343,7 @@ impl CollectionView {
             );
         }
 
-        let mut bar = div()
+        let bar = div()
             .flex()
             .flex_col()
             .min_w(px(0.0))
@@ -302,7 +351,18 @@ impl CollectionView {
             .font_family(crate::theme::fonts::ui())
             .child(primary)
             .child(tools);
-        let feedback = if let Some(error) = &self.filter_error_message {
+        let feedback = if ask_mode {
+            // The line the bar already keeps says what this mode is, so the mode needs no chrome.
+            Some(match (&self.ask_ai_error, self.ask_ai_busy) {
+                (Some(error), _) => (error.clone(), cx.theme().warning),
+                (None, true) => ("Writing the filter…".to_string(), cx.theme().muted_foreground),
+                (None, false) => (
+                    "Describe what to find · Enter writes the filter · Escape goes back"
+                        .to_string(),
+                    cx.theme().muted_foreground,
+                ),
+            })
+        } else if let Some(error) = &self.filter_error_message {
             Some((error.clone(), cx.theme().warning))
         } else if !valid && !text.trim().is_empty() {
             Some(("Complete the filter · Enter shows details".into(), cx.theme().muted_foreground))
@@ -341,10 +401,11 @@ impl CollectionView {
         } else {
             None
         };
-        if let Some((text, color)) = feedback {
-            bar = bar.child(div().text_xs().text_color(color).child(text));
-        }
-        bar
+        // The line is always there, empty when there is nothing to say. It used to appear and
+        // disappear with the message, and a query that takes five milliseconds would show
+        // "Searching collection…" for one frame — pushing the whole document list down and back.
+        let (text, color) = feedback.unwrap_or_else(|| (String::new(), cx.theme().transparent));
+        bar.child(div().text_xs().h(FEEDBACK_LINE_HEIGHT).text_color(color).child(text))
     }
 }
 

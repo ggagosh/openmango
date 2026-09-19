@@ -3,9 +3,13 @@
 pub mod blocks;
 pub mod bridge;
 pub mod budget;
+pub mod catalog;
 pub mod context;
 pub mod errors;
+pub mod inline;
+pub mod memory;
 pub mod model_registry;
+pub mod naming;
 pub mod provider;
 pub mod safety;
 pub mod settings;
@@ -14,7 +18,7 @@ pub mod tools;
 
 pub use blocks::{
     AiChatEntry, AiChatState, AiTurn, ChatMessage, ChatMessageTone, ChatRole, ContentBlock,
-    ReportSheet, ToolActivity, ToolActivityStatus,
+    ReportSheet, ToolActivity, ToolActivityStatus, TurnUsage,
 };
 pub use errors::{AiError, AiErrorKind};
 pub use settings::{AiProvider, AiSettings};

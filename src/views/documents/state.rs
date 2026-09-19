@@ -64,6 +64,12 @@ pub struct CollectionView {
     pub(crate) calendar_second: Option<Entity<InputState>>,
     pub(crate) sort_error: bool,
     pub(crate) projection_error: bool,
+    /// The filter bar is describing a filter rather than holding one.
+    pub(crate) ask_mode: bool,
+    pub(crate) ask_ai_busy: bool,
+    pub(crate) ask_ai_error: Option<String>,
+    /// The filter that was in the bar before it became the ask bar.
+    pub(crate) ask_ai_filter: Option<String>,
     pub(crate) search_state: Option<Entity<InputState>>,
     pub(crate) search_visible: bool,
     pub(crate) search_matches: Vec<String>,
@@ -164,6 +170,15 @@ impl CollectionView {
                     .flatten()
                     .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
                 if filter_focused || option_focused {
+                    // The kit's editors are not searchable by default, and a non-searchable one
+                    // deliberately lets Cmd+F bubble to the app — which is how the document
+                    // search kept opening from inside the filter box. Turning searchable on
+                    // would only trade it for a find panel inside a one-line editor, so the key
+                    // stops here instead.
+                    if cmd_or_ctrl && key == "f" {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if filter_focused && this.handle_query_editor_key(&event.keystroke, window, cx)
                     {
                         cx.stop_propagation();
@@ -180,9 +195,9 @@ impl CollectionView {
                 }
                 let mut handled = false;
 
-                let save_selected_document =
+                let save_documents =
                     |this: &mut CollectionView, window: &mut Window, cx: &mut Context<Self>| {
-                        this.save_selected_documents(window, cx)
+                        this.save_documents(window, cx)
                     };
                 let is_aggregation = this
                     .view_model
@@ -234,12 +249,12 @@ impl CollectionView {
                         if committed {
                             window.focus(&this.documents_focus, cx);
                             if cmd_or_ctrl {
-                                save_selected_document(this, window, cx);
+                                save_documents(this, window, cx);
                             }
                         }
                         handled = true;
                     } else if cmd_or_ctrl {
-                        handled = save_selected_document(this, window, cx);
+                        handled = save_documents(this, window, cx);
                     } else if let Some(table) = this.view_model.table_state().cloned()
                         && table.read(cx).focus_handle(cx).contains_focused(window, cx)
                     {
@@ -361,9 +376,10 @@ impl CollectionView {
                 this.view_model.invalidate_table();
                 this.view_model.sync_dirty_state(&state, cx);
                 this.update_search_results(cx);
-                // Force re-sync of filter/sort/projection inputs from session data.
-                // This handles external changes (e.g. AI "Open Collection" clearing filters).
-                this.input_session = None;
+                // The query inputs are deliberately left alone. They already follow the session
+                // on every render, writing only what actually differs; forcing the whole
+                // session-changed path here rewrote all three editors and shut the options row
+                // on every Find, which is what made the view blink.
                 cx.notify();
             }
             AppEvent::DocumentDraftChanged { session } => {
@@ -439,6 +455,10 @@ impl CollectionView {
             calendar_second: None,
             sort_error: false,
             projection_error: false,
+            ask_mode: false,
+            ask_ai_busy: false,
+            ask_ai_error: None,
+            ask_ai_filter: None,
             search_state: None,
             search_visible: false,
             search_matches: Vec::new(),

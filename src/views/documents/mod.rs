@@ -1,6 +1,7 @@
 //! Document/Collection view component.
 
 mod actions;
+mod ask_ai;
 mod explain;
 mod fast_filter;
 pub(crate) use fast_filter::compile_filter_input;

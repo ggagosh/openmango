@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 use crate::ai::safety::{ConfirmationSender, OperationPreview, SafetyTier};
@@ -194,7 +193,7 @@ pub fn tool_result_to_block(tool_name: &str, json: &str) -> Option<ContentBlock>
             let stats = serde_json::json!({"title": "Insert Result", "metrics": metrics});
             Some(ContentBlock::Stats { json: stats.to_string() })
         }
-        "update_documents" | "replace_documents" => {
+        "replace_documents" => {
             let matched = val.get("matched_count").map(|v| v.to_string()).unwrap_or_default();
             let modified = val.get("modified_count").map(|v| v.to_string()).unwrap_or_default();
             let metrics = vec![
@@ -365,9 +364,62 @@ impl ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTurn {
     pub id: Uuid,
+    /// What the turn cost, once it finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TurnUsage>,
     pub user_message: ChatMessage,
     pub assistant_message: Option<ChatMessage>,
     pub created_at: DateTime<Utc>,
+}
+
+/// Everything the namer needs, collected on the main thread so the work can leave it.
+pub struct NamingJob {
+    pub conversation_id: String,
+    pub settings: crate::ai::settings::AiSettings,
+    pub question: String,
+    pub answer: String,
+    pub memory: crate::ai::memory::ChatMemory,
+}
+
+/// Tokens a turn spent, as the provider counted them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// What it cost at the price the model listed when it ran. Prices move and a local model
+    /// has none, so this is recorded with the turn rather than worked out again later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
+impl TurnUsage {
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens == 0 && self.output_tokens == 0
+    }
+
+    /// The money if there is any, else the tokens: what fits beside a title.
+    pub fn short_label(&self) -> String {
+        use crate::helpers::format_number;
+        match self.cost_usd {
+            Some(cost) => crate::ai::catalog::format_usd(cost),
+            None => format!("{} tokens", format_number(self.input_tokens + self.output_tokens)),
+        }
+    }
+
+    /// "1,234 in · 567 out · $0.0042", the line under a finished answer.
+    pub fn label(&self) -> String {
+        use crate::helpers::format_number;
+        let mut label = format!(
+            "{} in · {} out",
+            format_number(self.input_tokens),
+            format_number(self.output_tokens)
+        );
+        if let Some(cost) = self.cost_usd {
+            label.push_str(" · ");
+            label.push_str(&crate::ai::catalog::format_usd(cost));
+        }
+        label
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,13 +442,23 @@ pub enum ToolActivityStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolActivity {
     pub id: Uuid,
+    /// rig's handle for the call this row shows. Absent on rows restored from an old workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     pub tool_name: String,
     pub status: ToolActivityStatus,
     pub args_preview: String,
+    /// What the tool returned, for this run only.
+    ///
+    /// Not persisted: a result is a copy of the user's production rows, and the workspace file is
+    /// plain text on disk. The row comes back after a restart saying which tool ran on what; the
+    /// rows themselves are re-read from the database when they are needed again.
+    #[serde(skip)]
     pub result_preview: Option<String>,
-    /// Full structured result for native rendering.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_block: Option<ContentBlock>,
+    /// Full structured result for native rendering. Boxed: a report block is far larger than the
+    /// rest of the row put together. Not persisted, for the same reason as `result_preview`.
+    #[serde(skip)]
+    pub result_block: Option<Box<ContentBlock>>,
     /// Collection name extracted from tool args (persists across restarts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
@@ -426,9 +488,22 @@ pub struct AiChatState {
     #[serde(skip)]
     pub current_turn_id: Option<Uuid>,
     #[serde(skip)]
-    pub cancel_flag: Option<Arc<AtomicBool>>,
+    /// Cancels the run in flight, including a tool call that has already started.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
     #[serde(skip)]
     pub cached_models: crate::ai::model_registry::ModelCache,
+    /// Names this conversation in the memory store, so reopening the app continues it rather
+    /// than starting over.
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
+    /// The store itself, opened once per run.
+    #[serde(skip)]
+    pub memory: Option<crate::ai::memory::ChatMemory>,
+    /// The catalogue from the last refresh; the bundled snapshot stands in until then.
+    #[serde(skip)]
+    pub refreshed_catalog: Option<Arc<crate::ai::catalog::ModelCatalog>>,
+    #[serde(skip)]
+    pub catalog_etag: Option<String>,
     /// Collections @-mentioned for additional context in the next message.
     #[serde(skip)]
     pub mentioned_collections: Vec<String>,
@@ -440,11 +515,45 @@ pub struct AiChatState {
 impl AiChatState {
     const TIMELINE_LIMIT: usize = 200;
 
+    /// The id this conversation is stored under, minted on first use.
+    pub fn conversation_id(&mut self) -> Uuid {
+        *self.conversation_id.get_or_insert_with(Uuid::new_v4)
+    }
+
+    /// Everything this conversation has spent: every turn's tokens, and the money for the turns
+    /// that carried a price.
+    pub fn conversation_usage(&self) -> TurnUsage {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                AiChatEntry::Turn(turn) => turn.usage,
+                _ => None,
+            })
+            .fold(TurnUsage::default(), |mut total, turn| {
+                total.input_tokens += turn.input_tokens;
+                total.output_tokens += turn.output_tokens;
+                if let Some(cost) = turn.cost_usd {
+                    total.cost_usd = Some(total.cost_usd.unwrap_or(0.0) + cost);
+                }
+                total
+            })
+    }
+
+    /// The model catalogue in force: the last refresh, or the bundled snapshot.
+    pub fn catalog(&self) -> Arc<crate::ai::catalog::ModelCatalog> {
+        self.refreshed_catalog.clone().unwrap_or_else(crate::ai::catalog::ModelCatalog::bundled)
+    }
+
     pub fn begin_turn(&mut self, content: impl Into<String>) -> Uuid {
         let user_message = ChatMessage::new(ChatRole::User, content);
         let turn_id = Uuid::new_v4();
-        let turn =
-            AiTurn { id: turn_id, user_message, assistant_message: None, created_at: Utc::now() };
+        let turn = AiTurn {
+            id: turn_id,
+            usage: None,
+            user_message,
+            assistant_message: None,
+            created_at: Utc::now(),
+        };
         self.entries.push(AiChatEntry::Turn(turn));
         self.current_turn_id = Some(turn_id);
         self.trim_entries();
@@ -470,6 +579,15 @@ impl AiChatState {
         {
             msg.content.push_str(delta);
             msg.tone = ChatMessageTone::Normal;
+        }
+    }
+
+    pub fn set_turn_usage(&mut self, turn_id: Uuid, usage: TurnUsage) {
+        if usage.is_empty() {
+            return;
+        }
+        if let Some(turn) = self.find_turn_mut(turn_id) {
+            turn.usage = Some(usage);
         }
     }
 
@@ -499,11 +617,104 @@ impl AiChatState {
         self.last_error = None;
     }
 
-    pub fn clear_chat(&mut self) {
+    /// Put the conversation in progress away and start an empty one.
+    ///
+    /// Unlike Clear, nothing is deleted: the old conversation stays in the store and in the
+    /// history list, which is what makes starting over safe to do.
+    pub fn start_new_conversation(&mut self) {
+        self.save_conversation();
+        self.reset_visible_chat();
+        // The next turn names it, so an abandoned empty chat never reaches the store.
+        self.conversation_id = None;
+    }
+
+    /// Put the conversation in progress away and bring an earlier one back.
+    pub fn open_conversation(&mut self, id: Uuid) {
+        if self.conversation_id == Some(id) {
+            return;
+        }
+        self.save_conversation();
+        self.entries = match &self.memory {
+            Some(memory) => memory.load_timeline(&id.to_string()).unwrap_or_else(|error| {
+                log::warn!("Could not open the stored conversation: {error}");
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        self.current_turn_id = None;
+        self.last_error = None;
+        self.mentioned_collections.clear();
+        self.conversation_id = Some(id);
+    }
+
+    /// The conversations worth offering, newest first. The one on screen is in the list, marked
+    /// by the view: a switcher that hides where you are reads as broken when there are only one
+    /// or two chats.
+    pub fn recent_conversations(&self, limit: usize) -> Vec<crate::ai::memory::Conversation> {
+        let Some(memory) = &self.memory else { return Vec::new() };
+        // The chat on screen may be ahead of the store, so it is written out before it is listed.
+        self.save_conversation();
+        memory.recent(limit).unwrap_or_else(|error| {
+            log::warn!("Could not list earlier conversations: {error}");
+            Vec::new()
+        })
+    }
+
+    /// What it takes to name this conversation, when it still needs a name.
+    ///
+    /// Only the first exchange is used and only once, so a long conversation keeps the name it
+    /// was given rather than drifting as the subject moves on.
+    pub fn naming_job(&self, settings: &crate::ai::settings::AiSettings) -> Option<NamingJob> {
+        let memory = self.memory.clone()?;
+        let conversation_id = self.conversation_id?.to_string();
+        if memory.has_title(&conversation_id) {
+            return None;
+        }
+        let turn = self.entries.iter().find_map(|entry| match entry {
+            AiChatEntry::Turn(turn) => Some(turn),
+            _ => None,
+        })?;
+        let answer = turn.assistant_message.as_ref()?;
+        // A turn that failed says nothing about the subject.
+        if answer.tone == ChatMessageTone::Error || answer.content.trim().is_empty() {
+            return None;
+        }
+        Some(NamingJob {
+            conversation_id,
+            settings: settings.clone(),
+            question: turn.user_message.content.clone(),
+            answer: answer.content.clone(),
+            memory,
+        })
+    }
+
+    /// Write what is on screen to the store, so leaving this conversation does not lose it.
+    pub fn save_conversation(&self) {
+        if let (Some(memory), Some(id)) = (&self.memory, self.conversation_id)
+            && !self.entries.is_empty()
+            && let Err(error) = memory.save_timeline(&id.to_string(), &self.entries)
+        {
+            log::warn!("Could not save the conversation: {error}");
+        }
+    }
+
+    fn reset_visible_chat(&mut self) {
         self.entries.clear();
         self.current_turn_id = None;
         self.last_error = None;
         self.mentioned_collections.clear();
+    }
+
+    pub fn clear_chat(&mut self) {
+        self.reset_visible_chat();
+        // A cleared chat starts the model over too, or it would answer from a conversation the
+        // user can no longer see. The stored conversation goes with it.
+        if let (Some(memory), Some(id)) = (&self.memory, self.conversation_id)
+            && let Err(error) = memory.forget(&id.to_string())
+        {
+            log::warn!("Could not clear the stored conversation: {error}");
+        }
+        self.conversation_id = None;
     }
 
     pub fn find_turn_mut(&mut self, turn_id: Uuid) -> Option<&mut AiTurn> {
@@ -539,6 +750,7 @@ impl AiChatState {
 
     pub fn push_tool_start(
         &mut self,
+        call_id: String,
         name: String,
         args_preview: String,
         args_full: String,
@@ -550,6 +762,7 @@ impl AiChatState {
         let args_full_stored = if name == "aggregate" { Some(args_full.clone()) } else { None };
         self.entries.push(AiChatEntry::ToolActivity(ToolActivity {
             id,
+            call_id: Some(call_id),
             tool_name: name,
             status: ToolActivityStatus::Running,
             args_preview,
@@ -562,37 +775,66 @@ impl AiChatState {
         id
     }
 
-    pub fn fail_tool(&mut self, name: &str, reason: String) {
-        for entry in self.entries.iter_mut().rev() {
+    pub fn fail_tool(&mut self, call_id: &str, name: &str, reason: String) {
+        let Some(activity) = self.running_tool_mut(call_id, name) else {
+            return;
+        };
+        activity.status = ToolActivityStatus::Failed(reason);
+    }
+
+    /// The row this result belongs to: the call rig names, or — for rows from before call ids
+    /// were recorded — the most recent running call of that tool.
+    /// Close off whatever was still running when the user pressed Stop. The call was dropped
+    /// mid-flight, so its row would otherwise spin for the rest of the session.
+    pub fn stop_running_tools(&mut self) {
+        for entry in &mut self.entries {
             if let AiChatEntry::ToolActivity(activity) = entry
+                && matches!(activity.status, ToolActivityStatus::Running)
+            {
+                activity.status = ToolActivityStatus::Failed("Stopped.".to_string());
+            }
+        }
+    }
+
+    fn running_tool_mut(&mut self, call_id: &str, name: &str) -> Option<&mut ToolActivity> {
+        let mut fallback = None;
+        for (index, entry) in self.entries.iter().enumerate().rev() {
+            let AiChatEntry::ToolActivity(activity) = entry else {
+                continue;
+            };
+            if activity.call_id.as_deref() == Some(call_id) {
+                fallback = Some(index);
+                break;
+            }
+            if fallback.is_none()
+                && activity.call_id.is_none()
                 && activity.tool_name == name
                 && matches!(activity.status, ToolActivityStatus::Running)
             {
-                activity.status = ToolActivityStatus::Failed(reason);
-                return;
+                fallback = Some(index);
             }
+        }
+        match self.entries.get_mut(fallback?) {
+            Some(AiChatEntry::ToolActivity(activity)) => Some(activity),
+            _ => None,
         }
     }
 
     pub fn complete_tool(
         &mut self,
+        call_id: &str,
         name: &str,
         result_preview: String,
         result_json: Option<String>,
     ) {
-        // Find the most recent Running tool activity with matching name
-        let block = result_json.as_deref().and_then(|json| tool_result_to_block(name, json));
-        for entry in self.entries.iter_mut().rev() {
-            if let AiChatEntry::ToolActivity(activity) = entry
-                && activity.tool_name == name
-                && matches!(activity.status, ToolActivityStatus::Running)
-            {
-                activity.status = ToolActivityStatus::Completed;
-                activity.result_preview = Some(result_preview);
-                activity.result_block = block;
-                return;
-            }
-        }
+        let block =
+            result_json.as_deref().and_then(|json| tool_result_to_block(name, json)).map(Box::new);
+        let Some(activity) = self.running_tool_mut(call_id, name) else {
+            return;
+        };
+        activity.status = ToolActivityStatus::Completed;
+        activity.result_preview = Some(result_preview);
+        activity.result_block = block;
     }
 
     /// Transition a tool from AwaitingConfirmation back to Running (approved).
@@ -672,6 +914,101 @@ impl AiChatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Starting over must not feel like losing the last hour of work.
+    #[test]
+    fn a_new_chat_keeps_the_old_one_and_can_go_back_to_it() {
+        let mut chat = AiChatState {
+            memory: Some(crate::ai::memory::ChatMemory::in_memory().expect("store")),
+            ..AiChatState::default()
+        };
+        let first = chat.conversation_id();
+        chat.begin_turn("how many orders shipped?");
+
+        // The conversation on screen is in its own list: hiding it made one chat look like none.
+        let listed = chat.recent_conversations(20);
+        assert_eq!(listed.len(), 1, "the conversation in progress is listed");
+        assert_eq!(listed[0].title, "how many orders shipped?");
+        assert_eq!(listed[0].id, first.to_string());
+
+        chat.start_new_conversation();
+        assert!(chat.entries.is_empty(), "the screen is empty");
+        assert_ne!(chat.conversation_id, Some(first), "and the model starts over too");
+
+        chat.open_conversation(first);
+        assert_eq!(chat.conversation_id, Some(first));
+        assert_eq!(chat.entries.len(), 1, "what was asked before came back");
+
+        // Clear is the one that really deletes, and what it deletes cannot be reopened.
+        chat.clear_chat();
+        chat.open_conversation(first);
+        assert!(chat.entries.is_empty());
+    }
+
+    #[test]
+    fn usage_is_recorded_on_the_turn_it_belongs_to() {
+        let mut chat = AiChatState::default();
+        let turn_id = chat.begin_turn("how many orders?");
+        chat.set_turn_usage(
+            turn_id,
+            TurnUsage { input_tokens: 1234, output_tokens: 56, cost_usd: Some(0.004_2) },
+        );
+
+        let turn = chat.find_turn_mut(turn_id).expect("turn");
+        assert_eq!(
+            turn.usage.map(|usage| usage.label()),
+            Some("1,234 in · 56 out · $0.0042".to_string())
+        );
+        assert_eq!(
+            chat.conversation_usage().label(),
+            "1,234 in · 56 out · $0.0042",
+            "the header adds the turns up"
+        );
+
+        // A provider that reports nothing leaves the footer off entirely.
+        let second = chat.begin_turn("and customers?");
+        chat.set_turn_usage(second, TurnUsage::default());
+        assert!(chat.find_turn_mut(second).expect("turn").usage.is_none());
+    }
+
+    #[test]
+    fn two_calls_to_one_tool_keep_their_own_results() {
+        let mut chat = AiChatState::default();
+        chat.push_tool_start(
+            "call-a".into(),
+            "find_documents".into(),
+            String::new(),
+            String::new(),
+        );
+        chat.push_tool_start(
+            "call-b".into(),
+            "find_documents".into(),
+            String::new(),
+            String::new(),
+        );
+
+        // The second call answers first — by name alone this landed on the wrong row.
+        chat.complete_tool("call-b", "find_documents", "second".into(), None);
+        chat.complete_tool("call-a", "find_documents", "first".into(), None);
+
+        let results: Vec<_> = chat
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                AiChatEntry::ToolActivity(activity) => {
+                    Some((activity.call_id.clone()?, activity.result_preview.clone()?))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results,
+            vec![
+                ("call-a".to_string(), "first".to_string()),
+                ("call-b".to_string(), "second".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn append_turn_delta_does_not_parse_blocks_until_finalize() {

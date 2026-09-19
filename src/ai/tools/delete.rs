@@ -1,7 +1,6 @@
 use futures::TryStreamExt;
 use mongodb::bson;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 
 use crate::ai::safety::OperationPreview;
@@ -31,30 +30,34 @@ impl Tool for DeleteDocumentsTool {
     type Args = DeleteArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Delete documents from a MongoDB collection matching a filter. \
+    fn description(&self) -> String {
+        "Delete documents from a MongoDB collection matching a filter. \
                 A non-empty filter is required — empty filters are blocked for safety."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection name (optional if a default is set)"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "description": "MongoDB filter as JSON string, e.g. {\"status\": \"inactive\"}"
-                    }
-                },
-                "required": ["filter"]
-            }),
-        }
+            .to_string()
     }
 
-    async fn call(&self, args: DeleteArgs) -> Result<serde_json::Value, ToolError> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "description": "Collection name (optional if a default is set)"
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "MongoDB filter as JSON string, e.g. {\"status\": \"inactive\"}"
+                }
+            },
+            "required": ["filter"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: DeleteArgs,
+    ) -> Result<serde_json::Value, ToolError> {
         ensure_writable(&self.0)?;
         let col_name = resolve_collection(&args.collection, &self.0)?;
         let filter = parse_json_to_doc(&args.filter)?;

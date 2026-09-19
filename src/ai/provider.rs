@@ -4,70 +4,114 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
-use rig::agent::{MultiTurnStreamItem, PromptHook, ToolCallHookAction};
-use rig::client::CompletionClient as _;
-use rig::client::Nothing;
-use rig::completion::{
-    Chat as _, CompletionModel, Message as RigMessage, Prompt as _, PromptError,
+use rig::agent::{
+    AgentHook, HookContext, ModelTurnAction, ModelTurnFinished, MultiTurnStreamItem,
+    StreamingResult, ToolCall as ToolCallEvent, ToolCallAction,
 };
-use rig::providers::{anthropic, gemini, ollama, openai};
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat as _};
-use rig::tool::ToolDyn;
+use rig::client::Nothing;
+use rig::completion::{Chat as _, Message as RigMessage, Prompt as _, PromptError};
+use rig::prelude::*;
+use rig::providers::{anthropic, gemini, ollama, openai, openrouter};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 
 use crate::ai::blocks::{ChatMessage, ChatRole};
 use crate::ai::errors::AiError;
 use crate::ai::settings::{AiProvider, AiSettings};
-use crate::ai::tools::{MongoContext, StreamEvent, build_tools, truncate_str};
+use crate::ai::tools::{MongoContext, StreamEvent, build_agent, truncate_str};
 
-const HISTORY_LIMIT: usize = 18;
 const MAX_OUTPUT_TOKENS: u32 = 4096;
-const MAX_TURNS: usize = 15;
-const MAX_TOOL_CALLS: usize = 6;
+/// Used when the catalogue does not say how much the model can hold.
+const DEFAULT_CONTEXT_TOKENS: usize = 100_000;
+/// However tight the budget looks, the conversation keeps at least this much room.
+const MIN_MEMORY_TOKENS: usize = 4_000;
 
-// ---------------------------------------------------------------------------
-// ToolCallLimiter — PromptHook that terminates after N tool calls
-// ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct ToolCallLimiter {
-    max_calls: usize,
-    call_count: Arc<AtomicUsize>,
+fn estimate_tokens(chars: usize) -> usize {
+    (chars as f64 * 0.3) as usize
 }
 
-impl ToolCallLimiter {
-    fn new(max_calls: usize) -> Self {
-        Self { max_calls, call_count: Arc::new(AtomicUsize::new(0)) }
+/// Model calls in one run. A step is cheap; being cut off mid-investigation is not.
+const MAX_TURNS: usize = 30;
+/// Tool calls in one run — the backstop against a model looping on the database.
+const MAX_TOOL_CALLS: usize = 20;
+
+// ---------------------------------------------------------------------------
+// RunPolicy — what the agent loop is allowed to do
+// ---------------------------------------------------------------------------
+
+/// Stops the run when the user hits Stop, and keeps the model from grinding through tool calls
+/// forever. rig calls this at every tool call and at the end of every model turn, so a cancelled
+/// run ends inside the loop instead of being abandoned mid-request.
+#[derive(Clone)]
+struct RunPolicy {
+    max_calls: usize,
+    calls: Arc<AtomicUsize>,
+    cancel: CancellationToken,
+}
+
+impl RunPolicy {
+    fn new(max_calls: usize, cancel: CancellationToken) -> Self {
+        Self { max_calls, calls: Arc::new(AtomicUsize::new(0)), cancel }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 }
 
-impl<M: CompletionModel> PromptHook<M> for ToolCallLimiter {
+const CANCELLED: &str = "The user stopped this request.";
+
+impl AgentHook for RunPolicy {
     fn on_tool_call(
         &self,
-        tool_name: &str,
-        _tool_call_id: Option<String>,
-        _internal_call_id: &str,
-        _args: &str,
-    ) -> impl Future<Output = ToolCallHookAction> + Send {
-        let count = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
-        let max = self.max_calls;
-        let name = tool_name.to_string();
+        _ctx: &HookContext,
+        event: ToolCallEvent<'_>,
+    ) -> impl Future<Output = ToolCallAction> + Send {
+        let cancelled = self.cancelled();
+        let count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let (max, name) = (self.max_calls, event.tool_name.to_string());
         async move {
+            if cancelled {
+                return ToolCallAction::stop(CANCELLED);
+            }
             if count > max {
-                log::debug!(
-                    "[ai-hook] skipping: tool call #{count} ({name}) exceeds limit of {max}"
-                );
-                ToolCallHookAction::skip(
+                log::debug!("[ai-hook] skipping tool call #{count} ({name}), limit is {max}");
+                ToolCallAction::skip(
                     "TOOL CALL LIMIT REACHED. Do NOT call any more tools. \
                      Respond to the user NOW with what you have found so far.",
                 )
             } else {
                 log::debug!("[ai-hook] allowing tool call #{count}/{max}: {name}");
-                ToolCallHookAction::cont()
+                ToolCallAction::run()
             }
         }
     }
+
+    fn on_model_turn_finished(
+        &self,
+        _ctx: &HookContext,
+        _event: ModelTurnFinished<'_>,
+    ) -> impl Future<Output = ModelTurnAction> + Send {
+        let cancelled = self.cancelled();
+        async move {
+            if cancelled {
+                ModelTurnAction::stop(CANCELLED)
+            } else {
+                ModelTurnAction::continue_run()
+            }
+        }
+    }
+}
+
+/// An HTTP client that retries the failures worth retrying: 429s and transient 5xx, backing off
+/// between attempts. rig has no retry of its own, and a rate limit should not end a turn.
+fn retrying_http_client() -> reqwest_middleware::ClientWithMiddleware {
+    let policy = reqwest_retry::policies::ExponentialBackoff::builder().build_with_max_retries(3);
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::default())
+        .with(reqwest_retry::RetryTransientMiddleware::new_with_policy(policy))
+        .build()
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +123,56 @@ pub struct AiGenerationRequest {
     pub system_prompt: String,
     pub history: Vec<ChatMessage>,
     pub user_prompt: String,
+    /// Names the conversation in the memory store.
+    pub conversation_id: String,
+    /// Where the conversation is kept. Without one the turn still runs, it is just not remembered.
+    pub memory: Option<crate::ai::memory::ChatMemory>,
+    /// The chosen model's context window, from the catalogue. `None` falls back to a safe default.
+    pub context_tokens: Option<usize>,
+    /// What the chosen model charges, from the catalogue, so a finished turn can say what it
+    /// cost. `None` for a model with no listed price.
+    pub price: Option<crate::ai::catalog::Cost>,
+}
+
+/// One completed turn.
+#[derive(Debug, Clone, Default)]
+pub struct TurnOutcome {
+    pub text: String,
+    /// What the provider charged for this turn.
+    pub usage: crate::ai::blocks::TurnUsage,
+    /// Feed this back as the next turn's transcript so the model keeps what its tools found.
+    pub transcript: Vec<RigMessage>,
+}
+
+/// What the model is shown of the conversation when there is no memory to load it from — the
+/// visible chat, replayed. With memory, rig loads the real transcript instead.
+fn conversation_history(request: &AiGenerationRequest) -> Vec<RigMessage> {
+    let mut history = to_rig_history(&request.history);
+    crate::ai::budget::trim_transcript(
+        &mut history,
+        request.system_prompt.chars().count(),
+        request.context_tokens,
+    );
+    history
+}
+
+/// How much of the stored conversation rig may load: what the model can hold, minus the room the
+/// system prompt and the answer need. rig drops whole turns to fit, keeping tool calls with their
+/// results.
+fn memory_policy(request: &AiGenerationRequest) -> rig_memory::TokenWindowMemory {
+    rig_memory::TokenWindowMemory::new(
+        memory_budget(request),
+        rig_memory::HeuristicTokenCounter::anthropic(),
+    )
+}
+
+/// Tokens the stored conversation may use: the model's window, less the room the system prompt
+/// and the answer need, and never so little that the last exchange cannot be loaded.
+fn memory_budget(request: &AiGenerationRequest) -> usize {
+    let context = request.context_tokens.unwrap_or(DEFAULT_CONTEXT_TOKENS);
+    let reserved =
+        estimate_tokens(request.system_prompt.chars().count()) + MAX_OUTPUT_TOKENS as usize;
+    context.saturating_sub(reserved).max(MIN_MEMORY_TOKENS)
 }
 
 pub async fn generate_text(
@@ -90,6 +184,7 @@ pub async fn generate_text(
         AiProvider::Gemini => call_gemini(settings, request).await,
         AiProvider::OpenAi => call_openai(settings, request).await,
         AiProvider::Anthropic => call_anthropic(settings, request).await,
+        AiProvider::OpenRouter => call_openrouter(settings, request).await,
         AiProvider::Ollama => call_ollama(settings, request).await,
     }
 }
@@ -98,28 +193,31 @@ pub async fn generate_text_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
     tool_ctx: Option<MongoContext>,
+    cancel: CancellationToken,
     event_tx: UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     settings.validate_for_request()?;
-    let tools: Vec<Box<dyn ToolDyn>> = match settings.provider {
-        // OpenAI GPT-5 models can reject tool-call replay in multi-turn streams
-        // with: function_call item missing required reasoning item.
-        // Keep OpenAI stable by running without attached tools.
-        AiProvider::OpenAi => Vec::new(),
-        _ => tool_ctx
-            .map(|mut ctx| {
-                ctx.event_tx = Some(event_tx.clone());
-                build_tools(ctx)
-            })
-            .unwrap_or_default(),
-    };
+    let tool_ctx = tool_ctx.map(|mut ctx| {
+        ctx.event_tx = Some(event_tx.clone());
+        ctx
+    });
+    let policy = RunPolicy::new(MAX_TOOL_CALLS, cancel);
     match settings.provider {
-        AiProvider::Gemini => call_gemini_streaming(settings, request, tools, &event_tx).await,
-        AiProvider::OpenAi => call_openai_streaming(settings, request, tools, &event_tx).await,
-        AiProvider::Anthropic => {
-            call_anthropic_streaming(settings, request, tools, &event_tx).await
+        AiProvider::Gemini => {
+            call_gemini_streaming(settings, request, tool_ctx, policy, &event_tx).await
         }
-        AiProvider::Ollama => call_ollama_streaming(settings, request, tools, &event_tx).await,
+        AiProvider::OpenAi => {
+            call_openai_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::Anthropic => {
+            call_anthropic_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::OpenRouter => {
+            call_openrouter_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
+        AiProvider::Ollama => {
+            call_ollama_streaming(settings, request, tool_ctx, policy, &event_tx).await
+        }
     }
 }
 
@@ -139,22 +237,26 @@ async fn call_gemini(
         return Err(AiError::Parse("Gemini model is empty".to_string()));
     }
 
-    let client = gemini::Client::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
-    })?;
+    let client = gemini::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Gemini, error))
+    response.map_err(|error| map_rig_error(AiProvider::Gemini, model, error))
 }
 
 async fn call_openai(
@@ -169,22 +271,26 @@ async fn call_openai(
         return Err(AiError::Parse("OpenAI model is empty".to_string()));
     }
 
-    let client = openai::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
-    })?;
+    let client = openai::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::OpenAi, error))
+    response.map_err(|error| map_rig_error(AiProvider::OpenAi, model, error))
 }
 
 async fn call_anthropic(
@@ -199,22 +305,60 @@ async fn call_anthropic(
         return Err(AiError::Parse("Anthropic model is empty".to_string()));
     }
 
-    let client = anthropic::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
-    })?;
+    let client = anthropic::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
+        })?;
     let agent = client
         .agent(model)
         .preamble(&request.system_prompt)
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Anthropic, error))
+    response.map_err(|error| map_rig_error(AiProvider::Anthropic, model, error))
+}
+
+async fn call_openrouter(
+    settings: &AiSettings,
+    request: AiGenerationRequest,
+) -> Result<String, AiError> {
+    let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
+        provider: settings.provider.label().to_string(),
+    })?;
+    let model = settings.model.trim();
+    if model.is_empty() {
+        return Err(AiError::Parse("OpenRouter model is empty".to_string()));
+    }
+
+    let client = openrouter::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenRouter client: {error}"))
+        })?;
+    let agent = client
+        .agent(model)
+        .preamble(&request.system_prompt)
+        .max_tokens(MAX_OUTPUT_TOKENS as u64)
+        .build();
+
+    let mut history = conversation_history(&request);
+    let response = if history.is_empty() {
+        agent.prompt(request.user_prompt).await
+    } else {
+        agent.chat(request.user_prompt, &mut history).await
+    };
+    response.map_err(|error| map_rig_error(AiProvider::OpenRouter, model, error))
 }
 
 async fn call_ollama(
@@ -245,7 +389,8 @@ async fn call_ollama(
         });
     }
 
-    let client = ollama::Client::<reqwest::Client>::builder()
+    let client = ollama::Client::builder()
+        .http_client(retrying_http_client())
         .api_key(Nothing)
         .base_url(base_url)
         .build()
@@ -258,13 +403,25 @@ async fn call_ollama(
         .max_tokens(MAX_OUTPUT_TOKENS as u64)
         .build();
 
-    let history = to_rig_history(&request.history);
+    let mut history = conversation_history(&request);
     let response = if history.is_empty() {
         agent.prompt(request.user_prompt).await
     } else {
-        agent.chat(request.user_prompt, history).await
+        agent.chat(request.user_prompt, &mut history).await
     };
-    response.map_err(|error| map_rig_error(AiProvider::Ollama, error))
+    response.map_err(|error| map_rig_error(AiProvider::Ollama, model, error))
+}
+
+/// Give the agent the conversation store, wrapped in the window policy that decides how much of
+/// it fits. Without a store the agent simply has no memory of earlier runs.
+fn with_memory(
+    builder: rig::agent::AgentBuilder<rig::agent::NoToolConfig>,
+    request: &AiGenerationRequest,
+) -> rig::agent::AgentBuilder<rig::agent::NoToolConfig> {
+    let Some(memory) = request.memory.clone() else {
+        return builder;
+    };
+    builder.memory(rig_memory::PolicyMemory::new(memory, memory_policy(request)))
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +431,10 @@ async fn call_ollama(
 async fn call_gemini_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -285,30 +443,52 @@ async fn call_gemini_streaming(
         return Err(AiError::Parse("Gemini model is empty".to_string()));
     }
 
-    let client = gemini::Client::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
-    })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let client = gemini::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Gemini client: {error}"))
+        })?;
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy.clone()),
+            &request,
+        ),
+        tool_ctx,
+    );
 
-    let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
-    consume_stream(&mut stream, AiProvider::Gemini, event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::Gemini,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_openai_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -317,30 +497,52 @@ async fn call_openai_streaming(
         return Err(AiError::Parse("OpenAI model is empty".to_string()));
     }
 
-    let client = openai::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
-    })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let client = openai::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenAI client: {error}"))
+        })?;
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy.clone()),
+            &request,
+        ),
+        tool_ctx,
+    );
 
-    let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
-    consume_stream(&mut stream, AiProvider::OpenAi, event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::OpenAi,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_anthropic_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
         provider: settings.provider.label().to_string(),
     })?;
@@ -349,30 +551,106 @@ async fn call_anthropic_streaming(
         return Err(AiError::Parse("Anthropic model is empty".to_string()));
     }
 
-    let client = anthropic::Client::<reqwest::Client>::new(api_key).map_err(|error| {
-        AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
+    let client = anthropic::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize Anthropic client: {error}"))
+        })?;
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy.clone()),
+            &request,
+        ),
+        tool_ctx,
+    );
+
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
+
+    consume_stream(
+        &mut stream,
+        AiProvider::Anthropic,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
+}
+
+async fn call_openrouter_streaming(
+    settings: &AiSettings,
+    request: AiGenerationRequest,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
+    event_tx: &UnboundedSender<StreamEvent>,
+) -> Result<TurnOutcome, AiError> {
+    let api_key = settings.configured_api_key().ok_or_else(|| AiError::MissingApiKey {
+        provider: settings.provider.label().to_string(),
     })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let model = settings.model.trim();
+    if model.is_empty() {
+        return Err(AiError::Parse("OpenRouter model is empty".to_string()));
+    }
 
-    let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    let client = openrouter::Client::builder()
+        .http_client(retrying_http_client())
+        .api_key(api_key)
+        .build()
+        .map_err(|error| {
+            AiError::Runtime(format!("failed to initialize OpenRouter client: {error}"))
+        })?;
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy.clone()),
+            &request,
+        ),
+        tool_ctx,
+    );
 
-    consume_stream(&mut stream, AiProvider::Anthropic, event_tx).await
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
+
+    consume_stream(
+        &mut stream,
+        AiProvider::OpenRouter,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 async fn call_ollama_streaming(
     settings: &AiSettings,
     request: AiGenerationRequest,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_ctx: Option<MongoContext>,
+    policy: RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let model = settings.model.trim();
     if model.is_empty() {
         return Err(AiError::Parse("Ollama model is empty".to_string()));
@@ -397,51 +675,82 @@ async fn call_ollama_streaming(
         });
     }
 
-    let client = ollama::Client::<reqwest::Client>::builder()
+    let client = ollama::Client::builder()
+        .http_client(retrying_http_client())
         .api_key(Nothing)
         .base_url(base_url)
         .build()
         .map_err(|error| {
             AiError::Runtime(format!("failed to initialize Ollama client: {error}"))
         })?;
-    let limiter = ToolCallLimiter::new(MAX_TOOL_CALLS);
-    let agent = client
-        .agent(model)
-        .preamble(&request.system_prompt)
-        .max_tokens(MAX_OUTPUT_TOKENS as u64)
-        .hook(limiter)
-        .tools(tools)
-        .build();
+    let agent = build_agent(
+        with_memory(
+            client
+                .agent(model)
+                .preamble(&request.system_prompt)
+                .max_tokens(MAX_OUTPUT_TOKENS as u64)
+                .add_hook(policy.clone()),
+            &request,
+        ),
+        tool_ctx,
+    );
 
-    let history = to_rig_history(&request.history);
-    let mut stream = agent.stream_chat(request.user_prompt, history).multi_turn(MAX_TURNS).await;
+    // With memory, rig loads the conversation itself; `history` only stands in without it.
+    let history =
+        if request.memory.is_some() { Vec::new() } else { conversation_history(&request) };
+    let mut stream = agent
+        .stream_chat(request.user_prompt, history)
+        .conversation(request.conversation_id.clone())
+        .max_turns(MAX_TURNS)
+        .await;
 
-    consume_stream(&mut stream, AiProvider::Ollama, event_tx).await
+    consume_stream(
+        &mut stream,
+        AiProvider::Ollama,
+        request.price.as_ref(),
+        model,
+        &policy,
+        event_tx,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
 // Shared streaming loop
 // ---------------------------------------------------------------------------
 
-async fn consume_stream<R: Clone + Unpin>(
-    stream: &mut (
-             impl futures::Stream<Item = Result<MultiTurnStreamItem<R>, rig::agent::StreamingError>>
-             + Unpin
-         ),
+async fn consume_stream(
+    stream: &mut StreamingResult,
     provider: AiProvider,
+    price: Option<&crate::ai::catalog::Cost>,
+    model: &str,
+    policy: &RunPolicy,
     event_tx: &UnboundedSender<StreamEvent>,
-) -> Result<String, AiError> {
+) -> Result<TurnOutcome, AiError> {
     let mut full_text = String::new();
     let mut final_text = String::new();
+    let mut transcript = Vec::new();
+    let mut usage = crate::ai::blocks::TurnUsage::default();
     let mut turn_count: usize = 0;
     let mut tool_call_count: usize = 0;
-    // Track tool call name by internal_call_id for correlating results
-    let mut tool_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
 
     log::debug!("[ai-stream] starting consume_stream for provider={}", provider.label());
 
-    while let Some(chunk) = stream.next().await {
+    // Stop has to reach a tool that is already running: dropping the stream future drops the
+    // database call with it, instead of waiting for a collection scan to finish first.
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            () = policy.cancel.cancelled() => {
+                log::debug!("[ai-stream] stopped mid-run after {tool_call_count} tool calls");
+                break;
+            }
+            chunk = stream.next() => match chunk {
+                Some(chunk) => chunk,
+                None => break,
+            },
+        };
+
         match chunk {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
                 full_text.push_str(&text.text);
@@ -455,32 +764,55 @@ async fn consume_stream<R: Clone + Unpin>(
                 let name = tool_call.function.name.clone();
                 let args_full = tool_call.function.arguments.to_string();
                 let args_preview = truncate_str(&args_full, 200).to_string();
-                log::debug!("[ai-stream] tool_call #{tool_call_count}: {name} args={args_preview}");
-                tool_names.insert(internal_call_id, name.clone());
-                let _ = event_tx.send(StreamEvent::ToolCallStart { name, args_preview, args_full });
+                // The arguments carry filters and values from the user's database; the log says
+                // what ran and how big it was, never what was in it.
+                log::debug!(
+                    "[ai-stream] tool_call #{tool_call_count}: {name} ({} bytes of arguments)",
+                    args_full.len()
+                );
+                let _ = event_tx.send(StreamEvent::ToolCallStart {
+                    call_id: internal_call_id,
+                    name,
+                    args_preview,
+                    args_full,
+                });
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
                 internal_call_id,
             })) => {
                 turn_count += 1;
-                let name = tool_names
-                    .get(&internal_call_id)
-                    .cloned()
-                    .unwrap_or_else(|| tool_result.id.clone());
+                // 0.42 reports the executed tool's own name, so results land on the right row
+                // even when the same tool runs twice in a turn.
+                let name = tool_result.name.clone();
                 let (result_preview, result_json) = extract_tool_result(&tool_result);
                 log::debug!(
-                    "[ai-stream] tool_result #{turn_count}: {name} preview={}",
-                    truncate_str(&result_preview, 100)
+                    "[ai-stream] tool_result #{turn_count}: {name} ({} bytes)",
+                    result_preview.len()
                 );
                 let event = match tool_failure_reason(result_json.as_deref().unwrap_or_default()) {
-                    Some(reason) => StreamEvent::ToolCallFailed { name, reason },
-                    None => StreamEvent::ToolCallEnd { name, result_preview, result_json },
+                    Some(reason) => {
+                        StreamEvent::ToolCallFailed { call_id: internal_call_id, name, reason }
+                    }
+                    None => StreamEvent::ToolCallEnd {
+                        call_id: internal_call_id,
+                        name,
+                        result_preview,
+                        result_json,
+                    },
                 };
                 let _ = event_tx.send(event);
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = final_response.response().to_string();
+                final_text = final_response.output().to_string();
+                transcript = final_response.messages.clone().unwrap_or_default();
+                let (input_tokens, output_tokens) =
+                    (final_response.usage.input_tokens, final_response.usage.output_tokens);
+                usage = crate::ai::blocks::TurnUsage {
+                    input_tokens,
+                    output_tokens,
+                    cost_usd: price.and_then(|price| price.of(input_tokens, output_tokens)),
+                };
                 log::debug!(
                     "[ai-stream] final_response after {tool_call_count} tool calls, \
                      {turn_count} results"
@@ -490,21 +822,29 @@ async fn consume_stream<R: Clone + Unpin>(
                 log::debug!("[ai-stream] other event");
             }
             Err(error) => {
-                let msg = error.to_string();
-                log::debug!("[ai-stream] error after {tool_call_count} tool calls: {msg}");
-                if msg.contains("MaxTurnError")
-                    || msg.contains("MaxDepthError")
-                    || msg.contains("PromptCancelled")
-                {
+                log::debug!("[ai-stream] error after {tool_call_count} tool calls: {error}");
+                // Running out of turns, or the user pressing Stop, ends the run without
+                // being a failure: whatever the model already said still stands.
+                // Running out of turns, or the user pressing Stop, ends the run without being a
+                // failure: whatever the model already said still stands.
+                let ended_early = match &error {
+                    rig::agent::StreamingError::Prompt(prompt) => match prompt.as_ref() {
+                        PromptError::MaxTurnsError { .. } => {
+                            Some("*(Tool call limit reached — see the results above.)*")
+                        }
+                        PromptError::PromptCancelled { .. } => Some("*(Stopped.)*"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(note) = ended_early {
                     if full_text.trim().is_empty() {
-                        let fallback =
-                            "*(Tool call limit reached — see the results above.)*".to_string();
-                        let _ = event_tx.send(StreamEvent::TextDelta(fallback.clone()));
-                        full_text = fallback;
+                        let _ = event_tx.send(StreamEvent::TextDelta(note.to_string()));
+                        full_text = note.to_string();
                     }
                     break;
                 }
-                return Err(map_provider_error(provider, msg));
+                return Err(map_provider_error(provider, model, error.to_string()));
             }
         }
     }
@@ -518,7 +858,7 @@ async fn consume_stream<R: Clone + Unpin>(
     if full_text.trim().is_empty() {
         full_text = final_text;
     }
-    Ok(full_text)
+    Ok(TurnOutcome { text: full_text, transcript, usage })
 }
 
 /// rig reports a failed tool call as its result text, tagged with the error variant.
@@ -556,7 +896,7 @@ fn extract_tool_result(result: &rig::message::ToolResult) -> (String, Option<Str
 
 fn to_rig_history(history: &[ChatMessage]) -> Vec<RigMessage> {
     let mut out = Vec::new();
-    for message in history.iter().rev().take(HISTORY_LIMIT).rev() {
+    for message in history {
         if message.content.trim().is_empty() {
             continue;
         }
@@ -569,26 +909,51 @@ fn to_rig_history(history: &[ChatMessage]) -> Vec<RigMessage> {
     out
 }
 
-fn map_provider_error(provider: AiProvider, message: String) -> AiError {
+/// Turn whatever the provider said into the one thing the user can act on.
+///
+/// Providers report the same condition half a dozen ways — a bare 401, "invalid x-api-key",
+/// "Incorrect API key provided" — so the match is on both the status code and the words.
+fn map_provider_error(provider: AiProvider, model: &str, message: String) -> AiError {
     let provider_name = provider.label().to_string();
     let lower = message.to_lowercase();
     if lower.contains("cancel") || lower.contains("abort") {
         return AiError::Cancelled;
     }
-    if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") {
+    if lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("api key")
+        || lower.contains("api-key")
+        || lower.contains("authentication")
+    {
         return AiError::Unauthorized { provider: provider_name };
     }
-    if lower.contains("429") || lower.contains("rate") {
+    if lower.contains("429") || lower.contains("rate limit") || lower.contains("quota") {
         return AiError::RateLimited { provider: provider_name };
     }
-    if lower.contains("timeout") {
+    // A 404 from a chat endpoint is the model, not the URL: the URL is ours and it is right.
+    if lower.contains("404")
+        || lower.contains("model_not_found")
+        || (lower.contains("model")
+            && (lower.contains("not found") || lower.contains("does not exist")))
+    {
+        return AiError::UnknownModel { provider: provider_name, model: model.to_string() };
+    }
+    if lower.contains("timeout") || lower.contains("timed out") {
         return AiError::Timeout(message);
+    }
+    if lower.contains("dns")
+        || lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("tcp connect")
+    {
+        return AiError::Network(message);
     }
     AiError::Provider(message)
 }
 
-fn map_rig_error(provider: AiProvider, error: PromptError) -> AiError {
-    map_provider_error(provider, error.to_string())
+fn map_rig_error(provider: AiProvider, model: &str, error: PromptError) -> AiError {
+    map_provider_error(provider, model, error.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -643,6 +1008,70 @@ pub async fn detect_ollama_models(base_url: &str) -> Result<Vec<String>, AiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A provider says the same thing half a dozen ways; the user needs one instruction.
+    #[test]
+    fn a_provider_failure_is_turned_into_something_to_do_about_it() {
+        let map = |message: &str| {
+            map_provider_error(AiProvider::OpenAi, "gpt-5", message.to_string()).user_message()
+        };
+
+        assert!(map("401 Unauthorized").contains("Settings > AI"));
+        assert!(map("Incorrect API key provided: sk-...").contains("Settings > AI"));
+        assert!(map("429 Too Many Requests").contains("rate limiting"));
+        assert!(map("You exceeded your current quota").contains("rate limiting"));
+        assert!(map("404 model_not_found").contains("gpt-5"), "name the model that is missing");
+        assert!(map("error sending request: tcp connect error").contains("proxy"));
+        assert_eq!(map("request was cancelled"), "Stopped.");
+
+        // Anything unrecognised still says what the provider said, and what to try.
+        let unknown = map("500 internal server error");
+        assert!(unknown.contains("500 internal server error") && unknown.contains("another model"));
+    }
+
+    fn request(history: Vec<ChatMessage>) -> AiGenerationRequest {
+        AiGenerationRequest {
+            system_prompt: String::new(),
+            history,
+            user_prompt: "and how big is orders?".to_string(),
+            conversation_id: "chat-1".to_string(),
+            memory: None,
+            context_tokens: None,
+            price: None,
+        }
+    }
+
+    /// Without a store, the visible chat is what the model gets — and it still has to fit.
+    #[test]
+    fn the_replayed_chat_is_trimmed_to_the_window() {
+        let short = conversation_history(&request(vec![ChatMessage::new(
+            ChatRole::User,
+            "what collections are there?",
+        )]));
+        assert_eq!(short.len(), 1);
+
+        let long: Vec<ChatMessage> = (0..40)
+            .map(|index| ChatMessage::new(ChatRole::User, format!("{index} {}", "x".repeat(4_000))))
+            .collect();
+        let mut request = request(long);
+        request.context_tokens = Some(20_000);
+        assert!(conversation_history(&request).len() < 40, "an over-long chat is cut down");
+    }
+
+    /// The window rig is given has to leave room for the prompt and the answer.
+    #[test]
+    fn the_memory_window_reserves_room_for_the_prompt_and_the_answer() {
+        let mut request = request(Vec::new());
+        request.context_tokens = Some(200_000);
+        request.system_prompt = "x".repeat(20_000);
+        let budget = memory_budget(&request);
+        assert!(budget < 200_000 - MAX_OUTPUT_TOKENS as usize, "the prompt is paid for");
+        assert!(budget > 100_000, "a large window is still mostly conversation");
+
+        // A small window must not be reserved down to nothing.
+        request.context_tokens = Some(8_000);
+        assert_eq!(memory_budget(&request), MIN_MEMORY_TOKENS);
+    }
 
     #[test]
     fn history_conversion_skips_system_messages() {
