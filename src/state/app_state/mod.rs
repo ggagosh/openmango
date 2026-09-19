@@ -119,6 +119,9 @@ pub struct AppState {
 
     /// Copied tree item for paste operation (internal clipboard)
     pub copied_tree_item: Option<CopiedTreeItem>,
+    /// Whether the frame-rate HUD is up. Runtime only: it is a diagnostic, not a preference,
+    /// so it never outlives the session. `OPENMANGO_FPS=1` starts with it on.
+    pub show_fps_monitor: bool,
 
     // Passive all-client History recorder
     history_service: Option<Arc<crate::history::HistoryService>>,
@@ -243,6 +246,7 @@ impl AppState {
             invalid_inline_edits: HashSet::new(),
             production_write_authorizations: HashMap::new(),
             copied_tree_item: None,
+            show_fps_monitor: std::env::var("OPENMANGO_FPS").is_ok(),
             history_service: None,
             history_eligibility: HashMap::new(),
             history_usage: HashMap::new(),

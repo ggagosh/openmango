@@ -1332,6 +1332,11 @@ impl Render for AppRoot {
             .children(notification_layer)
             .child(self.action_bar.clone());
 
+        // Hidden, the HUD costs nothing: its clock stops a second after it leaves the tree.
+        if self.state.read(cx).show_fps_monitor {
+            root = root.child(gpui_fps::fps_monitor(window, cx));
+        }
+
         if self.key_debug {
             root = root.child(render_key_debug_overlay(
                 &key_context,

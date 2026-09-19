@@ -365,6 +365,16 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("cmd:fps-monitor"),
+            keywords: &["fps", "frame", "performance", "debug", "hud"],
+            label: SharedString::from("Toggle FPS Monitor"),
+            detail: Some(SharedString::from("Frame time, CPU and memory overlay")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 106,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:check-updates"),
             keywords: &["upgrade", "version"],
             label: SharedString::from("Check for Updates"),
