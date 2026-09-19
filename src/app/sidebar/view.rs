@@ -85,7 +85,7 @@ impl Render for Sidebar {
         let sidebar_entity = cx.entity();
         let scroll_handle = self.scroll_handle.clone();
 
-        let sticky_rows = self.sticky_rows();
+        let sticky_rows = self.sticky_rows(cx);
 
         let search_query = self.search_state.read(cx).value().to_string();
         let search_results = if self.model.search_open {

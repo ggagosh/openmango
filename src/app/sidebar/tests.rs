@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gpui_kit::component::Root;
+use gpui_kit::component::{Root, Theme};
 use gpui_kit::{AppContext as _, Entity, ScrollStrategy, TestAppContext, VisualTestContext};
 use gpui_kit::{px, size};
 
@@ -93,22 +93,27 @@ fn scrolled_rows_pin_their_connection_and_database(cx: &mut TestAppContext) {
     let (sidebar, id, cx) = setup(cx);
     expand(&sidebar, &TreeNodeId::connection(id), true, cx);
     expand(&sidebar, &TreeNodeId::database(id, "a"), true, cx);
-    sidebar.read_with(cx, |sidebar, _| assert!(sidebar.sticky_rows().is_empty()));
+    sidebar.read_with(cx, |sidebar, cx| assert!(sidebar.sticky_rows(cx).is_empty()));
 
-    // Five rows down is far less than one viewport: arithmetic done in viewports instead of
-    // rows would still see row 0 on top and pin nothing.
-    sidebar.update(cx, |sidebar, cx| {
-        sidebar.scroll_handle.scroll_to_item_strict(5, ScrollStrategy::Top);
-        cx.notify();
-    });
-    draw(cx);
+    // The base font is the app's zoom: rows are sized in rems, so the arithmetic has to hold
+    // at a larger font as well as the default one.
+    for font in [16.0, 20.0] {
+        cx.update(|_, cx| Theme::global_mut(cx).font_size = px(font));
+        // Five rows down is far less than one viewport: arithmetic done in viewports instead
+        // of rows would still see row 0 on top and pin nothing.
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.scroll_handle.scroll_to_item_strict(5, ScrollStrategy::Top);
+            cx.notify();
+        });
+        draw(cx);
 
-    sidebar.read_with(cx, |sidebar, _| {
-        assert_eq!(sidebar.sticky_rows(), vec![0, 1]);
-        let offset = sidebar.scroll_handle.0.borrow().base_handle.offset().y;
-        assert_eq!(offset, -super::ROW_HEIGHT * 5.0, "rows are not ROW_HEIGHT tall");
-        assert!(sidebar.page_size() > 5, "a page is {} rows", sidebar.page_size());
-    });
+        sidebar.read_with(cx, |sidebar, cx| {
+            assert_eq!(sidebar.sticky_rows(cx), vec![0, 1], "at {font}px");
+            let offset = sidebar.scroll_handle.0.borrow().base_handle.offset().y;
+            assert_eq!(offset, px(-font * 1.5 * 5.0), "rows are not 1.5rem tall at {font}px");
+            assert!(sidebar.page_size(cx) > 5, "a page is {} rows", sidebar.page_size(cx));
+        });
+    }
 }
 
 #[gpui_kit::test]

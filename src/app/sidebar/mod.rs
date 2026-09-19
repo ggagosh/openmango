@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::InputState;
 use gpui_kit::*;
@@ -38,8 +39,9 @@ const SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(500.0);
 const KEYBOARD_PREVIEW_DELAY: Duration = Duration::from_millis(140);
 /// Every tree row is exactly this tall. The pinned rows and paging do their arithmetic with
-/// it; the scroll handle only reports the viewport and content sizes, never a row's.
-const ROW_HEIGHT: Pixels = px(24.0);
+/// it; the scroll handle only reports the viewport and content sizes, never a row's. In rems,
+/// so a row grows with its label when the base font does (24px at the default 16px).
+const ROW_HEIGHT: Rems = rems(1.5);
 // ponytail: the results list is not virtualized, so it shows the best matches only. Swap it
 // for a uniform_list if people need to page through more.
 const SEARCH_RESULTS_LIMIT: usize = 50;
@@ -405,9 +407,9 @@ impl Sidebar {
     /// of whatever has scrolled beneath them. Each level looks at the first row its
     /// predecessors leave uncovered. Read from the live scroll offset during render, so the
     /// pins never trail the scroll by a frame.
-    pub(super) fn sticky_rows(&self) -> Vec<usize> {
+    pub(super) fn sticky_rows(&self, cx: &App) -> Vec<usize> {
         let offset = self.scroll_handle.0.borrow().base_handle.offset().y;
-        let first = (-offset / ROW_HEIGHT).floor().max(0.0) as usize;
+        let first = (-offset / Self::row_height(cx)).floor().max(0.0) as usize;
         let mut pinned = Vec::new();
         for depth in 0..2 {
             let covered = first + depth;
@@ -417,6 +419,12 @@ impl Sidebar {
             }
         }
         pinned
+    }
+
+    /// A row's height in pixels. `Root` sets the window's rem size from the theme's base font,
+    /// so that font is the length a rem resolves against.
+    fn row_height(cx: &App) -> Pixels {
+        ROW_HEIGHT.to_pixels(cx.theme().font_size)
     }
 
     /// Scrolls a row into view, clear of the ancestor rows pinned over the top of the list.
@@ -1170,13 +1178,13 @@ impl Sidebar {
     }
 
     /// Rows that fit in the list right now, less one so a page keeps a row of context.
-    fn page_size(&self) -> isize {
+    fn page_size(&self, cx: &App) -> isize {
         let viewport = self.scroll_handle.0.borrow().base_handle.bounds().size.height;
-        ((viewport / ROW_HEIGHT) as isize - 1).max(1)
+        ((viewport / Self::row_height(cx)) as isize - 1).max(1)
     }
 
     fn move_sidebar_page(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.move_sidebar_selection(delta * self.page_size(), cx);
+        self.move_sidebar_selection(delta * self.page_size(cx), cx);
     }
 
     fn select_sidebar_first(&mut self, cx: &mut Context<Self>) {
