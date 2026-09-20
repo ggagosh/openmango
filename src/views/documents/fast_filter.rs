@@ -1115,18 +1115,18 @@ mod tests {
 
     #[test]
     fn compiles_fast_equality_filter() {
-        assert_eq!(formatted("status:active"), "{status: \"active\"}");
-        assert_eq!(formatted("status:active,type:user"), "{status: \"active\", type: \"user\"}");
-        assert_eq!(formatted("name: \"alice\""), "{name: \"alice\"}");
+        assert_eq!(formatted("status:active"), "{ status: \"active\" }");
+        assert_eq!(formatted("status:active,type:user"), "{ status: \"active\", type: \"user\" }");
+        assert_eq!(formatted("name: \"alice\""), "{ name: \"alice\" }");
     }
 
     #[test]
     fn compiles_fast_comparison_filters() {
-        assert_eq!(formatted("age>30"), "{age: {$gt: 30}}");
-        assert_eq!(formatted("age>30 age<50"), "{age: {$gt: 30, $lt: 50}}");
+        assert_eq!(formatted("age>30"), "{ age: { $gt: 30 } }");
+        assert_eq!(formatted("age>30 age<50"), "{ age: { $gt: 30, $lt: 50 } }");
         assert_eq!(
             formatted("createdAt>=ISODate(\"2024-01-01T00:00:00Z\")"),
-            "{createdAt: {$gte: ISODate(\"2024-01-01T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2024-01-01T00:00:00Z\") } }"
         );
     }
 
@@ -1134,29 +1134,32 @@ mod tests {
     fn compiles_fast_contains_and_negation_filters() {
         assert_eq!(
             formatted("email~gmail !deleted"),
-            "{email: {$regex: \"gmail\", $options: \"i\"}, deleted: {$ne: true}}"
+            "{ email: { $regex: \"gmail\", $options: \"i\" }, deleted: { $ne: true } }"
         );
     }
 
     #[test]
     fn compiles_fast_in_filters() {
-        assert_eq!(formatted("plan in pro,team"), "{plan: {$in: [\"pro\", \"team\"]}}");
-        assert_eq!(formatted("plan not in [free,team]"), "{plan: {$nin: [\"free\", \"team\"]}}");
+        assert_eq!(formatted("plan in pro,team"), "{ plan: { $in: [\"pro\", \"team\"] } }");
+        assert_eq!(
+            formatted("plan not in [free,team]"),
+            "{ plan: { $nin: [\"free\", \"team\"] } }"
+        );
     }
 
     #[test]
     fn smart_converts_bare_object_ids_for_id_fields() {
         assert_eq!(
             formatted("_id:6392478cbdd1f183c69543c3"),
-            "{_id: ObjectId(\"6392478cbdd1f183c69543c3\")}"
+            "{ _id: ObjectId(\"6392478cbdd1f183c69543c3\") }"
         );
         assert_eq!(
             formatted("ownerId:6392478cbdd1f183c69543c3"),
-            "{ownerId: ObjectId(\"6392478cbdd1f183c69543c3\")}"
+            "{ ownerId: ObjectId(\"6392478cbdd1f183c69543c3\") }"
         );
         assert_eq!(
             formatted("_id in 6392478cbdd1f183c69543c3,6392478cbdd1f183c69543c4"),
-            "{_id: {$in: [ObjectId(\"6392478cbdd1f183c69543c3\"), ObjectId(\"6392478cbdd1f183c69543c4\")]}}"
+            "{ _id: { $in: [ObjectId(\"6392478cbdd1f183c69543c3\"), ObjectId(\"6392478cbdd1f183c69543c4\")] } }"
         );
     }
 
@@ -1164,11 +1167,11 @@ mod tests {
     fn smart_object_id_conversion_is_field_aware_and_quote_safe() {
         assert_eq!(
             formatted("token:6392478cbdd1f183c69543c3"),
-            "{token: \"6392478cbdd1f183c69543c3\"}"
+            "{ token: \"6392478cbdd1f183c69543c3\" }"
         );
         assert_eq!(
             formatted("_id:\"6392478cbdd1f183c69543c3\""),
-            "{_id: \"6392478cbdd1f183c69543c3\"}"
+            "{ _id: \"6392478cbdd1f183c69543c3\" }"
         );
     }
 
@@ -1176,11 +1179,11 @@ mod tests {
     fn smart_converts_date_day_shorthand_for_date_fields() {
         assert_eq!(
             formatted("createdAt:2026-05-23"),
-            "{createdAt: {$gte: ISODate(\"2026-05-23T00:00:00Z\"), $lt: ISODate(\"2026-05-24T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2026-05-23T00:00:00Z\"), $lt: ISODate(\"2026-05-24T00:00:00Z\") } }"
         );
         assert_eq!(
             formatted("createdAt<=2026-05-23"),
-            "{createdAt: {$lt: ISODate(\"2026-05-24T00:00:00Z\")}}"
+            "{ createdAt: { $lt: ISODate(\"2026-05-24T00:00:00Z\") } }"
         );
     }
 
@@ -1188,29 +1191,29 @@ mod tests {
     fn smart_converts_month_year_quarter_and_explicit_ranges() {
         assert_eq!(
             formatted("createdAt:2026-05"),
-            "{createdAt: {$gte: ISODate(\"2026-05-01T00:00:00Z\"), $lt: ISODate(\"2026-06-01T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2026-05-01T00:00:00Z\"), $lt: ISODate(\"2026-06-01T00:00:00Z\") } }"
         );
         assert_eq!(
             formatted("createdAt:2026"),
-            "{createdAt: {$gte: ISODate(\"2026-01-01T00:00:00Z\"), $lt: ISODate(\"2027-01-01T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2026-01-01T00:00:00Z\"), $lt: ISODate(\"2027-01-01T00:00:00Z\") } }"
         );
         assert_eq!(
             formatted("createdAt:2026Q2"),
-            "{createdAt: {$gte: ISODate(\"2026-04-01T00:00:00Z\"), $lt: ISODate(\"2026-07-01T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2026-04-01T00:00:00Z\"), $lt: ISODate(\"2026-07-01T00:00:00Z\") } }"
         );
         assert_eq!(
             formatted("createdAt:2026-05-01..2026-05-31"),
-            "{createdAt: {$gte: ISODate(\"2026-05-01T00:00:00Z\"), $lt: ISODate(\"2026-06-01T00:00:00Z\")}}"
+            "{ createdAt: { $gte: ISODate(\"2026-05-01T00:00:00Z\"), $lt: ISODate(\"2026-06-01T00:00:00Z\") } }"
         );
         assert_eq!(
             formatted("createdAt:..2026-05-31"),
-            "{createdAt: {$lt: ISODate(\"2026-06-01T00:00:00Z\")}}"
+            "{ createdAt: { $lt: ISODate(\"2026-06-01T00:00:00Z\") } }"
         );
     }
 
     #[test]
     fn date_conversion_is_field_aware() {
-        assert_eq!(formatted("status:2026-05-23"), "{status: \"2026-05-23\"}");
+        assert_eq!(formatted("status:2026-05-23"), "{ status: \"2026-05-23\" }");
     }
 
     #[test]
@@ -1224,8 +1227,11 @@ mod tests {
 
     #[test]
     fn preserves_raw_document_filters() {
-        assert_eq!(formatted("name:\"alice\",age:1"), "{name: \"alice\", age: 1}");
-        assert_eq!(formatted("{ status: { $ne: \"archived\" } }"), "{status: {$ne: \"archived\"}}");
+        assert_eq!(formatted("name:\"alice\",age:1"), "{ name: \"alice\", age: 1 }");
+        assert_eq!(
+            formatted("{ status: { $ne: \"archived\" } }"),
+            "{ status: { $ne: \"archived\" } }"
+        );
     }
 
     #[test]

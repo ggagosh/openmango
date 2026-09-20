@@ -577,7 +577,7 @@ mod tests {
 
         let tab = &state.workspace.open_tabs[0];
         assert_eq!(tab.filter_raw, "status:active");
-        assert_eq!(tab.filter_compiled_raw, "{status: \"active\"}");
+        assert_eq!(tab.filter_compiled_raw, "{ status: \"active\" }");
     }
 
     #[test]
