@@ -480,7 +480,7 @@ impl AppCommands {
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         for relation in inferred.relations {
-                            state.upsert_relation(relation);
+                            state.upsert_inferred_relation(relation);
                         }
                         cx.notify();
                     });
@@ -502,6 +502,10 @@ impl AppCommands {
                         stopped,
                     };
                     state.set_inference_run(None);
+                    // A search that was stopped has not read the database, so it stays offered.
+                    if !stopped {
+                        state.mark_database_inferred(&database);
+                    }
                     state.set_status_message(Some(StatusMessage::info(summary.line())));
                     state.set_inference_summary(Some(summary));
                     cx.notify();

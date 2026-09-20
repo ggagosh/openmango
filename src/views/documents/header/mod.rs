@@ -9,6 +9,7 @@
 mod actions;
 mod filter_bar;
 mod navigation_trail;
+mod relations_chip;
 mod stats_panel;
 mod tabs_row;
 
@@ -18,6 +19,7 @@ pub use actions::{
 };
 pub use filter_bar::render_query_options;
 pub use navigation_trail::render_navigation_trail;
+use relations_chip::render_relations_chip;
 pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
@@ -150,7 +152,14 @@ impl CollectionView {
 
         // Build the root header container
         let mut root = header_container(islands::tool_bg(&appearance, cx))
-            .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
+            .child(render_title_row(
+                collection_name,
+                total,
+                &breadcrumb,
+                render_relations_chip(&self.state, session_key.as_ref(), cx),
+                action_row,
+                cx,
+            ))
             .children(render_navigation_trail(&self.state, window, cx))
             .child(div().pl(px(0.0)).child(subview_tabs))
             .when_some(documents_toolbar_row, |s, row| {
@@ -197,6 +206,7 @@ fn render_title_row(
     collection_name: &str,
     total: u64,
     breadcrumb: &str,
+    relations: Option<AnyElement>,
     action_row: Div,
     cx: &mut Context<CollectionView>,
 ) -> Div {
@@ -230,7 +240,8 @@ fn render_title_row(
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("({} docs)", format_number(total))),
-                        ),
+                        )
+                        .children(relations),
                 )
                 .child(
                     div()

@@ -138,6 +138,8 @@ impl AppState {
                 self.current_view = View::References;
             }
             TabKey::Relations(tab) => {
+                // Looking at the canvas is what "seen" means.
+                self.clear_unseen_relations(&tab.database);
                 self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
                 self.conn.selected_collection = None;

@@ -105,6 +105,13 @@ pub struct AppState {
     inference_run: Option<InferenceRun>,
     /// What the last search found, and what it could not.
     inference_summary: Option<InferenceSummary>,
+    /// Relations found per database since its canvas was last looked at. Not persisted: it is
+    /// about this sitting, and a number that survived a restart would be about nothing.
+    unseen_relations: HashMap<String, usize>,
+    /// A request to open the canvas holding one collection. Numbered, so the view can tell a
+    /// new request from the one it has already honoured without the state being written to
+    /// from a render.
+    relations_focus: Option<(u64, String)>,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -263,6 +270,8 @@ impl AppState {
             reference_lookup: None,
             inference_run: None,
             inference_summary: None,
+            unseen_relations: HashMap::new(),
+            relations_focus: None,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -502,6 +511,39 @@ impl AppState {
 
     pub fn set_inference_run(&mut self, run: Option<InferenceRun>) {
         self.inference_run = run;
+    }
+
+    /// Relations found for `database` that nobody has looked at yet.
+    pub fn unseen_relations(&self, database: &str) -> usize {
+        self.unseen_relations.get(database).copied().unwrap_or(0)
+    }
+
+    pub fn clear_unseen_relations(&mut self, database: &str) {
+        self.unseen_relations.remove(database);
+    }
+
+    /// The collection the canvas was last asked to open on, and the number of the request.
+    pub fn relations_focus(&self) -> Option<&(u64, String)> {
+        self.relations_focus.as_ref()
+    }
+
+    pub fn request_relations_focus(&mut self, collection: String) {
+        let next = self.relations_focus.as_ref().map_or(1, |(number, _)| number + 1);
+        self.relations_focus = Some((next, collection));
+    }
+
+    /// Record that a whole database has been read, so it stops being offered.
+    pub fn mark_database_inferred(&mut self, database: &str) {
+        self.relations.mark_inferred(database, chrono::Utc::now());
+        self.save_relations();
+    }
+
+    /// Store what a database-wide search found, counting what is new for the badge.
+    pub fn upsert_inferred_relation(&mut self, relation: Relation) {
+        let database = relation.source.database.clone();
+        if self.upsert_relation(relation) == Upsert::Added {
+            *self.unseen_relations.entry(database).or_default() += 1;
+        }
     }
 
     /// How many relations are known for a database, whatever their status.

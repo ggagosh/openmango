@@ -17,7 +17,7 @@ pub mod lookup;
 pub mod references;
 pub mod resolve;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -260,6 +260,10 @@ type Trail = HashMap<Namespace, (JoinStep, Namespace)>;
 #[derive(Debug, Clone, Default)]
 pub struct RelationGraph {
     relations: Vec<Relation>,
+    /// When each database was last read in full. Its absence is what "nobody has looked yet"
+    /// means, which an empty graph cannot say: a database read and found to have no relations
+    /// is also empty.
+    inferred: BTreeMap<String, DateTime<Utc>>,
 }
 
 impl RelationGraph {
@@ -273,6 +277,15 @@ impl RelationGraph {
 
     pub fn is_empty(&self) -> bool {
         self.relations.is_empty()
+    }
+
+    /// When `database` was last read from end to end, if it ever was.
+    pub fn inferred_at(&self, database: &str) -> Option<DateTime<Utc>> {
+        self.inferred.get(database).copied()
+    }
+
+    pub fn mark_inferred(&mut self, database: &str, at: DateTime<Utc>) {
+        self.inferred.insert(database.to_string(), at);
     }
 
     /// Where a field points. Drives Cmd+click and the peek popover.
@@ -489,6 +502,7 @@ impl RelationGraph {
         self.relations.retain(|relation| {
             relation.source.database != database && relation.target.database != database
         });
+        self.inferred.remove(database);
     }
 
     /// Follow a collection rename into both ends of every relation. Deliberate, for the same
@@ -507,11 +521,15 @@ impl RelationGraph {
     pub fn to_model(&self) -> RelationModel {
         let mut relations = self.relations.clone();
         relations.sort_by(|a, b| (&a.source, &a.target).cmp(&(&b.source, &b.target)));
-        RelationModel { version: RELATION_MODEL_VERSION, relations }
+        RelationModel {
+            version: RELATION_MODEL_VERSION,
+            relations,
+            inferred: self.inferred.clone(),
+        }
     }
 
     pub fn from_model(model: RelationModel) -> Self {
-        Self { relations: model.relations }
+        Self { relations: model.relations, inferred: model.inferred }
     }
 }
 
@@ -543,11 +561,15 @@ pub struct RelationModel {
     pub version: u32,
     #[serde(default)]
     pub relations: Vec<Relation>,
+    /// Database name to when it was last read in full. Added after version 1 shipped; a file
+    /// without it loads as "never", which is the truth about it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inferred: BTreeMap<String, DateTime<Utc>>,
 }
 
 impl Default for RelationModel {
     fn default() -> Self {
-        Self { version: RELATION_MODEL_VERSION, relations: Vec::new() }
+        Self { version: RELATION_MODEL_VERSION, relations: Vec::new(), inferred: BTreeMap::new() }
     }
 }
 
@@ -735,6 +757,29 @@ mod tests {
             Origin::Probe,
         ));
         graph
+    }
+
+    #[test]
+    fn when_a_database_was_read_survives_a_save_and_old_files_say_never() {
+        let mut graph = RelationGraph::new();
+        let at = chrono::Utc::now();
+        graph.mark_inferred("shop", at);
+
+        let text = serde_json::to_string(&graph.to_model()).unwrap();
+        let loaded = RelationGraph::from_model(serde_json::from_str(&text).unwrap());
+        assert_eq!(loaded.inferred_at("shop"), Some(at));
+        assert_eq!(loaded.inferred_at("elsewhere"), None);
+
+        // A file written before the field existed has nothing to say, and says nothing on save.
+        let old: RelationModel = serde_json::from_str(r#"{"version":1,"relations":[]}"#).unwrap();
+        assert_eq!(RelationGraph::from_model(old).inferred_at("shop"), None);
+        assert!(
+            !serde_json::to_string(&RelationGraph::new().to_model()).unwrap().contains("inferred")
+        );
+
+        // A dropped database is forgotten whole, the date with it.
+        graph.remove_database("shop");
+        assert_eq!(graph.inferred_at("shop"), None);
     }
 
     #[test]

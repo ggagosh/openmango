@@ -52,6 +52,8 @@ const FIT_MARGIN: f32 = 48.0;
 /// Below these, the text would be laid out only to be unreadable.
 const FIELD_TEXT_ZOOM: f32 = 0.5;
 const NAME_TEXT_ZOOM: f32 = 0.3;
+/// Arriving to look at one collection zooms in at least this far, so its fields can be read.
+const READING_ZOOM: f32 = 0.8;
 /// A press that travels less than this is a click, not a drag.
 const DRAG_SLOP: f32 = 3.0;
 /// Edges are background until asked about: most of them are not the one being read.
@@ -107,6 +109,11 @@ pub struct RelationsView {
     drag: Option<Drag>,
     hovered: Option<Focus>,
     held: Option<Held>,
+    /// The last request to open on a collection that was honoured. See
+    /// [`AppState::request_relations_focus`].
+    focus_request: u64,
+    /// A collection to bring to the middle once there is a window to measure against.
+    centre_pending: bool,
     focus_handle: FocusHandle,
     _subscription: Subscription,
 }
@@ -126,6 +133,8 @@ impl RelationsView {
             drag: None,
             hovered: None,
             held: None,
+            focus_request: 0,
+            centre_pending: false,
             focus_handle: cx.focus_handle(),
             _subscription: subscription,
         }
@@ -149,6 +158,37 @@ impl RelationsView {
             // Indices belong to the layout that was just replaced.
             self.hovered = None;
         }
+
+        // Asked to open on one collection, from somewhere that was looking at it.
+        if let Some((number, collection)) = self.state.read(cx).relations_focus().cloned()
+            && number > self.focus_request
+        {
+            self.focus_request = number;
+            if self.layout.index_of(&collection).is_some() {
+                self.held = Some(Held { collection, field: None });
+                self.centre_pending = true;
+            }
+        }
+        self.centre_on_held();
+    }
+
+    /// Bring the held collection to the middle, at a size its fields can be read at. Waits for
+    /// the first fit, since before that there is no window to be in the middle of.
+    fn centre_on_held(&mut self) {
+        if !self.centre_pending || !self.fitted {
+            return;
+        }
+        self.centre_pending = false;
+        let Some(Focus::Card(card)) = self.held_focus() else {
+            return;
+        };
+        let node = &self.layout.nodes[card];
+        let size = self.surface.get().size;
+        self.zoom = self.zoom.max(READING_ZOOM);
+        self.pan = point(
+            size.width / 2.0 - px((node.x + CARD_WIDTH / 2.0) * self.zoom),
+            size.height / 2.0 - px((node.y + node.height / 2.0) * self.zoom),
+        );
     }
 
     fn fit(&mut self) {
@@ -642,6 +682,7 @@ impl RelationsView {
                                 if !view.fitted {
                                     view.fitted = true;
                                     view.fit();
+                                    view.centre_on_held();
                                     view.focus_handle.focus(window, cx);
                                     cx.notify();
                                 }
