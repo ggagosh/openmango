@@ -21,6 +21,9 @@ pub struct ReferenceGroup {
     pub source: FieldRef,
     /// Whether the source path has an index. An unindexed lookup is a collection scan.
     pub indexed: bool,
+    /// Whether its documents are shown. Which fields point here, and how many documents each
+    /// found, is the answer to the question; the documents themselves are the detail.
+    pub expanded: bool,
     pub state: GroupState,
 }
 
@@ -126,7 +129,12 @@ mod tests {
     use super::*;
 
     fn group(path: &str, indexed: bool, state: GroupState) -> ReferenceGroup {
-        ReferenceGroup { source: FieldRef::new("shop", "orders", path), indexed, state }
+        ReferenceGroup {
+            source: FieldRef::new("shop", "orders", path),
+            indexed,
+            expanded: false,
+            state,
+        }
     }
 
     #[test]

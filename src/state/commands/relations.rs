@@ -612,11 +612,14 @@ impl AppCommands {
 
             let tab = state.references_tab_mut(tab_id)?;
             tab.discovering = false;
+            // One answer needs no choosing between; several are a summary until one is picked.
+            let single = groups.len() == 1;
             tab.groups = groups
                 .iter()
                 .map(|source| ReferenceGroup {
                     source: source.clone(),
                     indexed: false,
+                    expanded: single,
                     state: GroupState::Loading,
                 })
                 .collect();

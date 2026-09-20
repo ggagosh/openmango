@@ -20,6 +20,7 @@ use crate::state::relations::references::{GroupState, ReferenceGroup, References
 use crate::state::{AppCommands, AppState, ReferencesTabKey};
 use crate::theme::{borders, colors, islands, spacing};
 use crate::views::documents::table::cell_renderer::value_color;
+use uuid::Uuid;
 
 /// Fields summarised on a result row. Enough to recognise a document; reading it is what
 /// opening it is for.
@@ -27,14 +28,13 @@ const ROW_FIELDS: usize = 4;
 
 pub struct ReferencesView {
     state: Entity<AppState>,
-    scroll: ScrollHandle,
     _subscription: Subscription,
 }
 
 impl ReferencesView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&state, |_view, _state, cx| cx.notify());
-        Self { state, scroll: ScrollHandle::new(), _subscription: subscription }
+        Self { state, _subscription: subscription }
     }
 }
 
@@ -57,18 +57,16 @@ impl Render for ReferencesView {
             .bg(islands::content_bg(&appearance, cx))
             .child(header(&key, &tab, identity, self.state.clone(), &appearance, cx))
             .child(
-                div()
-                    .id("references-body")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .p(spacing::lg())
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::md())
-                    .children(body(&key, &tab, self.state.clone(), cx))
-                    .vertical_scrollbar(&self.scroll),
+                div().flex_1().min_h_0().overflow_y_scrollbar().child(
+                    div()
+                        .w_full()
+                        .p(spacing::lg())
+                        .pb(px(32.0))
+                        .flex()
+                        .flex_col()
+                        .gap(spacing::sm())
+                        .children(body(&key, &tab, self.state.clone(), cx)),
+                ),
             )
             .into_any_element()
     }
@@ -171,7 +169,7 @@ fn body(
     }
     tab.groups
         .iter()
-        .map(|group| render_group(key, tab, group, state.clone(), cx).into_any_element())
+        .map(|group| render_group(key.id, tab, group, state.clone(), cx).into_any_element())
         .collect()
 }
 
@@ -218,7 +216,7 @@ fn empty(key: &ReferencesTabKey, state: Entity<AppState>, cx: &App) -> AnyElemen
 /// line between them is structure, not depth. Rows run full width inside it and the card clips
 /// them, so a hover at the bottom edge follows the card's own corners.
 fn render_group(
-    key: &ReferencesTabKey,
+    tab_id: Uuid,
     tab: &ReferencesTabState,
     group: &ReferenceGroup,
     state: Entity<AppState>,
@@ -231,12 +229,12 @@ fn render_group(
         .border_1()
         .border_color(cx.theme().border)
         .overflow_hidden()
-        .child(group_header(key, tab, group, state.clone(), cx))
-        .children(group_body(tab, group, state, cx))
+        .child(group_header(tab_id, tab, group, state.clone(), cx))
+        .children(if group.expanded { group_body(group, state, cx) } else { Vec::new() })
 }
 
 fn group_header(
-    key: &ReferencesTabKey,
+    tab_id: Uuid,
     tab: &ReferencesTabState,
     group: &ReferenceGroup,
     state: Entity<AppState>,
@@ -247,7 +245,10 @@ fn group_header(
     let collection = group.source.collection.clone();
     let filter = group.filter(&tab.id);
     let loaded = matches!(group.state, GroupState::Loaded { .. });
-    let _ = key;
+    let can_expand =
+        matches!(&group.state, GroupState::Loaded { documents, .. } if !documents.is_empty());
+    let source = group.source.clone();
+    let expanded = group.expanded;
 
     div()
         .flex()
@@ -255,15 +256,50 @@ fn group_header(
         .gap(spacing::sm())
         .px(spacing::sm())
         .py(spacing::xs())
-        .bg(cx.theme().muted.opacity(0.4))
+        .bg(cx.theme().secondary)
         .child(
+            // Only the name toggles; the actions beside it keep their own clicks.
             div()
+                .id(SharedString::from(format!("toggle:{}", group.label())))
+                .flex()
                 .flex_1()
                 .min_w(px(0.0))
-                .text_sm()
-                .font_family(crate::theme::fonts::mono())
-                .truncate()
-                .child(group.label()),
+                .items_center()
+                .gap(spacing::xs())
+                .when(can_expand, |this| {
+                    this.cursor_pointer().on_click(move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            if let Some(tab) = state.references_tab_mut(tab_id)
+                                && let Some(group) = tab.group_mut(&source)
+                            {
+                                group.expanded = !group.expanded;
+                                cx.notify();
+                            }
+                        });
+                    })
+                })
+                .child(
+                    Icon::new(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .xsmall()
+                    .text_color(if can_expand {
+                        cx.theme().muted_foreground
+                    } else {
+                        colors::transparent()
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_sm()
+                        .font_family(crate::theme::fonts::mono())
+                        .truncate()
+                        .child(group.label()),
+                ),
         )
         .children(group.state.count_label().map(|count| {
             div()
@@ -319,16 +355,11 @@ fn group_header(
         })
 }
 
-fn group_body(
-    tab: &ReferencesTabState,
-    group: &ReferenceGroup,
-    state: Entity<AppState>,
-    cx: &App,
-) -> Vec<AnyElement> {
+fn group_body(group: &ReferenceGroup, state: Entity<AppState>, cx: &App) -> Vec<AnyElement> {
     match &group.state {
         // The header already carries a spinner; a body would only be a second thing saying wait.
         GroupState::Loading => Vec::new(),
-        GroupState::Held => vec![held(tab, group, state, cx)],
+        GroupState::Held => vec![held(group, state, cx)],
         GroupState::Failed(message) => vec![
             note(cx)
                 .child(Icon::new(IconName::TriangleAlert).xsmall().text_color(cx.theme().danger))
@@ -366,15 +397,8 @@ fn group_body(
 
 /// Held back because the lookup would scan. The button is the whole body, so the cost is named
 /// before it is paid rather than after.
-fn held(
-    tab: &ReferencesTabState,
-    group: &ReferenceGroup,
-    state: Entity<AppState>,
-    cx: &App,
-) -> AnyElement {
+fn held(group: &ReferenceGroup, state: Entity<AppState>, cx: &App) -> AnyElement {
     let source = group.source.clone();
-    let tab_label = tab.label.clone();
-    let _ = tab_label;
 
     div()
         .flex()
@@ -457,7 +481,7 @@ fn result_row(
         .px(spacing::sm())
         .py(spacing::xs())
         .border_t_1()
-        .border_color(cx.theme().border.opacity(0.6))
+        .border_color(cx.theme().border)
         .when(id.is_some(), |this| {
             this.cursor_pointer().hover(|style| style.bg(cx.theme().list_hover)).on_click({
                 let state = state.clone();
@@ -481,29 +505,52 @@ fn result_row(
                 }
             })
         })
-        .children(document.iter().filter(|(_, value)| is_scalar(value)).take(ROW_FIELDS).map(
-            |(field, value)| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(3.0))
-                    .min_w(px(0.0))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{field}:")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family(crate::theme::fonts::mono())
-                            .text_color(value_color(value, cx))
-                            .truncate()
-                            .child(bson_value_preview(value, 28)),
-                    )
-            },
-        ))
+        .children(summary(document, cx))
+}
+
+/// The fields that identify a document, or a compact preview when it has no plain ones — a row
+/// that renders nothing at all reads as a bug, which is what an empty strip looked like.
+fn summary(document: &Document, cx: &App) -> Vec<AnyElement> {
+    let fields: Vec<AnyElement> = document
+        .iter()
+        .filter(|(_, value)| is_scalar(value))
+        .take(ROW_FIELDS)
+        .map(|(field, value)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{field}:")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_family(crate::theme::fonts::mono())
+                        .text_color(value_color(value, cx))
+                        .truncate()
+                        .child(bson_value_preview(value, 28)),
+                )
+                .into_any_element()
+        })
+        .collect();
+
+    if !fields.is_empty() {
+        return fields;
+    }
+    vec![
+        div()
+            .text_xs()
+            .font_family(crate::theme::fonts::mono())
+            .text_color(cx.theme().muted_foreground)
+            .truncate()
+            .child(bson_value_preview(&Bson::Document(document.clone()), 120))
+            .into_any_element(),
+    ]
 }
 
 fn is_scalar(value: &Bson) -> bool {
