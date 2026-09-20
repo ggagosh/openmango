@@ -11,14 +11,16 @@ use crate::keyboard::{
     CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey,
     CopyValue, DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
     DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
-    FocusAggregationStageEditor, FormatAggregationStage, InsertDocument, MoveAggregationStageDown,
-    MoveAggregationStageUp, NextSearchMatch, PasteDocuments, PrevSearchMatch, RedoAggregationEdit,
-    RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation, SaveDocument,
-    SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
-    ShowDocumentsSubview, ShowHistorySubview, ShowIndexesSubview, ShowSchemaSubview,
-    ShowStatsSubview, ToggleAggregationStageEnabled, UndoAggregationEdit,
+    FocusAggregationStageEditor, FormatAggregationStage, GoToReference, InsertDocument,
+    MoveAggregationStageDown, MoveAggregationStageUp, NextSearchMatch, PasteDocuments,
+    PeekReference, PrevSearchMatch, RedoAggregationEdit, RemoveMatchingValues, RemoveSelectedField,
+    RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
+    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
+    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
+    UndoAggregationEdit,
 };
 use crate::models::TreeNodeId;
+use crate::state::relations::lookup::Intent;
 use crate::state::{AppCommands, CollectionSubview, DocumentViewMode, StatusMessage};
 
 use super::export::{CopyFormat, ExportScope, ViewExportSnapshot, render_to_clipboard};
@@ -432,6 +434,12 @@ impl CollectionView {
                 window,
                 cx,
             );
+        }))
+        .on_action(cx.listener(|this, _: &GoToReference, _window, cx| {
+            this.follow_selected_reference(Intent::Open, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PeekReference, _window, cx| {
+            this.follow_selected_reference(Intent::Peek, cx);
         }))
         .on_action(cx.listener(|this, _: &CopyValue, _window, cx| {
             if let Some((session_key, meta)) = this.selected_property_context(cx)

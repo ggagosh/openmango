@@ -12,12 +12,15 @@ use crate::components::request_connection_write;
 use crate::keyboard::{
     AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
     CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument, EditDocumentJson,
-    EditValueType, PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField,
+    EditValueType, GoToReference, PasteDocuments, PeekReference, RemoveMatchingValues,
+    RemoveSelectedField, RenameField,
 };
+use crate::state::relations::lookup::Intent;
 use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::export::CopyFormat;
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::reference::ReferenceLink;
 
 use super::super::CollectionView;
 
@@ -396,6 +399,24 @@ pub(super) fn build_property_menu(
                 }
             }),
     );
+
+    // Only offered on a value that can actually be followed, so the menu never promises a jump
+    // it cannot make.
+    if let Some(link) = ReferenceLink::for_node(&state, Some(&session_key), &meta) {
+        let peek = link.clone();
+        menu = menu.separator().item(
+            PopupMenuItem::new("Go to referenced document")
+                .icon(Icon::new(IconName::ArrowRight))
+                .action(Box::new(GoToReference))
+                .on_click(move |_, _window, cx| link.follow(Intent::Open, cx)),
+        );
+        menu = menu.item(
+            PopupMenuItem::new("Peek at referenced document")
+                .icon(Icon::new(IconName::Eye))
+                .action(Box::new(PeekReference))
+                .on_click(move |_, _window, cx| peek.follow(Intent::Peek, cx)),
+        );
+    }
 
     menu
 }

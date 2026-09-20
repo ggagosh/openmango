@@ -15,9 +15,11 @@ use crate::bson::{
 use crate::components::filter_builder::FilterBuilderPanel;
 use crate::helpers::auto_pair::AutoPairState;
 use crate::perf::log_tabs_duration;
+use crate::state::relations::lookup::Intent;
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionSubview, SessionDocument, SessionKey,
 };
+use crate::views::documents::reference::ReferenceLink;
 
 use super::node_meta::NodeMeta;
 use super::tree::document_tree::bson_tree_value_color;
@@ -809,6 +811,20 @@ impl CollectionView {
         let node_meta = self.view_model.node_meta();
         let meta = node_meta.get(&node_id).cloned()?;
         Some((session_key, meta))
+    }
+
+    /// Follow the reference on the selected row, if that row holds one.
+    ///
+    /// Silent when it does not: `space` and Cmd+B fire wherever the selection happens to be,
+    /// and a beep or a message for every non-reference row would be noise.
+    pub(crate) fn follow_selected_reference(&self, intent: Intent, cx: &mut App) {
+        let Some((session_key, meta)) = self.selected_property_context(cx) else {
+            return;
+        };
+        let Some(link) = ReferenceLink::for_node(&self.state, Some(&session_key), &meta) else {
+            return;
+        };
+        link.follow(intent, cx);
     }
 
     fn select_tree_index(

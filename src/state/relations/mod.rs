@@ -511,6 +511,27 @@ pub fn array_depth(path: &str) -> usize {
     path.matches("[]").count()
 }
 
+/// The relation path for a concrete path through a document: `items.0.productId` becomes
+/// `items[].productId`.
+///
+/// The index is dropped because a relation belongs to the field, not to one element of it —
+/// every `items[].productId` in the collection points at the same collection.
+pub fn path_from_segments(segments: &[crate::bson::PathSegment]) -> String {
+    let mut path = String::new();
+    for segment in segments {
+        match segment {
+            crate::bson::PathSegment::Key(key) => {
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(key);
+            }
+            crate::bson::PathSegment::Index(_) => path.push_str("[]"),
+        }
+    }
+    path
+}
+
 /// The field name a path ends in, without its array marker: `items[].productId` → `productId`.
 pub fn leaf_name(path: &str) -> &str {
     let leaf = path.rsplit('.').next().unwrap_or(path);
@@ -642,6 +663,37 @@ mod tests {
         assert_eq!(leaf_name("items[].productId"), "productId");
         assert_eq!(leaf_name("tagIds[]"), "tagIds");
         assert_eq!(leaf_name("userId"), "userId");
+    }
+
+    #[test]
+    fn a_documents_concrete_path_becomes_the_field_it_belongs_to() {
+        use crate::bson::PathSegment::{Index, Key};
+
+        // The element index is dropped: every items[].productId points at the same collection,
+        // so the relation belongs to the field rather than to one element of it.
+        assert_eq!(
+            path_from_segments(&[Key("items".into()), Index(3), Key("productId".into())]),
+            "items[].productId"
+        );
+        assert_eq!(path_from_segments(&[Key("tagIds".into()), Index(0)]), "tagIds[]");
+        assert_eq!(
+            path_from_segments(&[Key("shipping".into()), Key("countryId".into())]),
+            "shipping.countryId"
+        );
+        assert_eq!(path_from_segments(&[Key("_id".into())]), "_id");
+        assert_eq!(path_from_segments(&[]), "");
+
+        // The round trip a click makes: document path to relation path to Mongo path.
+        let path = path_from_segments(&[
+            Key("sections".into()),
+            Index(1),
+            Key("blocks".into()),
+            Index(0),
+            Key("assetId".into()),
+        ]);
+        assert_eq!(path, "sections[].blocks[].assetId");
+        assert_eq!(array_depth(&path), 2);
+        assert_eq!(mongo_path(&path), "sections.blocks.assetId");
     }
 
     #[test]

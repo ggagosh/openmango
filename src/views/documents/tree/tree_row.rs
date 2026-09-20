@@ -20,10 +20,15 @@ use crate::components::filter_builder::drag::{
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down, peek_arrow};
 use crate::views::documents::state::SearchMatcher;
 
 use super::super::CollectionView;
 use super::tree_menus::{build_document_menu, build_property_menu};
+
+/// The hover group a row forms, so the peek arrow can appear with the rest of the row's hover
+/// affordances rather than sitting in the grid permanently.
+const TREE_ROW_GROUP: &str = "tree-row-group";
 
 #[derive(Clone)]
 pub(crate) struct SearchOptions {
@@ -119,6 +124,11 @@ pub(crate) fn render_tree_row(
         div().w(px(18.0)).into_any_element()
     };
 
+    // A value that points somewhere becomes a link. Built once per row: deciding this reads
+    // only the value already in hand, no query.
+    let reference_link =
+        meta.and_then(|meta| ReferenceLink::for_node(&state, session_key.as_ref(), meta));
+
     let is_draggable_field = drag_enabled && !is_root && meta.is_some();
     // Only clone the (potentially heavy) node metadata when this row can
     // actually start a drag; most rows never do.
@@ -141,6 +151,7 @@ pub(crate) fn render_tree_row(
     // inside take static ids, which this one scopes, so nothing else allocates per frame.
     let row = div()
         .id((ElementId::from("tree-row"), item_id.clone()))
+        .group(TREE_ROW_GROUP)
         .flex()
         .items_center()
         .w_full()
@@ -253,6 +264,7 @@ pub(crate) fn render_tree_row(
             node_meta.clone(),
             view.clone(),
             value_drag,
+            reference_link,
             search_opts,
             current_match_id,
             cx,
@@ -431,6 +443,7 @@ fn render_value_column(
     node_meta: Arc<HashMap<String, NodeMeta>>,
     view: Entity<CollectionView>,
     value_drag: Option<DragValue>,
+    reference_link: Option<ReferenceLink>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     cx: &App,
@@ -480,9 +493,19 @@ fn render_value_column(
         })
         .child(if is_editing {
             render_inline_editor(inline_state, inline_error, view.clone(), cx)
+        } else if let Some(link) = reference_link.clone() {
+            // Underlined on hover and followed on Cmd+click. Plain click still selects and
+            // double-click still edits, because this handler ignores everything else.
+            value_text(value_label, value_color)
+                .id("tree-value-link")
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+                .into_any_element()
         } else {
             value_text(value_label, value_color).into_any_element()
-        });
+        })
+        .when_some(reference_link, |this, link| this.child(peek_arrow(link, TREE_ROW_GROUP, cx)));
 
     if let Some(value_drag) = value_drag
         && !is_editing
