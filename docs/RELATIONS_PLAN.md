@@ -273,8 +273,7 @@ Ordered by dependency; each step leaves the app working.
    (`TabKey::References`, reusing the aggregation results rendering), first used for ambiguous
    targets; broken-reference state; breadcrumb; single-result expand.
    `tests/relations_tests.rs` (Testcontainers): resolve → probe → remembered relation,
-   shared-`_id` ambiguity, miss, DBRef. **Left:** the References tab itself, and links in
-   aggregation results.
+   shared-`_id` ambiguity, miss, DBRef. **Left:** links in aggregation results.
 4. **Inference** — done for one collection at a time, from the collection context menu.
    `state/relations/infer.rs` profiles a byte-budgeted sample for ObjectId-shaped paths
    (arrays at any depth, ≤ 200 distinct ids each), reads DBRefs outright, pairs each field with
@@ -285,9 +284,11 @@ Ordered by dependency; each step leaves the app working.
    metadata stage it needs (name ranking already cuts the probe count); `secondaryPreferred` on
    inference reads; a job runner with pause / resume for whole-deployment sweeps; automatic
    inference on collection open.
-5. **Surfaces** — Relations page, badge, "Find references" filling the References tab from
-   `referenced_by()` (`shift-f12`), "Open all", integrity report (orphans,
-   drift, unindexed reference fields).
+5. **Surfaces** — References tab done: `TabKey::References`, "Find references" on a document
+   (`shift-f12`), one group per incoming relation loading independently, unindexed groups held
+   behind "Run anyway" on production and protected connections, "Open as filter" per group.
+   **Left:** the Relations page, the "N relations found" badge, "Open all" for arrays, and the
+   integrity report (orphans, drift, unindexed reference fields).
 6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
    compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
 7. **Independent consumers** — code imports (Mongoose `ref`, Prisma, `$jsonSchema`), codegen

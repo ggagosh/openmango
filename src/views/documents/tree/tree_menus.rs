@@ -12,8 +12,8 @@ use crate::components::request_connection_write;
 use crate::keyboard::{
     AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
     CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument, EditDocumentJson,
-    EditValueType, GoToReference, PasteDocuments, PeekReference, RemoveMatchingValues,
-    RemoveSelectedField, RenameField,
+    EditValueType, FindReferences, GoToReference, PasteDocuments, PeekReference,
+    RemoveMatchingValues, RemoveSelectedField, RenameField,
 };
 use crate::state::relations::lookup::Intent;
 use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
@@ -97,6 +97,21 @@ pub(in crate::views::documents) fn build_document_menu(
     });
     menu = menu
         .item(PopupMenuItem::submenu("Copy as", copy_as_submenu).icon(Icon::new(IconName::Copy)));
+
+    menu = menu.item(
+        PopupMenuItem::new("Find references")
+            .icon(Icon::new(crate::assets::AppIcon::Workflow))
+            .action(Box::new(FindReferences))
+            .disabled(multi)
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                let doc_key = doc_key.clone();
+                move |_, _window, cx| {
+                    find_references_for(&state, &session_key, &doc_key, cx);
+                }
+            }),
+    );
 
     menu = menu
         .item(
@@ -419,6 +434,24 @@ pub(super) fn build_property_menu(
     }
 
     menu
+}
+
+/// Ask what points at this document. The `_id` is read from the document itself, so the
+/// question is about the row the user actually right-clicked.
+pub(in crate::views::documents) fn find_references_for(
+    state: &Entity<AppState>,
+    session_key: &SessionKey,
+    doc_key: &DocumentKey,
+    cx: &mut App,
+) {
+    let Some(id) = resolve_document(state, session_key, doc_key, cx)
+        .and_then(|document| document.get("_id").cloned())
+    else {
+        return;
+    };
+    let target =
+        crate::state::relations::FieldRef::id_of(&session_key.database, &session_key.collection);
+    AppCommands::find_references(state.clone(), target, id, cx);
 }
 
 fn resolve_document(

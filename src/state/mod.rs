@@ -22,10 +22,10 @@ pub use app_state::{
     ExplainOpenMode, ExplainPanelTab, ExplainRejectedPlan, ExplainRun, ExplainScope,
     ExplainSeverity, ExplainStageDelta, ExplainState, ExplainSummary, ExplainViewMode,
     ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, KeybindingCapture, NavHistory,
-    SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument,
-    SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat,
-    TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange, UnsavedInventory,
-    UnsavedScope, View,
+    ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
+    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
+    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange,
+    UnsavedInventory, UnsavedScope, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;

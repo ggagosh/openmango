@@ -97,6 +97,16 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
             }
+            TabKey::References(key) => {
+                let label = state
+                    .references_tab(key.id)
+                    .map(|tab| format!("References to {} {}", key.collection, tab.label))
+                    .unwrap_or_else(|| format!("References to {}", key.collection));
+                let conn_name = state
+                    .connection_name(key.connection_id)
+                    .unwrap_or_else(|| "Connection".to_string());
+                (label, format!("{} / {}", conn_name, key.database))
+            }
             TabKey::AgentActivity => {
                 ("Agent Activity".to_string(), "Approvals and operations".to_string())
             }

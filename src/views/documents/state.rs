@@ -827,6 +827,19 @@ impl CollectionView {
         link.follow(intent, cx);
     }
 
+    /// Ask what points at the document the selection sits in, whichever row of it is selected.
+    pub(crate) fn find_references_for_selection(&self, cx: &mut App) {
+        let Some((session_key, meta)) = self.selected_property_context(cx) else {
+            return;
+        };
+        crate::views::documents::tree::tree_menus::find_references_for(
+            &self.state,
+            &session_key,
+            &meta.doc_key,
+            cx,
+        );
+    }
+
     fn select_tree_index(
         this: &mut CollectionView,
         new_ix: usize,

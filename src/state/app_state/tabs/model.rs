@@ -11,8 +11,8 @@ use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
 use crate::state::app_state::types::{
-    ActiveTab, ConnectionManagerRequest, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey,
-    TabKey, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    ActiveTab, ConnectionManagerRequest, DatabaseKey, ForgeTabKey, ForgeTabState, ReferencesTabKey,
+    SessionKey, TabKey, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +130,12 @@ impl AppState {
                 self.conn.selected_database = Some(tab.database.clone());
                 self.conn.selected_collection = None;
                 self.current_view = View::Forge;
+            }
+            TabKey::References(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
+                self.conn.selected_database = Some(tab.database.clone());
+                self.conn.selected_collection = Some(tab.collection.clone());
+                self.current_view = View::References;
             }
             TabKey::AgentActivity => {
                 self.current_view = View::AgentActivity;
@@ -581,6 +587,48 @@ impl AppState {
     }
 
     /// Open Agent Activity as a singleton workspace tab.
+    /// Open a tab answering what points at one document.
+    ///
+    /// Always a new tab. The answer is about one `_id`, so re-asking about another document is
+    /// a second question rather than a changed answer, and the tab it came from is untouched.
+    pub fn open_references_tab(
+        &mut self,
+        target: crate::state::relations::FieldRef,
+        id: mongodb::bson::Bson,
+        cx: &mut Context<Self>,
+    ) -> Option<uuid::Uuid> {
+        let connection_id = self.conn.selected_connection?;
+        let tab_id = Uuid::new_v4();
+        let key = ReferencesTabKey {
+            id: tab_id,
+            connection_id,
+            database: target.database.clone(),
+            collection: target.collection.clone(),
+        };
+        self.references_tabs.insert(
+            tab_id,
+            crate::state::relations::references::ReferencesTabState::new(target, id),
+        );
+        self.tabs.open.push(TabKey::References(key));
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::References;
+        self.update_workspace_from_state_debounced();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+        Some(tab_id)
+    }
+
+    /// The references tab on screen, if that is what is on screen.
+    pub fn active_references_tab(&self) -> Option<&ReferencesTabKey> {
+        match self.tabs.active {
+            ActiveTab::Index(index) => match self.tabs.open.get(index) {
+                Some(TabKey::References(key)) => Some(key),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn open_agent_activity_tab(&mut self, cx: &mut Context<Self>) {
         if let Some(index) =
             self.tabs.open.iter().position(|tab| matches!(tab, TabKey::AgentActivity))
@@ -911,6 +959,9 @@ impl AppState {
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
+            TabKey::References(key) => {
+                self.references_tabs.remove(&key.id);
+            }
             TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
                 // No cleanup needed
             }
@@ -1052,6 +1103,9 @@ impl AppState {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Forge(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
+                TabKey::References(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Transfer(_)
@@ -1238,6 +1292,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Database(_) => "database",
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
+        TabKey::References(_) => "references",
         TabKey::AgentActivity => "agent_activity",
         TabKey::Connections => "connections",
         TabKey::Settings => "settings",

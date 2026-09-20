@@ -12,6 +12,7 @@
 
 pub mod infer;
 pub mod lookup;
+pub mod references;
 pub mod resolve;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -531,6 +532,14 @@ pub fn path_from_segments(segments: &[crate::bson::PathSegment]) -> String {
         }
     }
     path
+}
+
+/// A filter as the user will see it in the filter bar: `{_id: ObjectId("…")}`, not Extended
+/// JSON. The same rendering the workspace uses, so a navigated filter and a typed one match.
+pub fn filter_text(filter: &mongodb::bson::Document) -> String {
+    crate::bson::format_relaxed_json_compact(
+        &mongodb::bson::Bson::Document(filter.clone()).into_relaxed_extjson(),
+    )
 }
 
 /// The field name a path ends in, without its array marker: `items[].productId` → `productId`.

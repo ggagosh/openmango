@@ -19,6 +19,9 @@ impl AppState {
             (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
             (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
             (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
+            // A references tab holds an answer about one document, which may not be there next
+            // session. Restoring it would mean re-running the queries to say the same thing.
+            (_, TabKey::References(_)) => false,
             (
                 _,
                 TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog,
@@ -383,8 +386,12 @@ impl AppState {
                     table_hidden_columns: HashSet::new(),
                 }
             }
-            TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
-                // Utility tabs are not persisted in workspace
+            TabKey::References(_)
+            | TabKey::AgentActivity
+            | TabKey::Connections
+            | TabKey::Settings
+            | TabKey::Changelog => {
+                // Utility and result tabs are not persisted in workspace
                 WorkspaceTab {
                     database: String::new(),
                     collection: String::new(),
@@ -437,6 +444,10 @@ impl AppState {
                 TabKey::Forge(key) => {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
+                }
+                TabKey::References(key) => {
+                    self.workspace.selected_database = Some(key.database.clone());
+                    self.workspace.selected_collection = Some(key.collection.clone());
                 }
                 TabKey::AgentActivity
                 | TabKey::Connections

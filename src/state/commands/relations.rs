@@ -11,6 +11,11 @@ use std::collections::HashSet;
 use chrono::Utc;
 use futures::StreamExt as _;
 
+use mongodb::bson::doc;
+use uuid::Uuid;
+
+use crate::connection::ops::documents::{AsyncFindOptions, find_documents_async};
+use crate::connection::ops::indexes::list_indexes_async;
 use crate::connection::ops::relations::{find_by_id_async, probe_id_async, probe_ids_async};
 use crate::connection::ops::schema::sample_for_schema_async;
 use crate::connection::ops::stats::collection_stats_async;
@@ -21,8 +26,10 @@ use crate::state::relations::infer::{
     declared_relations, profile_reference_paths, score, should_escalate,
 };
 use crate::state::relations::lookup::{Anchor, Candidate, Intent, LookupState, ReferenceLookup};
-use crate::state::relations::resolve::{Plan, Reference, plan};
+use crate::state::relations::references::{GROUP_PREVIEW_LIMIT, GroupState, ReferenceGroup};
+use crate::state::relations::resolve::{NAVIGATION_CONFIDENCE, Plan, Reference, plan};
 use crate::state::relations::{FieldRef, Origin, Relation};
+use crate::state::relations::{filter_text, mongo_path};
 
 use super::AppCommands;
 
@@ -239,14 +246,6 @@ fn open_target(
     }
 }
 
-/// The filter as the user will see it in the filter bar: `{_id: ObjectId("…")}`, not Extended
-/// JSON. The same rendering the workspace uses, so a navigated filter and a typed one match.
-fn filter_text(filter: &Document) -> String {
-    crate::bson::format_relaxed_json_compact(
-        &mongodb::bson::Bson::Document(filter.clone()).into_relaxed_extjson(),
-    )
-}
-
 /// A sample big enough to meet the rare fields, small enough not to be a scan.
 ///
 /// The budget is bytes rather than documents, because a thousand 40 KB documents is 40 MB of
@@ -440,4 +439,185 @@ fn number(value: &Bson) -> Option<f64> {
         Bson::Int64(size) => Some(*size as f64),
         _ => None,
     }
+}
+
+/// A reference lookup runs once per incoming relation, so each one is capped on its own.
+const REFERENCES_MAX_TIME: Duration = Duration::from_secs(5);
+
+impl AppCommands {
+    /// Open a tab answering what points at this document, and start filling it.
+    pub fn find_references(state: Entity<AppState>, target: FieldRef, id: Bson, cx: &mut App) {
+        let Some(tab_id) =
+            state.update(cx, |state, cx| state.open_references_tab(target.clone(), id.clone(), cx))
+        else {
+            return;
+        };
+        Self::load_references(state, tab_id, cx);
+    }
+
+    /// Work out which fields point at the tab's document, then ask each of them.
+    ///
+    /// Only the graph is consulted for *which* fields: guessing here would mean scanning
+    /// collections on the strength of a name, which is the one thing a reference lookup never
+    /// does. A database nobody has inferred yet says so, and offers to infer.
+    pub fn load_references(state: Entity<AppState>, tab_id: Uuid, cx: &mut App) {
+        let Some((client, id, groups, guard_scans)) = state.update(cx, |state, cx| {
+            let tab = state.references_tab(tab_id)?;
+            let target = tab.target.clone();
+            let id = tab.id.clone();
+            let connection_id = state.selected_connection_id()?;
+            let client = state.active_connection_by_id(connection_id)?.client.clone();
+            // An unindexed scan is not something to start unasked where it would be felt.
+            let guard_scans = state
+                .connection_by_id(connection_id)
+                .map(|connection| {
+                    connection.protected
+                        || connection.environment
+                            == Some(crate::models::ConnectionEnvironment::Production)
+                })
+                .unwrap_or(false);
+
+            let groups: Vec<FieldRef> = state
+                .relations()
+                .referenced_by(&target.database, &target.collection, NAVIGATION_CONFIDENCE)
+                .into_iter()
+                .map(|relation| relation.source.clone())
+                .collect();
+
+            let tab = state.references_tab_mut(tab_id)?;
+            tab.discovering = false;
+            tab.groups = groups
+                .iter()
+                .map(|source| ReferenceGroup {
+                    source: source.clone(),
+                    indexed: false,
+                    state: GroupState::Loading,
+                })
+                .collect();
+            cx.notify();
+            Some((client, id, groups, guard_scans))
+        }) else {
+            return;
+        };
+
+        for source in groups {
+            let task = cx.background_spawn({
+                let client = client.clone();
+                let source = source.clone();
+                let id = id.clone();
+                async move { load_group(&client, source, id, guard_scans).await }
+            });
+            cx.spawn({
+                let state = state.clone();
+                let source = source.clone();
+                async move |cx: &mut gpui_kit::AsyncApp| {
+                    let (indexed, group_state) = task.await;
+                    cx.update(|cx| {
+                        state.update(cx, |state, cx| {
+                            if let Some(tab) = state.references_tab_mut(tab_id)
+                                && let Some(group) = tab.group_mut(&source)
+                            {
+                                group.indexed = indexed;
+                                group.state = group_state;
+                                cx.notify();
+                            }
+                        });
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Run a group that was held back because its field has no index.
+    pub fn run_held_reference_group(
+        state: Entity<AppState>,
+        tab_id: Uuid,
+        source: FieldRef,
+        cx: &mut App,
+    ) {
+        let Some((client, id)) = state.update(cx, |state, cx| {
+            let id = state.references_tab(tab_id)?.id.clone();
+            let connection_id = state.selected_connection_id()?;
+            let client = state.active_connection_by_id(connection_id)?.client.clone();
+            let group = state.references_tab_mut(tab_id)?.group_mut(&source)?;
+            group.state = GroupState::Loading;
+            cx.notify();
+            Some((client, id))
+        }) else {
+            return;
+        };
+
+        let task = cx.background_spawn({
+            let source = source.clone();
+            async move { load_group(&client, source, id, false).await }
+        });
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            let (indexed, group_state) = task.await;
+            cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    if let Some(tab) = state.references_tab_mut(tab_id)
+                        && let Some(group) = tab.group_mut(&source)
+                    {
+                        group.indexed = indexed;
+                        group.state = group_state;
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+}
+
+/// Ask one field what it points at, checking first whether asking is cheap.
+///
+/// One document over the limit is fetched rather than counted, so a full page reads as "20+"
+/// without a `count` that would scan the collection to say the same thing.
+async fn load_group(
+    client: &Client,
+    source: FieldRef,
+    id: Bson,
+    guard_scans: bool,
+) -> (bool, GroupState) {
+    let path = mongo_path(&source.path);
+    let indexed = path_is_indexed(client, &source, &path).await;
+    if guard_scans && !indexed {
+        return (indexed, GroupState::Held);
+    }
+
+    let found = find_documents_async(
+        client,
+        &source.database,
+        &source.collection,
+        AsyncFindOptions {
+            filter: doc! { path: id },
+            sort: None,
+            projection: None,
+            skip: 0,
+            limit: GROUP_PREVIEW_LIMIT as i64 + 1,
+            max_time: REFERENCES_MAX_TIME,
+        },
+    )
+    .await;
+
+    match found {
+        Ok(mut documents) => {
+            let more = documents.len() > GROUP_PREVIEW_LIMIT;
+            documents.truncate(GROUP_PREVIEW_LIMIT);
+            (indexed, GroupState::Loaded { documents, more })
+        }
+        Err(error) => (indexed, GroupState::Failed(error.to_string())),
+    }
+}
+
+/// Whether some index starts with this path, which is what decides if a lookup is a seek or a
+/// scan. A compound index counts when the path is its first key.
+async fn path_is_indexed(client: &Client, source: &FieldRef, path: &str) -> bool {
+    let Ok(indexes) =
+        list_indexes_async(client, &source.database, &source.collection, REFERENCES_MAX_TIME).await
+    else {
+        return false;
+    };
+    indexes.iter().any(|index| index.keys.keys().next().is_some_and(|first| first == path))
 }

@@ -38,10 +38,10 @@ pub use types::{
     ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
     ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, NavHistory, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType,
-    SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
-    TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState,
-    View,
+    InsertMode, NavHistory, ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField,
+    SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
+    TabKey, TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey,
+    TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
@@ -58,6 +58,7 @@ use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
 use crate::state::relations::lookup::ReferenceLookup;
+use crate::state::relations::references::ReferencesTabState;
 use crate::state::relations::{
     FieldRef, Relation, RelationGraph, Status as RelationStatus, Upsert,
 };
@@ -113,6 +114,9 @@ pub struct AppState {
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
+    /// One answer each to "what points at this document?". Not persisted: a result about a
+    /// document that may not exist next session is not worth restoring.
+    references_tabs: HashMap<uuid::Uuid, ReferencesTabState>,
     forge_schema: HashMap<CollectionKey, ForgeSchemaCache>,
     forge_schema_inflight: HashSet<CollectionKey>,
     collection_meta: HashMap<CollectionKey, CollectionMetaCache>,
@@ -260,6 +264,7 @@ impl AppState {
             db_sessions: DatabaseSessionStore::new(),
             transfer_tabs: HashMap::new(),
             forge_tabs: HashMap::new(),
+            references_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
             forge_schema_inflight: std::collections::HashSet::new(),
             collection_meta: HashMap::new(),
@@ -462,6 +467,14 @@ impl AppState {
 
     pub fn relations(&self) -> &RelationGraph {
         &self.relations
+    }
+
+    pub fn references_tab(&self, id: uuid::Uuid) -> Option<&ReferencesTabState> {
+        self.references_tabs.get(&id)
+    }
+
+    pub fn references_tab_mut(&mut self, id: uuid::Uuid) -> Option<&mut ReferencesTabState> {
+        self.references_tabs.get_mut(&id)
     }
 
     pub fn reference_lookup(&self) -> Option<&ReferenceLookup> {

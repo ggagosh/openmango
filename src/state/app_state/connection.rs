@@ -337,6 +337,7 @@ impl AppState {
                 super::types::TabKey::Database(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Transfer(tab) => tab.connection_id == Some(connection_id),
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
+                super::types::TabKey::References(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::AgentActivity
                 | super::types::TabKey::Connections
                 | super::types::TabKey::Settings

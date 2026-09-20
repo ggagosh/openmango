@@ -26,6 +26,7 @@ pub enum View {
     Database,
     Transfer,
     Forge,
+    References,
     AgentActivity,
     Connections,
     Settings,
@@ -170,6 +171,7 @@ pub enum TabKey {
     Database(DatabaseKey),
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
+    References(ReferencesTabKey),
     AgentActivity,
     Connections,
     Settings,
@@ -299,6 +301,19 @@ pub struct ForgeTabKey {
     pub id: Uuid,
     pub connection_id: Uuid,
     pub database: String,
+}
+
+/// Identifies a tab answering "what points at this document?".
+///
+/// Carries its own id because the same document can be asked about twice, and because the tab
+/// holds a result rather than a place — re-asking is a new tab, not a changed one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReferencesTabKey {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub database: String,
+    /// The collection being pointed at.
+    pub collection: String,
 }
 
 /// Default content for a Forge query shell tab.

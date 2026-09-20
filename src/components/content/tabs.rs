@@ -18,8 +18,8 @@ use crate::keyboard::{self, FocusContent};
 use crate::state::{ActiveTab, AppState, SessionKey, TabKey, UnsavedScope, View};
 use crate::theme::{borders, colors, fonts, spacing};
 use crate::views::{
-    AgentActivityView, ChangelogView, CollectionView, DatabaseView, ForgeView, SettingsView,
-    TransferView,
+    AgentActivityView, ChangelogView, CollectionView, DatabaseView, ForgeView, ReferencesView,
+    SettingsView, TransferView,
 };
 
 fn request_close_tab(state: Entity<AppState>, tab: TabKey, window: &mut Window, cx: &mut App) {
@@ -80,6 +80,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
+    pub(crate) references_view: Option<&'a Entity<ReferencesView>>,
     pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
     pub(crate) connection_manager_view: Option<&'a Entity<ConnectionManagerView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
@@ -227,6 +228,9 @@ impl Render for OpenTabsBar {
                     TabKey::Forge(key) => {
                         (key.database.clone(), IconName::SquareTerminal.into(), false)
                     }
+                    TabKey::References(key) => {
+                        (key.collection.clone(), crate::assets::AppIcon::Workflow.into(), false)
+                    }
                     TabKey::AgentActivity => ("Agent Activity".into(), IconName::Bot.into(), false),
                     TabKey::Connections => {
                         ("Connections".into(), IconName::Settings2.into(), false)
@@ -236,10 +240,10 @@ impl Render for OpenTabsBar {
                 };
                 let identity = tab_connection_id(&tab).and_then(|id| connections.get(&id));
                 let is_selected = selected_index == Some(index);
-                let title = if matches!(tab, TabKey::Forge(_)) {
-                    format!("Forge: {label}")
-                } else {
-                    label.clone()
+                let title = match &tab {
+                    TabKey::Forge(_) => format!("Forge: {label}"),
+                    TabKey::References(_) => format!("References to {label}"),
+                    _ => label.clone(),
                 };
                 let tooltip = identity
                     .map(|identity| format!("{title} · {}", identity.display_name()))
@@ -588,6 +592,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::Forge => host
             .forge_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::References => host
+            .references_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::AgentActivity => host

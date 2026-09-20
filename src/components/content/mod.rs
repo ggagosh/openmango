@@ -5,7 +5,7 @@ use crate::components::ConnectionManager as ConnectionManagerView;
 use crate::state::{AppEvent, AppState, View};
 use crate::views::{
     AgentActivityView, AiView, ChangelogView, CollectionView, DatabaseView, ForgeView,
-    SettingsView, TransferView,
+    ReferencesView, SettingsView, TransferView,
 };
 
 mod empty;
@@ -28,6 +28,7 @@ pub struct ContentArea {
     ai_view: Option<Entity<AiView>>,
     transfer_view: Option<Entity<TransferView>>,
     forge_view: Option<Entity<ForgeView>>,
+    references_view: Option<Entity<ReferencesView>>,
     agent_activity_view: Option<Entity<AgentActivityView>>,
     connection_manager_view: Option<Entity<ConnectionManagerView>>,
     connection_manager_request_generation: u64,
@@ -98,6 +99,7 @@ impl ContentArea {
                     should_create_ai,
                     should_create_transfer,
                     should_create_forge,
+                    should_create_references,
                     should_create_agent_activity,
                     should_create_settings,
                     should_create_changelog,
@@ -110,6 +112,7 @@ impl ContentArea {
                         false,
                         matches!(state_ref.current_view, View::Transfer),
                         matches!(state_ref.current_view, View::Forge),
+                        matches!(state_ref.current_view, View::References),
                         matches!(state_ref.current_view, View::AgentActivity),
                         matches!(state_ref.current_view, View::Settings),
                         matches!(state_ref.current_view, View::Changelog),
@@ -131,6 +134,10 @@ impl ContentArea {
                 }
                 if should_create_forge && this.forge_view.is_none() {
                     this.forge_view = Some(cx.new(|cx| ForgeView::new(state.clone(), cx)));
+                }
+                if should_create_references && this.references_view.is_none() {
+                    this.references_view =
+                        Some(cx.new(|cx| ReferencesView::new(state.clone(), cx)));
                 }
                 if should_create_agent_activity && this.agent_activity_view.is_none() {
                     this.agent_activity_view =
@@ -192,6 +199,11 @@ impl ContentArea {
         } else {
             None
         };
+        let references_view = if matches!(state.read(cx).current_view, View::References) {
+            Some(cx.new(|cx| ReferencesView::new(state.clone(), cx)))
+        } else {
+            None
+        };
         let agent_activity_view = if matches!(state.read(cx).current_view, View::AgentActivity) {
             Some(cx.new(|cx| AgentActivityView::new(state.clone(), cx)))
         } else {
@@ -214,6 +226,7 @@ impl ContentArea {
             ai_view,
             transfer_view,
             forge_view,
+            references_view,
             agent_activity_view,
             connection_manager_view: None,
             connection_manager_request_generation: 0,
@@ -254,6 +267,13 @@ impl ContentArea {
         }
         if should_forge && self.forge_view.is_none() {
             self.forge_view = Some(cx.new(|cx| ForgeView::new(self.state.clone(), cx)));
+        }
+        // Read from state rather than adding a ninth flag to a parameter list that is already
+        // too long. Collapse all of them into one struct if a tenth view ever shows up.
+        if matches!(self.state.read(cx).current_view, View::References)
+            && self.references_view.is_none()
+        {
+            self.references_view = Some(cx.new(|cx| ReferencesView::new(self.state.clone(), cx)));
         }
         if should_agent_activity && self.agent_activity_view.is_none() {
             self.agent_activity_view =
@@ -392,6 +412,7 @@ impl Render for ContentArea {
                 database_view: self.database_view.as_ref(),
                 transfer_view: self.transfer_view.as_ref(),
                 forge_view: self.forge_view.as_ref(),
+                references_view: self.references_view.as_ref(),
                 agent_activity_view: self.agent_activity_view.as_ref(),
                 connection_manager_view: self.connection_manager_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
