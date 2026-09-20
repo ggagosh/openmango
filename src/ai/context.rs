@@ -109,7 +109,9 @@ const TOOL_GUIDE_TAIL: &str = "### Cross-Collection Access\n\
          `sample_field_values`.\n\
          5. Only then construct your query with confirmed field names and values.\n\n\
          ### Resolving References\n\
-         MongoDB collections often use ObjectId references between collections. When a field \
+         MongoDB collections often use ObjectId references between collections. `get_relations` \
+         says which field points at which collection, and `join_path` returns ready $lookup \
+         stages between two collections; prefer them to guessing from field names. When a field \
          contains ObjectId values that reference another collection (e.g., `leaveType: ObjectId(...)` \
          referencing a `taxonomies` or `categories` collection):\n\
          1. First query the referenced collection to find the ObjectId matching the user's intent. \

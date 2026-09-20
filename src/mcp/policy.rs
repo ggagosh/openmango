@@ -72,6 +72,22 @@ impl<'a> PolicyEvaluator<'a> {
             .ok_or_else(|| "Connection is not connected".to_string())
     }
 
+    /// The relation graph, for a database the shared connection actually has.
+    ///
+    /// Relations are kept per database name rather than per connection, so without the second
+    /// check a client could read the field names of a database it was never shown by naming it
+    /// on a connection it was.
+    pub fn relations(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+    ) -> Result<std::sync::Arc<crate::state::relations::RelationGraph>, String> {
+        if !self.cached_databases(connection_id)?.iter().any(|name| name == database) {
+            return Err("Database is not available on this connection".to_string());
+        }
+        Ok(std::sync::Arc::new(self.state.relations().clone()))
+    }
+
     pub fn authorize_action_connection(
         &self,
         connection_id: Uuid,

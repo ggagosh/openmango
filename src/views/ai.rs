@@ -666,6 +666,7 @@ impl AiView {
                     conversation_id: conversation_id.to_string(),
                     database: db,
                     collection: col,
+                    relations: std::sync::Arc::new(s.relations().clone()),
                     write_identity,
                     read_only: s.connection_read_only(id),
                     event_tx: None,

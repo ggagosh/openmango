@@ -192,6 +192,27 @@ struct ListCollectionsRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct GetRelationsRequest {
+    connection_id: String,
+    database: String,
+    /// Limit the answer to one collection and what points at it.
+    #[serde(default)]
+    collection: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct JoinPathRequest {
+    connection_id: String,
+    database: String,
+    /// The collection the pipeline runs on.
+    from: String,
+    /// The collection to reach.
+    to: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CountDocumentsRequest {
     connection_id: String,
     database: String,
@@ -424,6 +445,24 @@ struct ListCollectionsResponse {
     database: String,
     truncated: bool,
     collections: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct GetRelationsResponse {
+    data_classification: &'static str,
+    connection_id: String,
+    database: String,
+    /// One line per collection: `orders: users<buyerId,sellerId; products<items[].productId`.
+    relations: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct JoinPathResponse {
+    data_classification: &'static str,
+    connection_id: String,
+    database: String,
+    path: String,
+    pipeline: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -789,6 +828,73 @@ impl McpServer {
             database: request.database,
             truncated,
             collections,
+        }))
+    }
+
+    #[tool(
+        name = "openmango_get_relations",
+        description = "Which fields reference which collections, as OpenMango has inferred and confirmed them. One line per collection with fields grouped under their target: `orders: users<buyerId,sellerId; products<items[].productId`. `[]` marks an array; every target is an `_id`. With `collection`, a `<-` line lists the fields elsewhere that point at it. Read this before writing a $lookup.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn get_relations(
+        &self,
+        Parameters(request): Parameters<GetRelationsRequest>,
+    ) -> Result<Json<GetRelationsResponse>, String> {
+        let connection_id = parse_connection_id(&request.connection_id)?;
+        validate_namespace(&request.database, "database")?;
+        if let Some(collection) = &request.collection {
+            validate_namespace(collection, "collection")?;
+        }
+        let graph = self.bridge.relations(connection_id, request.database.clone()).await?;
+        Ok(Json(GetRelationsResponse {
+            // Field and collection names come from the database, like any other content.
+            data_classification: "untrusted_database_content",
+            connection_id: connection_id.to_string(),
+            relations: crate::state::relations::export::compact(
+                &graph,
+                &request.database,
+                request.collection.as_deref(),
+            ),
+            database: request.database,
+        }))
+    }
+
+    #[tool(
+        name = "openmango_join_path",
+        description = "The shortest chain of references joining two collections, with the $lookup stages that follow it, ready for openmango_aggregate on `from`.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn join_path(
+        &self,
+        Parameters(request): Parameters<JoinPathRequest>,
+    ) -> Result<Json<JoinPathResponse>, String> {
+        use crate::state::relations::export::{describe_steps, lookup_stages};
+        use crate::state::relations::resolve::NAVIGATION_CONFIDENCE;
+
+        let connection_id = parse_connection_id(&request.connection_id)?;
+        validate_namespace(&request.database, "database")?;
+        validate_namespace(&request.from, "from")?;
+        validate_namespace(&request.to, "to")?;
+        let graph = self.bridge.relations(connection_id, request.database.clone()).await?;
+        let database = request.database.as_str();
+        let steps = graph
+            .join_path((database, &request.from), (database, &request.to), NAVIGATION_CONFIDENCE)
+            .ok_or_else(|| {
+                format!(
+                    "No known chain of references joins {} to {}. openmango_get_relations shows what is known.",
+                    request.from, request.to
+                )
+            })?;
+        let pipeline = lookup_stages(&steps)
+            .into_iter()
+            .map(|stage| serde_json::to_value(stage).map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Json(JoinPathResponse {
+            data_classification: "untrusted_database_content",
+            connection_id: connection_id.to_string(),
+            path: describe_steps(&steps),
+            pipeline,
+            database: request.database,
         }))
     }
 
@@ -2798,6 +2904,8 @@ mod tests {
             "openmango_inspect_collection",
             "openmango_aggregate",
             "openmango_explain_query",
+            "openmango_get_relations",
+            "openmango_join_path",
             "openmango_insert_documents",
             "openmango_update_documents",
             "openmango_replace_document",
@@ -2816,7 +2924,7 @@ mod tests {
         ] {
             assert!(tools.iter().any(|tool| tool.name == name), "missing {name}");
         }
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 25);
         for removed in [
             "openmango_propose_insert_documents",
             "openmango_propose_replace_documents",
@@ -2838,6 +2946,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.structured_content.unwrap()["databases"][0], "app");
+
+        // Relations answer for a database the connection has, and only for those: they are
+        // kept per database name, so the gate is what stops one connection reading another's.
+        let relations = |database: &str| {
+            let arguments = serde_json::json!({
+                "connection_id": connection_id.to_string(),
+                "database": database
+            });
+            client.call_tool(
+                CallToolRequestParams::new("openmango_get_relations")
+                    .with_arguments(arguments.as_object().unwrap().clone()),
+            )
+        };
+        let known = relations("app").await.unwrap();
+        assert_eq!(known.structured_content.unwrap()["relations"], "no known relations in app");
+        let hidden = relations("payroll").await.unwrap();
+        assert_eq!(hidden.is_error, Some(true));
+        assert!(
+            serde_json::to_string(&hidden).unwrap().contains("not available on this connection")
+        );
 
         let arguments = serde_json::json!({
             "connection_id": connection_id.to_string(),
