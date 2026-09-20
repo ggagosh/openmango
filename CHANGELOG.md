@@ -22,8 +22,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tool calls in the chat carry an icon for the tool that ran, and a collapsed group shows which tools it used
 - New chat and a list of conversations in the chat header, the open one marked: starting over keeps what came before, and any of the last 20 conversations can be reopened where it left off. Each one is named by the model from its first exchange, says when it was, how many questions were asked and what it spent, and can be deleted from the list
 - Clear chat has a shortcut of its own while the chat has focus, and the chat's buttons show the keys that trigger them
+- Follow a reference: Cmd/Ctrl+click an ObjectId, or press Cmd/Ctrl+B or F12 on its row, and the tab moves to the document it points at, with a real filter you can edit. Where it points is confirmed against the server before anything moves, remembered for next time, and an id that leads nowhere says so instead of opening an empty collection. The arrow beside an id, or Space, shows the document in place without leaving; a DBRef goes where it names
+- Tabs go back and forward like a browser's: Cmd/Ctrl+[ returns to the view you followed a reference from, with its page, scroll, selection and filter as you left them and without asking the server again, and a trail under the collection name shows the way you came. Cmd/Ctrl+Shift+click follows into a new tab, and a tab with unsaved edits is never navigated away from
+- Open in new tab in the sidebar's collection menu and on Cmd/Ctrl+Shift+Enter, so one collection can be open twice with two different filters
+- Find references: Cmd/Ctrl+click a document's `_id`, or press Shift+F12, to see every document that points at it, grouped by the field that does. Each group can be opened as an ordinary filter, a row opens that document, and on a production or protected connection a field with no index waits for you to run it
+- Infer relations, in a database's tab and in a collection's menu: reads a sample of each collection one at a time, finds the fields that hold ids, and confirms where they point with index-only lookups, including references a collection makes to itself. It reports what it read, what it could not read and which fields matched nothing, can be stopped between collections, and what it learns is kept per database name, so it carries from a local copy to production
+- Relations tab, from Open canvas in a database's tab: every collection as a card listing the fields that reference something, laid out in layers with each line routed between the cards. Point at a field to light its one line and the collection at the other end, or at a collection to light everything joined to it; click holds it, Escape lets go, and double-click opens the collection. Drag or scroll to pan, pinch or Cmd/Ctrl+scroll to zoom, and copy the whole graph as Mermaid or DBML
+- A chip beside the collection name says whether its database has been read for relations, and either starts that or opens the canvas on this collection, counting what is new since you last looked
+- Adding an aggregation stage offers Join a related collection, which writes the `$lookup` from a known relation and the `$unwind` when the join arrives at one document; From relation on a `$lookup` stage fills in its four fields
+- Ids in aggregation results can be followed with Cmd/Ctrl+click, in the tree and the table, and an array of ids has Open all in its menu
+- The assistant and MCP clients can ask what references what (`get_relations`) and how two collections join (`join_path`), and get the `$lookup` stages back. Over MCP the graph is given only for a database the shared connection has
 
 ### Changed
+- Filters are written with spaces inside their braces, `{ _id: ObjectId("…") }`, everywhere one is shown, copied or saved
 - Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
 - When a request fails, the chat says what to do about it: which key to check, which model to pick, or that it is a rate limit that will clear
 - New installs match the system appearance with the Mango themes; a theme you already picked stays as it is
@@ -47,6 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
 
 ### Fixed
+- Cmd/Ctrl+Enter in an aggregation stage runs the pipeline without also adding a line to the stage
+- Closing a preview tab releases its session; it was kept alive until the app quit
 - Cmd/Ctrl+F while typing in a query editor no longer opens the document search over the results
 - The filter bar keeps a line for its message whether or not it has one, so a query that finishes in milliseconds no longer flashes "Searching collection…" and shifts the documents under it
 - JSON, Insert and Refresh no longer grey out for the length of a query, which made the toolbar blink on every reload while Tree and Table stayed put
