@@ -7,6 +7,7 @@ pub mod config;
 pub mod editor_sessions;
 pub mod events;
 mod query_library;
+pub mod relations;
 pub mod settings;
 pub mod status;
 pub mod transfer_rules;
@@ -35,6 +36,10 @@ pub use events::AppEvent;
 pub use query_library::{
     DocumentQuery, QueryContent, QueryDefinition, QueryHistoryEntry, QueryImportReport, QueryKind,
     QueryLibrary, QueryLibraryPersistenceError, SavedQuery, SavedQueryInput, SavedQueryScope,
+};
+pub use relations::{
+    Cardinality, Evidence, FieldRef, JoinStep, Origin, Relation, RelationGraph, RelationKind,
+    RelationModel, Status as RelationStatus, Upsert,
 };
 pub use settings::{
     AppSettings, AppTheme, AppearanceSettings, DATABASE_SCOPE_FILENAME_TEMPLATE,

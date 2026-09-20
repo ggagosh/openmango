@@ -57,6 +57,9 @@ use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
+use crate::state::relations::{
+    FieldRef, Relation, RelationGraph, Status as RelationStatus, Upsert,
+};
 use crate::state::settings::{AppSettings, migrate_islands_tab_style_to_islands};
 use crate::state::{ConfigManager, QueryLibrary, WorkspaceState};
 use crate::state::{StatusLevel, StatusMessage};
@@ -88,6 +91,10 @@ pub struct AppState {
     pub settings: AppSettings,
     query_library: QueryLibrary,
     query_library_persistence_blocked: bool,
+    /// Which field points at which collection. Keyed by database name, not connection, so a
+    /// model learned on dev is already there against production.
+    relations: RelationGraph,
+    relations_persistence_blocked: bool,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -211,6 +218,16 @@ impl AppState {
             }
         };
         let query_library_persistence_blocked = query_library_load_error.is_some();
+        let (relations, relations_load_error) = match config.load_relations() {
+            Ok(model) => (RelationGraph::from_model(model), None),
+            Err(error) => {
+                let message = format!(
+                    "Relations could not be loaded. The original file was preserved: {error}"
+                );
+                log::error!("{message}");
+                (RelationGraph::new(), Some(message))
+            }
+        };
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
@@ -228,6 +245,8 @@ impl AppState {
             settings,
             query_library,
             query_library_persistence_blocked,
+            relations,
+            relations_persistence_blocked: relations_load_error.is_some(),
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -429,6 +448,49 @@ impl AppState {
     pub fn save_settings(&self) {
         if let Err(e) = self.config.save_settings(&self.settings) {
             log::error!("Failed to save settings: {}", e);
+        }
+    }
+
+    // =========================================================================
+    // Relations
+    // =========================================================================
+
+    pub fn relations(&self) -> &RelationGraph {
+        &self.relations
+    }
+
+    /// Store a relation and persist the model. Returns what changed, so a caller doing
+    /// re-inference can tell "already knew that" from "a decision says otherwise".
+    pub fn upsert_relation(&mut self, relation: Relation) -> Upsert {
+        let outcome = self.relations.upsert(relation);
+        if outcome != Upsert::Refused {
+            self.save_relations();
+        }
+        outcome
+    }
+
+    /// Record a review of a relation. The decision outranks any later inference.
+    pub fn set_relation_status(
+        &mut self,
+        source: &FieldRef,
+        target: &FieldRef,
+        status: RelationStatus,
+    ) -> bool {
+        let changed = self.relations.set_status(source, target, status);
+        if changed {
+            self.save_relations();
+        }
+        changed
+    }
+
+    /// A model that failed to load is never overwritten: a hand-edited file is worth more than
+    /// whatever this run happened to infer.
+    fn save_relations(&self) {
+        if self.relations_persistence_blocked {
+            return;
+        }
+        if let Err(error) = self.config.save_relations(&self.relations.to_model()) {
+            log::error!("Failed to save relations: {error}");
         }
     }
 

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::models::connection::SavedConnection;
 use crate::state::QueryLibrary;
+use crate::state::relations::RelationModel;
 use crate::state::settings::AppSettings;
 use crate::state::workspace::WorkspaceState;
 
@@ -95,6 +96,7 @@ impl ConfigManager {
     const CONNECTIONS_FILE: &'static str = "connections.json";
     const QUERY_LIBRARY_FILE: &'static str = "query_library.json";
     const WORKSPACE_FILE: &'static str = "workspace.json";
+    const RELATIONS_FILE: &'static str = "relations.json";
 
     /// Load saved connections from disk
     pub fn load_connections(&self) -> Result<Vec<SavedConnection>> {
@@ -138,6 +140,20 @@ impl ConfigManager {
     /// Save workspace state to disk
     pub fn save_workspace(&self, workspace: &WorkspaceState) -> Result<()> {
         self.save_json(Self::WORKSPACE_FILE, workspace)
+    }
+
+    // =========================================================================
+    // Relations
+    // =========================================================================
+
+    /// Load the relation graph. A malformed file is reported rather than replaced, the same as
+    /// connections: a hand-edited model is worth more than an empty one.
+    pub fn load_relations(&self) -> Result<RelationModel> {
+        Ok(self.load_json(Self::RELATIONS_FILE)?.unwrap_or_default())
+    }
+
+    pub fn save_relations(&self, model: &RelationModel) -> Result<()> {
+        self.save_json(Self::RELATIONS_FILE, model)
     }
 
     // =========================================================================
@@ -331,5 +347,27 @@ mod tests {
         assert!(loaded[0].confirm_production_writes);
         assert!(loaded[0].agent_writable);
         assert!(loaded[0].history_enabled);
+    }
+
+    #[test]
+    fn relations_round_trip_through_the_file_and_start_empty() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
+
+        // Nothing on disk is an empty model, not an error: most databases have no file yet.
+        assert!(manager.load_relations().unwrap().relations.is_empty());
+
+        let mut graph = crate::state::relations::RelationGraph::new();
+        graph.upsert(crate::state::relations::Relation::asserted(
+            crate::state::relations::FieldRef::new("shop", "orders", "items[].productId"),
+            crate::state::relations::FieldRef::id_of("shop", "products"),
+            crate::state::relations::Origin::User,
+        ));
+        manager.save_relations(&graph.to_model()).unwrap();
+
+        let reloaded = manager.load_relations().unwrap();
+        assert_eq!(reloaded.relations.len(), 1);
+        assert_eq!(reloaded.relations[0].source.path, "items[].productId");
+        assert_eq!(reloaded.relations[0].target.collection, "products");
     }
 }
