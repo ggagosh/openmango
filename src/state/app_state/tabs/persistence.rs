@@ -22,6 +22,9 @@ impl AppState {
             // A references tab holds an answer about one document, which may not be there next
             // session. Restoring it would mean re-running the queries to say the same thing.
             (_, TabKey::References(_)) => false,
+            // ponytail: the canvas is one click from the database tab, so it is not restored.
+            // Persist it if people start treating it as a place they live in.
+            (_, TabKey::Relations(_)) => false,
             (
                 _,
                 TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog,
@@ -387,6 +390,7 @@ impl AppState {
                 }
             }
             TabKey::References(_)
+            | TabKey::Relations(_)
             | TabKey::AgentActivity
             | TabKey::Connections
             | TabKey::Settings
@@ -448,6 +452,10 @@ impl AppState {
                 TabKey::References(key) => {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = Some(key.collection.clone());
+                }
+                TabKey::Relations(key) => {
+                    self.workspace.selected_database = Some(key.database.clone());
+                    self.workspace.selected_collection = None;
                 }
                 TabKey::AgentActivity
                 | TabKey::Connections

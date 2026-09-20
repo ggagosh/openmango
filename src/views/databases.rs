@@ -1,10 +1,9 @@
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Icon, IconName};
-use gpui_kit::component::{Selectable as _, Sizable as _};
 use gpui_kit::*;
 
 use crate::components::{Button, ErrorCallout, request_preview_collection};
@@ -19,11 +18,6 @@ use crate::theme::{borders, sizing, spacing};
 pub struct DatabaseView {
     state: Entity<AppState>,
     last_database_key: Option<DatabaseKey>,
-    /// What the Relations section is showing: nothing, the diagram, or the review list.
-    relations_pane: RelationsPane,
-    /// The collection the diagram is centred on. Defaults to the most-referenced one, which is
-    /// the one the question is usually about.
-    diagram_focus: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -56,13 +50,7 @@ impl DatabaseView {
             _ => {}
         }));
 
-        Self {
-            state,
-            last_database_key: current_key,
-            relations_pane: RelationsPane::default(),
-            diagram_focus: None,
-            _subscriptions: subscriptions,
-        }
+        Self { state, last_database_key: current_key, _subscriptions: subscriptions }
     }
 }
 
@@ -178,14 +166,7 @@ impl Render for DatabaseView {
                 state.clone(),
                 cx,
             ))
-            .child(Self::render_relations_section(
-                &database_name,
-                self.relations_pane,
-                self.diagram_focus.clone(),
-                cx.entity(),
-                state.clone(),
-                cx,
-            ))
+            .child(Self::render_relations_section(&database_name, state.clone(), cx))
             .child(Self::render_collections_section(
                 collections,
                 collections_loading,
@@ -298,9 +279,6 @@ impl DatabaseView {
     #[allow(clippy::too_many_arguments)]
     fn render_relations_section(
         database_name: &str,
-        pane: RelationsPane,
-        focus: Option<String>,
-        view: Entity<Self>,
         state: Entity<AppState>,
         cx: &App,
     ) -> AnyElement {
@@ -383,14 +361,24 @@ impl DatabaseView {
                                 .to_string()
                         }),
                 )
-                .child(pane_button(
-                    "Diagram",
-                    "show-diagram",
-                    RelationsPane::Diagram,
-                    pane,
-                    known,
-                    view.clone(),
-                ))
+                .child(
+                    // The picture has a tab of its own: a canvas wants the whole window, and
+                    // this one clips rather than scrolls.
+                    Button::new("open-relations-canvas")
+                        .ghost()
+                        .xsmall()
+                        .label("Open canvas")
+                        .disabled(known == 0)
+                        .on_click({
+                            let state = state.clone();
+                            let database = database_name.to_string();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                state.update(cx, |state, cx| {
+                                    state.open_relations_tab(database.clone(), cx);
+                                });
+                            }
+                        }),
+                )
                 .children(report.map(|report| {
                     Button::new("copy-inference-report")
                         .ghost()
@@ -428,23 +416,6 @@ impl DatabaseView {
             .pt(spacing::lg())
             .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Relations"))
             .child(row)
-            .children(match pane {
-                RelationsPane::Closed => None,
-                RelationsPane::Diagram => {
-                    // Centred on whatever is most referenced until something else is chosen.
-                    let focus = focus.or_else(|| {
-                        state
-                            .read(cx)
-                            .relations()
-                            .by_target(database_name)
-                            .first()
-                            .map(|(target, _)| target.clone())
-                    });
-                    focus.map(|focus| {
-                        render_relation_diagram(database_name, &focus, view, state, cx)
-                    })
-                }
-            })
             .into_any_element()
     }
     fn render_collections_section(
@@ -662,190 +633,4 @@ fn stat_cell(label: &str, value: String, cx: &App) -> AnyElement {
         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
         .child(div().text_sm().text_color(cx.theme().foreground).child(value))
         .into_any_element()
-}
-/// What the Relations section is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum RelationsPane {
-    #[default]
-    Closed,
-    /// One collection and its neighbours, drawn.
-    Diagram,
-}
-
-/// One collection, what points at it, and what it points at.
-///
-/// Not the whole database: fifty-eight collections and a hundred edges drawn at once is a
-/// hairball whichever way it is laid out, and the question people actually arrive with is about
-/// one collection. Clicking a neighbour moves the focus, so the graph is walked rather than
-/// surveyed.
-///
-/// Three columns and elbow connectors, built from ordinary elements. A path-drawn diagram would
-/// need a layout engine and measured positions to say the same thing.
-fn render_relation_diagram(
-    database: &str,
-    focus: &str,
-    view: Entity<DatabaseView>,
-    state: Entity<AppState>,
-    cx: &App,
-) -> AnyElement {
-    let graph = state.read(cx).relations();
-    let incoming = graph.into_collection(database, focus);
-    let outgoing = graph.from_collection(database, focus);
-
-    if incoming.is_empty() && outgoing.is_empty() {
-        return div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .py(spacing::lg())
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(format!("Nothing is known to point at or from {focus}."))
-            .into_any_element();
-    }
-
-    div()
-        .id("relation-diagram")
-        // Its own scroll, bounded: the tab below it clips rather than scrolls, so a diagram
-        // that grew with the graph pushed the collections list off the page.
-        .max_h(px(420.0))
-        .overflow_y_scrollbar()
-        .flex()
-        .items_stretch()
-        .gap(spacing::sm())
-        .pt(spacing::sm())
-        .child(
-            // What points here, on the left, pointing right.
-            div().flex().flex_col().gap(px(2.0)).flex_1().min_w(px(0.0)).items_end().children(
-                incoming.iter().map(|relation| {
-                    neighbour(
-                        &relation.source.collection,
-                        &format!("{}.{}", relation.source.collection, relation.source.path),
-                        true,
-                        view.clone(),
-                        cx,
-                    )
-                }),
-            ),
-        )
-        .child(
-            // The collection in focus, between the two.
-            div().flex().flex_col().justify_center().child(
-                div()
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .rounded(borders::radius_md())
-                    .border_1()
-                    .border_color(cx.theme().primary)
-                    .bg(cx.theme().secondary)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_family(crate::theme::fonts::mono())
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(focus.to_string()),
-                    )
-                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
-                        "{} in · {} out",
-                        incoming.len(),
-                        outgoing.len()
-                    ))),
-            ),
-        )
-        .child(
-            // What it points at, on the right.
-            div().flex().flex_col().gap(px(2.0)).flex_1().min_w(px(0.0)).items_start().children(
-                outgoing.iter().map(|relation| {
-                    neighbour(
-                        &relation.target.collection,
-                        &format!("{}.{}", focus, relation.source.path),
-                        false,
-                        view.clone(),
-                        cx,
-                    )
-                }),
-            ),
-        )
-        .into_any_element()
-}
-
-/// One neighbour and the field that joins it, with an elbow pointing at the focus.
-fn neighbour(
-    collection: &str,
-    field: &str,
-    incoming: bool,
-    view: Entity<DatabaseView>,
-    cx: &App,
-) -> AnyElement {
-    let name = collection.to_string();
-    let box_el = div()
-        .id(SharedString::from(format!("node:{field}")))
-        .px(spacing::sm())
-        .py(px(3.0))
-        .min_w(px(0.0))
-        .rounded(borders::radius_sm())
-        .border_1()
-        .border_color(cx.theme().border)
-        .cursor_pointer()
-        .hover(|style| style.bg(cx.theme().list_hover))
-        .on_click(move |_, _window, cx| {
-            view.update(cx, |view, cx| {
-                view.diagram_focus = Some(name.clone());
-                cx.notify();
-            });
-        })
-        .child(
-            div()
-                .text_xs()
-                .font_family(crate::theme::fonts::mono())
-                .truncate()
-                .child(collection.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(field.to_string()),
-        );
-
-    // The elbow: a rule out of the box and an arrow into the focus.
-    let connector = div()
-        .flex()
-        .items_center()
-        .flex_none()
-        .child(div().w(px(18.0)).h(px(1.0)).bg(cx.theme().border))
-        .child(Icon::new(IconName::ArrowRight).xsmall().text_color(cx.theme().muted_foreground));
-
-    let row = div().flex().items_center().gap(px(2.0)).max_w(px(340.0));
-    if incoming {
-        row.child(box_el).child(connector).into_any_element()
-    } else {
-        row.child(connector).child(box_el).into_any_element()
-    }
-}
-
-/// One of the Relations section's views. Pressing the open one closes it, so the section
-/// collapses back to its summary.
-fn pane_button(
-    label: &'static str,
-    id: &'static str,
-    pane: RelationsPane,
-    current: RelationsPane,
-    known: usize,
-    view: Entity<DatabaseView>,
-) -> impl IntoElement {
-    Button::new(id)
-        .ghost()
-        .xsmall()
-        .label(label)
-        .selected(current == pane)
-        .disabled(known == 0)
-        .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-            view.update(cx, |view, cx| {
-                view.relations_pane =
-                    if view.relations_pane == pane { RelationsPane::Closed } else { pane };
-                cx.notify();
-            });
-        })
 }

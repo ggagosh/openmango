@@ -5,7 +5,7 @@ use crate::components::ConnectionManager as ConnectionManagerView;
 use crate::state::{AppEvent, AppState, View};
 use crate::views::{
     AgentActivityView, AiView, ChangelogView, CollectionView, DatabaseView, ForgeView,
-    ReferencesView, SettingsView, TransferView,
+    ReferencesView, RelationsView, SettingsView, TransferView,
 };
 
 mod empty;
@@ -29,6 +29,7 @@ pub struct ContentArea {
     transfer_view: Option<Entity<TransferView>>,
     forge_view: Option<Entity<ForgeView>>,
     references_view: Option<Entity<ReferencesView>>,
+    relations_view: Option<Entity<RelationsView>>,
     agent_activity_view: Option<Entity<AgentActivityView>>,
     connection_manager_view: Option<Entity<ConnectionManagerView>>,
     connection_manager_request_generation: u64,
@@ -227,6 +228,7 @@ impl ContentArea {
             transfer_view,
             forge_view,
             references_view,
+            relations_view: None,
             agent_activity_view,
             connection_manager_view: None,
             connection_manager_request_generation: 0,
@@ -274,6 +276,11 @@ impl ContentArea {
             && self.references_view.is_none()
         {
             self.references_view = Some(cx.new(|cx| ReferencesView::new(self.state.clone(), cx)));
+        }
+        if matches!(self.state.read(cx).current_view, View::Relations)
+            && self.relations_view.is_none()
+        {
+            self.relations_view = Some(cx.new(|cx| RelationsView::new(self.state.clone(), cx)));
         }
         if should_agent_activity && self.agent_activity_view.is_none() {
             self.agent_activity_view =
@@ -413,6 +420,7 @@ impl Render for ContentArea {
                 transfer_view: self.transfer_view.as_ref(),
                 forge_view: self.forge_view.as_ref(),
                 references_view: self.references_view.as_ref(),
+                relations_view: self.relations_view.as_ref(),
                 agent_activity_view: self.agent_activity_view.as_ref(),
                 connection_manager_view: self.connection_manager_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),

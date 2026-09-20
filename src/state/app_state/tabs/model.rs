@@ -137,6 +137,12 @@ impl AppState {
                 self.conn.selected_collection = Some(tab.collection.clone());
                 self.current_view = View::References;
             }
+            TabKey::Relations(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
+                self.conn.selected_database = Some(tab.database.clone());
+                self.conn.selected_collection = None;
+                self.current_view = View::Relations;
+            }
             TabKey::AgentActivity => {
                 self.current_view = View::AgentActivity;
             }
@@ -618,6 +624,37 @@ impl AppState {
         Some(tab_id)
     }
 
+    /// Open the relation canvas of a database, or return to it if it is already open.
+    pub fn open_relations_tab(&mut self, database: String, cx: &mut Context<Self>) {
+        let Some(connection_id) = self.conn.selected_connection else {
+            return;
+        };
+        let key = TabKey::Relations(DatabaseKey { connection_id, database });
+        let index = match self.tabs.open.iter().position(|tab| *tab == key) {
+            Some(index) => index,
+            None => {
+                self.tabs.open.push(key.clone());
+                self.tabs.open.len() - 1
+            }
+        };
+        self.set_active_index(index);
+        self.apply_tab_selection(key);
+        self.update_workspace_from_state_debounced();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    /// The database whose relation canvas is on screen, if that is what is on screen.
+    pub fn active_relations_tab(&self) -> Option<&DatabaseKey> {
+        match self.tabs.active {
+            ActiveTab::Index(index) => match self.tabs.open.get(index) {
+                Some(TabKey::Relations(key)) => Some(key),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The references tab on screen, if that is what is on screen.
     pub fn active_references_tab(&self) -> Option<&ReferencesTabKey> {
         match self.tabs.active {
@@ -962,7 +999,11 @@ impl AppState {
             TabKey::References(key) => {
                 self.references_tabs.remove(&key.id);
             }
-            TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
+            TabKey::Relations(_)
+            | TabKey::AgentActivity
+            | TabKey::Connections
+            | TabKey::Settings
+            | TabKey::Changelog => {
                 // No cleanup needed
             }
         }
@@ -1106,6 +1147,9 @@ impl AppState {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::References(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
+                TabKey::Relations(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Transfer(_)
@@ -1293,6 +1337,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
         TabKey::References(_) => "references",
+        TabKey::Relations(_) => "relations",
         TabKey::AgentActivity => "agent_activity",
         TabKey::Connections => "connections",
         TabKey::Settings => "settings",

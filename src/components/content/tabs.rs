@@ -19,7 +19,7 @@ use crate::state::{ActiveTab, AppState, SessionKey, TabKey, UnsavedScope, View};
 use crate::theme::{borders, colors, fonts, spacing};
 use crate::views::{
     AgentActivityView, ChangelogView, CollectionView, DatabaseView, ForgeView, ReferencesView,
-    SettingsView, TransferView,
+    RelationsView, SettingsView, TransferView,
 };
 
 fn request_close_tab(state: Entity<AppState>, tab: TabKey, window: &mut Window, cx: &mut App) {
@@ -81,6 +81,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
     pub(crate) references_view: Option<&'a Entity<ReferencesView>>,
+    pub(crate) relations_view: Option<&'a Entity<RelationsView>>,
     pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
     pub(crate) connection_manager_view: Option<&'a Entity<ConnectionManagerView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
@@ -231,6 +232,9 @@ impl Render for OpenTabsBar {
                     TabKey::References(key) => {
                         (key.collection.clone(), crate::assets::AppIcon::Workflow.into(), false)
                     }
+                    TabKey::Relations(key) => {
+                        (key.database.clone(), crate::assets::AppIcon::Workflow.into(), false)
+                    }
                     TabKey::AgentActivity => ("Agent Activity".into(), IconName::Bot.into(), false),
                     TabKey::Connections => {
                         ("Connections".into(), IconName::Settings2.into(), false)
@@ -243,6 +247,7 @@ impl Render for OpenTabsBar {
                 let title = match &tab {
                     TabKey::Forge(_) => format!("Forge: {label}"),
                     TabKey::References(_) => format!("References to {label}"),
+                    TabKey::Relations(_) => format!("Relations of {label}"),
                     _ => label.clone(),
                 };
                 let tooltip = identity
@@ -596,6 +601,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::References => host
             .references_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Relations => host
+            .relations_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::AgentActivity => host

@@ -27,6 +27,7 @@ pub enum View {
     Transfer,
     Forge,
     References,
+    Relations,
     AgentActivity,
     Connections,
     Settings,
@@ -172,6 +173,9 @@ pub enum TabKey {
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
     References(ReferencesTabKey),
+    /// The relation canvas of one database. One per database: it shows a place, so asking again
+    /// returns to the tab that is already open.
+    Relations(DatabaseKey),
     AgentActivity,
     Connections,
     Settings,

@@ -884,6 +884,7 @@ impl Render for AppRoot {
             View::Transfer => {}
             View::Forge => key_context.push_str(" Forge"),
             View::References => key_context.push_str(" References"),
+            View::Relations => key_context.push_str(" Relations"),
             View::AgentActivity => key_context.push_str(" AgentActivity"),
             View::Connections => key_context.push_str(" Connections"),
             View::Welcome => key_context.push_str(" Welcome"),

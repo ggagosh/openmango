@@ -292,28 +292,36 @@ Ordered by dependency; each step leaves the app working.
    (`shift-f12`), one group per incoming relation loading independently, unindexed groups held
    behind "Run anyway" on production and protected connections, "Open as filter" per group.
    A review *list* was built and then cut: two surfaces for one subject, and a table is a poor
-   way to see a graph. Reading and deciding both belong on the diagram.
-   **Left:** accept / reject on the diagram's nodes, the "N relations found" badge, "Open all"
-   for arrays, and the integrity report (orphans, drift, unindexed reference fields).
+   way to see a graph. Reading and deciding both belong on the canvas (step 7), and now do.
+   **Left:** the "N relations found" badge and "Open all" for arrays.
 6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
    compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
-7. **The canvas** — moved up to next, because it is what the feature is *for*. Today's diagram
-   is three columns of elbow connectors around one collection: readable, cheap, and not a canvas.
-   A real one needs three things it does not have:
-   - **Layout.** 58 nodes and 116 edges need layering and crossing reduction or it is a hairball.
-     Either a Sugiyama pass written here or a crate (`dagre`, `layout-rs`, `rust-sugiyama`).
-   - **A drawing surface.** `gpui::canvas` with `Path` + `paint_path` draws curved edges. GPUI
-     has **no element transform**, so zoom is applied to computed coordinates, not to a
-     container — that decides the whole design.
-   - **Performance by construction.** Layout cached until the graph changes, paint culled to the
-     viewport. Not "fast on a small database by accident".
-   The focused three-column view stays as the one-collection mode inside it.
+7. **The Relations tab** — done: the canvas. `TabKey::Relations`, one tab per database, opened
+   from "Open canvas" in the database tab. It is the home for everything about a database's
+   graph, so the integrity report and the Mermaid / DBML export join it rather than getting
+   surfaces of their own.
+   - **Layout** (`state/relations/layout.rs`): layered left to right, written here rather than
+     pulled in — cycle breaking, longest-path layers pulled towards their targets, barycentre
+     ordering, and tall layers split into side-by-side columns. Pure, deterministic, and 154µs on
+     a real 19-collection, 113-edge graph, so no crate was needed.
+   - **Drawing** (`views/relations.rs`): cards are elements, edges are stroked cubic beziers via
+     `PathBuilder` + `paint_path`. GPUI has **no element transform**, so zoom is applied to every
+     computed coordinate and size.
+   - **Performance by construction:** layout cached on the graph's fingerprint; cards and edges
+     culled to the window; cards carry no listeners (the surface hit-tests the layout); text is
+     not laid out below a legible zoom; dashes, the one costly stroke, only on edges in focus.
+   - Pan by drag or scroll, zoom by pinch / cmd-scroll / `=` `-` `0`, hover or select to focus a
+     collection and its edges, double-click to open it, and an inspector to accept, reject or
+     restore each relation and walk to the other end.
+   **Left in this tab:** the integrity report (orphans, drift, unindexed reference fields) and
+   Mermaid / DBML export. Not done: dragging cards, and routing long edges around the cards they
+   pass (they run beneath them).
 
 8. **Independent consumers** — codegen (TypeScript / Zod / Rust), and code imports (Mongoose
    `ref`, Prisma, `$jsonSchema`) if wanted: a generic "point at a repo" reader, not a
    schema-specific one. Last because nothing depends on them.
 
-New crates: none so far. A layout crate is the first candidate, for the canvas.
+New crates: none. The canvas's layout was small enough to write here.
 
 ## Sources
 

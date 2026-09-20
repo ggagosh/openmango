@@ -11,6 +11,7 @@
 //! itself, because every jump is still confirmed by a probe.
 
 pub mod infer;
+pub mod layout;
 pub mod lookup;
 pub mod references;
 pub mod resolve;

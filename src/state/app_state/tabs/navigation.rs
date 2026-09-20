@@ -407,6 +407,32 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_relation_canvas_is_one_tab_per_database(cx: &mut TestAppContext) {
+        let (state, users, _dir) = setup(cx);
+
+        state.update(cx, |state, cx| state.open_relations_tab("shop".into(), cx));
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.open_tabs().len(), 2);
+            assert_eq!(state.active_relations_tab().map(|key| key.database.as_str()), Some("shop"));
+            assert_eq!(state.current_view, crate::state::View::Relations);
+        });
+
+        // Asking again from somewhere else returns to it rather than opening a second one.
+        state.update(cx, |state, cx| {
+            state.select_tab(0, cx);
+            state.open_relations_tab("shop".into(), cx);
+        });
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.open_tabs().len(), 2);
+            assert!(state.active_relations_tab().is_some());
+            assert!(state.session(&users).is_some(), "the collection tab is untouched");
+        });
+
+        state.update(cx, |state, cx| state.open_relations_tab("other".into(), cx));
+        state.read_with(cx, |state, _| assert_eq!(state.open_tabs().len(), 3));
+    }
+
+    #[gpui_kit::test]
     fn the_same_collection_can_be_open_in_two_tabs(cx: &mut TestAppContext) {
         let (state, users, _dir) = setup(cx);
 
