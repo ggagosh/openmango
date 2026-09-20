@@ -113,6 +113,23 @@ impl AppState {
         trail
     }
 
+    /// Jump straight to a point in the active tab's trail, as clicking a breadcrumb does.
+    ///
+    /// Walking back one step at a time keeps one definition of what Back means; a breadcrumb
+    /// click is rare enough that the repeated redraws do not matter.
+    pub fn navigate_to_trail_index(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let depth = self.navigation_trail().len();
+        if index + 1 >= depth {
+            return false;
+        }
+        for _ in 0..depth - 1 - index {
+            if !self.navigate_back(cx) {
+                return false;
+            }
+        }
+        true
+    }
+
     fn active_tab_history(&self) -> Option<&NavHistory> {
         self.tabs.history.get(&self.active_collection_session()?)
     }
@@ -331,6 +348,31 @@ mod tests {
             assert!(state.session(&users).is_none(), "the oldest view is evicted");
             assert!(state.session(visited.last().unwrap()).is_some());
         });
+    }
+
+    #[gpui_kit::test]
+    fn a_breadcrumb_click_jumps_straight_back_through_the_trail(cx: &mut TestAppContext) {
+        let (state, users, _dir) = setup(cx);
+        go(&state, cx, "orders", "");
+        let products = go(&state, cx, "products", "");
+
+        state.read_with(cx, |state, _| {
+            let trail = state.navigation_trail();
+            assert_eq!(trail.len(), 3);
+            assert_eq!(trail[0], users);
+            assert_eq!(trail[2], products, "the trail ends at what is on screen");
+        });
+
+        // Clicking the first crumb goes back two steps at once.
+        assert!(state.update(cx, |state, cx| state.navigate_to_trail_index(0, cx)));
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.current_session_key().as_ref(), Some(&users));
+            assert_eq!(state.navigation_trail().len(), 1);
+            assert!(state.can_navigate_forward(), "the way back forward is kept");
+        });
+
+        // The crumb for the view already on screen does nothing.
+        assert!(!state.update(cx, |state, cx| state.navigate_to_trail_index(0, cx)));
     }
 
     #[gpui_kit::test]

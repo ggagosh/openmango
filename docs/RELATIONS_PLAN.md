@@ -264,16 +264,17 @@ Ordered by dependency; each step leaves the app working.
    holds `navigate_to_collection` / `navigate_back` / `navigate_forward` /
    `open_collection_in_new_tab` / `navigation_trail`; `cmd-[` / `cmd-]` and
    `cmd-shift-enter` are bound. Navigation history is per-run and not persisted.
-2. **Relation graph** — `src/state/relations.rs`: structs, indexes, `outgoing` / `referenced_by` /
+2. ~~**Relation graph**~~ **Done** — `src/state/relations/mod.rs`: structs, indexes, `outgoing` / `referenced_by` /
    `join_path` / `mongo_path` / `to_model`, path helper, name heuristic, `relations.json`.
    Unit tests: nested paths and unwind counts, join finding including misses, origin precedence,
    decision persistence, JSON round-trip and sort stability.
-3. **Navigation** — `connection/ops/relations.rs` probe op; `resolve()`; links in `tree_row.rs` and
+3. **Navigation** — mostly done. `connection/ops/relations.rs` probe op; `resolve()`; links in `tree_row.rs` and
    `cell_renderer.rs`; context menu; key bindings; peek; the References tab shell
    (`TabKey::References`, reusing the aggregation results rendering), first used for ambiguous
    targets; broken-reference state; breadcrumb; single-result expand.
    `tests/relations_tests.rs` (Testcontainers): resolve → probe → remembered relation,
-   shared-`_id` ambiguity, miss, DBRef.
+   shared-`_id` ambiguity, miss, DBRef. **Left:** the References tab itself, and links in
+   aggregation results.
 4. **Inference** — extend the existing profiler (recurse arrays-in-arrays, retain ≤ 200 raw
    ObjectIds per path, byte-budget sample size); metadata (collStats, indexes, min / max `_id`);
    prune (type, name, ObjectId time-range overlap); `$in` probes 10 → 50 → 200; score. Job runner:

@@ -8,6 +8,7 @@
 
 mod actions;
 mod filter_bar;
+mod navigation_trail;
 mod stats_panel;
 mod tabs_row;
 
@@ -16,6 +17,7 @@ pub use actions::{
     render_pending_changes, render_schema_actions, render_stats_actions,
 };
 pub use filter_bar::render_query_options;
+pub use navigation_trail::render_navigation_trail;
 pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
@@ -149,6 +151,7 @@ impl CollectionView {
         // Build the root header container
         let mut root = header_container(islands::tool_bg(&appearance, cx))
             .child(render_title_row(collection_name, total, &breadcrumb, action_row, cx))
+            .children(render_navigation_trail(&self.state, window, cx))
             .child(div().pl(px(0.0)).child(subview_tabs))
             .when_some(documents_toolbar_row, |s, row| {
                 s.child(
