@@ -234,25 +234,38 @@ impl Candidate {
 
 /// Pair every reference-shaped field with the collections worth asking, best-named first.
 ///
-/// A collection is never paired with itself on a field: a self-reference is real but rare, and
-/// including it would probe every collection against its own `_id`, which always hits.
+/// A collection is paired with itself too. `parentId` on a category, a hierarchy or a system
+/// points back into the same collection, and a tree is not a rare shape — excluding the source
+/// meant every self-referencing structure was invisible however cleanly its ids resolved. The
+/// worry that a collection always matches its own ids applies to `_id` itself, which is never
+/// profiled as a source.
 pub fn candidates(
     database: &str,
     collection: &str,
     profiles: &[PathProfile],
     collections: &[String],
 ) -> Vec<Candidate> {
-    let probeable: Vec<String> = collections
-        .iter()
-        .filter(|name| name.as_str() != collection && !name.starts_with("system."))
-        .cloned()
-        .collect();
+    let probeable: Vec<String> =
+        collections.iter().filter(|name| !name.starts_with("system.")).cloned().collect();
 
     profiles
         .iter()
         .flat_map(|profile| {
             let source = FieldRef::new(database, collection, &profile.path);
-            rank_target_collections(&profile.path, &probeable)
+            let mut ranked = rank_target_collections(&profile.path, &probeable);
+            // `parentId` names no collection, so nothing sorts it anywhere useful. A field whose
+            // name says nothing is likelier to point home — every tree does — than at whichever
+            // collection happens to sort first, so its own goes ahead of the ones it ties with.
+            // A real name match still wins.
+            if target_name_score(&profile.path, collection) == 0
+                && let Some(position) = ranked.iter().position(|name| *name == collection)
+            {
+                let own = ranked.remove(position);
+                let first_tie =
+                    ranked.iter().position(|name| target_name_score(&profile.path, name) == 0);
+                ranked.insert(first_tie.unwrap_or(ranked.len()), own);
+            }
+            ranked
                 .into_iter()
                 .take(CANDIDATES_PER_FIELD)
                 .map(|target| Candidate {
@@ -432,14 +445,34 @@ impl InferenceSummary {
                 out.push_str(&format!("  {name}\n"));
             }
         }
-        if !self.unplaced_fields.is_empty() {
+        // Split, because the two halves mean different things. An embedded object's `_id`
+        // matching nothing is the correct answer; an ordinary field's is a question.
+        let (embedded, unmatched): (Vec<&String>, Vec<&String>) =
+            self.unplaced_fields.iter().partition(|field| is_embedded_id(field));
+        if !unmatched.is_empty() {
             out.push_str("\nHeld ids that matched nothing:\n");
-            for field in &self.unplaced_fields {
+            for field in unmatched {
+                out.push_str(&format!("  {field}\n"));
+            }
+        }
+        if !embedded.is_empty() {
+            out.push_str(&format!(
+                "\nEmbedded object ids, which point at nothing by design ({}):\n",
+                embedded.len()
+            ));
+            for field in embedded {
                 out.push_str(&format!("  {field}\n"));
             }
         }
         out
     }
+}
+
+/// An `_id` below the top level belongs to an embedded object, not to a document in some
+/// collection. MongoDB gives every subdocument one, so a database is full of them and none is a
+/// reference — they are separated in the report rather than read as misses.
+fn is_embedded_id(field: &str) -> bool {
+    field.ends_with("._id")
 }
 
 /// Relations an inference pass produced, ready to store.
@@ -655,7 +688,21 @@ mod tests {
     }
 
     #[test]
-    fn candidates_are_the_best_named_collections_and_never_the_source() {
+    fn a_tree_can_point_back_into_its_own_collection() {
+        // `categories.parentId` points at `categories`. Excluding the source made every tree
+        // — categories, hierarchies, systems — permanently unfindable.
+        let profiles =
+            vec![PathProfile { path: "parentId".into(), seen: 40, object_ids: 40, ids: ids(8) }];
+        let collections: Vec<String> =
+            ["auditlogs", "categories", "documents"].map(String::from).to_vec();
+
+        let built = candidates("au", "categories", &profiles, &collections);
+        let targets: Vec<&str> = built.iter().map(|c| c.target.collection.as_str()).collect();
+        assert_eq!(targets[0], "categories", "its own collection, and the best-named one");
+    }
+
+    #[test]
+    fn candidates_lead_with_the_best_named_collection() {
         let profiles =
             vec![PathProfile { path: "userId".into(), seen: 100, object_ids: 100, ids: ids(10) }];
         let collections: Vec<String> =
@@ -667,7 +714,6 @@ mod tests {
 
         let targets: Vec<&str> = built.iter().map(|c| c.target.collection.as_str()).collect();
         assert_eq!(targets[0], "users");
-        assert!(!targets.contains(&"orders"), "a collection is not probed against itself");
         assert!(!targets.iter().any(|name| name.starts_with("system.")));
         assert_eq!(built[0].source.path, "userId");
     }
