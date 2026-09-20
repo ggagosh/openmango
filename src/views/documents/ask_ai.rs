@@ -179,7 +179,7 @@ fn ask_ai_context(
     // An empty page still has a shape, if anything has sampled it.
     if fields.is_empty() {
         let schema = state
-            .collection_meta(session_key)
+            .collection_meta(&session_key.collection_key())
             .map(|meta| meta.schema.fields.clone())
             .or_else(|| state.session(session_key)?.data.schema.as_ref().map(|s| s.fields.clone()));
         if let Some(schema) = schema {

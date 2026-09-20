@@ -21,7 +21,7 @@ use super::runtime::ForgeRuntime;
 use super::runtime::active_forge_session_info;
 use super::types::{Suggestion, SuggestionKind};
 use crate::app::search::fuzzy_match_score;
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppState, CollectionKey};
 use crate::views::editor_completion::EditorCompletionMenu;
 
 // ── Accumulator operators ──────────────────────────────────────────────────
@@ -183,7 +183,7 @@ impl ForgeCompletionProvider {
             return;
         };
 
-        let session_key = SessionKey::new(
+        let session_key = CollectionKey::new(
             tab_key.connection_id,
             tab_key.database.clone(),
             collection.to_string(),
@@ -349,7 +349,7 @@ fn schema_cache_stale(state: &AppState, collection: &str) -> bool {
         return false;
     };
     let session_key =
-        SessionKey::new(tab_key.connection_id, tab_key.database.clone(), collection.to_string());
+        CollectionKey::new(tab_key.connection_id, tab_key.database.clone(), collection.to_string());
     state.forge_schema_stale(&session_key)
 }
 
@@ -854,12 +854,16 @@ fn build_field_suggestions(state: &AppState, collection: &str, token: &str) -> V
     let Some(tab_key) = state.active_forge_tab_key() else {
         return Vec::new();
     };
-    let session_key =
-        SessionKey::new(tab_key.connection_id, tab_key.database.clone(), collection.to_string());
+    let collection_key =
+        CollectionKey::new(tab_key.connection_id, tab_key.database.clone(), collection.to_string());
     let mut fields: Vec<String> = Vec::new();
-    if let Some(cached) = state.forge_schema_fields(&session_key) {
+    if let Some(cached) = state.forge_schema_fields(&collection_key) {
         fields.extend(cached.iter().cloned());
-    } else if let Some(session) = state.session_data(&session_key) {
+    } else if let Some(session) = state
+        .open_sessions_for_collection(tab_key.connection_id, &tab_key.database, collection)
+        .first()
+        .and_then(|key| state.session_data(key))
+    {
         let mut set = std::collections::HashSet::new();
         for item in &session.items {
             for key in item.doc.keys() {

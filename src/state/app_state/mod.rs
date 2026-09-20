@@ -31,16 +31,17 @@ pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
 pub(crate) use sessions::SessionStore;
 pub use types::{
-    ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,
-    CollectionStats, CollectionSubview, CollectionTransferStatus, CompressionMode,
-    ConnectionManagerRequest, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
+    ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
+    CollectionProgress, CollectionStats, CollectionSubview, CollectionTransferStatus,
+    CompressionMode, ConnectionManagerRequest, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
     DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, DocumentViewMode, Encoding,
     ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
     ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
-    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    InsertMode, NavHistory, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType,
+    SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
+    TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState,
+    View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
@@ -101,10 +102,10 @@ pub struct AppState {
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
-    forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
-    forge_schema_inflight: HashSet<SessionKey>,
-    collection_meta: HashMap<SessionKey, CollectionMetaCache>,
-    collection_meta_inflight: HashSet<SessionKey>,
+    forge_schema: HashMap<CollectionKey, ForgeSchemaCache>,
+    forge_schema_inflight: HashSet<CollectionKey>,
+    collection_meta: HashMap<CollectionKey, CollectionMetaCache>,
+    collection_meta_inflight: HashSet<CollectionKey>,
     pub ai_chat: AiChatState,
 
     // View state
@@ -431,31 +432,31 @@ impl AppState {
         }
     }
 
-    pub(crate) fn collection_meta(&self, key: &SessionKey) -> Option<&CollectionMetaCache> {
+    pub(crate) fn collection_meta(&self, key: &CollectionKey) -> Option<&CollectionMetaCache> {
         self.collection_meta.get(key)
     }
 
-    pub(crate) fn collection_meta_stale(&self, key: &SessionKey) -> bool {
+    pub(crate) fn collection_meta_stale(&self, key: &CollectionKey) -> bool {
         match self.collection_meta.get(key) {
             Some(cache) => cache.fetched_at.elapsed().as_secs() > COLLECTION_META_TTL_SECS,
             None => true,
         }
     }
 
-    pub(crate) fn set_collection_meta(&mut self, key: SessionKey, schema: SchemaAnalysis) {
+    pub(crate) fn set_collection_meta(&mut self, key: CollectionKey, schema: SchemaAnalysis) {
         self.collection_meta
             .insert(key, CollectionMetaCache { schema, fetched_at: Instant::now() });
     }
 
-    pub(crate) fn mark_collection_meta_inflight(&mut self, key: &SessionKey) -> bool {
+    pub(crate) fn mark_collection_meta_inflight(&mut self, key: &CollectionKey) -> bool {
         self.collection_meta_inflight.insert(key.clone())
     }
 
-    pub(crate) fn is_collection_meta_inflight(&self, key: &SessionKey) -> bool {
+    pub(crate) fn is_collection_meta_inflight(&self, key: &CollectionKey) -> bool {
         self.collection_meta_inflight.contains(key)
     }
 
-    pub(crate) fn clear_collection_meta_inflight(&mut self, key: &SessionKey) {
+    pub(crate) fn clear_collection_meta_inflight(&mut self, key: &CollectionKey) {
         self.collection_meta_inflight.remove(key);
     }
 

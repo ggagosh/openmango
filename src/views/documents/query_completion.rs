@@ -213,6 +213,7 @@ impl QueryCompletionProvider {
 
     fn field_candidates(&self, session_key: &SessionKey, cx: &mut App) -> Vec<FieldCandidate> {
         let mut fields: HashMap<String, FieldCandidate> = HashMap::new();
+        let collection_key = session_key.collection_key();
         let should_fetch = {
             let state_ref = self.state.read(cx);
 
@@ -222,7 +223,7 @@ impl QueryCompletionProvider {
                 collect_schema_candidates(&schema.fields, &mut fields);
             }
 
-            if let Some(cache) = state_ref.collection_meta(session_key) {
+            if let Some(cache) = state_ref.collection_meta(&collection_key) {
                 collect_schema_candidates(&cache.schema.fields, &mut fields);
             }
 
@@ -232,12 +233,12 @@ impl QueryCompletionProvider {
                 }
             }
 
-            state_ref.collection_meta_stale(session_key)
-                && !state_ref.is_collection_meta_inflight(session_key)
+            state_ref.collection_meta_stale(&collection_key)
+                && !state_ref.is_collection_meta_inflight(&collection_key)
         };
 
         if should_fetch {
-            AppCommands::fetch_single_collection_meta(self.state.clone(), session_key.clone(), cx);
+            AppCommands::fetch_single_collection_meta(self.state.clone(), collection_key, cx);
         }
 
         let mut ordered: Vec<FieldCandidate> = fields.into_values().collect();

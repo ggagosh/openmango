@@ -14,16 +14,17 @@ pub mod workspace;
 
 pub use crate::ai::{AiProvider, AiSettings};
 pub use app_state::{
-    ActiveTab, AppState, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionStats,
-    CollectionSubview, CompressionMode, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
-    DatabaseSessionState, DatabaseStats, DocumentViewMode, Encoding, ErrorAction, ErrorEntry,
-    ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
-    ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
-    ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, KeybindingCapture, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType,
-    SessionData, SessionDocument, SessionKey, SessionState, SessionViewState, TabKey,
-    TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState,
-    UnsavedChange, UnsavedInventory, UnsavedScope, View,
+    ActiveTab, AppState, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
+    CollectionStats, CollectionSubview, CompressionMode, CopiedTreeItem, DatabaseKey,
+    DatabaseSessionData, DatabaseSessionState, DatabaseStats, DocumentViewMode, Encoding,
+    ErrorAction, ErrorEntry, ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode,
+    ExplainOpenMode, ExplainPanelTab, ExplainRejectedPlan, ExplainRun, ExplainScope,
+    ExplainSeverity, ExplainStageDelta, ExplainState, ExplainSummary, ExplainViewMode,
+    ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, KeybindingCapture, NavHistory,
+    SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData, SessionDocument,
+    SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode, TransferFormat,
+    TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange, UnsavedInventory,
+    UnsavedScope, View,
 };
 pub use commands::AppCommands;
 pub use config::ConfigManager;

@@ -8,7 +8,7 @@ use mongodb::bson::Bson;
 use crate::bson::document_to_shell_string;
 use crate::state::app_state::CollectionSubview;
 use crate::state::commands::schema_to_summary;
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppState, CollectionKey};
 
 const BUDGET: usize = 25 * 1024; // 25 KB
 
@@ -391,7 +391,7 @@ pub fn build_ai_context(
         let mention_budget = w.remaining().min(6 * 1024);
         let per_mention = mention_budget / mentioned_collections.len().max(1);
         for col in mentioned_collections {
-            let key = SessionKey::new(conn_id, db, col);
+            let key = CollectionKey::new(conn_id, db, col);
             if let Some(meta) = state.collection_meta(&key) {
                 let summary = schema_to_summary(&meta.schema);
                 let cap = per_mention.min(summary.len());
@@ -483,7 +483,7 @@ pub fn build_ai_context(
             if col_name.as_deref() == Some(col.as_str()) {
                 continue;
             }
-            let key = SessionKey::new(conn_id, db, col);
+            let key = CollectionKey::new(conn_id, db, col);
             if let Some(meta) = state.collection_meta(&key) {
                 let compact = compact_schema_line(col, &meta.schema);
                 let truncated = truncate_str(&compact, 400);

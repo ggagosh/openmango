@@ -400,7 +400,7 @@ impl AiView {
             if let (Some(conn_id), Some(db)) =
                 (s.selected_connection_id(), s.selected_database_name())
             {
-                let key = crate::state::SessionKey::new(conn_id, &db, &collection);
+                let key = crate::state::CollectionKey::new(conn_id, &db, &collection);
                 if s.collection_meta_stale(&key) && !s.is_collection_meta_inflight(&key) {
                     Some(key)
                 } else {

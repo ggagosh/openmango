@@ -79,17 +79,24 @@ impl AppState {
         let workspace_tabs = self.workspace.open_tabs.clone();
         let mut restored_tabs: Vec<TabKey> = Vec::new();
         let mut restored_meta: Vec<(SessionKey, WorkspaceTab)> = Vec::new();
+        // Which restored tab each saved tab became, so the saved active index still points at
+        // the right tab when the same collection was open in two of them.
+        let mut restored_index: Vec<Option<usize>> = Vec::with_capacity(workspace_tabs.len());
         for tab in &workspace_tabs {
+            let before = restored_tabs.len();
             match tab.kind {
                 WorkspaceTabKind::Collection => {
                     if tab.collection.is_empty() {
                         continue;
                     }
                     if databases.contains(&tab.database) {
-                        let key = SessionKey::new(
+                        // A distinct view per saved tab, so two tabs on one collection restore
+                        // as two tabs rather than collapsing into one.
+                        let key = SessionKey::with_instance(
                             connection_id,
                             tab.database.clone(),
                             tab.collection.clone(),
+                            self.allocate_session_instance(),
                         );
                         restored_tabs.push(TabKey::Collection(key.clone()));
                         restored_meta.push((key, tab.clone()));
@@ -146,6 +153,11 @@ impl AppState {
                     }
                 }
             }
+            restored_index.push(if restored_tabs.len() > before {
+                Some(restored_tabs.len() - 1)
+            } else {
+                None
+            });
         }
 
         // Restore workspace-level AI state (new format).
@@ -174,28 +186,14 @@ impl AppState {
         self.tabs.open = restored_tabs.clone();
         self.tabs.preview = None;
         self.tabs.dirty.clear();
+        // Tabs are replaced wholesale, so nothing can navigate back into the previous set.
+        // Navigation history is per-run state and is not persisted.
+        self.tabs.history.clear();
 
-        let active_tab =
-            self.workspace.active_tab.and_then(|idx| workspace_tabs.get(idx)).and_then(|tab| {
-                restored_tabs.iter().position(|key| match (tab.kind, key) {
-                    (WorkspaceTabKind::Collection, TabKey::Collection(session)) => {
-                        session.database == tab.database && session.collection == tab.collection
-                    }
-                    (WorkspaceTabKind::Database, TabKey::Database(database)) => {
-                        database.database == tab.database
-                    }
-                    (WorkspaceTabKind::Transfer, TabKey::Transfer(transfer)) => {
-                        let Some(state) = self.transfer_tabs.get(&transfer.id) else {
-                            return false;
-                        };
-                        state.config.source_database == tab.database
-                    }
-                    (WorkspaceTabKind::Forge, TabKey::Forge(forge)) => {
-                        forge.database == tab.database
-                    }
-                    _ => false,
-                })
-            });
+        let active_tab = self
+            .workspace
+            .active_tab
+            .and_then(|index| restored_index.get(index).copied().flatten());
 
         for (key, tab) in restored_meta.iter() {
             let session = self.ensure_session(key.clone());
@@ -598,7 +596,9 @@ mod tests {
         });
 
         let _active = state.restore_tabs_from_workspace(conn_id, &["db".to_string()]);
-        let session = SessionKey::new(conn_id, "db", "col");
+        let TabKey::Collection(session) = state.open_tabs()[0].clone() else {
+            panic!("a collection tab should restore");
+        };
         let data = state.session_data(&session).expect("session should restore");
 
         assert_eq!(data.filter_raw, "status:active");
@@ -674,5 +674,50 @@ mod tests {
         assert!(state.tabs.open.is_empty());
         assert!(state.ai_chat.panel_open);
         assert_eq!(state.ai_chat.draft_input, "old draft");
+    }
+
+    /// Serde fills the rest; only the fields a restore reads are worth stating here.
+    fn saved_collection_tab(collection: &str, filter_raw: &str) -> WorkspaceTab {
+        serde_json::from_value(serde_json::json!({
+            "database": "db",
+            "collection": collection,
+            "kind": "Collection",
+            "filter_raw": filter_raw,
+            "filter_compiled_raw": "",
+        }))
+        .expect("a collection tab")
+    }
+
+    #[test]
+    fn two_saved_tabs_on_one_collection_restore_as_two_views() {
+        let mut state = AppState::new();
+        let conn_id = Uuid::new_v4();
+        state.conn.selected_connection = Some(conn_id);
+        state.workspace.open_tabs = vec![
+            saved_collection_tab("col", "{ a: 1 }"),
+            saved_collection_tab("other", ""),
+            saved_collection_tab("col", "{ b: 2 }"),
+        ];
+        state.workspace.active_tab = Some(2);
+
+        let active = state.restore_tabs_from_workspace(conn_id, &["db".to_string()]);
+
+        assert_eq!(state.open_tabs().len(), 3);
+        let keys: Vec<SessionKey> = state
+            .open_tabs()
+            .iter()
+            .map(|tab| match tab {
+                TabKey::Collection(key) => key.clone(),
+                _ => panic!("only collection tabs were saved"),
+            })
+            .collect();
+        assert_ne!(keys[0], keys[2], "two tabs on one collection are two views");
+        assert_eq!(state.session_data(&keys[0]).unwrap().filter_raw, "{ a: 1 }");
+        assert_eq!(
+            state.session_data(&keys[2]).unwrap().filter_raw,
+            "{ b: 2 }",
+            "each tab keeps its own filter"
+        );
+        assert_eq!(active, Some(2), "the saved active tab is still the third one");
     }
 }

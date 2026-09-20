@@ -331,7 +331,7 @@ impl ForgeView {
             let Some(tab_key) = state_ref.active_forge_tab_key() else {
                 return;
             };
-            let session_key = crate::state::SessionKey::new(
+            let session_key = crate::state::CollectionKey::new(
                 tab_key.connection_id,
                 tab_key.database.clone(),
                 collection.clone(),

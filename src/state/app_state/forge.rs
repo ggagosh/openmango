@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::types::{ForgeTabKey, ForgeTabState, SessionKey};
+use super::types::{CollectionKey, ForgeTabKey, ForgeTabState};
 use super::{AppState, FORGE_SCHEMA_TTL_SECS, ForgeSchemaCache};
 
 impl AppState {
@@ -64,27 +64,27 @@ impl AppState {
         self.forge_tabs.get_mut(&id).and_then(|state| state.pending_cursor.take())
     }
 
-    pub fn forge_schema_fields(&self, key: &SessionKey) -> Option<&[String]> {
+    pub fn forge_schema_fields(&self, key: &CollectionKey) -> Option<&[String]> {
         self.forge_schema.get(key).map(|cache| cache.fields.as_slice())
     }
 
     /// Check if the schema cache for a key is stale (older than TTL).
-    pub fn forge_schema_stale(&self, key: &SessionKey) -> bool {
+    pub fn forge_schema_stale(&self, key: &CollectionKey) -> bool {
         match self.forge_schema.get(key) {
             Some(cache) => cache.cached_at.elapsed().as_secs() > FORGE_SCHEMA_TTL_SECS,
             None => true,
         }
     }
 
-    pub fn set_forge_schema_fields(&mut self, key: SessionKey, fields: Vec<String>) {
+    pub fn set_forge_schema_fields(&mut self, key: CollectionKey, fields: Vec<String>) {
         self.forge_schema.insert(key, ForgeSchemaCache { fields, cached_at: Instant::now() });
     }
 
-    pub fn mark_forge_schema_inflight(&mut self, key: SessionKey) -> bool {
+    pub fn mark_forge_schema_inflight(&mut self, key: CollectionKey) -> bool {
         self.forge_schema_inflight.insert(key)
     }
 
-    pub fn clear_forge_schema_inflight(&mut self, key: &SessionKey) {
+    pub fn clear_forge_schema_inflight(&mut self, key: &CollectionKey) {
         self.forge_schema_inflight.remove(key);
     }
 }
