@@ -314,6 +314,32 @@ impl RelationGraph {
         found
     }
 
+    /// Every relation in a database, grouped by what it points at and ordered for reading:
+    /// the most-referenced collection first, then by source.
+    ///
+    /// This is the review order — "what points at users" is the question people arrive with,
+    /// and the collections nothing points at are the ones worth seeing last.
+    pub fn by_target(&self, database: &str) -> Vec<(String, Vec<&Relation>)> {
+        let mut groups: HashMap<&str, Vec<&Relation>> = HashMap::new();
+        for relation in &self.relations {
+            if relation.source.database == database {
+                groups.entry(relation.target.collection.as_str()).or_default().push(relation);
+            }
+        }
+        let mut grouped: Vec<(String, Vec<&Relation>)> = groups
+            .into_iter()
+            .map(|(target, mut relations)| {
+                relations.sort_by(|a, b| {
+                    (&a.source.collection, &a.source.path)
+                        .cmp(&(&b.source.collection, &b.source.path))
+                });
+                (target.to_string(), relations)
+            })
+            .collect();
+        grouped.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        grouped
+    }
+
     /// Accepted candidates for a source path other than `keep`. This is drift: inference now
     /// believes something a reviewed decision contradicts.
     pub fn rivals_of(&self, keep: &Relation) -> Vec<&Relation> {
@@ -413,8 +439,13 @@ impl RelationGraph {
             return false;
         };
         relation.status = status;
+        // The decision outranks any later inference either way. Only accepting makes the
+        // relation certain; a rejected one keeps the score it was rejected on, so the row still
+        // says what the evidence had been.
         relation.origin = Origin::User;
-        relation.confidence = 1.0;
+        if status == Status::Accepted {
+            relation.confidence = 1.0;
+        }
         true
     }
 
@@ -787,6 +818,22 @@ mod tests {
     }
 
     #[test]
+    fn review_order_leads_with_the_most_referenced_collection() {
+        let mut graph = shop();
+        graph.upsert(Relation::asserted(field("invoices", "userId"), id("users"), Origin::Probe));
+
+        let grouped = graph.by_target("shop");
+        let shape: Vec<(String, usize)> =
+            grouped.iter().map(|(target, rows)| (target.clone(), rows.len())).collect();
+        assert_eq!(shape, [("users".to_string(), 2), ("products".to_string(), 1)]);
+        // Within a group, by where the reference comes from.
+        assert_eq!(grouped[0].1[0].source.collection, "invoices");
+        assert_eq!(grouped[0].1[1].source.collection, "orders");
+
+        assert!(graph.by_target("other").is_empty(), "scoped to one database");
+    }
+
+    #[test]
     fn a_rejected_relation_is_never_walked() {
         let mut graph = shop();
         graph.set_status(&field("orders", "userId"), &id("users"), Status::Rejected);
@@ -928,6 +975,27 @@ mod tests {
             .expect("the rejection is kept, so re-inference cannot resurrect it");
         assert_eq!(rejected.status, Status::Rejected);
         assert_eq!(rejected.origin, Origin::User);
+        assert_eq!(
+            rejected.confidence, 1.0,
+            "this one was certain before it was rejected, and the row still says so"
+        );
+    }
+
+    #[test]
+    fn rejecting_keeps_the_score_it_was_rejected_on() {
+        let mut graph = RelationGraph::new();
+        let source = field("orders", "userId");
+        graph.upsert(Relation::candidate(source.clone(), id("accounts"), 0.6, evidence(10, 6)));
+
+        graph.set_status(&source, &id("accounts"), Status::Rejected);
+        let rejected = &graph.relations()[0];
+        assert_eq!(rejected.status, Status::Rejected);
+        assert_eq!(rejected.origin, Origin::User, "the decision outranks later inference");
+        assert!(
+            (rejected.confidence - 0.6).abs() < 0.001,
+            "a rejected guess that was never certain must not read as certain"
+        );
+        assert!(!rejected.is_navigable(0.0), "rejected is rejected whatever the score");
     }
 
     #[test]

@@ -4,11 +4,14 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::components::{Button, ErrorCallout, request_preview_collection};
 use crate::error::ErrorReport;
 use crate::helpers::{format_bytes, format_number};
+use crate::state::relations::{Origin, Relation, Status as RelationStatus};
 use crate::state::{
     AppCommands, AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, View,
 };
@@ -18,6 +21,9 @@ use crate::theme::{borders, sizing, spacing};
 pub struct DatabaseView {
     state: Entity<AppState>,
     last_database_key: Option<DatabaseKey>,
+    /// Whether the relation list is open. A hundred rows is a working surface, not an
+    /// overview, so the overview shows the count and opens the list on request.
+    relations_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -50,7 +56,12 @@ impl DatabaseView {
             _ => {}
         }));
 
-        Self { state, last_database_key: current_key, _subscriptions: subscriptions }
+        Self {
+            state,
+            last_database_key: current_key,
+            relations_open: false,
+            _subscriptions: subscriptions,
+        }
     }
 }
 
@@ -166,7 +177,13 @@ impl Render for DatabaseView {
                 state.clone(),
                 cx,
             ))
-            .child(Self::render_relations_section(&database_name, state.clone(), cx))
+            .child(Self::render_relations_section(
+                &database_name,
+                self.relations_open,
+                cx.entity(),
+                state.clone(),
+                cx,
+            ))
             .child(Self::render_collections_section(
                 collections,
                 collections_loading,
@@ -278,6 +295,8 @@ impl DatabaseView {
     /// asks each one's neighbours, so the database is the scope that matches the work.
     fn render_relations_section(
         database_name: &str,
+        open: bool,
+        view: Entity<Self>,
         state: Entity<AppState>,
         cx: &App,
     ) -> AnyElement {
@@ -360,6 +379,22 @@ impl DatabaseView {
                                 .to_string()
                         }),
                 )
+                .child(
+                    Button::new("toggle-relations")
+                        .ghost()
+                        .xsmall()
+                        .label(if open { "Hide" } else { "Review" })
+                        .disabled(known == 0)
+                        .on_click({
+                            let view = view.clone();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                view.update(cx, |view, cx| {
+                                    view.relations_open = !view.relations_open;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
                 .children(report.map(|report| {
                     Button::new("copy-inference-report")
                         .ghost()
@@ -397,6 +432,62 @@ impl DatabaseView {
             .pt(spacing::lg())
             .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Relations"))
             .child(row)
+            .children(open.then(|| Self::render_relation_rows(database_name, state, cx)))
+            .into_any_element()
+    }
+
+    /// Every relation in the database, grouped by what it points at.
+    ///
+    /// "What points at users" is the question people arrive with, so the most-referenced
+    /// collection leads. Each row says where the belief came from and how sure it is, and
+    /// rejecting one stops it driving navigation without forgetting what was learned.
+    fn render_relation_rows(database_name: &str, state: Entity<AppState>, cx: &App) -> AnyElement {
+        let grouped = state.read(cx).relations().by_target(database_name);
+        if grouped.is_empty() {
+            return div().into_any_element();
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::sm())
+            .pt(spacing::sm())
+            .children(grouped.into_iter().map(|(target, relations)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(borders::radius_sm())
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::sm())
+                            .px(spacing::sm())
+                            .py(spacing::xs())
+                            .bg(cx.theme().secondary)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_sm()
+                                    .font_family(crate::theme::fonts::mono())
+                                    .child(target.clone()),
+                            )
+                            .child(
+                                div()
+                                    .font_family(crate::theme::fonts::mono())
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format_number(relations.len() as u64)),
+                            ),
+                    )
+                    .children(
+                        relations.into_iter().map(|relation| relation_row(relation, &state, cx)),
+                    )
+            }))
             .into_any_element()
     }
 
@@ -615,4 +706,128 @@ fn stat_cell(label: &str, value: String, cx: &App) -> AnyElement {
         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
         .child(div().text_sm().text_color(cx.theme().foreground).child(value))
         .into_any_element()
+}
+
+/// One relation, and the two things a reviewer needs: where the belief came from, and how sure
+/// it is. Rejecting stops it driving navigation; the entry stays, so re-inference cannot
+/// quietly bring it back.
+fn relation_row(relation: &Relation, state: &Entity<AppState>, cx: &App) -> AnyElement {
+    let rejected = relation.status == RelationStatus::Rejected;
+    let source = relation.source.clone();
+    let target = relation.target.clone();
+
+    // Keyed by the relation, not by a name shared with every other row: two buttons with one
+    // id is the bug that sends a click to the wrong place.
+    let key = format!("{}.{}->{}", source.collection, source.path, target.collection);
+    let decide = |label: &'static str, id: &'static str, status: RelationStatus| {
+        let state = state.clone();
+        let source = source.clone();
+        let target = target.clone();
+        Button::new((ElementId::from(id), SharedString::from(key.clone())))
+            .ghost()
+            .xsmall()
+            .label(label)
+            .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                state.update(cx, |state, cx| {
+                    state.set_relation_status(&source, &target, status);
+                    cx.notify();
+                });
+            })
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::sm())
+        .px(spacing::sm())
+        .py(spacing::xs())
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_xs()
+                .font_family(crate::theme::fonts::mono())
+                .truncate()
+                .text_color(if rejected {
+                    cx.theme().muted_foreground
+                } else {
+                    cx.theme().foreground
+                })
+                .child(format!("{}.{}", relation.source.collection, relation.source.path)),
+        )
+        .child(origin_tag(relation, cx))
+        .child(
+            // Tabular figures, so a column of percentages reads as a column.
+            div()
+                .font_family(crate::theme::fonts::mono())
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{:.0}%", relation.confidence * 100.0)),
+        )
+        .child(
+            div().w(px(150.0)).text_xs().text_color(cx.theme().muted_foreground).truncate().child(
+                match &relation.evidence {
+                    Some(evidence) => format!(
+                        "{} of {} ids · {}",
+                        format_number(evidence.hits as u64),
+                        format_number(evidence.probed as u64),
+                        relative_time(evidence.sampled_at),
+                    ),
+                    None => "stated, not sampled".to_string(),
+                },
+            ),
+        )
+        .child(if rejected {
+            decide("Restore", "restore-relation", RelationStatus::Accepted).into_any_element()
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .when(relation.status == RelationStatus::Candidate, |this| {
+                    this.child(decide("Accept", "accept-relation", RelationStatus::Accepted))
+                })
+                .child(decide("Reject", "reject-relation", RelationStatus::Rejected))
+                .into_any_element()
+        })
+        .into_any_element()
+}
+
+/// Where a relation came from. Icon and word, never the colour alone.
+fn origin_tag(relation: &Relation, cx: &App) -> AnyElement {
+    let (label, icon) = match relation.origin {
+        Origin::User => ("Decided", IconName::Check),
+        Origin::DbRef => ("Stated", IconName::Check),
+        Origin::CodeImport => ("From code", IconName::Check),
+        Origin::Probe => ("Followed", IconName::ArrowRight),
+        Origin::Inferred => ("Sampled", IconName::Search),
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .w(px(92.0))
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(Icon::new(icon).xsmall())
+        .child(div().child(label))
+        .when(relation.status == RelationStatus::Rejected, |this| {
+            this.child(div().text_color(cx.theme().danger).child("· rejected"))
+        })
+        .into_any_element()
+}
+
+fn relative_time(time: chrono::DateTime<chrono::Utc>) -> String {
+    let seconds = (chrono::Utc::now() - time).num_seconds().max(0);
+    if seconds < 60 {
+        "just now".into()
+    } else if seconds < 3_600 {
+        format!("{}m ago", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h ago", seconds / 3_600)
+    } else {
+        format!("{}d ago", seconds / 86_400)
+    }
 }

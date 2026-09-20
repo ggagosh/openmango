@@ -291,8 +291,11 @@ Ordered by dependency; each step leaves the app working.
 5. **Surfaces** — References tab done: `TabKey::References`, "Find references" on a document
    (`shift-f12`), one group per incoming relation loading independently, unindexed groups held
    behind "Run anyway" on production and protected connections, "Open as filter" per group.
-   **Left:** the Relations page, the "N relations found" badge, "Open all" for arrays, and the
-   integrity report (orphans, drift, unindexed reference fields).
+   Relations review done: the database tab's Relations section opens the whole list, grouped by
+   what each relation points at, most-referenced first, each row showing provenance, confidence
+   and evidence age, with accept / reject / restore.
+   **Left:** the "N relations found" badge, "Open all" for arrays, and the integrity report
+   (orphans, drift, unindexed reference fields).
 6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
    compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
 7. **Independent consumers** — code imports (Mongoose `ref`, Prisma, `$jsonSchema`), codegen
