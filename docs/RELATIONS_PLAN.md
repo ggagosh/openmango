@@ -300,10 +300,14 @@ Ordered by dependency; each step leaves the app working.
    from "Open canvas" in the database tab. It is the home for everything about a database's
    graph, so the integrity report and the Mermaid / DBML export join it rather than getting
    surfaces of their own.
-   - **Layout** (`state/relations/layout.rs`): layered left to right, written here rather than
-     pulled in — cycle breaking, longest-path layers pulled towards their targets, barycentre
-     ordering, and tall layers split into side-by-side columns. Pure, deterministic, and 154µs on
-     a real 19-collection, 113-edge graph, so no crate was needed.
+   - **Layout** (`state/relations/layout.rs`): the standard layered method (Sugiyama, as in
+     Graphviz `dot`, dagre and ELK), through `dugong`, a Rust port of dagre. Network-simplex
+     ranking, crossing minimisation, Brandes–Köpf placement, and a lane for every long edge so it
+     runs between cards rather than beneath them. On top of that: one routed trunk per pair of
+     collections with each field's edge leaving its own row, and B-spline paths as cubic
+     segments. A hand-written layered layout came first and was replaced: compared on a real
+     19-collection, 113-edge graph, its edges ran under cards and its drawing was a 4:1 strip.
+     `rust-sugiyama` was also tried and returns no edge routes. About 5ms, cached.
    - **Drawing** (`views/relations.rs`): cards are elements, edges are stroked cubic beziers via
      `PathBuilder` + `paint_path`. GPUI has **no element transform**, so zoom is applied to every
      computed coordinate and size.
@@ -314,14 +318,15 @@ Ordered by dependency; each step leaves the app working.
      collection and its edges, double-click to open it, and an inspector to accept, reject or
      restore each relation and walk to the other end.
    **Left in this tab:** the integrity report (orphans, drift, unindexed reference fields) and
-   Mermaid / DBML export. Not done: dragging cards, and routing long edges around the cards they
-   pass (they run beneath them).
+   Mermaid / DBML export. Not done: dragging cards, and bundling the edges of a hub with dozens
+   of pure sources into one bus (today that is one very tall rank).
 
 8. **Independent consumers** — codegen (TypeScript / Zod / Rust), and code imports (Mongoose
    `ref`, Prisma, `$jsonSchema`) if wanted: a generic "point at a repo" reader, not a
    schema-specific one. Last because nothing depends on them.
 
-New crates: none. The canvas's layout was small enough to write here.
+New crates: `dugong` (and its `dugong-graphlib`), pinned exactly since it is an alpha. All use
+is in `state/relations/layout.rs`.
 
 ## Sources
 

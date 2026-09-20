@@ -1,30 +1,51 @@
-//! Where each collection sits on the relation canvas.
+//! Where each collection sits on the relation canvas, and the path each relation takes.
 //!
-//! Layered, left to right: a collection sits to the left of what it points at, so the
-//! collections everything leans on gather on the right and a reference reads the way it is
-//! written. Coordinates are in world units, which the canvas scales by its zoom; nothing here
-//! knows about pixels, the window or the theme, which is what lets it be tested and cached.
+//! The method is the standard one for drawing a directed graph in layers, due to Sugiyama and
+//! used by Graphviz `dot`, dagre and ELK: rank the nodes so edges run one way (network simplex,
+//! which minimises total edge length), order each rank to minimise crossings, place nodes beside
+//! what they are joined to (Brandes–Köpf), and give every long edge a lane of its own through
+//! the ranks it crosses, so it runs between cards rather than beneath them. `dugong` is a port
+//! of dagre and does that part; what is here is what an ER drawing needs on top of it:
 //!
-//! ponytail: long edges are not routed around the cards they pass, they run beneath them. The
-//! fix is dummy nodes in the layers an edge crosses, worth it if hovering stops being enough to
-//! read a busy database.
+//! - one routed trunk per pair of collections, however many fields join them, with each field's
+//!   edge leaving its own row and merging into the trunk;
+//! - smooth paths through the routed points, as cubic segments ready to draw.
+//!
+//! Coordinates are world units, which the canvas scales by its zoom. Nothing here knows about
+//! pixels, the window or the theme, which is what lets it be tested and cached.
+//!
+//! ponytail: a hub with dozens of collections that do nothing but point at it makes one very tall
+//! rank. Splitting that rank into columns does not help, because every long edge is given a
+//! straight lane of its own and the columns end up staircased; the fix is to bundle those edges
+//! into one shared bus. Worth doing when a real database shows the problem.
+//!
+//! ponytail: this runs where it is called, on the main thread, a few milliseconds for a real
+//! database and only when the graph changes. Move it to a background task if a database ever
+//! makes that noticeable.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
+
+use dugong::graphlib::{Graph, GraphOptions};
+use dugong::{EdgeLabel, GraphLabel, NodeLabel, RankDir};
 
 use super::{FieldRef, RelationGraph, Status};
 
 pub const CARD_WIDTH: f32 = 230.0;
 pub const HEADER_HEIGHT: f32 = 30.0;
 pub const FIELD_HEIGHT: f32 = 20.0;
-/// Room between columns for the curves to turn in.
-const COLUMN_GAP: f32 = 150.0;
-const ROW_GAP: f32 = 22.0;
-/// A layer taller than this is split into columns side by side. Most collections in a real
-/// database point straight at one or two hubs, so without the split they form a single column
-/// thousands of units tall and fitting it to the window makes every card unreadable.
-const MAX_COLUMN_HEIGHT: f32 = 1500.0;
-const ORDERING_SWEEPS: usize = 4;
+/// Room between ranks for the curves to turn in.
+const RANK_GAP: f64 = 150.0;
+const CARD_GAP: f64 = 22.0;
+/// Room between two edges' lanes where they pass a rank side by side.
+const LANE_GAP: f64 = 10.0;
+/// How far an edge travels straight out of a row, and into a header, before it turns. It is what
+/// makes an edge read as belonging to its row rather than to the card's corner.
+const STUB: f32 = 26.0;
+/// The arrowhead's length. The path stops this short of the card so the head stays sharp.
+pub const ARROW: f32 = 7.0;
+
+type P = (f32, f32);
 
 /// One reference field listed on a card.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +67,21 @@ pub struct CanvasNode {
     pub height: f32,
 }
 
+/// A smooth path from a field's row to a collection's header.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EdgePath {
+    pub start: P,
+    /// Cubic segments, each two control points and then where the segment ends.
+    pub segments: Vec<[P; 3]>,
+    /// Where the arrowhead's point lands: on the target card's edge, [`ARROW`] past the path.
+    pub tip: P,
+    /// The head points right. False for a reference that runs against the grain, which enters
+    /// its target from the far side.
+    pub rightwards: bool,
+    /// Everything the path touches, control points included: `(left, top, right, bottom)`.
+    pub bounds: (f32, f32, f32, f32),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CanvasEdge {
     pub source: usize,
@@ -56,6 +92,7 @@ pub struct CanvasEdge {
     pub accepted: bool,
     pub from: FieldRef,
     pub to: FieldRef,
+    pub path: EdgePath,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -66,33 +103,9 @@ pub struct CanvasLayout {
     pub height: f32,
 }
 
-/// The two ends of an edge and the direction its curve leaves in.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EdgeLine {
-    pub start: (f32, f32),
-    pub end: (f32, f32),
-    /// True when the edge runs left to right. A reference into an earlier column leaves from
-    /// the card's left side instead, so the curve never doubles back through its own card.
-    pub rightwards: bool,
-}
-
 impl CanvasLayout {
     pub fn index_of(&self, collection: &str) -> Option<usize> {
         self.nodes.iter().position(|node| node.collection == collection)
-    }
-
-    /// From the field's row on the source card to the target card's header.
-    pub fn edge_line(&self, edge: &CanvasEdge) -> EdgeLine {
-        let source = &self.nodes[edge.source];
-        let target = &self.nodes[edge.target];
-        let rightwards = target.x >= source.x;
-        let row = source.y + HEADER_HEIGHT + (edge.field as f32 + 0.5) * FIELD_HEIGHT;
-        let header = target.y + HEADER_HEIGHT / 2.0;
-        if rightwards {
-            EdgeLine { start: (source.x + CARD_WIDTH, row), end: (target.x, header), rightwards }
-        } else {
-            EdgeLine { start: (source.x, row), end: (target.x + CARD_WIDTH, header), rightwards }
-        }
     }
 
     /// Every node joined to `node` by an edge, in either direction.
@@ -186,209 +199,216 @@ pub fn layout(graph: &RelationGraph, database: &str) -> CanvasLayout {
             accepted: relation.status == Status::Accepted,
             from: relation.source.clone(),
             to: relation.target.clone(),
+            path: EdgePath::default(),
         });
     }
     edges.sort_by_key(|edge| (edge.source, edge.field, edge.target));
 
-    let links: BTreeSet<(usize, usize)> =
-        edges.iter().map(|edge| (edge.source, edge.target)).collect();
-    let layers = assign_layers(nodes.len(), &links);
-    let columns = order_columns(&nodes, &layers, &links);
-    let (width, height) = place(&mut nodes, &columns);
-
-    CanvasLayout { nodes, edges, width, height }
-}
-
-/// The layer of each node: every link runs from a lower layer to a higher one.
-fn assign_layers(count: usize, links: &BTreeSet<(usize, usize)>) -> Vec<usize> {
-    let forward = break_cycles(count, links);
-    let mut successors = vec![Vec::new(); count];
-    let mut pending = vec![0usize; count];
-    for &(from, to) in &forward {
-        successors[from].push(to);
-        pending[to] += 1;
+    // One link per pair of collections, weighted by how many fields join them: the heavier the
+    // link, the harder the layout works to keep it short and straight.
+    let mut links: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for edge in &edges {
+        *links.entry((edge.source, edge.target)).or_default() += 1;
     }
 
-    // Longest path from the left, in topological order.
-    let mut layers = vec![0usize; count];
-    let mut ready: Vec<usize> = (0..count).filter(|&node| pending[node] == 0).collect();
-    let mut order = Vec::with_capacity(count);
-    while let Some(node) = ready.pop() {
-        order.push(node);
-        for &next in &successors[node] {
-            layers[next] = layers[next].max(layers[node] + 1);
-            pending[next] -= 1;
-            if pending[next] == 0 {
-                ready.push(next);
-            }
+    let routes = match place(&mut nodes, &links) {
+        Some(routes) => routes,
+        None => {
+            // The layout engine refused the graph. A plain grid still shows what is known.
+            log::warn!("relation layout failed; falling back to a grid");
+            place_in_grid(&mut nodes);
+            BTreeMap::new()
         }
-    }
-
-    // Then pull everything as far right as its targets allow. Longest-path alone strands every
-    // leaf in the first column, however far away the one thing it points at ended up.
-    for &node in order.iter().rev() {
-        if let Some(nearest) = successors[node].iter().map(|&next| layers[next]).min() {
-            layers[node] = nearest - 1;
-        }
-    }
-    layers
-}
-
-/// The links with every cycle broken by turning one of its edges around, for layering only.
-/// Two collections that point at each other still have to sit in some order.
-fn break_cycles(count: usize, links: &BTreeSet<(usize, usize)>) -> BTreeSet<(usize, usize)> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mark {
-        Unseen,
-        Open,
-        Done,
-    }
-
-    let mut successors = vec![Vec::new(); count];
-    for &(from, to) in links {
-        successors[from].push(to);
-    }
-    let mut marks = vec![Mark::Unseen; count];
-    let mut forward = BTreeSet::new();
-
-    for root in 0..count {
-        if marks[root] != Mark::Unseen {
-            continue;
-        }
-        // Iterative, so a long chain of collections cannot overflow the stack.
-        let mut stack = vec![(root, 0usize)];
-        marks[root] = Mark::Open;
-        while let Some(&(node, next)) = stack.last() {
-            let Some(&to) = successors[node].get(next) else {
-                marks[node] = Mark::Done;
-                stack.pop();
-                continue;
-            };
-            stack.last_mut().expect("just read").1 += 1;
-            match marks[to] {
-                // Back onto the path being walked: this is the edge that closes a cycle.
-                Mark::Open => {
-                    forward.insert((to, node));
-                }
-                Mark::Done => {
-                    forward.insert((node, to));
-                }
-                Mark::Unseen => {
-                    forward.insert((node, to));
-                    marks[to] = Mark::Open;
-                    stack.push((to, 0));
-                }
-            }
-        }
-    }
-    forward
-}
-
-/// Nodes grouped into columns, left to right, each ordered top to bottom so that a node sits
-/// near what it is joined to. A layer too tall for one column becomes several.
-fn order_columns(
-    nodes: &[CanvasNode],
-    layers: &[usize],
-    links: &BTreeSet<(usize, usize)>,
-) -> Vec<Vec<usize>> {
-    let layer_count = layers.iter().max().map_or(0, |max| max + 1);
-    let mut by_layer: Vec<Vec<usize>> = vec![Vec::new(); layer_count];
-    for (node, &layer) in layers.iter().enumerate() {
-        by_layer[layer].push(node);
-    }
-
-    let mut joined = vec![Vec::new(); nodes.len()];
-    for &(from, to) in links {
-        joined[from].push(to);
-        joined[to].push(from);
-    }
-
-    // Barycentre sweeps: each node moves to the average position of what it is joined to in
-    // the layers beside it. A few passes settle it; more do not visibly help.
-    let mut position = vec![0.0f32; nodes.len()];
-    for layer in &by_layer {
-        for (slot, &node) in layer.iter().enumerate() {
-            position[node] = slot as f32;
-        }
-    }
-    for sweep in 0..ORDERING_SWEEPS {
-        let order: Vec<usize> = if sweep % 2 == 0 {
-            (0..layer_count).collect()
-        } else {
-            (0..layer_count).rev().collect()
-        };
-        for layer in order {
-            let mut ranked: Vec<(f32, usize)> = by_layer[layer]
-                .iter()
-                .map(|&node| {
-                    let beside: Vec<f32> = joined[node]
-                        .iter()
-                        .filter(|&&other| layers[other] != layer)
-                        .map(|&other| position[other])
-                        .collect();
-                    let centre = if beside.is_empty() {
-                        position[node]
-                    } else {
-                        beside.iter().sum::<f32>() / beside.len() as f32
-                    };
-                    (centre, node)
-                })
-                .collect();
-            ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            by_layer[layer] = ranked.iter().map(|&(_, node)| node).collect();
-            for (slot, &node) in by_layer[layer].iter().enumerate() {
-                position[node] = slot as f32;
-            }
-        }
-    }
-
-    by_layer.into_iter().flat_map(|layer| split_tall(nodes, layer)).collect()
-}
-
-/// One layer as one or more columns of roughly equal height.
-fn split_tall(nodes: &[CanvasNode], layer: Vec<usize>) -> Vec<Vec<usize>> {
-    let total: f32 = layer.iter().map(|&node| nodes[node].height + ROW_GAP).sum();
-    let wanted = (total / MAX_COLUMN_HEIGHT).ceil().max(1.0);
-    let budget = total / wanted;
-
-    let mut columns = vec![Vec::new()];
-    let mut filled = 0.0;
-    for node in layer {
-        let height = nodes[node].height + ROW_GAP;
-        if filled > 0.0 && filled + height / 2.0 > budget && (columns.len() as f32) < wanted {
-            columns.push(Vec::new());
-            filled = 0.0;
-        }
-        columns.last_mut().expect("starts with one").push(node);
-        filled += height;
-    }
-    columns
-}
-
-/// Give every node its coordinates. Columns are centred on a shared midline, so a short column
-/// sits beside the middle of a tall one rather than hanging from its top.
-fn place(nodes: &mut [CanvasNode], columns: &[Vec<usize>]) -> (f32, f32) {
-    let column_height = |column: &Vec<usize>| -> f32 {
-        let cards: f32 = column.iter().map(|&node| nodes[node].height).sum();
-        cards + ROW_GAP * column.len().saturating_sub(1) as f32
     };
-    let heights: Vec<f32> = columns.iter().map(column_height).collect();
-    let tallest = heights.iter().copied().fold(0.0, f32::max);
-
-    for (slot, column) in columns.iter().enumerate() {
-        let mut y = (tallest - heights[slot]) / 2.0;
-        for &node in column {
-            nodes[node].x = slot as f32 * (CARD_WIDTH + COLUMN_GAP);
-            nodes[node].y = y;
-            y += nodes[node].height + ROW_GAP;
-        }
+    for edge in &mut edges {
+        let trunk = routes.get(&(edge.source, edge.target)).map(Vec::as_slice).unwrap_or(&[]);
+        edge.path = path_for(&nodes[edge.source], edge.field, &nodes[edge.target], trunk);
     }
 
-    let width = match columns.len() {
-        0 => 0.0,
-        count => count as f32 * CARD_WIDTH + (count - 1) as f32 * COLUMN_GAP,
+    normalise(nodes, edges)
+}
+
+/// The routed points of each link, source to target, once every node has its place.
+type Routes = BTreeMap<(usize, usize), Vec<P>>;
+
+/// Place the nodes and route the links between them.
+fn place(nodes: &mut [CanvasNode], links: &BTreeMap<(usize, usize), usize>) -> Option<Routes> {
+    let mut graph: Graph<NodeLabel, EdgeLabel, GraphLabel> =
+        Graph::new(GraphOptions { multigraph: false, compound: false, ..Default::default() });
+    graph.set_graph(GraphLabel {
+        rankdir: RankDir::LR,
+        ranksep: RANK_GAP,
+        nodesep: CARD_GAP,
+        edgesep: LANE_GAP,
+        ..Default::default()
+    });
+    graph.set_default_edge_label(EdgeLabel::default);
+    for (index, node) in nodes.iter().enumerate() {
+        graph.set_node(
+            index.to_string(),
+            NodeLabel {
+                width: f64::from(CARD_WIDTH),
+                height: f64::from(node.height),
+                ..Default::default()
+            },
+        );
+    }
+    for (&(source, target), &count) in links {
+        graph.set_edge_with_label(
+            source.to_string(),
+            target.to_string(),
+            EdgeLabel { weight: count as f64, ..Default::default() },
+        );
+    }
+
+    dugong::layout(&mut graph).ok()?;
+
+    let routes = links
+        .keys()
+        .map(|&(source, target)| {
+            let label = graph.edge(&source.to_string(), &target.to_string(), None)?;
+            let points = label.points.iter().map(|point| (point.x as f32, point.y as f32));
+            Some(((source, target), points.collect()))
+        })
+        .collect::<Option<Routes>>()?;
+    for (index, node) in nodes.iter_mut().enumerate() {
+        let label = graph.node(&index.to_string())?;
+        node.x = label.x? as f32 - CARD_WIDTH / 2.0;
+        node.y = label.y? as f32 - node.height / 2.0;
+    }
+    Some(routes)
+}
+
+/// Rows of cards, left to right. Only reached if the layout engine fails.
+fn place_in_grid(nodes: &mut [CanvasNode]) {
+    let per_row = (nodes.len() as f32).sqrt().ceil().max(1.0) as usize;
+    let tallest = nodes.iter().map(|node| node.height).fold(0.0, f32::max);
+    for (index, node) in nodes.iter_mut().enumerate() {
+        node.x = (index % per_row) as f32 * (CARD_WIDTH + RANK_GAP as f32);
+        node.y = (index / per_row) as f32 * (tallest + CARD_GAP as f32);
+    }
+}
+
+/// One relation's path: out of its field's row, along the trunk its collections share, and into
+/// the target's header.
+fn path_for(source: &CanvasNode, field: usize, target: &CanvasNode, trunk: &[P]) -> EdgePath {
+    // The trunk's ends are where it met each card's outline. The relation has better ends than
+    // those, a row and a header, so only what lies between is kept.
+    let between = if trunk.len() > 2 { &trunk[1..trunk.len() - 1] } else { &[][..] };
+    let source_centre = source.x + CARD_WIDTH / 2.0;
+    let target_centre = target.x + CARD_WIDTH / 2.0;
+
+    // Which side each end uses follows the trunk, so a reference that runs against the grain
+    // leaves leftwards instead of doubling back through its own card.
+    let leaves_right = between.first().map_or(target_centre, |point| point.0) >= source_centre;
+    let enters_left = between.last().map_or(source_centre, |point| point.0) <= target_centre;
+    let out = if leaves_right { 1.0 } else { -1.0 };
+    let into = if enters_left { 1.0 } else { -1.0 };
+
+    let start = (
+        if leaves_right { source.x + CARD_WIDTH } else { source.x },
+        source.y + HEADER_HEIGHT + (field as f32 + 0.5) * FIELD_HEIGHT,
+    );
+    let tip = (
+        if enters_left { target.x } else { target.x + CARD_WIDTH },
+        target.y + HEADER_HEIGHT / 2.0,
+    );
+    let end = (tip.0 - ARROW * into, tip.1);
+
+    let mut points = vec![start, (start.0 + STUB * out, start.1)];
+    points.extend_from_slice(between);
+    points.extend([(end.0 - STUB * into, end.1), end]);
+
+    let segments = basis_spline(&points);
+    let mut bounds =
+        (start.0.min(tip.0), start.1.min(tip.1), start.0.max(tip.0), start.1.max(tip.1));
+    for point in segments.iter().flatten() {
+        bounds = (
+            bounds.0.min(point.0),
+            bounds.1.min(point.1),
+            bounds.2.max(point.0),
+            bounds.3.max(point.1),
+        );
+    }
+    EdgePath { start, segments, tip, rightwards: enters_left, bounds }
+}
+
+/// A uniform cubic B-spline through `points`, as Bézier segments. It starts and ends on the
+/// first and last point and is pulled towards the ones between without passing through them,
+/// which is what turns a route of corners into a line that flows. The same curve d3 calls
+/// `curveBasis`, which is what dagre's own renderers draw with.
+fn basis_spline(points: &[P]) -> Vec<[P; 3]> {
+    let mix = |a: P, b: P, c: P, (wa, wb, wc): (f32, f32, f32)| {
+        ((wa * a.0 + wb * b.0 + wc * c.0) / 6.0, (wa * a.1 + wb * b.1 + wc * c.1) / 6.0)
     };
-    (width, tallest)
+    let line = |from: P, to: P| {
+        [mix(from, to, to, (4.0, 2.0, 0.0)), mix(from, to, to, (2.0, 4.0, 0.0)), to]
+    };
+    let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
+        return Vec::new();
+    };
+    if points.len() < 3 {
+        return vec![line(first, last)];
+    }
+
+    let mut segments = Vec::with_capacity(points.len() + 1);
+    let (mut before, mut at) = (points[0], points[1]);
+    let mut pen = mix(before, at, at, (5.0, 1.0, 0.0));
+    segments.push(line(first, pen));
+    // The last point is fed twice, which is what brings the curve to rest on it.
+    for &next in points[2..].iter().chain(std::iter::once(&last)) {
+        let to = mix(before, at, next, (1.0, 4.0, 1.0));
+        segments.push([
+            mix(before, at, at, (4.0, 2.0, 0.0)),
+            mix(before, at, at, (2.0, 4.0, 0.0)),
+            to,
+        ]);
+        pen = to;
+        (before, at) = (at, next);
+    }
+    segments.push(line(pen, last));
+    segments
+}
+
+/// Shift everything so the drawing starts at the origin, and measure it.
+fn normalise(mut nodes: Vec<CanvasNode>, mut edges: Vec<CanvasEdge>) -> CanvasLayout {
+    let mut bounds = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for node in &nodes {
+        bounds = (
+            bounds.0.min(node.x),
+            bounds.1.min(node.y),
+            bounds.2.max(node.x + CARD_WIDTH),
+            bounds.3.max(node.y + node.height),
+        );
+    }
+    for edge in &edges {
+        let path = edge.path.bounds;
+        bounds = (
+            bounds.0.min(path.0),
+            bounds.1.min(path.1),
+            bounds.2.max(path.2),
+            bounds.3.max(path.3),
+        );
+    }
+    if nodes.is_empty() {
+        return CanvasLayout::default();
+    }
+
+    let (dx, dy) = (-bounds.0, -bounds.1);
+    let shift = |point: &mut P| *point = (point.0 + dx, point.1 + dy);
+    for node in &mut nodes {
+        node.x += dx;
+        node.y += dy;
+    }
+    for edge in &mut edges {
+        let path = &mut edge.path;
+        shift(&mut path.start);
+        shift(&mut path.tip);
+        path.segments.iter_mut().flatten().for_each(shift);
+        path.bounds =
+            (path.bounds.0 + dx, path.bounds.1 + dy, path.bounds.2 + dx, path.bounds.3 + dy);
+    }
+    CanvasLayout { nodes, edges, width: bounds.2 - bounds.0, height: bounds.3 - bounds.1 }
 }
 
 #[cfg(test)]
@@ -448,7 +468,7 @@ mod tests {
         assert_eq!(layout.edges.len(), 2);
         assert_ne!(x_of(&layout, "users"), x_of(&layout, "teams"));
         // One of the two runs against the grain and says so, so its curve leaves leftwards.
-        let against = layout.edges.iter().filter(|e| !layout.edge_line(e).rightwards).count();
+        let against = layout.edges.iter().filter(|edge| !edge.path.rightwards).count();
         assert_eq!(against, 1);
     }
 
@@ -463,16 +483,16 @@ mod tests {
     }
 
     #[test]
-    fn a_hub_with_many_sources_wraps_them_into_several_columns() {
+    fn a_hub_with_many_sources_places_every_one_of_them() {
         let names: Vec<String> = (0..80).map(|n| format!("source{n:02}")).collect();
         let links: Vec<(&str, &str, &str)> =
             names.iter().map(|name| (name.as_str(), "userId", "users")).collect();
         let layout = layout(&graph(&links), "shop");
 
-        let columns: BTreeSet<i32> = layout.nodes.iter().map(|node| node.x as i32).collect();
-        assert!(columns.len() > 2, "eighty sources in one column is unreadable");
-        assert!(layout.height <= MAX_COLUMN_HEIGHT + HEADER_HEIGHT + FIELD_HEIGHT + ROW_GAP);
+        assert_eq!(layout.nodes.len(), 81);
         assert_eq!(layout.nodes[layout.index_of("users").unwrap()].incoming, 80);
+        assert!(layout.edges.iter().all(|edge| edge.path.rightwards));
+        assert!(layout.width > 0.0 && layout.height > 0.0);
     }
 
     #[test]
@@ -503,15 +523,101 @@ mod tests {
             "shop",
         );
         let orders = &layout.nodes[layout.index_of("orders").unwrap()];
+        let users = &layout.nodes[layout.index_of("users").unwrap()];
         let edge = layout.edges.iter().find(|edge| edge.from.path == "userId").unwrap();
-        let line = layout.edge_line(edge);
 
         // `userId` sorts after `items[].productId`, so it is the second row.
         assert_eq!(
-            line.start,
+            edge.path.start,
             (orders.x + CARD_WIDTH, orders.y + HEADER_HEIGHT + 1.5 * FIELD_HEIGHT)
         );
-        assert!(line.rightwards);
+        assert_eq!(edge.path.tip, (users.x, users.y + HEADER_HEIGHT / 2.0));
+        // The path itself stops short, leaving room for the arrowhead.
+        assert_eq!(edge.path.segments.last().unwrap()[2], (users.x - ARROW, edge.path.tip.1));
+        assert!(edge.path.rightwards);
+    }
+
+    /// Points along a path, close enough together that none can step over a card.
+    fn sampled(path: &EdgePath) -> Vec<P> {
+        let mut from = path.start;
+        let mut points = Vec::new();
+        for [a, b, to] in &path.segments {
+            for step in 0..=24 {
+                let t = step as f32 / 24.0;
+                let u = 1.0 - t;
+                let blend = |p: fn(&P) -> f32| {
+                    u * u * u * p(&from)
+                        + 3.0 * u * u * t * p(a)
+                        + 3.0 * u * t * t * p(b)
+                        + t * t * t * p(to)
+                };
+                points.push((blend(|p| p.0), blend(|p| p.1)));
+            }
+            from = *to;
+        }
+        points
+    }
+
+    #[test]
+    fn an_edge_that_skips_a_rank_goes_around_the_card_in_it() {
+        // `logs` reaches past `users` to `companies`. Drawn straight, it would cross `users`.
+        let layout = layout(
+            &graph(&[
+                ("logs", "userId", "users"),
+                ("users", "companyId", "companies"),
+                ("logs", "companyId", "companies"),
+            ]),
+            "shop",
+        );
+        let users = &layout.nodes[layout.index_of("users").unwrap()];
+        let long = layout
+            .edges
+            .iter()
+            .find(|edge| edge.from.collection == "logs" && edge.to.collection == "companies")
+            .unwrap();
+
+        for (x, y) in sampled(&long.path) {
+            let inside = x > users.x
+                && x < users.x + CARD_WIDTH
+                && y > users.y
+                && y < users.y + users.height;
+            assert!(!inside, "the path crosses `users` at ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn fields_joining_the_same_two_collections_share_one_trunk() {
+        let layout = layout(
+            &graph(&[
+                ("orders", "buyerId", "users"),
+                ("orders", "sellerId", "users"),
+                ("orders", "shipping.courierId", "users"),
+            ]),
+            "shop",
+        );
+
+        assert_eq!(layout.edges.len(), 3);
+        let starts: BTreeSet<i32> =
+            layout.edges.iter().map(|edge| edge.path.start.1 as i32).collect();
+        let tips: BTreeSet<(i32, i32)> = layout
+            .edges
+            .iter()
+            .map(|edge| (edge.path.tip.0 as i32, edge.path.tip.1 as i32))
+            .collect();
+        assert_eq!(starts.len(), 3, "each leaves its own row");
+        assert_eq!(tips.len(), 1, "and all arrive at the one header");
+    }
+
+    #[test]
+    fn a_spline_rests_on_its_first_and_last_points() {
+        let points = [(0.0, 0.0), (30.0, 0.0), (60.0, 80.0), (120.0, 80.0), (150.0, 40.0)];
+        let segments = basis_spline(&points);
+
+        assert_eq!(segments.last().unwrap()[2], (150.0, 40.0));
+        // Each segment picks up where the one before left off, so the line has no gaps.
+        assert!(segments.len() > points.len());
+        assert_eq!(basis_spline(&points[..2]), vec![[(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]]);
+        assert!(basis_spline(&[]).is_empty());
     }
 
     #[test]

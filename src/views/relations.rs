@@ -31,7 +31,7 @@ use crate::components::{
 };
 use crate::keyboard::{RelationsFit, RelationsZoomIn, RelationsZoomOut};
 use crate::state::relations::layout::{
-    self, CARD_WIDTH, CanvasLayout, CanvasNode, FIELD_HEIGHT, HEADER_HEIGHT,
+    self, ARROW, CARD_WIDTH, CanvasLayout, CanvasNode, FIELD_HEIGHT, HEADER_HEIGHT,
 };
 use crate::state::relations::{Origin, Relation, Status};
 use crate::state::{AppCommands, AppState, DatabaseKey};
@@ -889,6 +889,10 @@ fn card(
         .when(zoom >= NAME_TEXT_ZOOM, |card| {
             card.child(
                 div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
                     .h(px(HEADER_HEIGHT * zoom))
                     .px(pad)
                     .flex()
@@ -916,8 +920,15 @@ fn card(
             )
         })
         .when(zoom >= FIELD_TEXT_ZOOM, |card| {
-            card.children(node.fields.iter().map(|field| {
+            // Each row is placed, not stacked. Stacked rows each round to a whole pixel, and over
+            // thirty of them the error adds up to a row: the card ends before its fields do, and
+            // an edge no longer leaves from the row it belongs to.
+            card.children(node.fields.iter().enumerate().map(|(row, field)| {
                 div()
+                    .absolute()
+                    .left_0()
+                    .w_full()
+                    .top(px((HEADER_HEIGHT + row as f32 * FIELD_HEIGHT) * zoom))
                     .h(px(FIELD_HEIGHT * zoom))
                     .px(pad)
                     .flex()
@@ -940,7 +951,7 @@ struct EdgeColors {
     focus: Hsla,
 }
 
-/// Every edge that crosses the window, as a curve from a field's row to a header. The ones in
+/// Every edge that crosses the window, along the path the layout routed for it. The ones in
 /// focus are painted last so they are never buried under the ones that are not.
 fn paint_edges(
     layout: &CanvasLayout,
@@ -954,7 +965,7 @@ fn paint_edges(
     let origin = bounds.origin + pan;
     let to_screen = |(x, y): (f32, f32)| point(origin.x + px(x * zoom), origin.y + px(y * zoom));
     let width = px((1.5 * zoom).clamp(1.0, 2.0));
-    let head = (7.0 * zoom).clamp(3.0, 8.0);
+    let head = px(ARROW * zoom);
 
     for in_focus in [false, true] {
         for edge in &layout.edges {
@@ -962,21 +973,12 @@ fn paint_edges(
             if touches != in_focus {
                 continue;
             }
-            let line = layout.edge_line(edge);
-            let (start, end) = (to_screen(line.start), to_screen(line.end));
-            let direction = if line.rightwards { 1.0 } else { -1.0 };
-            // How far the curve travels sideways before it turns. Half the gap reads as an S;
-            // the floor keeps a short hop from collapsing into a kink.
-            let reach = px((f32::from(end.x - start.x).abs() / 2.0).max(40.0 * zoom) * direction);
-            let (bend_a, bend_b) = (point(start.x + reach, start.y), point(end.x - reach, end.y));
-
-            let left = start.x.min(end.x).min(bend_a.x).min(bend_b.x);
-            let right = start.x.max(end.x).max(bend_a.x).max(bend_b.x);
-            let reach_box = Bounds::from_corners(
-                point(left, start.y.min(end.y) - width),
-                point(right, start.y.max(end.y) + width),
+            let path = &edge.path;
+            let reach = Bounds::from_corners(
+                to_screen((path.bounds.0, path.bounds.1)) - point(width, width),
+                to_screen((path.bounds.2, path.bounds.3)) + point(width, width),
             );
-            if !bounds.intersects(&reach_box) {
+            if !bounds.intersects(&reach) {
                 continue;
             }
 
@@ -985,8 +987,6 @@ fn paint_edges(
                 (Some(_), true) => colors.focus,
                 (Some(_), false) => colors.dimmed,
             };
-            // The curve stops where the arrowhead begins, so the head stays sharp.
-            let tip = point(end.x - px(head * direction), end.y);
             let mut curve = PathBuilder::stroke(width);
             // Dashed means unreviewed, but only on the edges in focus. Straight after inference
             // nearly every edge is a guess, so dashing them all would say nothing, and a dash is
@@ -994,19 +994,27 @@ fn paint_edges(
             if touches && !edge.accepted {
                 curve = curve.dash_array(&[px(5.0), px(4.0)]);
             }
-            curve.move_to(start);
-            curve.cubic_bezier_to(tip, bend_a, point(bend_b.x, tip.y));
-            if let Ok(path) = curve.build() {
-                window.paint_path(path, color);
+            curve.move_to(to_screen(path.start));
+            for [bend_a, bend_b, to] in &path.segments {
+                curve.cubic_bezier_to(to_screen(*to), to_screen(*bend_a), to_screen(*bend_b));
+            }
+            if let Ok(built) = curve.build() {
+                window.paint_path(built, color);
             }
 
+            // Too small to read as an arrow, and a filled speck on every header is just noise.
+            if head < px(2.5) {
+                continue;
+            }
+            let tip = to_screen(path.tip);
+            let base = if path.rightwards { tip.x - head } else { tip.x + head };
             let mut arrow = PathBuilder::fill();
-            arrow.move_to(end);
-            arrow.line_to(point(tip.x, tip.y - px(head * 0.5)));
-            arrow.line_to(point(tip.x, tip.y + px(head * 0.5)));
+            arrow.move_to(tip);
+            arrow.line_to(point(base, tip.y - head / 2.0));
+            arrow.line_to(point(base, tip.y + head / 2.0));
             arrow.close();
-            if let Ok(path) = arrow.build() {
-                window.paint_path(path, color);
+            if let Ok(built) = arrow.build() {
+                window.paint_path(built, color);
             }
         }
     }
