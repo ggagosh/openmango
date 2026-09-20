@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use mongodb::Client;
 use mongodb::bson::{Bson, Document, doc};
 
@@ -121,4 +121,31 @@ impl ConnectionManager {
             probe_id_async(&client, &database, &collections, &id, max_time).await
         })
     }
+}
+
+/// How many of `ids` the target collection holds.
+///
+/// A covered query: the `$in` is matched against the `_id` index and the projection keeps the
+/// read there, so confirming two hundred ids never touches a document.
+pub async fn probe_ids_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    ids: &[mongodb::bson::oid::ObjectId],
+    max_time: Duration,
+) -> Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let coll = client.database(database).collection::<Document>(collection);
+    let values: Vec<Bson> = ids.iter().map(|id| Bson::ObjectId(*id)).collect();
+    let found = coll
+        .find(doc! { "_id": { "$in": values } })
+        .projection(doc! { "_id": 1 })
+        .limit(ids.len() as i64)
+        .max_time(max_time)
+        .await?
+        .try_collect::<Vec<Document>>()
+        .await?;
+    Ok(found.len())
 }

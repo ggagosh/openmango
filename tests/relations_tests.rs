@@ -8,11 +8,18 @@ mod common;
 
 use std::time::Duration;
 
+use chrono::Utc;
 use common::MongoTestContainer;
+use futures::TryStreamExt as _;
 use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
-use openmango::connection::ops::relations::{find_by_id_async, probe_id_async};
+use openmango::connection::ops::relations::{find_by_id_async, probe_id_async, probe_ids_async};
+use openmango::state::relations::infer::{
+    best_per_field, candidates, declared_relations, profile_reference_paths, score,
+};
 use openmango::state::relations::resolve::{Plan, Reference, plan, reference_at};
-use openmango::state::relations::{FieldRef, Origin, Relation, RelationGraph};
+use openmango::state::relations::{
+    FieldRef, Origin, Relation, RelationGraph, Status as RelationStatus,
+};
 
 const MAX_TIME: Duration = Duration::from_secs(5);
 
@@ -236,4 +243,132 @@ async fn a_stale_mapping_is_caught_by_the_confirmation() {
     .await
     .unwrap();
     assert!(found.is_none(), "the jump is stopped before it lands somewhere wrong");
+}
+
+#[tokio::test]
+async fn inference_finds_the_relations_a_shop_actually_has() {
+    let shop = Shop::seed().await;
+    // One document is not a sample. Give inference a collection worth profiling.
+    let mut orders = Vec::new();
+    for _ in 0..40 {
+        let user = ObjectId::new();
+        let product = ObjectId::new();
+        shop.mongo
+            .collection::<Document>("shop", "users")
+            .insert_one(doc! { "_id": user, "name": "someone" })
+            .await
+            .unwrap();
+        shop.mongo
+            .collection::<Document>("shop", "products")
+            .insert_one(doc! { "_id": product, "title": "something" })
+            .await
+            .unwrap();
+        orders.push(doc! {
+            "userId": user,
+            "items": [ { "productId": product, "quantity": 2 } ],
+            "reference": format!("ORD-{}", ObjectId::new()),
+        });
+    }
+    shop.mongo.collection::<Document>("shop", "orders").insert_many(orders).await.unwrap();
+
+    let documents = shop
+        .mongo
+        .collection::<Document>("shop", "orders")
+        .find(doc! {})
+        .await
+        .unwrap()
+        .try_collect::<Vec<Document>>()
+        .await
+        .unwrap();
+
+    let profiles = profile_reference_paths(&documents);
+    let paths: Vec<&str> = profiles.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["items[].productId", "userId"],
+        "the string reference is not ObjectId-shaped, and the DBRef needs no inference"
+    );
+
+    // The DBRef is read straight out of the document, with an origin no probe can displace.
+    let declared = declared_relations(&shop.database, "orders", &documents);
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared[0].source.path, "owner");
+    assert_eq!(declared[0].target.collection, "users");
+    assert_eq!(declared[0].origin, Origin::DbRef);
+
+    // Probe each candidate the way the inference pass does, and keep what the data confirms.
+    let mut confirmed = Vec::new();
+    for candidate in candidates("shop", "orders", &profiles, &shop.collections) {
+        let ids = candidate.round(0);
+        let hits = probe_ids_async(
+            &shop.mongo.client,
+            &shop.database,
+            &candidate.target.collection,
+            ids,
+            MAX_TIME,
+        )
+        .await
+        .unwrap();
+        if let Some(relation) =
+            score(&candidate, ids.len() as u32, hits as u32, documents.len() as u64, Utc::now())
+        {
+            confirmed.push(relation);
+        }
+    }
+
+    let kept = best_per_field(confirmed);
+    let mut found: Vec<(String, String)> = kept
+        .iter()
+        .map(|relation| (relation.source.path.clone(), relation.target.collection.clone()))
+        .collect();
+    found.sort();
+
+    assert_eq!(
+        found,
+        [
+            ("items[].productId".to_string(), "products".to_string()),
+            ("userId".to_string(), "users".to_string()),
+        ],
+        "userId lands on users, not on the user_profiles that mirrors its keys"
+    );
+    // Sampling estimates, so inference proposes rather than decides.
+    assert!(kept.iter().all(|relation| relation.status == RelationStatus::Candidate));
+}
+
+#[tokio::test]
+async fn a_field_pointing_nowhere_produces_no_relation() {
+    let shop = Shop::seed().await;
+    let orphans: Vec<Document> = (0..20).map(|_| doc! { "ghostId": ObjectId::new() }).collect();
+    shop.mongo.collection::<Document>("shop", "orders").insert_many(orphans).await.unwrap();
+
+    let documents = shop
+        .mongo
+        .collection::<Document>("shop", "orders")
+        .find(doc! { "ghostId": { "$exists": true } })
+        .await
+        .unwrap()
+        .try_collect::<Vec<Document>>()
+        .await
+        .unwrap();
+
+    let profiles = profile_reference_paths(&documents);
+    assert!(profiles.iter().any(|profile| profile.path == "ghostId"));
+
+    for candidate in candidates("shop", "orders", &profiles, &shop.collections) {
+        let ids = candidate.round(0);
+        let hits = probe_ids_async(
+            &shop.mongo.client,
+            &shop.database,
+            &candidate.target.collection,
+            ids,
+            MAX_TIME,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            score(&candidate, ids.len() as u32, hits as u32, 20, Utc::now()),
+            None,
+            "ids that exist nowhere are not a foreign key"
+        );
+    }
 }

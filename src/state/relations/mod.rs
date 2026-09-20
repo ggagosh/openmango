@@ -10,6 +10,7 @@
 //! running inference there. A wrong entry from two unrelated apps sharing a database name heals
 //! itself, because every jump is still confirmed by a probe.
 
+pub mod infer;
 pub mod lookup;
 pub mod resolve;
 
@@ -572,6 +573,14 @@ pub fn reference_stem(path: &str) -> String {
     let trimmed = trimmed.trim_end_matches('_');
     // `_id` and `id` trim to nothing; those name no collection, so keep the original.
     if trimmed.is_empty() { normalize(&lowered) } else { normalize(trimmed) }
+}
+
+/// How much a collection's name looks like the target of `path`. Higher is closer.
+///
+/// Only ever breaks ties between collections the data has already confirmed; it never decides
+/// a relation on its own.
+pub fn target_name_score(path: &str, collection: &str) -> u32 {
+    name_score(&reference_stem(path), collection)
 }
 
 fn name_score(stem: &str, collection: &str) -> u32 {

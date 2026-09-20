@@ -275,11 +275,16 @@ Ordered by dependency; each step leaves the app working.
    `tests/relations_tests.rs` (Testcontainers): resolve → probe → remembered relation,
    shared-`_id` ambiguity, miss, DBRef. **Left:** the References tab itself, and links in
    aggregation results.
-4. **Inference** — extend the existing profiler (recurse arrays-in-arrays, retain ≤ 200 raw
-   ObjectIds per path, byte-budget sample size); metadata (collStats, indexes, min / max `_id`);
-   prune (type, name, ObjectId time-range overlap); `$in` probes 10 → 50 → 200; score. Job runner:
-   2–4 workers, `maxTimeMS`, pausable per collection, skip views and time-series, open collection
-   first then its neighbours.
+4. **Inference** — done for one collection at a time, from the collection context menu.
+   `state/relations/infer.rs` profiles a byte-budgeted sample for ObjectId-shaped paths
+   (arrays at any depth, ≤ 200 distinct ids each), reads DBRefs outright, pairs each field with
+   the 8 best-named collections and confirms with covered `$in` probes escalating 10 → 50 → 200.
+   Confidence is the rule-of-three bound capped by the observed hit rate; a field keeps only its
+   strongest target, ties broken by name.
+   **Deferred, with the ceiling named in code:** the `_id` time-range prune and the `collStats`
+   metadata stage it needs (name ranking already cuts the probe count); `secondaryPreferred` on
+   inference reads; a job runner with pause / resume for whole-deployment sweeps; automatic
+   inference on collection open.
 5. **Surfaces** — Relations page, badge, "Find references" filling the References tab from
    `referenced_by()` (`shift-f12`), "Open all", integrity report (orphans,
    drift, unindexed reference fields).

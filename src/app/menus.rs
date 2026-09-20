@@ -433,6 +433,26 @@ pub(crate) fn build_collection_menu(
                 }),
         )
         .item(
+            PopupMenuItem::new("Infer relations")
+                .icon(Icon::new(crate::assets::AppIcon::Workflow))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
+                        AppCommands::infer_relations(
+                            state.clone(),
+                            database.clone(),
+                            collection.clone(),
+                            cx,
+                        );
+                    }
+                }),
+        )
+        .item(
             menu_item_with_shortcut("Open Forge", &OpenForge, window)
                 .on_click({
                     let state = state.clone();
