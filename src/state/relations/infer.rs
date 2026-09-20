@@ -24,13 +24,17 @@ pub const MIN_OBJECT_ID_RATIO: f32 = 0.9;
 /// only cost memory.
 pub const MAX_SAMPLED_IDS: usize = 200;
 
-/// Collections probed per field, in name order.
+/// Collections probed for one field before giving up.
 ///
-/// ponytail: the true target is all but always among the best-named few, and anything missed
-/// here is still found the moment someone clicks the field, which searches the whole database.
-/// Widen this, or add the `_id` time-range prune the feature doc describes, if real databases
-/// turn out to name their fields less helpfully than this assumes.
-pub const CANDIDATES_PER_FIELD: usize = 8;
+/// Every collection is a candidate, because the fields that matter most are the ones whose names
+/// give nothing away — `createdBy`, `owner` and `assignee` all point at users and none of them
+/// says so. Names decide the *order*, not the membership, and probing stops at the first
+/// collection holding every sampled id, so a well-named field still costs one query.
+///
+/// ponytail: a flat ceiling rather than the feature doc's `_id` time-range prune. A covered
+/// `$in` on `_id` is the cheapest query there is; add the prune when a deployment is large
+/// enough for the count to matter.
+pub const CANDIDATES_PER_FIELD: usize = 200;
 
 /// How many ids each round of probing sends. All of a round found escalates to the next; none
 /// found rejects the candidate outright.
@@ -114,6 +118,9 @@ fn record(
                 record(&element, item, found, index);
             }
         }
+        // A null is an absent reference, not a differently-shaped one. Counting it against the
+        // field would reject every optional foreign key, which is most of them.
+        Bson::Null | Bson::Undefined => {}
         other => {
             let slot = *index.entry(path.to_string()).or_insert_with(|| {
                 found.push(PathProfile {
@@ -260,10 +267,16 @@ pub fn candidates(
 
 /// Turn a round of probing into a relation, or nothing when the evidence rejects the guess.
 ///
-/// Finding none of the probed ids rejects outright: a foreign key whose values are nowhere in
-/// the target is not a foreign key. Finding all of them gives the rule-of-three bound; finding
-/// some gives the observed rate, which is lower, so partial containment reads as the weaker
-/// evidence it is.
+/// Confidence answers "does this field point at this collection", which is a different question
+/// from "how many of its values resolve". ObjectIds are near-globally unique, so ids landing in
+/// a collection is strong evidence of the first whatever the sample size; what a small sample
+/// leaves open is the second. So confidence is the share of probed ids that were found, and the
+/// rule-of-three bound on containment stays in the evidence, where the Relations page and the
+/// integrity report read it.
+///
+/// Scoring both as one number meant a field with a dozen distinct values could never clear the
+/// bar a click needs, however cleanly every one of them landed — which quietly hid every
+/// low-cardinality reference in a database.
 pub fn score(
     candidate: &Candidate,
     probed: u32,
@@ -274,9 +287,7 @@ pub fn score(
     if probed == 0 || hits == 0 {
         return None;
     }
-    let observed = hits as f32 / probed as f32;
-    let bound = 1.0 - 3.0 / probed as f32;
-    let confidence = observed.min(bound).clamp(0.0, 1.0);
+    let confidence = (hits as f32 / probed as f32).clamp(0.0, 1.0);
 
     Some(Relation::candidate(
         candidate.source.clone(),
@@ -284,6 +295,13 @@ pub fn score(
         confidence,
         Evidence { probed, hits, sampled, sampled_at: at },
     ))
+}
+
+/// Whether a probed collection settles a field: every id it was given was there.
+///
+/// Nothing further down the candidate list can beat that, so the search for this field stops.
+pub fn is_decisive(relation: &Relation) -> bool {
+    relation.confidence >= 1.0
 }
 
 /// Whether a round's result is worth sending a bigger one.
@@ -422,6 +440,21 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_value_says_nothing_about_a_fields_shape() {
+        // An optional reference: set on half the documents, null on the rest. Counting the
+        // nulls against it would reject most of the foreign keys in a real database.
+        let mut documents: Vec<Document> =
+            (0..10).map(|_| doc! { "ownerId": ObjectId::new() }).collect();
+        documents.extend((0..10).map(|_| doc! { "ownerId": Bson::Null }));
+
+        let profiles = profile_reference_paths(&documents);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].path, "ownerId");
+        assert_eq!(profiles[0].seen, 10, "only the values that are there count");
+        assert_eq!(profiles[0].ids.len(), 10);
+    }
+
+    #[test]
     fn a_field_that_only_sometimes_holds_an_id_is_not_a_reference() {
         // Nine strings to one ObjectId: something else that happens to contain an id.
         let mut documents: Vec<Document> =
@@ -510,6 +543,51 @@ mod tests {
     }
 
     #[test]
+    fn a_field_whose_name_says_nothing_still_reaches_every_collection() {
+        // `createdBy` points at users and says so nowhere. Ranking by name put eight
+        // alphabetically-early collections ahead of it and stopped, so the reference was
+        // invisible — the most common shape of reference there is.
+        let profiles = vec![PathProfile {
+            path: "createdBy".into(),
+            seen: 100,
+            object_ids: 100,
+            ids: ids(10),
+        }];
+        let collections: Vec<String> = [
+            "auditlogs",
+            "brandings",
+            "categories",
+            "changelog",
+            "documents",
+            "events",
+            "filemodels",
+            "floorplans",
+            "usermodels",
+        ]
+        .map(String::from)
+        .to_vec();
+
+        let built = candidates("au", "tasks", &profiles, &collections);
+        let targets: Vec<&str> = built.iter().map(|c| c.target.collection.as_str()).collect();
+        assert!(targets.contains(&"usermodels"), "every collection stays reachable");
+        assert_eq!(targets.len(), collections.len(), "none is ruled out by its name");
+    }
+
+    #[test]
+    fn a_collection_named_after_the_field_outranks_one_that_merely_contains_it() {
+        let profiles =
+            vec![PathProfile { path: "user".into(), seen: 50, object_ids: 50, ids: ids(5) }];
+        let collections: Vec<String> =
+            ["auditlogs", "superusergroups", "usermodels"].map(String::from).to_vec();
+
+        let built = candidates("au", "tasks", &profiles, &collections);
+        assert_eq!(
+            built[0].target.collection, "usermodels",
+            "named after the thing beats containing its name in the middle"
+        );
+    }
+
+    #[test]
     fn candidates_are_the_best_named_collections_and_never_the_source() {
         let profiles =
             vec![PathProfile { path: "userId".into(), seen: 100, object_ids: 100, ids: ids(10) }];
@@ -539,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn confidence_rises_with_the_size_of_a_clean_sweep() {
+    fn a_clean_sweep_identifies_the_target_whatever_its_size() {
         let candidate = Candidate {
             source: FieldRef::new("shop", "orders", "userId"),
             target: FieldRef::id_of("shop", "users"),
@@ -547,23 +625,29 @@ mod tests {
         };
         let at = Utc::now();
 
-        // The rule of three: ten clean hits are not yet enough to follow silently.
-        let ten = score(&candidate, 10, 10, 1000, at).unwrap();
-        assert!((ten.confidence - 0.7).abs() < 0.001);
+        // Twelve distinct values, all of them in `users`, is that field's whole population.
+        // Treating it as weaker than a bigger sample would hide every low-cardinality
+        // reference — a `companyId` across five companies is still a reference.
+        let small = score(&candidate, 12, 12, 1000, at).unwrap();
+        let large = score(&candidate, 200, 200, 1000, at).unwrap();
+        assert_eq!(small.confidence, 1.0);
+        assert_eq!(large.confidence, 1.0);
+        assert!(is_decisive(&small), "nothing further down the list can beat this");
 
-        let fifty = score(&candidate, 50, 50, 1000, at).unwrap();
-        assert!((fifty.confidence - 0.94).abs() < 0.001);
-        assert!(fifty.confidence > ten.confidence);
+        // What the bigger sample buys is a stronger claim about orphans, which lives in the
+        // evidence rather than in the confidence.
+        let small_bound = small.evidence.as_ref().unwrap().containment_lower_bound();
+        let large_bound = large.evidence.as_ref().unwrap().containment_lower_bound();
+        assert!(large_bound > small_bound);
+        assert!((large_bound - 0.985).abs() < 0.001);
 
-        let full = score(&candidate, 200, 200, 1000, at).unwrap();
-        assert!(full.confidence > fifty.confidence);
-        assert_eq!(full.status, Status::Candidate, "inference proposes, it does not decide");
-        assert_eq!(full.origin, Origin::Inferred);
-        assert_eq!(full.evidence.unwrap().sampled, 1000);
+        assert_eq!(large.status, Status::Candidate, "inference proposes, it does not decide");
+        assert_eq!(large.origin, Origin::Inferred);
+        assert_eq!(large.evidence.unwrap().sampled, 1000);
     }
 
     #[test]
-    fn partial_containment_reads_as_the_weaker_evidence_it_is() {
+    fn a_partial_hit_is_weaker_and_keeps_the_search_going() {
         let candidate = Candidate {
             source: FieldRef::new("shop", "orders", "userId"),
             target: FieldRef::id_of("shop", "users"),
@@ -571,8 +655,13 @@ mod tests {
         };
         let partial = score(&candidate, 50, 45, 1000, Utc::now()).unwrap();
         let clean = score(&candidate, 50, 50, 1000, Utc::now()).unwrap();
+
         assert!(partial.confidence < clean.confidence);
         assert!((partial.confidence - 0.9).abs() < 0.001);
+        // Five of its values are somewhere else, so a better collection may still be ahead.
+        assert!(!is_decisive(&partial));
+        // Its containment bound is zero: a miss is a miss, however many landed.
+        assert_eq!(partial.evidence.unwrap().containment_lower_bound(), 0.0);
     }
 
     #[test]

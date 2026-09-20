@@ -609,7 +609,12 @@ fn name_score(stem: &str, collection: &str) -> u32 {
         return 90;
     }
     if candidate.ends_with(stem) || stem.ends_with(&candidate) {
-        return 50;
+        return 70;
+    }
+    // `usermodels` for `user`: named after the thing, with a suffix a codebase happens to use
+    // everywhere. Worth more than merely containing the stem somewhere in the middle.
+    if candidate.starts_with(stem) {
+        return 60;
     }
     if candidate.contains(stem) || stem.contains(&candidate) {
         return 25;

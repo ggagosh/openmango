@@ -23,7 +23,7 @@ use crate::state::AppState;
 use crate::state::StatusMessage;
 use crate::state::relations::infer::{
     Candidate as InferCandidate, InferenceRun, Inferred, PROBE_ROUNDS, best_per_field, candidates,
-    declared_relations, profile_reference_paths, score, should_escalate,
+    declared_relations, is_decisive, profile_reference_paths, score, should_escalate,
 };
 use crate::state::relations::lookup::{Anchor, Candidate, Intent, LookupState, ReferenceLookup};
 use crate::state::relations::references::{GROUP_PREVIEW_LIMIT, GroupState, ReferenceGroup};
@@ -470,13 +470,23 @@ async fn infer(
     let sampled = documents.len() as u64;
 
     let profiles = profile_reference_paths(&documents);
-    let candidates = candidates(database, collection, &profiles, collections);
+
+    // One field at a time, its candidates in name order. Fields run beside each other; the
+    // collections one field asks do not, because each answer may make the rest unnecessary.
+    let mut by_field: Vec<Vec<InferCandidate>> = Vec::new();
+    for candidate in candidates(database, collection, &profiles, collections) {
+        match by_field.last_mut() {
+            Some(group) if group[0].source == candidate.source => group.push(candidate),
+            _ => by_field.push(vec![candidate]),
+        }
+    }
+
     let confirmed: Vec<Relation> = futures::stream::iter(
-        candidates
+        by_field
             .into_iter()
-            .map(|candidate| {
+            .map(|candidates| {
                 let client = client.clone();
-                async move { confirm(&client, candidate, sampled).await }
+                async move { confirm_field(&client, candidates, sampled).await }
             })
             .collect::<Vec<_>>(),
     )
@@ -505,6 +515,32 @@ async fn infer(
         .collect();
 
     Ok(Inferred { relations, unresolved })
+}
+
+/// Find the collection a field points at, asking the best-named first.
+///
+/// Stops at the first collection that holds every id it was given: nothing further down can beat
+/// that, and a field points at one collection. A field whose name says nothing pays for the
+/// whole list, which is the price of finding `createdBy` at all.
+async fn confirm_field(
+    client: &Client,
+    candidates: Vec<InferCandidate>,
+    sampled: u64,
+) -> Option<Relation> {
+    let mut best: Option<Relation> = None;
+    for candidate in candidates {
+        let Some(relation) = confirm(client, candidate, sampled).await else {
+            continue;
+        };
+        let decisive = is_decisive(&relation);
+        if best.as_ref().is_none_or(|kept| relation.confidence > kept.confidence) {
+            best = Some(relation);
+        }
+        if decisive {
+            break;
+        }
+    }
+    best
 }
 
 /// Probe one candidate, sending more ids only while every one of them keeps landing.

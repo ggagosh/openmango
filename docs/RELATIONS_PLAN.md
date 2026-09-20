@@ -281,8 +281,9 @@ Ordered by dependency; each step leaves the app working.
    `state/relations/infer.rs` profiles a byte-budgeted sample for ObjectId-shaped paths
    (arrays at any depth, ≤ 200 distinct ids each), reads DBRefs outright, pairs each field with
    the 8 best-named collections and confirms with covered `$in` probes escalating 10 → 50 → 200.
-   Confidence is the rule-of-three bound capped by the observed hit rate; a field keeps only its
-   strongest target, ties broken by name.
+   Confidence is the share of probed ids that were found — it answers *which collection*, and
+   the rule-of-three bound on containment stays in the evidence for the integrity report. A field
+   keeps only its strongest target, ties broken by name.
    **Deferred, with the ceiling named in code:** the `_id` time-range prune and the `collStats`
    metadata stage it needs (name ranking already cuts the probe count); `secondaryPreferred` on
    inference reads; a job runner with pause / resume for whole-deployment sweeps; automatic
