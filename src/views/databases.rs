@@ -166,6 +166,7 @@ impl Render for DatabaseView {
                 state.clone(),
                 cx,
             ))
+            .child(Self::render_relations_section(&database_name, state.clone(), cx))
             .child(Self::render_collections_section(
                 collections,
                 collections_loading,
@@ -269,6 +270,104 @@ impl DatabaseView {
             .child(stat_cell("Index size", format_bytes(stats.index_size), cx));
 
         section.child(row).into_any_element()
+    }
+
+    /// What this database's fields point at, and a way to find out.
+    ///
+    /// It lives here because inference is a database-wide read: it samples every collection and
+    /// asks each one's neighbours, so the database is the scope that matches the work.
+    fn render_relations_section(
+        database_name: &str,
+        state: Entity<AppState>,
+        cx: &App,
+    ) -> AnyElement {
+        let state_ref = state.read(cx);
+        let known = state_ref.relation_count(database_name);
+        // Another database's search still blocks this one, so say whose it is.
+        let run = state_ref.inference_run().filter(|run| run.database == database_name).cloned();
+        let busy_elsewhere = state_ref.inference_run().is_some() && run.is_none();
+
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(spacing::lg())
+            .px(spacing::lg())
+            .py(spacing::sm())
+            .bg(cx.theme().tab_bar)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(borders::radius_sm());
+
+        row = match &run {
+            Some(run) => row
+                .child(Spinner::new().small())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .truncate()
+                        .child(format!(
+                            "Reading {} — {} of {} collections, {} relations found",
+                            run.collection,
+                            format_number(run.done as u64 + 1),
+                            format_number(run.total as u64),
+                            format_number(run.found as u64),
+                        )),
+                )
+                .child(Button::new("cancel-inference").ghost().xsmall().label("Stop").on_click({
+                    let state = state.clone();
+                    move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                        AppCommands::cancel_inference(&state, cx);
+                    }
+                })),
+            None => row
+                .child(stat_cell("Known relations", format_number(known as u64), cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if known == 0 {
+                            "Nothing is known yet. Inferring reads a sample of every collection \
+                             and confirms each guess against the data."
+                                .to_string()
+                        } else {
+                            "Cmd+click an ObjectId to follow it, or an _id to see what points \
+                             at it."
+                                .to_string()
+                        }),
+                )
+                .child(
+                    Button::new("infer-relations-db")
+                        .xsmall()
+                        .label(if known == 0 { "Infer relations" } else { "Infer again" })
+                        .disabled(busy_elsewhere)
+                        .on_click({
+                            let state = state.clone();
+                            let database = database_name.to_string();
+                            move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                AppCommands::infer_relations_for_database(
+                                    state.clone(),
+                                    database.clone(),
+                                    cx,
+                                );
+                            }
+                        }),
+                ),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::sm())
+            .px(spacing::lg())
+            .pt(spacing::lg())
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Relations"))
+            .child(row)
+            .into_any_element()
     }
 
     fn render_collections_section(

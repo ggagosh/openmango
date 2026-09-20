@@ -20,7 +20,7 @@ use crate::state::relations::lookup::{
     Anchor as LookupAnchor, Candidate, Intent, LookupState, ReferenceLookup,
 };
 use crate::state::relations::resolve::{Reference, reference_at};
-use crate::state::relations::{FieldRef, path_from_segments};
+use crate::state::relations::{is_document_id, path_from_segments};
 use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 
@@ -97,26 +97,37 @@ impl ReferenceLink {
 pub struct IncomingLink {
     pub state: Entity<AppState>,
     pub session: SessionKey,
-    pub id: Bson,
+    pub document: DocumentKey,
 }
 
 impl IncomingLink {
     /// Build a link for the `_id` row of a document.
+    ///
+    /// The id is read from the document at click time rather than from the row, because
+    /// `NodeMeta` only carries a value for fields that can be edited and an `_id` never can.
     pub fn for_node(
         state: &Entity<AppState>,
         session: Option<&SessionKey>,
         meta: &NodeMeta,
     ) -> Option<Self> {
         let session = session?;
-        if path_from_segments(&meta.path) != "_id" {
+        if !is_document_id(&meta.path) {
             return None;
         }
-        Some(Self { state: state.clone(), session: session.clone(), id: meta.value.clone()? })
+        Some(Self {
+            state: state.clone(),
+            session: session.clone(),
+            document: meta.doc_key.clone(),
+        })
     }
 
     pub fn find(&self, cx: &mut App) {
-        let target = FieldRef::id_of(&self.session.database, &self.session.collection);
-        AppCommands::find_references(self.state.clone(), target, self.id.clone(), cx);
+        super::tree::tree_menus::find_references_for(
+            &self.state,
+            &self.session,
+            &self.document,
+            cx,
+        );
     }
 }
 

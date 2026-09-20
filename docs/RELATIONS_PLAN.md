@@ -276,7 +276,8 @@ Ordered by dependency; each step leaves the app working.
    targets; broken-reference state; breadcrumb; single-result expand.
    `tests/relations_tests.rs` (Testcontainers): resolve → probe → remembered relation,
    shared-`_id` ambiguity, miss, DBRef. **Left:** links in aggregation results.
-4. **Inference** — done for one collection at a time, from the collection context menu.
+4. **Inference** — done. Run it for a whole database from the **Relations** section of the
+   database tab (known count, progress, Stop), or for one collection from its context menu.
    `state/relations/infer.rs` profiles a byte-budgeted sample for ObjectId-shaped paths
    (arrays at any depth, ≤ 200 distinct ids each), reads DBRefs outright, pairs each field with
    the 8 best-named collections and confirms with covered `$in` probes escalating 10 → 50 → 200.

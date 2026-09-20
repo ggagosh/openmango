@@ -315,6 +315,48 @@ pub fn best_per_field(mut relations: Vec<Relation>) -> Vec<Relation> {
     relations
 }
 
+/// A relation search across a database, while it runs.
+///
+/// Collections are taken one at a time so the server sees one collection's worth of work at a
+/// time and the whole thing can be stopped between them.
+#[derive(Debug, Clone)]
+pub struct InferenceRun {
+    pub database: String,
+    /// The collection being read right now.
+    pub collection: String,
+    pub done: usize,
+    pub total: usize,
+    /// Relations found so far, across every collection finished.
+    pub found: usize,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl InferenceRun {
+    pub fn new(database: String, total: usize) -> Self {
+        Self {
+            database,
+            collection: String::new(),
+            done: 0,
+            total,
+            found: 0,
+            cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// A handle the running job checks between collections.
+    pub fn cancel_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.cancelled.clone()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// Relations an inference pass produced, ready to store.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Inferred {

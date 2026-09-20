@@ -156,10 +156,11 @@ impl DocumentTableDelegate {
         if self.column_key(col_ix)? != "_id" {
             return None;
         }
+        // Table columns are top-level fields, so the column name is the whole path.
         Some(IncomingLink {
             state: self.state.clone(),
             session: self.session_key.clone()?,
-            id: self.cell_value(row_ix, col_ix)?.clone(),
+            document: self.document_key(row_ix)?,
         })
     }
 

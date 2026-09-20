@@ -424,7 +424,8 @@ fn note(cx: &App) -> Div {
         .text_color(cx.theme().muted_foreground)
 }
 
-/// One referring document, summarised. Clicking opens it where it lives, filtered to itself.
+/// One referring document, summarised. Clicking opens it in a tab of its own, filtered to
+/// itself, leaving this result where it is to go back to.
 ///
 /// ponytail: the row is a pointer shortcut, not the keyboard path — "Open as filter" in the
 /// group header is focusable and lands in the collection view, which is fully keyboard
@@ -467,7 +468,9 @@ fn result_row(
                     };
                     let filter = mongodb::bson::doc! { "_id": id };
                     state.update(cx, |state, cx| {
-                        state.navigate_to_collection(
+                        // A new tab, not a navigation: this tab is a result, so it has no
+                        // view to navigate and nothing to go back to.
+                        state.open_collection_in_new_tab(
                             database.clone(),
                             collection.clone(),
                             filter_text(&filter),

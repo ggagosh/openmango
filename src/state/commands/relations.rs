@@ -22,7 +22,7 @@ use crate::connection::ops::stats::collection_stats_async;
 use crate::state::AppState;
 use crate::state::StatusMessage;
 use crate::state::relations::infer::{
-    Candidate as InferCandidate, Inferred, PROBE_ROUNDS, best_per_field, candidates,
+    Candidate as InferCandidate, InferenceRun, Inferred, PROBE_ROUNDS, best_per_field, candidates,
     declared_relations, profile_reference_paths, score, should_escalate,
 };
 use crate::state::relations::lookup::{Anchor, Candidate, Intent, LookupState, ReferenceLookup};
@@ -336,6 +336,120 @@ impl AppCommands {
             });
         })
         .detach();
+    }
+}
+
+impl AppCommands {
+    /// Work out what every collection in a database points at.
+    ///
+    /// Collections are read one at a time rather than all at once: a database of sixty is sixty
+    /// samples and several hundred probes, and doing that in a burst is the kind of read a
+    /// production server feels. One at a time is slower, stoppable, and unremarkable.
+    pub fn infer_relations_for_database(state: Entity<AppState>, database: String, cx: &mut App) {
+        if state.read(cx).inference_run().is_some() {
+            return;
+        }
+        let Some((client, collections)) =
+            state.read(cx).selected_connection_id().and_then(|connection_id| {
+                let active = state.read(cx).active_connection_by_id(connection_id)?;
+                let collections: Vec<String> = active
+                    .collections
+                    .get(&database)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|name| !name.starts_with("system."))
+                    .collect();
+                Some((active.client.clone(), collections))
+            })
+        else {
+            return;
+        };
+        if collections.is_empty() {
+            return;
+        }
+
+        let runtime = state.read(cx).connection_manager().runtime_handle();
+        let run = InferenceRun::new(database.clone(), collections.len());
+        let cancelled = run.cancel_flag();
+        state.update(cx, |state, cx| {
+            state.set_inference_run(Some(run));
+            cx.notify();
+        });
+
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            let mut found = 0usize;
+            let mut read = 0usize;
+            for (index, collection) in collections.iter().enumerate() {
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        if let Some(run) = state.inference_run_mut() {
+                            run.collection = collection.clone();
+                            run.done = index;
+                            run.found = found;
+                        }
+                        cx.notify();
+                    });
+                });
+
+                let task = runtime.spawn({
+                    let client = client.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    let collections = collections.clone();
+                    async move { infer(&client, &database, &collection, &collections).await }
+                });
+                let Ok(Ok(inferred)) = task.await else {
+                    read += 1;
+                    continue;
+                };
+                read += 1;
+                found += inferred.relations.len();
+
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        for relation in inferred.relations {
+                            state.upsert_relation(relation);
+                        }
+                        cx.notify();
+                    });
+                });
+            }
+
+            cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    let stopped = state.inference_run().is_some_and(|run| run.is_cancelled());
+                    state.set_inference_run(None);
+                    state.set_status_message(Some(StatusMessage::info(if stopped {
+                        format!(
+                            "Stopped after {read} of {} collections. {found} relations found.",
+                            collections.len()
+                        )
+                    } else {
+                        match found {
+                            0 => format!("No relations found in {database}."),
+                            1 => format!("1 relation found in {database}."),
+                            count => format!("{count} relations found in {database}."),
+                        }
+                    })));
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Stop a relation search between collections.
+    pub fn cancel_inference(state: &Entity<AppState>, cx: &mut App) {
+        state.update(cx, |state, cx| {
+            if let Some(run) = state.inference_run() {
+                run.cancel();
+                cx.notify();
+            }
+        });
     }
 }
 

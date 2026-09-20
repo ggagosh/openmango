@@ -542,6 +542,14 @@ pub fn filter_text(filter: &mongodb::bson::Document) -> String {
     )
 }
 
+/// Whether a path is a document's own `_id`.
+///
+/// Exactly `_id`, not a nested one: `users.addresses[]._id` belongs to an embedded document,
+/// which is a different thing to ask about.
+pub fn is_document_id(segments: &[crate::bson::PathSegment]) -> bool {
+    matches!(segments, [crate::bson::PathSegment::Key(key)] if key == "_id")
+}
+
 /// The field name a path ends in, without its array marker: `items[].productId` → `productId`.
 pub fn leaf_name(path: &str) -> &str {
     let leaf = path.rsplit('.').next().unwrap_or(path);
@@ -712,6 +720,18 @@ mod tests {
         assert_eq!(path, "sections[].blocks[].assetId");
         assert_eq!(array_depth(&path), 2);
         assert_eq!(mongo_path(&path), "sections.blocks.assetId");
+    }
+
+    #[test]
+    fn only_a_documents_own_id_is_where_incoming_references_are_asked_about() {
+        use crate::bson::PathSegment::{Index, Key};
+
+        assert!(is_document_id(&[Key("_id".into())]));
+
+        // An embedded document's id is a different thing to ask about.
+        assert!(!is_document_id(&[Key("addresses".into()), Index(0), Key("_id".into())]));
+        assert!(!is_document_id(&[Key("userId".into())]));
+        assert!(!is_document_id(&[]));
     }
 
     #[test]

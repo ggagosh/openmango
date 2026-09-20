@@ -57,6 +57,7 @@ use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
+use crate::state::relations::infer::InferenceRun;
 use crate::state::relations::lookup::ReferenceLookup;
 use crate::state::relations::references::ReferencesTabState;
 use crate::state::relations::{
@@ -100,6 +101,8 @@ pub struct AppState {
     /// The reference the user is looking at, if any. One at a time: a peek is a glance at one
     /// value, and a second click replaces the first.
     reference_lookup: Option<ReferenceLookup>,
+    /// A relation search in flight, so the database it is reading can say so and stop it.
+    inference_run: Option<InferenceRun>,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -256,6 +259,7 @@ impl AppState {
             relations,
             relations_persistence_blocked: relations_load_error.is_some(),
             reference_lookup: None,
+            inference_run: None,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -475,6 +479,27 @@ impl AppState {
 
     pub fn references_tab_mut(&mut self, id: uuid::Uuid) -> Option<&mut ReferencesTabState> {
         self.references_tabs.get_mut(&id)
+    }
+
+    pub fn inference_run(&self) -> Option<&InferenceRun> {
+        self.inference_run.as_ref()
+    }
+
+    pub fn inference_run_mut(&mut self) -> Option<&mut InferenceRun> {
+        self.inference_run.as_mut()
+    }
+
+    pub fn set_inference_run(&mut self, run: Option<InferenceRun>) {
+        self.inference_run = run;
+    }
+
+    /// How many relations are known for a database, whatever their status.
+    pub fn relation_count(&self, database: &str) -> usize {
+        self.relations
+            .relations()
+            .iter()
+            .filter(|relation| relation.source.database == database)
+            .count()
     }
 
     pub fn reference_lookup(&self) -> Option<&ReferenceLookup> {
