@@ -11,7 +11,6 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use mongodb::Client;
 use mongodb::bson::{Bson, Document, doc};
 
-use crate::connection::ConnectionManager;
 use crate::error::Result;
 
 /// Probes in flight at once. Enough to make a search of a few dozen collections feel instant,
@@ -85,42 +84,6 @@ pub async fn probe_id_async(
 
     found.sort_by_key(|(rank, _)| *rank);
     found.into_iter().map(|(_, collection)| collection).collect()
-}
-
-impl ConnectionManager {
-    pub fn find_by_id(
-        &self,
-        client: &Client,
-        database: &str,
-        collection: &str,
-        id: &Bson,
-        max_time: Duration,
-    ) -> Result<Option<Document>> {
-        let client = client.clone();
-        let database = database.to_string();
-        let collection = collection.to_string();
-        let id = id.clone();
-        self.runtime.block_on(async move {
-            find_by_id_async(&client, &database, &collection, &id, max_time).await
-        })
-    }
-
-    pub fn probe_id(
-        &self,
-        client: &Client,
-        database: &str,
-        collections: &[String],
-        id: &Bson,
-        max_time: Duration,
-    ) -> Vec<String> {
-        let client = client.clone();
-        let database = database.to_string();
-        let collections = collections.to_vec();
-        let id = id.clone();
-        self.runtime.block_on(async move {
-            probe_id_async(&client, &database, &collections, &id, max_time).await
-        })
-    }
 }
 
 /// How many of `ids` the target collection holds.

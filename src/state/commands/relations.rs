@@ -66,6 +66,9 @@ impl AppCommands {
         let session = anchor.session.clone();
         let source = FieldRef::new(&session.database, &session.collection, &anchor.path);
 
+        // The driver's work belongs to the connection's Tokio runtime; gpui's executor has no
+        // reactor for it to spawn onto.
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         let Some((client, decision)) = state.update(cx, |state, cx| {
             let active = state.active_connection_by_id(session.connection_id)?;
             let client = active.client.clone();
@@ -86,7 +89,7 @@ impl AppCommands {
 
         let database = session.database.clone();
         let id = reference.id().clone();
-        let task = cx.background_spawn(async move {
+        let task = runtime.spawn(async move {
             // A known target is asked directly. An unknown one is searched first, cheaply,
             // against each candidate's `_id` index, and only the hits are read in full.
             let (targets, from_search, searched, more) = match decision {
@@ -111,7 +114,9 @@ impl AppCommands {
             let state = state.clone();
             let anchor = anchor.clone();
             async move |cx: &mut gpui_kit::AsyncApp| {
-                let found = task.await;
+                let Ok(found) = task.await else {
+                    return;
+                };
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
                         apply(state, &anchor, found, cx);
@@ -284,6 +289,7 @@ impl AppCommands {
             return;
         };
 
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         state.update(cx, |state, cx| {
             state.set_status_message(Some(StatusMessage::info(format!(
                 "Looking for relations in {database}.{collection}…"
@@ -291,14 +297,19 @@ impl AppCommands {
             cx.notify();
         });
 
-        let task = cx.background_spawn({
+        let task = runtime.spawn({
             let database = database.clone();
             let collection = collection.clone();
             async move { infer(&client, &database, &collection, &collections).await }
         });
 
         cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
-            let outcome = task.await;
+            let outcome = match task.await {
+                Ok(outcome) => outcome,
+                Err(error) => Err(crate::error::Error::Parse(format!(
+                    "The relation search could not finish: {error}"
+                ))),
+            };
             cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let message = match outcome {
@@ -461,6 +472,7 @@ impl AppCommands {
     /// collections on the strength of a name, which is the one thing a reference lookup never
     /// does. A database nobody has inferred yet says so, and offers to infer.
     pub fn load_references(state: Entity<AppState>, tab_id: Uuid, cx: &mut App) {
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         let Some((client, id, groups, guard_scans)) = state.update(cx, |state, cx| {
             let tab = state.references_tab(tab_id)?;
             let target = tab.target.clone();
@@ -501,7 +513,7 @@ impl AppCommands {
         };
 
         for source in groups {
-            let task = cx.background_spawn({
+            let task = runtime.spawn({
                 let client = client.clone();
                 let source = source.clone();
                 let id = id.clone();
@@ -511,7 +523,9 @@ impl AppCommands {
                 let state = state.clone();
                 let source = source.clone();
                 async move |cx: &mut gpui_kit::AsyncApp| {
-                    let (indexed, group_state) = task.await;
+                    let Ok((indexed, group_state)) = task.await else {
+                        return;
+                    };
                     cx.update(|cx| {
                         state.update(cx, |state, cx| {
                             if let Some(tab) = state.references_tab_mut(tab_id)
@@ -536,6 +550,7 @@ impl AppCommands {
         source: FieldRef,
         cx: &mut App,
     ) {
+        let runtime = state.read(cx).connection_manager().runtime_handle();
         let Some((client, id)) = state.update(cx, |state, cx| {
             let id = state.references_tab(tab_id)?.id.clone();
             let connection_id = state.selected_connection_id()?;
@@ -548,12 +563,14 @@ impl AppCommands {
             return;
         };
 
-        let task = cx.background_spawn({
+        let task = runtime.spawn({
             let source = source.clone();
             async move { load_group(&client, source, id, false).await }
         });
         cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
-            let (indexed, group_state) = task.await;
+            let Ok((indexed, group_state)) = task.await else {
+                return;
+            };
             cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     if let Some(tab) = state.references_tab_mut(tab_id)
