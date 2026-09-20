@@ -57,7 +57,7 @@ use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
-use crate::state::relations::infer::InferenceRun;
+use crate::state::relations::infer::{InferenceRun, InferenceSummary};
 use crate::state::relations::lookup::ReferenceLookup;
 use crate::state::relations::references::ReferencesTabState;
 use crate::state::relations::{
@@ -103,6 +103,8 @@ pub struct AppState {
     reference_lookup: Option<ReferenceLookup>,
     /// A relation search in flight, so the database it is reading can say so and stop it.
     inference_run: Option<InferenceRun>,
+    /// What the last search found, and what it could not.
+    inference_summary: Option<InferenceSummary>,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -260,6 +262,7 @@ impl AppState {
             relations_persistence_blocked: relations_load_error.is_some(),
             reference_lookup: None,
             inference_run: None,
+            inference_summary: None,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -483,6 +486,14 @@ impl AppState {
 
     pub fn inference_run(&self) -> Option<&InferenceRun> {
         self.inference_run.as_ref()
+    }
+
+    pub fn inference_summary(&self) -> Option<&InferenceSummary> {
+        self.inference_summary.as_ref()
+    }
+
+    pub fn set_inference_summary(&mut self, summary: Option<InferenceSummary>) {
+        self.inference_summary = summary;
     }
 
     pub fn inference_run_mut(&mut self) -> Option<&mut InferenceRun> {

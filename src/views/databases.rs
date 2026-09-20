@@ -285,6 +285,10 @@ impl DatabaseView {
         let known = state_ref.relation_count(database_name);
         // Another database's search still blocks this one, so say whose it is.
         let run = state_ref.inference_run().filter(|run| run.database == database_name).cloned();
+        let last_run = state_ref
+            .inference_summary()
+            .filter(|summary| summary.database == database_name)
+            .map(|summary| summary.line());
         let busy_elsewhere = state_ref.inference_run().is_some() && run.is_none();
 
         let mut row = div()
@@ -309,11 +313,16 @@ impl DatabaseView {
                         .text_color(cx.theme().muted_foreground)
                         .truncate()
                         .child(format!(
-                            "Reading {} — {} of {} collections, {} relations found",
+                            "Reading {} — {} of {} collections, {} relations found{}",
                             run.collection,
                             format_number(run.done as u64 + 1),
                             format_number(run.total as u64),
                             format_number(run.found as u64),
+                            if run.failed > 0 {
+                                format!(", {} could not be read", run.failed)
+                            } else {
+                                String::new()
+                            },
                         )),
                 )
                 .child(Button::new("cancel-inference").ghost().xsmall().label("Stop").on_click({
@@ -330,7 +339,11 @@ impl DatabaseView {
                         .min_w(px(0.0))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(if known == 0 {
+                        // What the last search could not do is worth more than what it did: a
+                        // small number with no explanation is the thing that wastes time.
+                        .child(if let Some(summary) = last_run {
+                            summary
+                        } else if known == 0 {
                             "Nothing is known yet. Inferring reads a sample of every collection \
                              and confirms each guess against the data."
                                 .to_string()

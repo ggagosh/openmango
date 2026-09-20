@@ -22,8 +22,9 @@ use crate::connection::ops::stats::collection_stats_async;
 use crate::state::AppState;
 use crate::state::StatusMessage;
 use crate::state::relations::infer::{
-    Candidate as InferCandidate, InferenceRun, Inferred, PROBE_ROUNDS, best_per_field, candidates,
-    declared_relations, is_decisive, profile_reference_paths, score, should_escalate,
+    Candidate as InferCandidate, InferenceRun, InferenceSummary, Inferred, PROBE_ROUNDS,
+    best_per_field, candidates, declared_relations, is_decisive, profile_reference_paths, score,
+    should_escalate,
 };
 use crate::state::relations::lookup::{Anchor, Candidate, Intent, LookupState, ReferenceLookup};
 use crate::state::relations::references::{GROUP_PREVIEW_LIMIT, GroupState, ReferenceGroup};
@@ -266,6 +267,11 @@ const DEFAULT_SAMPLE: u64 = 1_000;
 const INFER_CONCURRENCY: usize = 4;
 const INFER_MAX_TIME: Duration = Duration::from_secs(10);
 
+/// Sampling is the one step that moves real data — megabytes of documents, not index entries —
+/// so it gets a budget of its own. Sharing the probe's ten seconds meant a large collection on a
+/// remote server timed out and contributed nothing, silently.
+const SAMPLE_MAX_TIME: Duration = Duration::from_secs(60);
+
 impl AppCommands {
     /// Work out what the fields of a collection point at, and store what the data confirms.
     ///
@@ -380,6 +386,8 @@ impl AppCommands {
         cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             let mut found = 0usize;
             let mut read = 0usize;
+            let mut failed = 0usize;
+            let mut unplaced = 0usize;
             for (index, collection) in collections.iter().enumerate() {
                 if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
@@ -390,6 +398,8 @@ impl AppCommands {
                             run.collection = collection.clone();
                             run.done = index;
                             run.found = found;
+                            run.failed = failed;
+                            run.unplaced = unplaced;
                         }
                         cx.notify();
                     });
@@ -402,12 +412,29 @@ impl AppCommands {
                     let collections = collections.clone();
                     async move { infer(&client, &database, &collection, &collections).await }
                 });
-                let Ok(Ok(inferred)) = task.await else {
-                    read += 1;
-                    continue;
+                let inferred = match task.await {
+                    Ok(Ok(inferred)) => inferred,
+                    outcome => {
+                        // A collection that cannot be read is counted and named, not skipped:
+                        // a small number with no explanation is the worst of both.
+                        if let Ok(Err(error)) = outcome {
+                            log::warn!("Relations: {database}.{collection} not read: {error}");
+                        }
+                        failed += 1;
+                        cx.update(|cx| {
+                            state.update(cx, |state, cx| {
+                                if let Some(run) = state.inference_run_mut() {
+                                    run.failed = failed;
+                                }
+                                cx.notify();
+                            });
+                        });
+                        continue;
+                    }
                 };
                 read += 1;
                 found += inferred.relations.len();
+                unplaced += inferred.unresolved.len();
 
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
@@ -422,19 +449,18 @@ impl AppCommands {
             cx.update(|cx| {
                 state.update(cx, |state, cx| {
                     let stopped = state.inference_run().is_some_and(|run| run.is_cancelled());
+                    let summary = InferenceSummary {
+                        database: database.clone(),
+                        read,
+                        total: collections.len(),
+                        found,
+                        failed,
+                        unplaced,
+                        stopped,
+                    };
                     state.set_inference_run(None);
-                    state.set_status_message(Some(StatusMessage::info(if stopped {
-                        format!(
-                            "Stopped after {read} of {} collections. {found} relations found.",
-                            collections.len()
-                        )
-                    } else {
-                        match found {
-                            0 => format!("No relations found in {database}."),
-                            1 => format!("1 relation found in {database}."),
-                            count => format!("{count} relations found in {database}."),
-                        }
-                    })));
+                    state.set_status_message(Some(StatusMessage::info(summary.line())));
+                    state.set_inference_summary(Some(summary));
                     cx.notify();
                 });
             });
@@ -463,7 +489,7 @@ async fn infer(
 ) -> crate::error::Result<Inferred> {
     let sample_size = sample_size_for(client, database, collection).await;
     let (documents, _) =
-        sample_for_schema_async(client, database, collection, sample_size, INFER_MAX_TIME).await?;
+        sample_for_schema_async(client, database, collection, sample_size, SAMPLE_MAX_TIME).await?;
     if documents.is_empty() {
         return Ok(Inferred::default());
     }
@@ -575,7 +601,7 @@ async fn confirm(client: &Client, candidate: InferCandidate, sampled: u64) -> Op
 /// A collection too new or too small to report an average gets the default; being wrong there
 /// costs one modest sample, and the clamp keeps a wrong answer from becoming a big read.
 async fn sample_size_for(client: &Client, database: &str, collection: &str) -> u64 {
-    let average = collection_stats_async(client, database, collection, INFER_MAX_TIME)
+    let average = collection_stats_async(client, database, collection, SAMPLE_MAX_TIME)
         .await
         .ok()
         .and_then(|stats| {

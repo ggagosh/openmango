@@ -346,6 +346,12 @@ pub struct InferenceRun {
     pub total: usize,
     /// Relations found so far, across every collection finished.
     pub found: usize,
+    /// Collections that could not be read. A search that quietly skips half a database and
+    /// reports a small number is worse than one that says what it could not do.
+    pub failed: usize,
+    /// Fields that held ids but matched no collection. The difference between "no references
+    /// here" and "references we could not place".
+    pub unplaced: usize,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -357,6 +363,8 @@ impl InferenceRun {
             done: 0,
             total,
             found: 0,
+            failed: 0,
+            unplaced: 0,
             cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -372,6 +380,41 @@ impl InferenceRun {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// What a finished search found, and what it could not. Kept so the database it ran against can
+/// show it rather than flashing a message that is gone before it is read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InferenceSummary {
+    pub database: String,
+    pub read: usize,
+    pub total: usize,
+    pub found: usize,
+    pub failed: usize,
+    pub unplaced: usize,
+    pub stopped: bool,
+}
+
+impl InferenceSummary {
+    /// One line saying what happened, including the parts that did not work.
+    pub fn line(&self) -> String {
+        let mut parts = vec![match self.found {
+            0 => "No relations found".to_string(),
+            1 => "1 relation found".to_string(),
+            count => format!("{count} relations found"),
+        }];
+        parts.push(format!("{} of {} collections read", self.read, self.total));
+        if self.failed > 0 {
+            parts.push(format!("{} could not be read", self.failed));
+        }
+        if self.unplaced > 0 {
+            parts.push(format!("{} fields held ids that matched nothing", self.unplaced));
+        }
+        if self.stopped {
+            parts.push("stopped early".to_string());
+        }
+        format!("{}.", parts.join(" · "))
     }
 }
 
@@ -699,5 +742,87 @@ mod tests {
         assert_eq!(kept.len(), 2, "one target per field, plus the other field");
         let users = kept.iter().find(|r| r.source.path == "userId").unwrap();
         assert_eq!(users.target.collection, "users");
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn a_summary_says_what_it_could_not_do() {
+        let clean = InferenceSummary {
+            database: "shop".into(),
+            read: 58,
+            total: 58,
+            found: 67,
+            failed: 0,
+            unplaced: 0,
+            stopped: false,
+        };
+        assert_eq!(clean.line(), "67 relations found · 58 of 58 collections read.");
+
+        // The number on its own is the misleading part: a small count next to a dozen
+        // unreadable collections means something different from the same count next to none.
+        let partial = InferenceSummary {
+            read: 46,
+            found: 15,
+            failed: 12,
+            unplaced: 9,
+            stopped: true,
+            ..clean.clone()
+        };
+        assert_eq!(
+            partial.line(),
+            "15 relations found · 46 of 58 collections read · 12 could not be read · \
+             9 fields held ids that matched nothing · stopped early."
+        );
+
+        let empty =
+            InferenceSummary { found: 0, failed: 0, unplaced: 0, stopped: false, ..clean.clone() };
+        assert!(empty.line().starts_with("No relations found"));
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use mongodb::bson::{doc, oid::ObjectId};
+
+    use super::*;
+
+    /// A document shaped like a real one: references at the top level, inside arrays of
+    /// subdocuments, inside arrays *within* those, and behind a plain nested object.
+    #[test]
+    fn every_shape_a_reference_hides_in_is_profiled() {
+        let user = || ObjectId::new();
+        let documents = vec![doc! {
+            "_id": user(),
+            "createdBy": user(),
+            "needToNotified": [user(), user()],
+            "comments": [
+                { "_id": user(), "user": user(), "mentionedUsers": [user()], "text": "hi" },
+            ],
+            "surveyWindows": [ { "completedBy": user(), "renewalDate": "2026-01-01" } ],
+            "crewComment": { "user": user(), "message": "x" },
+            "workHoursSubmissions": [
+                { "reviewedBy": user(), "comments": [ { "user": user() } ] },
+            ],
+        }];
+
+        let found: Vec<String> =
+            profile_reference_paths(&documents).into_iter().map(|p| p.path).collect();
+
+        for expected in [
+            "createdBy",
+            "needToNotified[]",
+            "comments[].user",
+            "comments[].mentionedUsers[]",
+            "surveyWindows[].completedBy",
+            "crewComment.user",
+            "workHoursSubmissions[].reviewedBy",
+            "workHoursSubmissions[].comments[].user",
+        ] {
+            assert!(found.contains(&expected.to_string()), "missed {expected}: found {found:?}");
+        }
     }
 }
