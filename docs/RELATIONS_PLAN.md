@@ -291,21 +291,29 @@ Ordered by dependency; each step leaves the app working.
 5. **Surfaces** — References tab done: `TabKey::References`, "Find references" on a document
    (`shift-f12`), one group per incoming relation loading independently, unindexed groups held
    behind "Run anyway" on production and protected connections, "Open as filter" per group.
-   Relations review done: the database tab's Relations section opens the whole list, grouped by
-   what each relation points at, most-referenced first, each row showing provenance, confidence
-   and evidence age, with accept / reject / restore.
-   **Left:** the "N relations found" badge, "Open all" for arrays, and the integrity report
-   (orphans, drift, unindexed reference fields).
+   A review *list* was built and then cut: two surfaces for one subject, and a table is a poor
+   way to see a graph. Reading and deciding both belong on the diagram.
+   **Left:** accept / reject on the diagram's nodes, the "N relations found" badge, "Open all"
+   for arrays, and the integrity report (orphans, drift, unindexed reference fields).
 6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
    compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
-7. **Independent consumers** — code imports (Mongoose `ref`, Prisma, `$jsonSchema`), codegen
-   (TypeScript / Zod / Rust). The diagram arrived early and focused: one collection with what
-   points at it and what it points at, three columns and elbow connectors, clicking a neighbour
-   to walk the graph. No layout crate — a whole-database view would need one, and would be a
-   hairball at 58 collections. Last because nothing depends
-   on them and they share no code with steps 1–6.
+7. **The canvas** — moved up to next, because it is what the feature is *for*. Today's diagram
+   is three columns of elbow connectors around one collection: readable, cheap, and not a canvas.
+   A real one needs three things it does not have:
+   - **Layout.** 58 nodes and 116 edges need layering and crossing reduction or it is a hairball.
+     Either a Sugiyama pass written here or a crate (`dagre`, `layout-rs`, `rust-sugiyama`).
+   - **A drawing surface.** `gpui::canvas` with `Path` + `paint_path` draws curved edges. GPUI
+     has **no element transform**, so zoom is applied to computed coordinates, not to a
+     container — that decides the whole design.
+   - **Performance by construction.** Layout cached until the graph changes, paint culled to the
+     viewport. Not "fast on a small database by accident".
+   The focused three-column view stays as the one-collection mode inside it.
 
-New crates: none until step 7's layout crate.
+8. **Independent consumers** — codegen (TypeScript / Zod / Rust), and code imports (Mongoose
+   `ref`, Prisma, `$jsonSchema`) if wanted: a generic "point at a repo" reader, not a
+   schema-specific one. Last because nothing depends on them.
+
+New crates: none so far. A layout crate is the first candidate, for the canvas.
 
 ## Sources
 
