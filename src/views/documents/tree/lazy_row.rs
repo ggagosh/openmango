@@ -9,9 +9,9 @@ use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};
-use crate::state::SessionDocument;
 use crate::state::relations::path_from_segments;
 use crate::state::relations::resolve::{Reference, reference_at};
+use crate::state::{AppState, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::CollectionView;
 use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down};
@@ -115,6 +115,9 @@ pub fn render_lazy_readonly_row(
     meta: &LazyRowMeta,
     _selected: bool,
     view_entity: Entity<CollectionView>,
+    // Where a followed id starts from. Passed in, not read off `view_entity`: rows are built
+    // while the view is being updated, and reading it then panics.
+    link_base: Option<&(Entity<AppState>, SessionKey)>,
     cx: &App,
 ) -> AnyElement {
     let node_id = row.node_id.clone();
@@ -193,15 +196,13 @@ pub fn render_lazy_readonly_row(
             Some(found) => {
                 // Followed, never learned from: a pipeline's output path is not a field of the
                 // collection, so it has nothing to teach the graph.
-                let link = view_entity.read(cx).view_model.current_session().map(|session| {
-                    ReferenceLink {
-                        state: view_entity.read(cx).state.clone(),
-                        session,
-                        document: found.document.clone(),
-                        path: found.path.clone(),
-                        reference: found.reference.clone(),
-                        derived: true,
-                    }
+                let link = link_base.map(|(state, session)| ReferenceLink {
+                    state: state.clone(),
+                    session: session.clone(),
+                    document: found.document.clone(),
+                    path: found.path.clone(),
+                    reference: found.reference.clone(),
+                    derived: true,
                 });
                 render_value_column(&value_label, value_color, link)
             }
