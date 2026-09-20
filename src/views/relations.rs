@@ -5,6 +5,11 @@
 //! table. Collections are cards listing their reference fields; each edge leaves the row of the
 //! field that holds it and arrives at the header of the collection it points at.
 //!
+//! The picture is dense by nature, so reading it is done by asking. Pointing at a card lights
+//! everything joined to it; pointing at a field lights its one line and the collection at the
+//! far end. A click holds that until the next click or Escape, which is what lets a line be
+//! followed across the canvas without losing it on the way.
+//!
 //! Built to stay fast however large the database is:
 //! - the layout is computed only when the graph's fingerprint moves, never per frame;
 //! - cards outside the window are not built and edges outside it are not tessellated;
@@ -17,10 +22,10 @@
 //! needs, and anything eased on top of that would lag the thing being dragged.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -29,11 +34,10 @@ use gpui_kit::*;
 use crate::components::{
     Button, ConnectionIdentity, connection_identity_tags, request_preview_collection,
 };
-use crate::keyboard::{RelationsFit, RelationsZoomIn, RelationsZoomOut};
+use crate::keyboard::{RelationsClearFocus, RelationsFit, RelationsZoomIn, RelationsZoomOut};
 use crate::state::relations::layout::{
-    self, ARROW, CARD_WIDTH, CanvasLayout, CanvasNode, FIELD_HEIGHT, HEADER_HEIGHT,
+    self, ARROW, CARD_WIDTH, CanvasEdge, CanvasLayout, CanvasNode, FIELD_HEIGHT, HEADER_HEIGHT,
 };
-use crate::state::relations::{Origin, Relation, Status};
 use crate::state::{AppCommands, AppState, DatabaseKey};
 use crate::theme::{borders, fonts, islands, spacing};
 
@@ -49,16 +53,40 @@ const FIELD_TEXT_ZOOM: f32 = 0.5;
 const NAME_TEXT_ZOOM: f32 = 0.3;
 /// A press that travels less than this is a click, not a drag.
 const DRAG_SLOP: f32 = 3.0;
-const INSPECTOR_WIDTH: f32 = 340.0;
 /// Edges are background until asked about: most of them are not the one being read.
 const EDGE_REST_ALPHA: f32 = 0.4;
-/// With a collection in focus, the edges that do not touch it step back further.
+/// With something in focus, the edges that are not part of it step back further.
 const EDGE_DIMMED_ALPHA: f32 = 0.1;
 
 struct Drag {
     from: Point<Pixels>,
     pan: Point<Pixels>,
     moved: bool,
+}
+
+/// What is being asked about: a whole collection, or one of its reference fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Card(usize),
+    /// A card, and the index of one of its fields.
+    Field(usize, usize),
+}
+
+impl Focus {
+    fn lights(self, edge: &CanvasEdge) -> bool {
+        match self {
+            Focus::Card(card) => edge.source == card || edge.target == card,
+            Focus::Field(card, field) => edge.source == card && edge.field == field,
+        }
+    }
+}
+
+/// A focus that was clicked to hold it. By name, so it survives the layout being recomputed
+/// under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
+    collection: String,
+    field: Option<String>,
 }
 
 pub struct RelationsView {
@@ -76,10 +104,9 @@ pub struct RelationsView {
     /// Where the surface was last painted. Mouse events arrive in window coordinates.
     surface: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<Drag>,
-    hovered: Option<usize>,
-    /// By name, so it survives the layout being recomputed under it.
-    selected: Option<String>,
-    focus: FocusHandle,
+    hovered: Option<Focus>,
+    held: Option<Held>,
+    focus_handle: FocusHandle,
     _subscription: Subscription,
 }
 
@@ -97,8 +124,8 @@ impl RelationsView {
             surface: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             hovered: None,
-            selected: None,
-            focus: cx.focus_handle(),
+            held: None,
+            focus_handle: cx.focus_handle(),
             _subscription: subscription,
         }
     }
@@ -111,7 +138,7 @@ impl RelationsView {
             self.fitted = false;
             self.drag = None;
             self.hovered = None;
-            self.selected = None;
+            self.held = None;
         }
         let graph = self.state.read(cx).relations();
         let fingerprint = layout::fingerprint(graph, &key.database);
@@ -143,35 +170,53 @@ impl RelationsView {
         self.zoom_about(point(size.width / 2.0, size.height / 2.0), factor);
     }
 
-    fn centre_on(&mut self, node: &CanvasNode) {
-        let size = self.surface.get().size;
-        self.pan = point(
-            size.width / 2.0 - px((node.x + CARD_WIDTH / 2.0) * self.zoom),
-            size.height / 2.0 - px((node.y + node.height / 2.0) * self.zoom),
-        );
-    }
-
     /// A window position, measured from the surface's corner.
     fn local(&self, position: Point<Pixels>) -> Point<Pixels> {
         position - self.surface.get().origin
     }
 
-    /// The card under a surface position. Later cards are never on top of earlier ones, since
-    /// the layout does not overlap them, so the first hit is the only hit.
-    fn node_at(&self, local: Point<Pixels>) -> Option<usize> {
+    /// What a surface position is pointing at. Cards never overlap, so the first hit is the
+    /// only hit. Rows count only while they are drawn: zoomed out past that, a card is one
+    /// target, since nobody can aim at a row they cannot see.
+    fn focus_at(&self, local: Point<Pixels>) -> Option<Focus> {
         let x = f32::from(local.x - self.pan.x) / self.zoom;
         let y = f32::from(local.y - self.pan.y) / self.zoom;
-        self.layout.nodes.iter().position(|node| {
+        let (card, node) = self.layout.nodes.iter().enumerate().find(|(_, node)| {
             x >= node.x && x <= node.x + CARD_WIDTH && y >= node.y && y <= node.y + node.height
+        })?;
+        let row = (y - node.y - HEADER_HEIGHT) / FIELD_HEIGHT;
+        if row < 0.0 || self.zoom < FIELD_TEXT_ZOOM {
+            return Some(Focus::Card(card));
+        }
+        Some(match node.fields.get(row as usize) {
+            Some(_) => Focus::Field(card, row as usize),
+            None => Focus::Card(card),
         })
     }
 
-    fn select(&mut self, collection: &str) {
-        self.selected = Some(collection.to_string());
-        if let Some(index) = self.layout.index_of(collection) {
-            let node = self.layout.nodes[index].clone();
-            self.centre_on(&node);
+    fn hold(&self, focus: Focus) -> Held {
+        let (Focus::Card(card) | Focus::Field(card, _)) = focus;
+        let node = &self.layout.nodes[card];
+        Held {
+            collection: node.collection.clone(),
+            field: match focus {
+                Focus::Card(_) => None,
+                Focus::Field(_, field) => Some(node.fields[field].path.clone()),
+            },
         }
+    }
+
+    /// The held focus in terms of the current layout, if what it names is still there.
+    fn held_focus(&self) -> Option<Focus> {
+        let held = self.held.as_ref()?;
+        let card = self.layout.index_of(&held.collection)?;
+        Some(match &held.field {
+            None => Focus::Card(card),
+            Some(path) => {
+                let fields = &self.layout.nodes[card].fields;
+                Focus::Field(card, fields.iter().position(|field| &field.path == path)?)
+            }
+        })
     }
 
     fn on_mouse_down(
@@ -180,15 +225,19 @@ impl RelationsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus.focus(window, cx);
-        let local = self.local(event.position);
-        match self.node_at(local) {
-            Some(index) => {
-                let collection = self.layout.nodes[index].collection.clone();
+        self.focus_handle.focus(window, cx);
+        match self.focus_at(self.local(event.position)) {
+            Some(focus) => {
+                let held = self.hold(focus);
                 if event.click_count >= 2 {
-                    self.open_collection(&collection, window, cx);
+                    // The first click of the pair already held it; the second must not let go.
+                    self.open_collection(&held.collection.clone(), window, cx);
+                    self.held = Some(held);
+                } else if self.held.as_ref() == Some(&held) {
+                    self.held = None;
+                } else {
+                    self.held = Some(held);
                 }
-                self.selected = Some(collection);
             }
             None => self.drag = Some(Drag { from: event.position, pan: self.pan, moved: false }),
         }
@@ -209,7 +258,7 @@ impl RelationsView {
             cx.notify();
             return;
         }
-        let hovered = self.node_at(self.local(event.position));
+        let hovered = self.focus_at(self.local(event.position));
         if hovered != self.hovered {
             self.hovered = hovered;
             cx.notify();
@@ -220,8 +269,8 @@ impl RelationsView {
         if let Some(drag) = self.drag.take()
             && !drag.moved
         {
-            // A click on empty canvas lets go of whatever was selected.
-            self.selected = None;
+            // A click on empty canvas lets go of whatever was held.
+            self.held = None;
         }
         cx.notify();
     }
@@ -259,28 +308,21 @@ impl Render for RelationsView {
         self.sync(&key, cx);
 
         let appearance = self.state.read(cx).settings.appearance.clone();
-        let layout = self.layout.clone();
-        let selected = self.selected.as_deref().and_then(|name| layout.index_of(name));
-        // Hovering previews what selecting would show, so the two never fight for the picture.
-        let focus = self.hovered.or(selected);
+        // What is held wins over what is hovered. Holding exists so a line can be followed to
+        // its far end, and the pointer crosses a dozen other cards on the way there.
+        let focus = self.held_focus().or(self.hovered);
 
-        let body = if layout.nodes.is_empty() {
+        let body = if self.layout.nodes.is_empty() {
             self.render_empty(&key, cx)
         } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(self.render_surface(focus, selected, cx))
-                .children(selected.map(|index| self.render_inspector(&key, index, cx)))
-                .into_any_element()
+            self.render_surface(focus, cx).into_any_element()
         };
 
         div()
             .size_full()
             .flex()
             .flex_col()
-            .track_focus(&self.focus)
+            .track_focus(&self.focus_handle)
             .bg(islands::content_bg(&appearance, cx))
             .on_action(cx.listener(|this, _: &RelationsZoomIn, _window, cx| {
                 this.zoom_about_centre(ZOOM_STEP);
@@ -294,23 +336,61 @@ impl Render for RelationsView {
                 this.fit();
                 cx.notify();
             }))
-            .child(self.render_toolbar(&key, &appearance, cx))
+            .on_action(cx.listener(|this, _: &RelationsClearFocus, _window, cx| {
+                this.held = None;
+                cx.notify();
+            }))
+            .child(self.render_toolbar(&key, focus, &appearance, cx))
             .child(body)
             .into_any_element()
     }
 }
 
 impl RelationsView {
+    /// What the canvas is showing, in words. With something in focus it names it, which is all
+    /// a side panel would have added: the field, and where it points.
+    fn describe(&self, focus: Option<Focus>) -> String {
+        let layout = &self.layout;
+        match focus {
+            None => format!(
+                "{} collections · {} relations · point at a collection or a field to trace it, \
+                 click to hold",
+                layout.nodes.len(),
+                layout.edges.len()
+            ),
+            Some(Focus::Card(card)) => {
+                let node = &layout.nodes[card];
+                let out = layout.edges.iter().filter(|edge| edge.source == card).count();
+                format!("{} · points at {out} · pointed at by {}", node.collection, node.incoming)
+            }
+            Some(Focus::Field(card, field)) => {
+                let node = &layout.nodes[card];
+                let path = &node.fields[field];
+                let mut targets: Vec<&str> = layout
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.source == card && edge.field == field)
+                    .map(|edge| edge.to.collection.as_str())
+                    .collect();
+                if path.to_self {
+                    targets.push(&node.collection);
+                }
+                format!("{}.{} → {}", node.collection, path.path, targets.join(", "))
+            }
+        }
+    }
+
     fn render_toolbar(
         &self,
         key: &DatabaseKey,
+        focus: Option<Focus>,
         appearance: &crate::state::settings::AppearanceSettings,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.read(cx);
         let identity = state.connection_by_id(key.connection_id).map(ConnectionIdentity::from);
         let run = state.inference_run().filter(|run| run.database == key.database).cloned();
-        let guesses = self.layout.edges.iter().filter(|edge| !edge.accepted).count();
+        let has_picture = !self.layout.nodes.is_empty();
         let subtitle = match &run {
             Some(run) => format!(
                 "Reading {} — {} of {} collections",
@@ -318,18 +398,9 @@ impl RelationsView {
                 run.done + 1,
                 run.total
             ),
-            None if self.layout.nodes.is_empty() => "Nothing is known yet".to_string(),
-            None => format!(
-                "{} collections · {} relations{}",
-                self.layout.nodes.len(),
-                self.layout.edges.len(),
-                match guesses {
-                    0 => String::new(),
-                    count => format!(" · {count} not reviewed"),
-                }
-            ),
+            None if !has_picture => "Nothing is known yet".to_string(),
+            None => self.describe(focus),
         };
-        let has_picture = !self.layout.nodes.is_empty();
 
         div()
             .flex()
@@ -369,7 +440,15 @@ impl RelationsView {
                             .items_center()
                             .gap(spacing::xs())
                             .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                            // In the mono face once it names a field, so paths read as paths.
+                            .when(focus.is_some() && run.is_none(), |line| {
+                                line.font_family(fonts::mono())
+                            })
+                            .text_color(if focus.is_some() && run.is_none() {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
                             .children(run.is_some().then(|| Spinner::new().xsmall()))
                             .child(div().truncate().child(subtitle)),
                     ),
@@ -434,18 +513,14 @@ impl RelationsView {
             .items_center()
             .justify_center()
             .gap(spacing::sm())
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("Nothing is known about how {}'s collections relate.", key.database)),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Inferring reads a sample of every collection and confirms each guess against the data."),
-            )
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(format!(
+                "Nothing is known about how {}'s collections relate.",
+                key.database
+            )))
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                "Inferring reads a sample of every collection and confirms each guess against \
+                 the data.",
+            ))
             .child(
                 Button::new("relations-infer")
                     .primary()
@@ -463,19 +538,31 @@ impl RelationsView {
             .into_any_element()
     }
 
-    fn render_surface(
-        &self,
-        focus: Option<usize>,
-        selected: Option<usize>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_surface(&self, focus: Option<Focus>, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = self.layout.clone();
         let (pan, zoom) = (self.pan, self.zoom);
         let size = self.surface.get().size;
         // Before the first paint there is no size to cull against, so nothing is culled.
         let window_known = size.width > px(0.0);
         let viewport = Bounds::new(Point::default(), size);
-        let beside = focus.map(|index| layout.neighbours(index)).unwrap_or_default();
+
+        // Both ends of everything in focus: the rows the lit edges leave from, and the cards
+        // they arrive at. Lighting the far end is what answers "where does this go".
+        let mut lit_rows: BTreeSet<(usize, usize)> = BTreeSet::new();
+        let mut lit_cards: BTreeSet<usize> = BTreeSet::new();
+        if let Some(focus) = focus {
+            for edge in layout.edges.iter().filter(|edge| focus.lights(edge)) {
+                lit_rows.insert((edge.source, edge.field));
+                lit_cards.extend([edge.source, edge.target]);
+            }
+            match focus {
+                Focus::Card(card) => lit_cards.insert(card),
+                // A field that points into its own collection has no edge to find it by.
+                Focus::Field(card, field) => {
+                    lit_rows.insert((card, field)) | lit_cards.insert(card)
+                }
+            };
+        }
 
         let cards: Vec<AnyElement> = layout
             .nodes
@@ -489,11 +576,21 @@ impl RelationsView {
                 (!window_known || viewport.intersects(&bounds)).then(|| {
                     let emphasis = match focus {
                         None => Emphasis::Rest,
-                        Some(focus) if focus == index => Emphasis::Focus,
-                        Some(_) if beside.contains(&index) => Emphasis::Beside,
+                        Some(Focus::Card(card)) if card == index => Emphasis::Asked,
+                        // Asking about a field is asking where it goes, so the far end is the
+                        // answer and gets the accent; the card the field sits on is context.
+                        Some(Focus::Field(card, _))
+                            if card != index && lit_cards.contains(&index) =>
+                        {
+                            Emphasis::Asked
+                        }
+                        Some(_) if lit_cards.contains(&index) => Emphasis::Joined,
                         Some(_) => Emphasis::Dimmed,
                     };
-                    card(node, bounds, zoom, emphasis, selected == Some(index), cx)
+                    let rows: Vec<bool> = (0..node.fields.len())
+                        .map(|field| lit_rows.contains(&(index, field)))
+                        .collect();
+                    card(node, bounds, zoom, emphasis, &rows, cx)
                 })
             })
             .collect();
@@ -514,7 +611,7 @@ impl RelationsView {
                                 if !view.fitted {
                                     view.fitted = true;
                                     view.fit();
-                                    view.focus.focus(window, cx);
+                                    view.focus_handle.focus(window, cx);
                                     cx.notify();
                                 }
                             });
@@ -526,7 +623,7 @@ impl RelationsView {
                 let colors = EdgeColors {
                     rest: cx.theme().muted_foreground.opacity(EDGE_REST_ALPHA),
                     dimmed: cx.theme().muted_foreground.opacity(EDGE_DIMMED_ALPHA),
-                    focus: cx.theme().primary,
+                    lit: cx.theme().primary,
                 };
                 move |bounds, (), window, _cx| {
                     paint_edges(&layout, bounds, pan, zoom, focus, colors, window);
@@ -542,8 +639,8 @@ impl RelationsView {
             .id("relation-canvas")
             .relative()
             .flex_1()
-            .min_w(px(0.0))
-            .h_full()
+            .min_h_0()
+            .w_full()
             .overflow_hidden()
             .when(self.drag.is_some(), |surface| surface.cursor_grabbing())
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -570,227 +667,6 @@ impl RelationsView {
             .child(edges)
             .children(cards)
     }
-
-    /// Everything known about the selected collection's relations, and the place to review
-    /// them. Rejected ones are listed too, since this is the only place to take one back.
-    fn render_inspector(
-        &self,
-        key: &DatabaseKey,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let collection = self.layout.nodes[index].collection.clone();
-        let graph = self.state.read(cx).relations();
-        let mut outgoing: Vec<Relation> = Vec::new();
-        let mut incoming: Vec<Relation> = Vec::new();
-        for relation in graph.relations() {
-            if relation.source.is_in(&key.database, &collection) {
-                outgoing.push(relation.clone());
-            } else if relation.target.is_in(&key.database, &collection) {
-                incoming.push(relation.clone());
-            }
-        }
-        let order = |relation: &Relation| {
-            (
-                relation.status == Status::Rejected,
-                relation.source.collection.clone(),
-                relation.source.path.clone(),
-            )
-        };
-        outgoing.sort_by_key(order);
-        incoming.sort_by_key(order);
-
-        let section = |title: String,
-                       relations: Vec<Relation>,
-                       outward: bool,
-                       cx: &mut Context<Self>| {
-            let rows: Vec<AnyElement> =
-                relations.iter().map(|relation| self.relation_row(relation, outward, cx)).collect();
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .px(spacing::md())
-                        .pt(spacing::md())
-                        .pb(spacing::xs())
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(title),
-                )
-                .children(rows)
-        };
-
-        div()
-            .w(px(INSPECTOR_WIDTH))
-            .flex_none()
-            .h_full()
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .px(spacing::md())
-                    .py(spacing::sm())
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_sm()
-                            .font_family(fonts::mono())
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(collection.clone()),
-                    )
-                    .child(Button::new("inspector-open").ghost().xsmall().label("Open").on_click(
-                        cx.listener({
-                            let collection = collection.clone();
-                            move |this, _, window, cx| this.open_collection(&collection, window, cx)
-                        }),
-                    ))
-                    .child(
-                        Button::new("inspector-close")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Close))
-                            .tooltip("Close")
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.selected = None;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .when(!outgoing.is_empty(), |panel| {
-                        let title = format!("Points at · {}", outgoing.len());
-                        panel.child(section(title, outgoing, true, cx))
-                    })
-                    .when(!incoming.is_empty(), |panel| {
-                        let title = format!("Pointed at by · {}", incoming.len());
-                        panel.child(section(title, incoming, false, cx))
-                    })
-                    .child(div().h(spacing::lg())),
-            )
-            .into_any_element()
-    }
-
-    /// One relation of the selected collection: the field, the collection at the other end,
-    /// what the belief rests on, and the decision.
-    fn relation_row(
-        &self,
-        relation: &Relation,
-        outward: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let rejected = relation.status == Status::Rejected;
-        let other = if outward { &relation.target.collection } else { &relation.source.collection };
-        let field = if outward {
-            relation.source.path.clone()
-        } else {
-            format!("{}.{}", relation.source.collection, relation.source.path)
-        };
-        let identity = format!(
-            "{}.{}>{}",
-            relation.source.collection, relation.source.path, relation.target.collection
-        );
-        let decide = |label: &'static str, status: Status| {
-            let state = self.state.clone();
-            let (source, target) = (relation.source.clone(), relation.target.clone());
-            Button::new(SharedString::from(format!("{label}:{identity}")))
-                .ghost()
-                .xsmall()
-                .label(label)
-                .on_click(move |_, _window, cx| {
-                    state.update(cx, |state, cx| {
-                        state.set_relation_status(&source, &target, status);
-                        cx.notify();
-                    });
-                })
-        };
-
-        div()
-            .flex()
-            .items_center()
-            .gap(spacing::sm())
-            .px(spacing::md())
-            .py(spacing::xs())
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(1.0))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family(fonts::mono())
-                            .truncate()
-                            .when(rejected, |text| {
-                                text.line_through().text_color(cx.theme().muted_foreground)
-                            })
-                            .child(field),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("walk:{identity}")))
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .cursor_pointer()
-                            .hover(|text| text.text_color(cx.theme().foreground))
-                            .on_click(cx.listener({
-                                let other = other.clone();
-                                move |this, _, _window, cx| {
-                                    this.select(&other);
-                                    cx.notify();
-                                }
-                            }))
-                            .child(
-                                Icon::new(if outward {
-                                    IconName::ArrowRight
-                                } else {
-                                    IconName::ArrowLeft
-                                })
-                                .xsmall(),
-                            )
-                            .child(
-                                div().truncate().font_family(fonts::mono()).child(other.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .truncate()
-                            .child(basis(relation)),
-                    ),
-            )
-            .when(relation.status == Status::Candidate, |row| {
-                row.child(decide("Accept", Status::Accepted))
-            })
-            .child(if rejected {
-                decide("Restore", Status::Accepted)
-            } else {
-                decide("Reject", Status::Rejected)
-            })
-            .into_any_element()
-    }
 }
 
 /// The pan and zoom that show a whole layout, centred, with a margin around it.
@@ -815,61 +691,38 @@ fn zoom_about(
     (pan, next)
 }
 
-/// What a belief rests on, in words: where it came from, how sure, and on how much.
-fn basis(relation: &Relation) -> String {
-    let origin = match relation.origin {
-        Origin::Inferred => "Sampled",
-        Origin::Probe => "Followed",
-        Origin::CodeImport => "From code",
-        Origin::DbRef => "Stated by the data",
-        Origin::User => "Decided",
-    };
-    let status = match relation.status {
-        Status::Rejected => "rejected",
-        Status::Accepted => "confirmed",
-        Status::Candidate => "a guess",
-    };
-    match &relation.evidence {
-        Some(evidence) => format!(
-            "{origin} · {status} · {} of {} ids · {}%",
-            evidence.hits,
-            evidence.probed,
-            (relation.confidence * 100.0).round()
-        ),
-        None => format!("{origin} · {status}"),
-    }
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Emphasis {
     /// Nothing is in focus, so everything reads normally.
     Rest,
-    Focus,
-    /// Joined to whatever is in focus.
-    Beside,
+    /// The answer to what was asked: the card pointed at, or the far end of a field's line.
+    Asked,
+    /// Part of what is lit, as context.
+    Joined,
     Dimmed,
 }
 
 /// One collection. Every size is the world size times the zoom, since nothing scales for us.
+/// `lit` says, per field, whether its row is part of what is in focus.
 fn card(
     node: &CanvasNode,
     bounds: Bounds<Pixels>,
     zoom: f32,
     emphasis: Emphasis,
-    selected: bool,
+    lit: &[bool],
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
     let border = match emphasis {
-        Emphasis::Focus => theme.primary,
-        _ if selected => theme.primary,
-        Emphasis::Beside => theme.muted_foreground,
+        Emphasis::Asked => theme.primary,
+        Emphasis::Joined => theme.muted_foreground,
         Emphasis::Rest | Emphasis::Dimmed => theme.border,
     };
     // Dimming is done with colour rather than opacity: a translucent card would show the edges
     // that run beneath it, which is the opposite of stepping back.
     let (name_color, field_color) = match emphasis {
         Emphasis::Dimmed => (theme.muted_foreground, theme.muted_foreground.opacity(0.6)),
+        Emphasis::Asked => (theme.primary, theme.muted_foreground),
         _ => (theme.foreground, theme.muted_foreground),
     };
     let pad = px(10.0 * zoom);
@@ -924,6 +777,7 @@ fn card(
             // thirty of them the error adds up to a row: the card ends before its fields do, and
             // an edge no longer leaves from the row it belongs to.
             card.children(node.fields.iter().enumerate().map(|(row, field)| {
+                let is_lit = lit.get(row).copied().unwrap_or(false);
                 div()
                     .absolute()
                     .left_0()
@@ -936,7 +790,8 @@ fn card(
                     .gap(px(6.0 * zoom))
                     .text_size(px(11.0 * zoom))
                     .font_family(fonts::mono())
-                    .text_color(field_color)
+                    .text_color(if is_lit { theme.foreground } else { field_color })
+                    .when(is_lit, |row| row.bg(theme.list_active))
                     .child(div().flex_1().min_w(px(0.0)).truncate().child(field.path.clone()))
                     .children(field.to_self.then(|| div().flex_none().child("self")))
             }))
@@ -948,7 +803,7 @@ fn card(
 struct EdgeColors {
     rest: Hsla,
     dimmed: Hsla,
-    focus: Hsla,
+    lit: Hsla,
 }
 
 /// Every edge that crosses the window, along the path the layout routed for it. The ones in
@@ -958,7 +813,7 @@ fn paint_edges(
     bounds: Bounds<Pixels>,
     pan: Point<Pixels>,
     zoom: f32,
-    focus: Option<usize>,
+    focus: Option<Focus>,
     colors: EdgeColors,
     window: &mut Window,
 ) {
@@ -967,10 +822,10 @@ fn paint_edges(
     let width = px((1.5 * zoom).clamp(1.0, 2.0));
     let head = px(ARROW * zoom);
 
-    for in_focus in [false, true] {
+    for lit_pass in [false, true] {
         for edge in &layout.edges {
-            let touches = focus.is_some_and(|node| edge.source == node || edge.target == node);
-            if touches != in_focus {
+            let lit = focus.is_some_and(|focus| focus.lights(edge));
+            if lit != lit_pass {
                 continue;
             }
             let path = &edge.path;
@@ -982,18 +837,12 @@ fn paint_edges(
                 continue;
             }
 
-            let color = match (focus, touches) {
+            let color = match (focus, lit) {
                 (None, _) => colors.rest,
-                (Some(_), true) => colors.focus,
+                (Some(_), true) => colors.lit,
                 (Some(_), false) => colors.dimmed,
             };
-            let mut curve = PathBuilder::stroke(width);
-            // Dashed means unreviewed, but only on the edges in focus. Straight after inference
-            // nearly every edge is a guess, so dashing them all would say nothing, and a dash is
-            // the one costly thing here: each is a split of the measured curve.
-            if touches && !edge.accepted {
-                curve = curve.dash_array(&[px(5.0), px(4.0)]);
-            }
+            let mut curve = PathBuilder::stroke(if lit { width * 1.5 } else { width });
             curve.move_to(to_screen(path.start));
             for [bend_a, bend_b, to] in &path.segments {
                 curve.cubic_bezier_to(to_screen(*to), to_screen(*bend_a), to_screen(*bend_b));

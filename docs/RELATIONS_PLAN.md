@@ -314,12 +314,20 @@ Ordered by dependency; each step leaves the app working.
    - **Performance by construction:** layout cached on the graph's fingerprint; cards and edges
      culled to the window; cards carry no listeners (the surface hit-tests the layout); text is
      not laid out below a legible zoom; dashes, the one costly stroke, only on edges in focus.
-   - Pan by drag or scroll, zoom by pinch / cmd-scroll / `=` `-` `0`, hover or select to focus a
-     collection and its edges, double-click to open it, and an inspector to accept, reject or
-     restore each relation and walk to the other end.
+   - Pan by drag or scroll, zoom by pinch / cmd-scroll / `=` `-` `0`. Point at a collection to
+     light everything joined to it, or at a field to light its one line and the collection at
+     the far end; click to hold that, click again or Escape to let go. Held beats hovered, so a
+     line can be followed across the canvas. The toolbar names what is lit. Double-click opens
+     the collection.
+   - No review panel. An accept / reject inspector was built and removed: a relation here is
+     what the data says, confirmed by probing, so there was nothing for a person to rule on.
+     `Status` stays in the model because navigation and older files use it.
+   - A rank too tall to read folds into columns whose edges share a bus (junction nodes in the
+     layout graph), in both directions: many sources into a hub, or one collection out to many
+     lookups. The columns still step diagonally rather than sitting level, because the engine
+     places each junction at the end of the neighbouring rank.
    **Left in this tab:** the integrity report (orphans, drift, unindexed reference fields) and
-   Mermaid / DBML export. Not done: dragging cards, and bundling the edges of a hub with dozens
-   of pure sources into one bus (today that is one very tall rank).
+   Mermaid / DBML export. Not done: dragging cards, and levelling the columns of a folded rank.
 
 8. **Independent consumers** — codegen (TypeScript / Zod / Rust), and code imports (Mongoose
    `ref`, Prisma, `$jsonSchema`) if wanted: a generic "point at a repo" reader, not a

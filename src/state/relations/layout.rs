@@ -9,15 +9,12 @@
 //!
 //! - one routed trunk per pair of collections, however many fields join them, with each field's
 //!   edge leaving its own row and merging into the trunk;
+//! - a rank too tall to read folded into columns whose edges share a bus, which real databases
+//!   need because most of their collections point straight at one or two hubs;
 //! - smooth paths through the routed points, as cubic segments ready to draw.
 //!
 //! Coordinates are world units, which the canvas scales by its zoom. Nothing here knows about
 //! pixels, the window or the theme, which is what lets it be tested and cached.
-//!
-//! ponytail: a hub with dozens of collections that do nothing but point at it makes one very tall
-//! rank. Splitting that rank into columns does not help, because every long edge is given a
-//! straight lane of its own and the columns end up staircased; the fix is to bundle those edges
-//! into one shared bus. Worth doing when a real database shows the problem.
 //!
 //! ponytail: this runs where it is called, on the main thread, a few milliseconds for a real
 //! database and only when the graph changes. Move it to a background task if a database ever
@@ -39,6 +36,10 @@ const RANK_GAP: f64 = 150.0;
 const CARD_GAP: f64 = 22.0;
 /// Room between two edges' lanes where they pass a rank side by side.
 const LANE_GAP: f64 = 10.0;
+/// A rank whose cards stack taller than this is folded into columns. Without it a hub with sixty
+/// sources is one column thousands of units tall, and fitting that to a window makes every card
+/// unreadable.
+const MAX_COLUMN_HEIGHT: f64 = 1500.0;
 /// How far an edge travels straight out of a row, and into a header, before it turns. It is what
 /// makes an edge read as belonging to its row rather than to the card's corner.
 const STUB: f32 = 26.0;
@@ -88,8 +89,6 @@ pub struct CanvasEdge {
     /// Index into the source node's `fields`.
     pub field: usize,
     pub target: usize,
-    /// Reviewed or asserted, as opposed to a guess.
-    pub accepted: bool,
     pub from: FieldRef,
     pub to: FieldRef,
     pub path: EdgePath,
@@ -196,7 +195,6 @@ pub fn layout(graph: &RelationGraph, database: &str) -> CanvasLayout {
             source,
             field,
             target,
-            accepted: relation.status == Status::Accepted,
             from: relation.source.clone(),
             to: relation.target.clone(),
             path: EdgePath::default(),
@@ -221,18 +219,64 @@ pub fn layout(graph: &RelationGraph, database: &str) -> CanvasLayout {
         }
     };
     for edge in &mut edges {
-        let trunk = routes.get(&(edge.source, edge.target)).map(Vec::as_slice).unwrap_or(&[]);
-        edge.path = path_for(&nodes[edge.source], edge.field, &nodes[edge.target], trunk);
+        let between = routes.get(&(edge.source, edge.target)).map(Vec::as_slice).unwrap_or(&[]);
+        edge.path = path_for(&nodes[edge.source], edge.field, &nodes[edge.target], between);
     }
 
     normalise(nodes, edges)
 }
 
-/// The routed points of each link, source to target, once every node has its place.
+/// What lies between the two cards of each link: the points its trunk was routed through.
 type Routes = BTreeMap<(usize, usize), Vec<P>>;
 
+/// Something the layout engine places: a collection's card, or a junction where edges that
+/// share a bus join it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Stop {
+    Card(usize),
+    Junction(usize),
+}
+
+impl Stop {
+    fn id(self) -> String {
+        match self {
+            Stop::Card(index) => index.to_string(),
+            Stop::Junction(index) => format!("j{index}"),
+        }
+    }
+}
+
+/// The stops each link passes through, ends included. Most go straight from card to card.
+type Chains = BTreeMap<(usize, usize), Vec<Stop>>;
+
 /// Place the nodes and route the links between them.
+///
+/// Laid out twice when a rank comes out too tall to read: once to see the ranks, then again
+/// with the overflow folded into columns whose edges share a bus.
 fn place(nodes: &mut [CanvasNode], links: &BTreeMap<(usize, usize), usize>) -> Option<Routes> {
+    let direct: Chains = links
+        .keys()
+        .map(|&(source, target)| ((source, target), vec![Stop::Card(source), Stop::Card(target)]))
+        .collect();
+    let first = run_engine(nodes, links, &direct)?;
+    let folded = fold_tall_ranks(nodes, links, &first.0, direct);
+    let (centres, routes) = match folded {
+        Some(chains) => run_engine(nodes, links, &chains)?,
+        None => first,
+    };
+    for (node, (x, y)) in nodes.iter_mut().zip(centres) {
+        node.x = x - CARD_WIDTH / 2.0;
+        node.y = y - node.height / 2.0;
+    }
+    Some(routes)
+}
+
+/// Card centres in node order, and each link's route along its chain.
+fn run_engine(
+    nodes: &[CanvasNode],
+    links: &BTreeMap<(usize, usize), usize>,
+    chains: &Chains,
+) -> Option<(Vec<P>, Routes)> {
     let mut graph: Graph<NodeLabel, EdgeLabel, GraphLabel> =
         Graph::new(GraphOptions { multigraph: false, compound: false, ..Default::default() });
     graph.set_graph(GraphLabel {
@@ -253,30 +297,132 @@ fn place(nodes: &mut [CanvasNode], links: &BTreeMap<(usize, usize), usize>) -> O
             },
         );
     }
-    for (&(source, target), &count) in links {
-        graph.set_edge_with_label(
-            source.to_string(),
-            target.to_string(),
-            EdgeLabel { weight: count as f64, ..Default::default() },
-        );
+
+    // A hop shared by many links is one heavy edge: the heavier, the straighter it is kept,
+    // which is what makes a bus read as a bus.
+    let mut hops: BTreeMap<(Stop, Stop), f64> = BTreeMap::new();
+    for (link, chain) in chains {
+        for pair in chain.windows(2) {
+            *hops.entry((pair[0], pair[1])).or_default() += links[link] as f64;
+        }
+    }
+    for stop in hops.keys().flat_map(|&(from, to)| [from, to]) {
+        if let Stop::Junction(_) = stop {
+            graph.set_node(stop.id(), NodeLabel { width: 1.0, height: 1.0, ..Default::default() });
+        }
+    }
+    for (&(from, to), &weight) in &hops {
+        graph.set_edge_with_label(from.id(), to.id(), EdgeLabel { weight, ..Default::default() });
     }
 
     dugong::layout(&mut graph).ok()?;
 
-    let routes = links
-        .keys()
-        .map(|&(source, target)| {
-            let label = graph.edge(&source.to_string(), &target.to_string(), None)?;
-            let points = label.points.iter().map(|point| (point.x as f32, point.y as f32));
-            Some(((source, target), points.collect()))
-        })
-        .collect::<Option<Routes>>()?;
-    for (index, node) in nodes.iter_mut().enumerate() {
-        let label = graph.node(&index.to_string())?;
-        node.x = label.x? as f32 - CARD_WIDTH / 2.0;
-        node.y = label.y? as f32 - node.height / 2.0;
+    let centre = |stop: Stop| -> Option<P> {
+        let label = graph.node(&stop.id())?;
+        Some((label.x? as f32, label.y? as f32))
+    };
+    let mut routes = Routes::new();
+    for (&link, chain) in chains {
+        let mut route = Vec::new();
+        for pair in chain.windows(2) {
+            let points = &graph.edge(&pair[0].id(), &pair[1].id(), None)?.points;
+            // A hop's own ends are where it met each outline. Between cards those are replaced
+            // by a row and a header; at a junction, by the junction itself.
+            if points.len() > 2 {
+                route.extend(
+                    points[1..points.len() - 1]
+                        .iter()
+                        .map(|point| (point.x as f32, point.y as f32)),
+                );
+            }
+            if let Stop::Junction(_) = pair[1] {
+                route.push(centre(pair[1])?);
+            }
+        }
+        routes.insert(link, route);
     }
-    Some(routes)
+    let centres = (0..nodes.len()).map(|index| centre(Stop::Card(index))).collect::<Option<_>>()?;
+    Some((centres, routes))
+}
+
+/// New chains for the links of any rank that stacks too tall, or `None` if every rank is fine.
+///
+/// A rank is tall when many collections do nothing but point at a hub, or one collection points
+/// at many lookups. Those cards are joined on one side only, so they can move a rank outward
+/// without dragging the graph with them. Moving them is not enough, though: every long edge is
+/// given a straight lane of its own, so the new columns end up staircased and the drawing no
+/// shorter. So the edges of a column are bundled: they meet at a junction beside the column and
+/// travel on as one line, column to column, to the card they were all going to anyway.
+fn fold_tall_ranks(
+    nodes: &[CanvasNode],
+    links: &BTreeMap<(usize, usize), usize>,
+    centres: &[P],
+    mut chains: Chains,
+) -> Option<Chains> {
+    let sources: BTreeSet<usize> = links.keys().map(|&(source, _)| source).collect();
+    let targets: BTreeSet<usize> = links.keys().map(|&(_, target)| target).collect();
+
+    // Cards are one width, so the cards of a rank share an x.
+    let mut ranks: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (index, centre) in centres.iter().enumerate() {
+        ranks.entry(centre.0.round() as i64).or_default().push(index);
+    }
+
+    // One junction per column per far end, found again by every link that shares it.
+    let mut junctions: BTreeMap<(i64, usize, usize), usize> = BTreeMap::new();
+    let mut folded = false;
+    for (&rank, members) in &ranks {
+        let stacked = |cards: &[usize]| -> f64 {
+            cards.iter().map(|&card| f64::from(nodes[card].height) + CARD_GAP).sum()
+        };
+        let mut movable: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|card| sources.contains(card) != targets.contains(card))
+            .collect();
+        let total = stacked(members);
+        if total <= MAX_COLUMN_HEIGHT || movable.len() < 2 {
+            continue;
+        }
+        // Neighbours in the rank stay neighbours in their column.
+        movable.sort_by(|a, b| centres[*a].1.total_cmp(&centres[*b].1));
+        let columns = (total / MAX_COLUMN_HEIGHT).ceil();
+        let budget = total / columns;
+        // Whatever cannot move stays in the first column and counts against its height.
+        let (mut column, mut filled) = (0usize, total - stacked(&movable));
+        for card in movable {
+            let height = f64::from(nodes[card].height) + CARD_GAP;
+            if filled + height / 2.0 > budget && (column as f64) < columns - 1.0 {
+                column += 1;
+                filled = 0.0;
+            }
+            filled += height;
+            if column == 0 {
+                continue;
+            }
+            folded = true;
+            let outward = sources.contains(&card);
+            for &(source, target) in links.keys().filter(|link| link.0 == card || link.1 == card) {
+                let far = if outward { target } else { source };
+                let mut bus: Vec<Stop> = (1..=column)
+                    .map(|step| {
+                        let next = junctions.len();
+                        Stop::Junction(*junctions.entry((rank, step, far)).or_insert(next))
+                    })
+                    .collect();
+                // A source's bus runs from its own column in towards the hub; a lookup's runs
+                // from the hub out to its column.
+                if outward {
+                    bus.reverse();
+                }
+                let mut chain = vec![Stop::Card(source)];
+                chain.extend(bus);
+                chain.push(Stop::Card(target));
+                chains.insert((source, target), chain);
+            }
+        }
+    }
+    folded.then_some(chains)
 }
 
 /// Rows of cards, left to right. Only reached if the layout engine fails.
@@ -291,10 +437,7 @@ fn place_in_grid(nodes: &mut [CanvasNode]) {
 
 /// One relation's path: out of its field's row, along the trunk its collections share, and into
 /// the target's header.
-fn path_for(source: &CanvasNode, field: usize, target: &CanvasNode, trunk: &[P]) -> EdgePath {
-    // The trunk's ends are where it met each card's outline. The relation has better ends than
-    // those, a row and a header, so only what lies between is kept.
-    let between = if trunk.len() > 2 { &trunk[1..trunk.len() - 1] } else { &[][..] };
+fn path_for(source: &CanvasNode, field: usize, target: &CanvasNode, between: &[P]) -> EdgePath {
     let source_centre = source.x + CARD_WIDTH / 2.0;
     let target_centre = target.x + CARD_WIDTH / 2.0;
 
@@ -482,17 +625,45 @@ mod tests {
         assert_eq!(layout.nodes[0].incoming, 0);
     }
 
+    fn column_count(layout: &CanvasLayout) -> usize {
+        layout.nodes.iter().map(|node| node.x as i32).collect::<BTreeSet<_>>().len()
+    }
+
     #[test]
-    fn a_hub_with_many_sources_places_every_one_of_them() {
+    fn a_hub_with_many_sources_folds_them_into_columns_on_a_bus() {
         let names: Vec<String> = (0..80).map(|n| format!("source{n:02}")).collect();
         let links: Vec<(&str, &str, &str)> =
             names.iter().map(|name| (name.as_str(), "userId", "users")).collect();
         let layout = layout(&graph(&links), "shop");
+        let users = &layout.nodes[layout.index_of("users").unwrap()];
 
         assert_eq!(layout.nodes.len(), 81);
-        assert_eq!(layout.nodes[layout.index_of("users").unwrap()].incoming, 80);
+        assert_eq!(users.incoming, 80);
+        assert!(column_count(&layout) > 2, "eighty sources in one column is unreadable");
+        let one_column = 80.0 * (HEADER_HEIGHT + FIELD_HEIGHT + CARD_GAP as f32);
+        assert!(layout.height < one_column / 2.0, "{} is still one tall strip", layout.height);
+        // Folding moves a card outward; it never turns its edge around or sends it elsewhere.
+        for edge in &layout.edges {
+            assert!(edge.path.rightwards);
+            assert_eq!(edge.path.tip, (users.x, users.y + HEADER_HEIGHT / 2.0));
+        }
+    }
+
+    #[test]
+    fn a_collection_with_many_lookups_folds_them_too() {
+        let fields: Vec<String> = (0..70).map(|n| format!("lookup{n:02}Id")).collect();
+        let names: Vec<String> = (0..70).map(|n| format!("lookup{n:02}")).collect();
+        let links: Vec<(&str, &str, &str)> = fields
+            .iter()
+            .zip(&names)
+            .map(|(field, name)| ("orders", field.as_str(), name.as_str()))
+            .collect();
+        let layout = layout(&graph(&links), "shop");
+        let orders = &layout.nodes[layout.index_of("orders").unwrap()];
+
+        assert!(column_count(&layout) > 2);
+        assert!(layout.nodes.iter().all(|node| node.collection == "orders" || node.x > orders.x));
         assert!(layout.edges.iter().all(|edge| edge.path.rightwards));
-        assert!(layout.width > 0.0 && layout.height > 0.0);
     }
 
     #[test]

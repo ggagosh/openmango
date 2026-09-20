@@ -40,7 +40,9 @@ unsafe extern "C" {
 extern "C" fn remove_container() {
     if let Some(id) = CONTAINER_ID.get() {
         let _ = std::process::Command::new("docker")
-            .args(["rm", "-f", id])
+            // `-v` takes the container's anonymous volumes with it. The Mongo image declares two,
+            // and without the flag every test run left both behind.
+            .args(["rm", "-f", "-v", id])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
