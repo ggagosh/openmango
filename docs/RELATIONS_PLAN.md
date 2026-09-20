@@ -275,7 +275,7 @@ Ordered by dependency; each step leaves the app working.
    (`TabKey::References`, reusing the aggregation results rendering), first used for ambiguous
    targets; broken-reference state; breadcrumb; single-result expand.
    `tests/relations_tests.rs` (Testcontainers): resolve → probe → remembered relation,
-   shared-`_id` ambiguity, miss, DBRef. **Left:** links in aggregation results.
+   shared-`_id` ambiguity, miss, DBRef.
 4. **Inference** — done. Run it for a whole database from the **Relations** section of the
    database tab (known count, progress, Stop), or for one collection from its context menu.
    `state/relations/infer.rs` profiles a byte-budgeted sample for ObjectId-shaped paths
@@ -293,9 +293,30 @@ Ordered by dependency; each step leaves the app working.
    behind "Run anyway" on production and protected connections, "Open as filter" per group.
    A review *list* was built and then cut: two surfaces for one subject, and a table is a poor
    way to see a graph. Reading and deciding both belong on the canvas (step 7), and now do.
-   **Left:** the "N relations found" badge and "Open all" for arrays.
-6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
-   compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
+   Also done: links in aggregation results, tree and table, followed but never learned from,
+   since a pipeline's output path is not a field of the collection; "Open all" on an array of
+   ids; and a chip beside the collection name that says whether the database has been read for
+   relations (click to infer), is being read, or has N relations here with M new (click to
+   open the canvas holding this collection). When a database was last read in full is recorded
+   in `relations.json`, because an empty graph cannot tell never-read from read-and-empty.
+6. **Consumers on the graph** — done, all reading one module (`state/relations/export.rs`) so
+   they cannot disagree about what is known or in what order.
+   - **Agent and MCP tools:** `get_relations` and `join_path` (`openmango_` prefixed over MCP).
+     The graph goes out as a line per collection with fields grouped under their target,
+     `orders: users<buyerId,sellerId; products<items[].productId`: a thirteenth of the same
+     facts as JSON on a real 113-relation database, about a thousand tokens for everything and a
+     couple of hundred characters for one collection. Over MCP it is only given for a database
+     the shared connection actually has, since relations are kept per database name.
+   - **`$lookup` generation:** `join_path` to stages, named the way Mongoose's `populate` names
+     them (`userId` to `user`, `createdBy` stays `createdBy`), a to-one step unwound with empty
+     results kept, a later step reading through the name before it. Offered in the Add stage
+     picker as "Join a related collection" (inserted as one undo step), and as "From relation"
+     on a `$lookup` stage, which fills in all four fields. The stage editor has no text
+     completion engine, so this is what completing a `$lookup` means here.
+   - **Mermaid / DBML:** copied from the Relations tab's toolbar.
+   Not done: a generative-UI block for relations in chat. Tool results are plain text today; the
+   candidate is a small neighbourhood card with "Open canvas", worth it once the tools have
+   been used enough to know what people ask them.
 7. **The Relations tab** — done: the canvas. `TabKey::Relations`, one tab per database, opened
    from "Open canvas" in the database tab. It is the home for everything about a database's
    graph, so the integrity report and the Mermaid / DBML export join it rather than getting
@@ -326,8 +347,9 @@ Ordered by dependency; each step leaves the app working.
      layout graph), in both directions: many sources into a hub, or one collection out to many
      lookups. The columns still step diagonally rather than sitting level, because the engine
      places each junction at the end of the neighbouring rank.
-   **Left in this tab:** the integrity report (orphans, drift, unindexed reference fields) and
-   Mermaid / DBML export. Not done: dragging cards, and levelling the columns of a folded rank.
+   Mermaid and DBML are copied from its toolbar. **Left in this tab:** the integrity report
+   (orphans, unindexed reference fields), deferred. Not done: dragging cards, and levelling the
+   columns of a folded rank.
 
 8. **Independent consumers** — codegen (TypeScript / Zod / Rust), and code imports (Mongoose
    `ref`, Prisma, `$jsonSchema`) if wanted: a generic "point at a repo" reader, not a

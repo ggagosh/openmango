@@ -435,6 +435,30 @@ impl RelationGraph {
         None
     }
 
+    /// The collections one join away from `collection`, by the field that joins them: what a
+    /// `$lookup` written here could reach. Sorted by where it arrives, so a list of them does
+    /// not reshuffle between renders.
+    pub fn joins_from(
+        &self,
+        database: &str,
+        collection: &str,
+        min_confidence: f32,
+    ) -> Vec<JoinStep> {
+        let mut steps =
+            self.steps_from(&(database.to_string(), collection.to_string()), min_confidence);
+        // A collection that points at itself shows up once in each direction; one is enough.
+        steps.retain(|step| step.forward || step.relation.source.collection != collection);
+        steps.retain(|step| step.target().database == database);
+        steps.sort_by(|a, b| {
+            (&a.target().collection, &a.relation.source.path, !a.forward).cmp(&(
+                &b.target().collection,
+                &b.relation.source.path,
+                !b.forward,
+            ))
+        });
+        steps
+    }
+
     /// Every relation leaving a collection, in either direction.
     fn steps_from(&self, at: &Namespace, min_confidence: f32) -> Vec<JoinStep> {
         self.relations

@@ -148,6 +148,31 @@ pub fn lookup_stages(steps: &[JoinStep]) -> Vec<Document> {
     stages
 }
 
+/// The same stages as the text an editor holds: each stage's operator, and its body formatted
+/// the way the aggregation editor formats one.
+pub fn stage_texts(steps: &[JoinStep]) -> Vec<(String, String)> {
+    lookup_stages(steps)
+        .into_iter()
+        .filter_map(|stage| {
+            let (operator, body) = stage.into_iter().next()?;
+            let body = serde_json::to_value(&body).ok()?;
+            Some((operator, crate::bson::format_relaxed_json_value(&body)))
+        })
+        .collect()
+}
+
+/// How a join reads in a list: the collection it reaches, and the field that reaches it.
+pub fn describe_join(step: &JoinStep) -> (String, String) {
+    let source = &step.relation.source;
+    let via = if step.forward {
+        format!("via {}", source.path)
+    } else {
+        // Against the grain the field is on the other collection, so it is named in full.
+        format!("via {}.{}", source.collection, source.path)
+    };
+    (step.target().collection.clone(), via)
+}
+
 /// A chain of relations in the compact notation: `orders.userId>users, users.companyId>companies`.
 pub fn describe_steps(steps: &[JoinStep]) -> String {
     steps
@@ -351,6 +376,39 @@ mod tests {
                 doc! { "$lookup": { "from": "products", "localField": "items.productId", "foreignField": "_id", "as": "product" } }
             ]
         );
+    }
+
+    #[test]
+    fn the_joins_from_a_collection_are_everything_one_lookup_can_reach() {
+        let graph = shop();
+        let joins: Vec<(String, String)> =
+            graph.joins_from("shop", "users", 0.8).iter().map(describe_join).collect();
+
+        assert_eq!(
+            joins,
+            vec![
+                ("companies".to_string(), "via companyId".to_string()),
+                ("orders".to_string(), "via orders.userId".to_string()),
+                ("reviews".to_string(), "via reviews.createdBy".to_string()),
+            ]
+        );
+        // A tree joins to itself once, not once in each direction.
+        assert_eq!(graph.joins_from("shop", "categories", 0.8).len(), 1);
+    }
+
+    #[test]
+    fn stage_texts_are_what_the_editor_would_hold() {
+        let steps = shop().joins_from("shop", "orders", 0.8);
+        let users = steps.iter().find(|step| step.target().collection == "users").unwrap();
+        let texts = stage_texts(std::slice::from_ref(users));
+
+        assert_eq!(texts.len(), 2, "a to-one join is a $lookup and its $unwind");
+        assert_eq!(texts[0].0, "$lookup");
+        assert_eq!(
+            texts[0].1,
+            "{\n  from: \"users\",\n  localField: \"userId\",\n  foreignField: \"_id\",\n  as: \"user\"\n}"
+        );
+        assert_eq!(texts[1].0, "$unwind");
     }
 
     #[test]

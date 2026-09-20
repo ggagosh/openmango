@@ -10,8 +10,11 @@ use crate::error::{ErrorKind, ErrorReport, sentence};
 use crate::keyboard::{ClearAggregationStage, FormatAggregationStage};
 use crate::state::SessionKey;
 use crate::state::app_state::PipelineState;
+use crate::state::relations::export::{describe_join, stage_texts};
+use crate::state::relations::resolve::NAVIGATION_CONFIDENCE;
 use crate::theme::{islands, spacing};
 use crate::views::CollectionView;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 
 use super::{OperatorPick, format_stage_body, open_operator_picker};
 
@@ -40,6 +43,51 @@ impl CollectionView {
         };
 
         let operator = stage.operator.trim().to_string();
+        // A `$lookup` being written by hand is the moment the known relations are worth having:
+        // picking one fills in all four fields, which is what completing it would have meant.
+        let joins = session_key
+            .as_ref()
+            .filter(|_| operator == "$lookup")
+            .map(|key| {
+                self.state.read(cx).relations().joins_from(
+                    &key.database,
+                    &key.collection,
+                    NAVIGATION_CONFIDENCE,
+                )
+            })
+            .unwrap_or_default();
+        let from_relation = (!joins.is_empty()).then(|| {
+            let body_state = self.aggregation_stage_body_state.clone();
+            gpui_kit::component::button::Button::new("agg-lookup-from-relation")
+                .ghost()
+                .xsmall()
+                .label("From relation")
+                .dropdown_caret(true)
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu: PopupMenu, _, _| {
+                    for step in &joins {
+                        let (collection, via) = describe_join(step);
+                        // Only the `$lookup` itself: this stage is one stage, and whether to
+                        // unwind it is a choice the Add stage picker makes and this does not.
+                        let Some((_, body)) =
+                            stage_texts(std::slice::from_ref(step)).into_iter().next()
+                        else {
+                            continue;
+                        };
+                        let body_state = body_state.clone();
+                        menu =
+                            menu.item(PopupMenuItem::new(format!("{collection} {via}")).on_click(
+                                move |_, window, cx| {
+                                    if let Some(body_state) = body_state.clone() {
+                                        body_state.update(cx, |state, cx| {
+                                            state.replace_all(body.clone(), window, cx);
+                                        });
+                                    }
+                                },
+                            ));
+                    }
+                    menu
+                })
+        });
         let operator_button = Button::new("agg-operator")
             .outline()
             .xsmall()
@@ -77,6 +125,7 @@ impl CollectionView {
                     .gap(spacing::sm())
                     .child(div().text_sm().child(format!("Stage {}", index + 1)))
                     .child(operator_button)
+                    .children(from_relation)
                     .when(!stage.enabled, |row| {
                         row.child(Tag::secondary().xsmall().child("Skipped"))
                     }),
