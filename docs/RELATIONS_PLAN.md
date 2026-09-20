@@ -299,8 +299,10 @@ Ordered by dependency; each step leaves the app working.
 6. **Consumers on the graph** — agent / MCP tools `get_relations`, `join_path` (accepted edges as
    compact text); Mermaid / DBML export; `$lookup` generator and autocomplete.
 7. **Independent consumers** — code imports (Mongoose `ref`, Prisma, `$jsonSchema`), codegen
-   (TypeScript / Zod / Rust), native ER diagram view (custom canvas + a layout crate: `dagre` Rust
-   port, `layout-rs` or `rust-sugiyama`, chosen when we get there). Last because nothing depends
+   (TypeScript / Zod / Rust). The diagram arrived early and focused: one collection with what
+   points at it and what it points at, three columns and elbow connectors, clicking a neighbour
+   to walk the graph. No layout crate — a whole-database view would need one, and would be a
+   hairball at 58 collections. Last because nothing depends
    on them and they share no code with steps 1–6.
 
 New crates: none until step 7's layout crate.

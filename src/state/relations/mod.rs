@@ -340,6 +340,34 @@ impl RelationGraph {
         grouped
     }
 
+    /// Every relation leaving a collection, by the field it leaves from.
+    pub fn from_collection(&self, database: &str, collection: &str) -> Vec<&Relation> {
+        let mut found: Vec<&Relation> = self
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.source.is_in(database, collection) && relation.status != Status::Rejected
+            })
+            .collect();
+        found.sort_by(|a, b| a.source.path.cmp(&b.source.path));
+        found
+    }
+
+    /// Every relation arriving at a collection, by where it comes from.
+    pub fn into_collection(&self, database: &str, collection: &str) -> Vec<&Relation> {
+        let mut found: Vec<&Relation> = self
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.target.is_in(database, collection) && relation.status != Status::Rejected
+            })
+            .collect();
+        found.sort_by(|a, b| {
+            (&a.source.collection, &a.source.path).cmp(&(&b.source.collection, &b.source.path))
+        });
+        found
+    }
+
     /// Accepted candidates for a source path other than `keep`. This is drift: inference now
     /// believes something a reviewed decision contradicts.
     pub fn rivals_of(&self, keep: &Relation) -> Vec<&Relation> {
