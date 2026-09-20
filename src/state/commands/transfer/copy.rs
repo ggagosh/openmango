@@ -96,7 +96,7 @@ impl AppCommands {
                 tab.runtime.database_progress = None; // Reset on new copy
                 tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
-            state.set_status_message(Some(StatusMessage::info("Copying...")));
+            state.set_status_message(Some(StatusMessage::info("Copying…")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
             cx.notify();
         });

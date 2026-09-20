@@ -146,7 +146,7 @@ impl ForgeView {
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::BookOpen).xsmall())
-                    .label("Query Library")
+                    .label("Query library")
                     .disabled(target.is_none())
                     .on_click({
                         let state = self.app_state.clone();
@@ -275,7 +275,7 @@ impl ForgeView {
                                     .text_color(cx.theme().muted_foreground)
                             };
                             let pin_button = div()
-                                .id(("forge-result-pin", index))
+                                .id((ElementId::from("forge-result-pin"), page_id.to_string()))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -304,7 +304,7 @@ impl ForgeView {
 
                             let view_entity = forge_view.clone();
                             let close_button = div()
-                                .id(("forge-result-close", index))
+                                .id((ElementId::from("forge-result-close"), page_id.to_string()))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -477,7 +477,7 @@ impl Render for ForgeView {
         let status_text = if self.state.runtime.mongosh_error.is_some() {
             "Shell error"
         } else if self.state.runtime.is_running {
-            "Running..."
+            "Running…"
         } else {
             "Ready"
         };

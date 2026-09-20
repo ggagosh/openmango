@@ -81,7 +81,7 @@ pub fn render_single_block(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("Generating {}...", block_label(block_type))),
+                    .child(format!("Generating {}…", block_label(block_type))),
             )
             .into_any_element(),
     }

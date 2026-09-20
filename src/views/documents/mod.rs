@@ -3,6 +3,8 @@
 mod actions;
 mod ask_ai;
 mod explain;
+#[cfg(test)]
+mod explain_escape_tests;
 mod fast_filter;
 pub(crate) use fast_filter::compile_filter_input;
 mod header;
@@ -116,7 +118,7 @@ pub(crate) fn request_delete_confirmation(
     };
 
     state.update(cx, |state, cx| {
-        state.set_status_message(Some(StatusMessage::info("Counting documents...")));
+        state.set_status_message(Some(StatusMessage::info("Counting documents…")));
         cx.notify();
     });
     let database = session_key.database.clone();
@@ -244,7 +246,7 @@ mod write_impact_tests {
     use super::*;
 
     fn stage(operator: &str, body: &str) -> PipelineStage {
-        PipelineStage { operator: operator.to_string(), body: body.to_string(), enabled: true }
+        PipelineStage::with(operator.to_string(), body.to_string(), true)
     }
 
     #[test]

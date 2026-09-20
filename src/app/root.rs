@@ -8,11 +8,12 @@ use gpui_kit::*;
 use uuid::Uuid;
 
 use super::sidebar::Sidebar;
+use super::sidebar_model::SidebarModel;
 use crate::components::action_bar::ActionBar;
+use crate::components::node_commands::{confirm_delete_node, copy_node_name};
 use crate::components::{
-    ConnectionManager, ContentArea, OpenTabsBar, QueryLibraryDialog, StatusBar, WriteConfirmation,
-    open_confirm_dialog, request_app_quit, request_connection_write, request_disconnect_connection,
-    request_remove_connection,
+    ConnectionManager, ContentArea, OpenTabsBar, QueryLibraryDialog, StatusBar, request_app_quit,
+    request_disconnect_connection,
 };
 use crate::helpers::keystore::KeyStore;
 use crate::helpers::validate::UriSecrets;
@@ -24,6 +25,7 @@ use crate::keyboard::{
     QuitApp, RefreshView, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
     SelectTab7, SelectTab8, SelectTab9, ToggleAiPanel,
 };
+use crate::models::TreeNodeId;
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::app_state::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
@@ -377,7 +379,7 @@ impl AppRoot {
                 Ok(Some(key)) => match <[u8; 32]>::try_from(key) {
                     Ok(key) => key,
                     Err(_) => {
-                        log::error!("History key has an invalid length");
+                        history_unavailable(&state, "Its encryption key is damaged.", cx);
                         return;
                     }
                 },
@@ -385,13 +387,16 @@ impl AppRoot {
                     let key: [u8; 32] = rand::random();
                     let write = cx.update(|cx| KeyStore::write_history_key(cx, &key));
                     if write.await.is_err() {
-                        log::error!("History key could not be stored");
+                        let reason = "Its encryption key could not be saved to the keychain.";
+                        history_unavailable(&state, reason, cx);
                         return;
                     }
                     key
                 }
                 Err(error) => {
                     log::error!("History key could not be read: {error}");
+                    let reason = "Its encryption key could not be read from the keychain.";
+                    history_unavailable(&state, reason, cx);
                     return;
                 }
             };
@@ -401,7 +406,7 @@ impl AppRoot {
                 })
                 .await;
             let Ok(Ok(service)) = opened else {
-                log::error!("History could not be initialized");
+                history_unavailable(&state, "Its database could not be opened.", cx);
                 return;
             };
             let _ = service.reconcile();
@@ -959,63 +964,21 @@ impl Render for AppRoot {
                 this.handle_create_collection(window, cx);
             }))
             .on_action(cx.listener(|this, _: &CreateIndex, window, cx| {
-                this.handle_create_index(window, cx);
+                Self::create_index(&this.state, window, cx);
             }))
             .on_action(cx.listener(|this, _: &QuitApp, window, cx| {
                 this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DeleteDatabase, window, cx| {
-                let Some(database_key) = this.state.read(cx).current_database_key() else {
-                    return;
-                };
-                let message =
-                    format!("Drop database \"{}\"? This cannot be undone.", database_key.database);
-                let state = this.state.clone();
-                let state_for_write = state.clone();
-                let database = database_key.database;
-                let connection_id = database_key.connection_id;
-                request_connection_write(
-                    state,
-                    crate::components::WriteRequest::new(
-                        connection_id,
-                        database.clone(),
-                        "Drop a database",
-                        Some(WriteConfirmation {
-                            title: "Drop database".into(),
-                            message,
-                            confirm_label: "Drop".into(),
-                            destructive: true,
-                        }),
-                    ),
-                    window,
-                    cx,
-                    move |_window, cx| {
-                        AppCommands::drop_database(state_for_write, connection_id, database, cx);
-                    },
-                );
+                if let Some(key) = this.state.read(cx).current_database_key() {
+                    let node = TreeNodeId::database(key.connection_id, key.database);
+                    confirm_delete_node(this.state.clone(), node, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &DeleteConnection, window, cx| {
                 if let Some(connection_id) = this.state.read(cx).selected_connection_id() {
-                    let name = this
-                        .state
-                        .read(cx)
-                        .connection_name(connection_id)
-                        .unwrap_or_else(|| "connection".to_string());
-                    let message = format!("Remove connection \"{name}\"?");
-                    open_confirm_dialog(
-                        window,
-                        cx,
-                        "Remove connection",
-                        message,
-                        "Remove",
-                        true,
-                        {
-                            let state = this.state.clone();
-                            move |window, cx| {
-                                request_remove_connection(state.clone(), connection_id, window, cx);
-                            }
-                        },
-                    );
+                    let node = TreeNodeId::connection(connection_id);
+                    confirm_delete_node(this.state.clone(), node, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &DisconnectConnection, window, cx| {
@@ -1036,19 +999,17 @@ impl Render for AppRoot {
                 }
             }))
             .on_action(cx.listener(|this, _: &CopySelectionName, _window, cx| {
-                let state_ref = this.state.read(cx);
-                let selection_name = if let Some(collection) = state_ref.selected_collection_name()
-                {
-                    Some(collection)
-                } else if let Some(database) = state_ref.selected_database_name() {
-                    Some(database)
-                } else if let Some(connection_id) = state_ref.selected_connection_id() {
-                    state_ref.connection_name(connection_id)
-                } else {
-                    None
+                // The node the app is showing; the sidebar answers for its own selected row.
+                let node = {
+                    let state = this.state.read(cx);
+                    SidebarModel::node_for_view(
+                        state.selected_connection_id(),
+                        state.selected_database_name(),
+                        state.selected_collection_name(),
+                    )
                 };
-                if let Some(name) = selection_name {
-                    cx.write_to_clipboard(ClipboardItem::new_string(name));
+                if let Some(node) = node {
+                    copy_node_name(&this.state, &node, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &RefreshView, window, cx| {
@@ -1332,6 +1293,11 @@ impl Render for AppRoot {
             .children(notification_layer)
             .child(self.action_bar.clone());
 
+        // Hidden, the HUD costs nothing: its clock stops a second after it leaves the tree.
+        if self.state.read(cx).show_fps_monitor {
+            root = root.child(gpui_fps::fps_monitor(window, cx));
+        }
+
         if self.key_debug {
             root = root.child(render_key_debug_overlay(
                 &key_context,
@@ -1342,6 +1308,18 @@ impl Render for AppRoot {
 
         root
     }
+}
+
+/// History failing to start is otherwise invisible: the feature is simply never there. Say so.
+fn history_unavailable(state: &Entity<AppState>, reason: &str, cx: &mut AsyncApp) {
+    log::error!("History is unavailable: {reason}");
+    cx.update(|cx| {
+        state.update(cx, |state, cx| {
+            let message = format!("History is off. {reason}");
+            state.set_status_message(Some(crate::state::StatusMessage::error(message)));
+            cx.notify();
+        });
+    });
 }
 
 fn render_key_debug_overlay(

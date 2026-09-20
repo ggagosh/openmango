@@ -4,6 +4,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::*;
 
@@ -92,7 +93,7 @@ pub fn open_error_history(state: Entity<AppState>, window: &mut Window, cx: &mut
                 .flex_col()
                 .gap(spacing::sm())
                 .max_h(px(520.0))
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .children(entries.into_iter().map(|entry| {
                     div()
                         .flex()

@@ -459,7 +459,7 @@ impl CollectionView {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("Loading documents..."),
+                                            .child("Loading documents…"),
                                     )
                                     .into_any_element()
                             } else if document_count == 0 {

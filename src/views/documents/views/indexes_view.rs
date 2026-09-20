@@ -103,8 +103,7 @@ impl CollectionView {
 
         let rows = indexes
             .into_iter()
-            .enumerate()
-            .map(|(index, model)| {
+            .map(|model| {
                 let name = index_name(&model);
                 let name_label = name.clone().unwrap_or_else(|| "Unnamed".to_string());
                 let properties = index_properties(&model, &name_label);
@@ -112,7 +111,9 @@ impl CollectionView {
                 let editable = name.as_ref().is_some_and(|name| name != "_id_");
 
                 let row = div()
-                    .id(("index-row", index))
+                    // Keyed by index name: dropping one shifts every row after it. The buttons
+                    // inside are scoped by this id.
+                    .id((ElementId::from("index-row"), name_label.clone()))
                     .flex()
                     .items_center()
                     .gap(spacing::md())
@@ -153,7 +154,7 @@ impl CollectionView {
                         let edit_state = state.clone();
                         actions
                             .child(
-                                Button::new(("edit-index", index))
+                                Button::new("edit-index")
                                     .ghost()
                                     .xsmall()
                                     .label("Edit")
@@ -171,7 +172,7 @@ impl CollectionView {
                                     ),
                             )
                             .child(
-                                Button::new(("drop-index", index))
+                                Button::new("drop-index")
                                     .ghost()
                                     .xsmall()
                                     .text_color(cx.theme().danger)

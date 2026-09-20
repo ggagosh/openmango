@@ -149,6 +149,7 @@ pub(super) fn render_query_field_row(
                 .ghost()
                 .xsmall()
                 .icon(IconName::Close)
+                .tooltip("Clear")
                 .on_click(move |_, _, cx| {
                     state.update(cx, |state, cx| {
                         if let Some(id) = state.active_transfer_tab_id()

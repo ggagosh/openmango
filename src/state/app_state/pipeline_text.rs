@@ -114,7 +114,7 @@ fn parse_stage(element: &str, number: usize, enabled: bool) -> Result<PipelineSt
     if commas.contains(&trailing) {
         body = &body[..body.len() - 1];
     }
-    Ok(PipelineStage { operator: operator.to_string(), body: dedent_body(body.trim()), enabled })
+    Ok(PipelineStage::with(operator.to_string(), dedent_body(body.trim()), enabled))
 }
 
 /// Byte range of the first and last code in `src`, ignoring whitespace and comments.
@@ -289,7 +289,7 @@ mod tests {
     use crate::state::app_state::PipelineStage;
 
     fn stage(operator: &str, body: &str, enabled: bool) -> PipelineStage {
-        PipelineStage { operator: operator.to_string(), body: body.to_string(), enabled }
+        PipelineStage::with(operator.to_string(), body.to_string(), enabled)
     }
 
     #[test]

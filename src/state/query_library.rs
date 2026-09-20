@@ -916,11 +916,7 @@ mod tests {
                 database: "app".into(),
                 collection: Some("users".into()),
                 content: QueryContent::Aggregation {
-                    stages: vec![PipelineStage {
-                        operator: "$match".into(),
-                        body: "{}".into(),
-                        enabled: true,
-                    }],
+                    stages: vec![PipelineStage::with("$match", "{}", true)],
                     selected_stage: Some(1),
                 },
             },

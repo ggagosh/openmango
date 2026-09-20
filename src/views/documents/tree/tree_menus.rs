@@ -93,7 +93,7 @@ pub(in crate::views::documents) fn build_document_menu(
         menu
     });
     menu = menu
-        .item(PopupMenuItem::submenu("Copy As", copy_as_submenu).icon(Icon::new(IconName::Copy)));
+        .item(PopupMenuItem::submenu("Copy as", copy_as_submenu).icon(Icon::new(IconName::Copy)));
 
     menu = menu
         .item(
@@ -142,7 +142,7 @@ pub(super) fn build_property_menu(
     let can_add_field = !is_array_element;
 
     menu = menu.item(
-        PopupMenuItem::new("Edit Value / Type...")
+        PopupMenuItem::new("Edit value / type…")
             .icon(Icon::new(IconName::Settings2))
             .action(Box::new(EditValueType))
             .disabled(!can_edit_value)
@@ -168,7 +168,7 @@ pub(super) fn build_property_menu(
 
     if can_rename_field {
         menu = menu.item(
-            PopupMenuItem::new("Rename Field...")
+            PopupMenuItem::new("Rename field…")
                 .icon(Icon::new(IconName::Settings2))
                 .action(Box::new(RenameField))
                 .on_click({
@@ -191,7 +191,7 @@ pub(super) fn build_property_menu(
 
     if can_remove_field {
         menu = menu.item(
-            PopupMenuItem::new("Remove Field...")
+            PopupMenuItem::new("Remove field…")
                 .icon(Icon::new(IconName::Minus))
                 .action(Box::new(RemoveSelectedField))
                 .on_click({
@@ -214,7 +214,7 @@ pub(super) fn build_property_menu(
 
     if can_remove_element {
         menu = menu.item(
-            PopupMenuItem::new("Remove Element...")
+            PopupMenuItem::new("Remove element…")
                 .icon(Icon::new(IconName::Minus))
                 .action(Box::new(RemoveSelectedField))
                 .on_click({
@@ -237,7 +237,7 @@ pub(super) fn build_property_menu(
 
     if can_add_field {
         menu = menu.item(
-            PopupMenuItem::new("Add Field/Value...")
+            PopupMenuItem::new("Add field/value…")
                 .icon(Icon::new(IconName::Plus))
                 .action(Box::new(AddField))
                 .on_click({
@@ -260,7 +260,7 @@ pub(super) fn build_property_menu(
 
     if is_array && !is_array_element {
         menu = menu.item(
-            PopupMenuItem::new("Add Element...")
+            PopupMenuItem::new("Add element…")
                 .icon(Icon::new(IconName::Plus))
                 .action(Box::new(AddElement))
                 .on_click({
@@ -280,7 +280,7 @@ pub(super) fn build_property_menu(
                 }),
         );
         menu = menu.item(
-            PopupMenuItem::new("Remove Matching Values...")
+            PopupMenuItem::new("Remove matching values…")
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(RemoveMatchingValues))
                 .on_click({
@@ -304,7 +304,7 @@ pub(super) fn build_property_menu(
     // ── Copy group ───────────────────────────────────────────────
     menu = menu.separator();
     menu = menu.item(
-        PopupMenuItem::new("Copy Value")
+        PopupMenuItem::new("Copy value")
             .icon(Icon::new(IconName::Copy))
             .action(Box::new(CopyValue))
             .on_click({
@@ -323,7 +323,7 @@ pub(super) fn build_property_menu(
             }),
     );
     menu = menu.item(
-        PopupMenuItem::new("Copy Key")
+        PopupMenuItem::new("Copy key")
             .icon(Icon::new(IconName::Copy))
             .action(Box::new(CopyKey))
             .on_click({
@@ -334,7 +334,7 @@ pub(super) fn build_property_menu(
             }),
     );
     menu = menu.item(
-        PopupMenuItem::new("Copy Field Path").icon(Icon::new(IconName::Copy)).on_click({
+        PopupMenuItem::new("Copy field path").icon(Icon::new(IconName::Copy)).on_click({
             let path = path.clone();
             move |_, _window, cx| {
                 let dot_path = path_to_dot_notation(&path);
@@ -369,7 +369,7 @@ pub(super) fn build_property_menu(
     let is_filterable = has_value && !meta.is_folder;
     menu = menu.separator();
     menu = menu.item(
-        PopupMenuItem::new("Filter by This Value")
+        PopupMenuItem::new("Filter by this value")
             .icon(Icon::new(crate::assets::AppIcon::Filter))
             .disabled(!is_filterable)
             .on_click({
@@ -383,7 +383,7 @@ pub(super) fn build_property_menu(
             }),
     );
     menu = menu.item(
-        PopupMenuItem::new("Exclude This Value")
+        PopupMenuItem::new("Exclude this value")
             .icon(Icon::new(crate::assets::AppIcon::FilterX))
             .disabled(!is_filterable)
             .on_click({

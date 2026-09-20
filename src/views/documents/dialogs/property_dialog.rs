@@ -19,7 +19,7 @@ use super::property_dialog_support::{
     PropertyActionKind, UpdateScope, ValueType, display_path, display_segment, dot_path,
     format_bson_for_input, parent_path,
 };
-use super::shared::{dialog_error, escape_key_subscription, status_text, styled_dropdown_button};
+use super::shared::{dialog_error, status_text, styled_dropdown_button};
 
 pub struct PropertyActionDialog {
     state: Entity<AppState>,
@@ -63,7 +63,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Edit Value / Type").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Edit value / type").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -87,7 +87,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Add Field/Value").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Add field/value").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -111,7 +111,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Rename Field").w(px(600.0)).child(dialog_view.clone())
+            dialog.title("Rename field").w(px(600.0)).child(dialog_view.clone())
         });
     }
 
@@ -135,7 +135,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Remove Field").w(px(560.0)).child(dialog_view.clone())
+            dialog.title("Remove field").w(px(560.0)).child(dialog_view.clone())
         });
     }
 
@@ -159,7 +159,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Add Element").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Add element").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -183,7 +183,7 @@ impl PropertyActionDialog {
             )
         });
         window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, _cx: &mut App| {
-            dialog.title("Remove Matching Values").w(px(640.0)).child(dialog_view.clone())
+            dialog.title("Remove matching values").w(px(640.0)).child(dialog_view.clone())
         });
     }
 
@@ -334,7 +334,6 @@ impl PropertyActionDialog {
             });
         dialog._subscriptions.push(subscription);
 
-        dialog._subscriptions.push(escape_key_subscription(cx));
         // The value field is multi-line, so Cmd/Ctrl+Enter submits, as in other multi-line
         // query and value editors.
         let weak = cx.entity().downgrade();
@@ -745,7 +744,7 @@ impl Render for PropertyActionDialog {
                 PropertyActionKind::AddField => "Add Field",
                 PropertyActionKind::RenameField => "Rename",
                 PropertyActionKind::RemoveField => "Remove",
-                PropertyActionKind::AddElement => "Add Element",
+                PropertyActionKind::AddElement => "Add element",
                 PropertyActionKind::RemoveMatchingValues => "Remove",
             }
         };
@@ -758,7 +757,7 @@ impl Render for PropertyActionDialog {
         let status = status_text(
             self.error_message.as_ref(),
             self.updating,
-            "Applying update...",
+            "Applying update…",
             default_label,
             cx,
         );

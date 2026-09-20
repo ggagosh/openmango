@@ -349,7 +349,7 @@ impl DetachedJsonEditorView {
                 self.awaiting_create_as_new = false;
                 self.set_save_in_flight(true);
                 self.clear_sync_issue();
-                self.set_notice(false, "Inserting...");
+                self.set_notice(false, "Inserting…");
                 AppCommands::insert_document_for_editor(
                     self.state.clone(),
                     session.session_key,
@@ -418,7 +418,7 @@ impl DetachedJsonEditorView {
 
         self.awaiting_create_as_new = false;
         self.set_save_in_flight(true);
-        self.set_notice(false, "Checking latest document...");
+        self.set_notice(false, "Checking latest document…");
 
         let database = session_key.database.clone();
         let collection = session_key.collection.clone();
@@ -466,7 +466,7 @@ impl DetachedJsonEditorView {
                                     move |_window, cx| {
                                         let _ = view_for_save.update(cx, |this, cx| {
                                             this.set_save_in_flight(true);
-                                            this.set_notice(false, "Saving...");
+                                            this.set_notice(false, "Saving…");
                                             AppCommands::save_document_for_editor(
                                                 this.state.clone(),
                                                 session_key,
@@ -722,7 +722,7 @@ impl DetachedJsonEditorView {
                 view.update(cx, |this, cx| {
                     this.awaiting_create_as_new = true;
                     this.set_save_in_flight(true);
-                    this.set_notice(false, "Creating as new document...");
+                    this.set_notice(false, "Creating as new document…");
                     AppCommands::insert_document_for_editor(
                         this.state.clone(),
                         session.session_key,
@@ -810,7 +810,7 @@ impl Render for DetachedJsonEditorView {
                 .justify_center()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Editor is initializing...");
+                .child("Editor is initializing…");
         };
 
         let view = cx.entity();
@@ -838,17 +838,10 @@ impl Render for DetachedJsonEditorView {
                     let key = event.keystroke.key.to_ascii_lowercase();
                     let modifiers = event.keystroke.modifiers;
                     let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
-                    if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "w" {
-                        cx.stop_propagation();
-                        view.update(cx, |this, cx| {
-                            this.request_close_window(window, cx);
-                        });
-                    } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "n" {
+                    // Close and Save are actions bound in this window's key context.
+                    if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "n" {
                         // Prevent spawning additional app/editor windows from detached editor focus.
                         cx.stop_propagation();
-                    } else if cmd_or_ctrl && key == "s" {
-                        cx.stop_propagation();
-                        view.update(cx, |this, cx| this.save_or_insert(window, cx));
                     } else if cmd_or_ctrl && !modifiers.alt && !modifiers.shift && key == "c" {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.copy_json(window, cx));
@@ -987,7 +980,7 @@ impl Render for DetachedJsonEditorView {
                         row = row.child(
                             Button::new("json-editor-window-load-inline-draft")
                                 .xsmall()
-                                .label("Load Inline Draft")
+                                .label("Load inline draft")
                                 .on_click({
                                     let view = view.clone();
                                     move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
@@ -1001,7 +994,7 @@ impl Render for DetachedJsonEditorView {
                         row = row.child(
                             Button::new("json-editor-window-create-new")
                                 .xsmall()
-                                .label("Create as New")
+                                .label("Create as new")
                                 .on_click({
                                     let view = view.clone();
                                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {

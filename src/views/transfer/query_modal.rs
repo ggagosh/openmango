@@ -208,6 +208,7 @@ impl TransferView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Close)
+                                    .tooltip("Close")
                                     .on_click(move |_, window, cx| {
                                         view_cancel.update(cx, |view, cx| {
                                             view.close_query_modal(window, cx);

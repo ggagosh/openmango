@@ -307,6 +307,9 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-w", CloseTab, Some("Workspace")),
         KeyBinding::new("cmd-w", CloseEditorWindow, Some("JsonEditorWindow")),
         KeyBinding::new("ctrl-w", CloseEditorWindow, Some("JsonEditorWindow")),
+        // The Documents binding excludes a focused input, and the editor is one.
+        KeyBinding::new("cmd-s", SaveDocument, Some("JsonEditorWindow")),
+        KeyBinding::new("ctrl-s", SaveDocument, Some("JsonEditorWindow")),
         KeyBinding::new("ctrl-tab", NextTab, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PrevTab, Some("Workspace")),
         KeyBinding::new("cmd-1", SelectTab1, Some("Workspace")),

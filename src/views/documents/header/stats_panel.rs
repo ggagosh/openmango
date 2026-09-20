@@ -31,9 +31,9 @@ pub fn render_stats_row(
         .border_color(cx.theme().border);
 
     if stats_loading {
-        row = row.child(Spinner::new().small()).child(
-            div().text_sm().text_color(cx.theme().muted_foreground).child("Loading stats..."),
-        );
+        row = row
+            .child(Spinner::new().small())
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Loading stats…"));
         return row.into_any_element();
     }
 

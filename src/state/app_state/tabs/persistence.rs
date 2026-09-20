@@ -209,7 +209,7 @@ impl AppState {
             session.view.stats_open = matches!(restored_subview, CollectionSubview::Stats);
             restore_filter_option(&tab.filter_raw, &tab.filter_compiled_raw, |raw, doc| {
                 session.data.filter_raw = raw;
-                session.data.filter = doc;
+                session.data.set_filter(doc);
             });
             restore_doc_option(&tab.sort_raw, |raw, doc| {
                 session.data.sort_raw = raw;

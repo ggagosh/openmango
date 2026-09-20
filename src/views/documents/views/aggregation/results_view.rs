@@ -5,6 +5,7 @@ use gpui_kit::component::button::{Button as MenuButton, ButtonGroup, ButtonVaria
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::pagination::Pagination;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tag::Tag;
@@ -603,33 +604,41 @@ fn render_results_tree(
                 ),
         )
         .child(
-            div().flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(
-                uniform_list(
-                    "agg-results-tree",
-                    row_count,
-                    cx.processor({
-                        let view_entity = view_entity.clone();
-                        move |_view, range: std::ops::Range<usize>, _window, cx| {
-                            range
-                                .map(|ix| {
-                                    let row = &visible_rows[ix];
-                                    let meta = compute_row_meta(row, &documents, cx);
-                                    render_lazy_readonly_row(
-                                        ix,
-                                        row,
-                                        &meta,
-                                        false,
-                                        view_entity.clone(),
-                                        cx,
-                                    )
-                                })
-                                .collect()
-                        }
-                    }),
-                )
+            div()
+                .flex()
+                .flex_col()
                 .flex_1()
-                .track_scroll(&view.aggregation_results_scroll),
-            ),
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .child(
+                    uniform_list(
+                        "agg-results-tree",
+                        row_count,
+                        cx.processor({
+                            let view_entity = view_entity.clone();
+                            move |_view, range: std::ops::Range<usize>, _window, cx| {
+                                range
+                                    .map(|ix| {
+                                        let row = &visible_rows[ix];
+                                        let meta = compute_row_meta(row, &documents, cx);
+                                        render_lazy_readonly_row(
+                                            row,
+                                            &meta,
+                                            false,
+                                            view_entity.clone(),
+                                            cx,
+                                        )
+                                    })
+                                    .collect()
+                            }
+                        }),
+                    )
+                    .flex_1()
+                    .track_scroll(&view.aggregation_results_scroll),
+                )
+                // The list scrolls itself; the bar reads the list's own handle.
+                .vertical_scrollbar(&view.aggregation_results_scroll),
         )
         .into_any_element()
 }

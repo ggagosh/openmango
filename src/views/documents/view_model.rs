@@ -872,7 +872,7 @@ impl DocumentViewModel {
         if let Some(ref state) = self.col_visibility_search {
             return state.clone();
         }
-        let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns..."));
+        let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns…"));
         self.col_visibility_search = Some(state.clone());
         state
     }

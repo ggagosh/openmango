@@ -121,7 +121,7 @@ impl AppCommands {
                 tab.runtime.database_progress = None; // Reset on new export
                 tab.runtime.cancellation_token = Some(cancellation_token.clone());
             }
-            state.set_status_message(Some(StatusMessage::info("Exporting...")));
+            state.set_status_message(Some(StatusMessage::info("Exporting…")));
             cx.emit(AppEvent::TransferStarted { transfer_id });
             cx.notify();
             operation_generation

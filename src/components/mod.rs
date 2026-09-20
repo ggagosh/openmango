@@ -38,6 +38,7 @@ pub mod file_picker;
 pub mod filter_builder;
 pub mod form_field;
 pub mod model_select;
+pub mod node_commands;
 pub mod query_library;
 mod status_bar;
 mod unsaved_guard;

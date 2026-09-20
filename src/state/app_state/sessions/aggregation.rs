@@ -260,7 +260,7 @@ impl AppState {
         index: usize,
     ) -> Option<usize> {
         self.edit_pipeline(session_key, Undo::Step, |aggregation| {
-            let stage = aggregation.stages.get(index).cloned()?;
+            let stage = aggregation.stages.get(index)?.duplicate();
             aggregation.stages.insert(index + 1, stage);
             insert_counts(aggregation, index + 1);
             aggregation.selected_stage = Some(index + 1);

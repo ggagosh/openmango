@@ -17,41 +17,69 @@ use crate::theme::{islands, sizing, spacing};
 
 pub struct AgentActivityView {
     state: Entity<AppState>,
+    /// What the broker's store held at the last reload. The store is a directory of JSON files,
+    /// so it is read here and never while rendering.
+    actions: Vec<ProposedAction>,
+    operations: Vec<OperationRecord>,
     _subscription: Subscription,
     _refresh: Task<()>,
 }
 
 impl AgentActivityView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&state, |_view, _state, cx| cx.notify());
+        let subscription = cx.observe(&state, |view, _state, cx| {
+            view.reload(cx);
+            cx.notify();
+        });
+        // Operations run outside the app's event stream and actions expire on their own, so the
+        // store is polled while this view is open. A poll that finds nothing new redraws nothing.
         let refresh = cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                if view.update(cx, |_view, cx| cx.notify()).is_err() {
+                if view.update(cx, |view, cx| view.reload(cx)).is_err() {
                     break;
                 }
             }
         });
-        Self { state, _subscription: subscription, _refresh: refresh }
+        let mut view = Self {
+            state,
+            actions: Vec::new(),
+            operations: Vec::new(),
+            _subscription: subscription,
+            _refresh: refresh,
+        };
+        view.reload(cx);
+        view
+    }
+
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let broker = self.state.read(cx).action_broker();
+        let actions = broker.list_all().unwrap_or_default();
+        let operations = broker.store().list_operations().unwrap_or_default();
+        if actions != self.actions || operations != self.operations {
+            self.actions = actions;
+            self.operations = operations;
+            cx.notify();
+        }
     }
 }
 
 impl Render for AgentActivityView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let broker = self.state.read(cx).action_broker();
-        let actions = broker.list_all().unwrap_or_default();
-        let operations = broker.store().list_operations().unwrap_or_default();
+        let actions = &self.actions;
+        let operations = &self.operations;
         let pending = actions
             .iter()
             .filter(|action| action.status == ActionStatus::PendingApproval)
             .cloned()
             .collect::<Vec<_>>();
         let reviewed = actions
-            .into_iter()
+            .iter()
             .filter(|action| {
                 action.status != ActionStatus::PendingApproval && action.operation_id.is_none()
             })
             .take(20)
+            .cloned()
             .collect::<Vec<_>>();
         let pending_count = pending.len();
         let has_reviewed = !reviewed.is_empty();
@@ -111,8 +139,9 @@ impl Render for AgentActivityView {
                 .bg(cx.theme().background)
                 .children(
                     operations
-                        .into_iter()
+                        .iter()
                         .take(50)
+                        .cloned()
                         .map(|operation| operation_row(self.state.clone(), operation, cx)),
                 )
                 .into_any_element()
@@ -448,7 +477,7 @@ fn action_card(
                             Button::new(("approve-agent-action", action_id.as_u128() as u64))
                                 .xsmall()
                                 .primary()
-                                .label("Approve & Run")
+                                .label("Approve and run")
                                 .on_click(move |_, window, cx| {
                                     if protected {
                                         open_typed_approval_dialog(
@@ -465,7 +494,7 @@ fn action_card(
                                             cx,
                                             "Approve and run",
                                             "OpenMango will revalidate this request, create a durable operation, and begin execution.",
-                                            "Approve & Run",
+                                            "Approve and run",
                                             false,
                                             move |_window, cx| {
                                                 AppCommands::approve_agent_action(
@@ -646,7 +675,7 @@ fn open_typed_approval_dialog(
                     cancel_button("cancel-protected-approval"),
                     Button::new("approve-protected-action")
                         .danger()
-                        .label("Approve & Run")
+                        .label("Approve and run")
                         .disabled(!matches)
                         .on_click(move |_, window, cx| {
                             if input_for_click.read(cx).value().as_ref() != target_for_click {

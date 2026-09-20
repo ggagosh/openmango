@@ -16,14 +16,43 @@ use crate::theme::spacing;
 use crate::views::CollectionView;
 
 impl CollectionView {
+    /// Closes the Explain modal if it is showing. Returns whether it was.
+    pub(in crate::views::documents) fn close_explain_modal(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session_key) = self.view_model.current_session() else {
+            return false;
+        };
+        let open = self.state.read(cx).session(&session_key).is_some_and(|session| {
+            matches!(session.data.explain.open_mode, ExplainOpenMode::Modal)
+        });
+        if open {
+            self.state.update(cx, |state, cx| {
+                state.set_explain_open_mode(&session_key, ExplainOpenMode::Closed);
+                cx.notify();
+            });
+        }
+        open
+    }
+
     pub(in crate::views::documents) fn render_explain_modal_layer(
         &mut self,
         explain: &ExplainState,
         session_key: Option<SessionKey>,
         active_subview: CollectionSubview,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !matches!(explain.open_mode, ExplainOpenMode::Modal) {
+        // A modal takes focus when it opens and gives it back when it closes. Without that its
+        // Escape handler sat off the focus path until the user clicked inside.
+        let open = matches!(explain.open_mode, ExplainOpenMode::Modal);
+        if open != self.explain_was_open {
+            self.explain_was_open = open;
+            let target = if open { &self.explain_focus } else { &self.documents_focus };
+            window.focus(target, cx);
+        }
+        if !open {
             return div().into_any_element();
         }
 
@@ -38,9 +67,9 @@ impl CollectionView {
             .gap(spacing::xs())
             .child(
                 if explain.view_mode == ExplainViewMode::Tree {
-                    Button::new("explain-mode-tree").xsmall().primary().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().primary().label("Visual tree")
                 } else {
-                    Button::new("explain-mode-tree").xsmall().ghost().label("Visual Tree")
+                    Button::new("explain-mode-tree").xsmall().ghost().label("Visual tree")
                 }
                 .on_click({
                     let state = self.state.clone();
@@ -162,6 +191,7 @@ impl CollectionView {
         div()
             .absolute()
             .inset_0()
+            .track_focus(&self.explain_focus)
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
@@ -243,7 +273,7 @@ impl CollectionView {
                                             div().into_any_element()
                                         })
                                         .child(if explain.loading {
-                                            explain_info_chip("Running...", cx.theme().primary, cx)
+                                            explain_info_chip("Running…", cx.theme().primary, cx)
                                                 .into_any_element()
                                         } else {
                                             div().into_any_element()
@@ -491,7 +521,7 @@ impl CollectionView {
                 Button::new("explain-clear-diff")
                     .xsmall()
                     .ghost()
-                    .label("Clear Diff")
+                    .label("Clear diff")
                     .disabled(session_key.is_none())
                     .on_click({
                         let state = self.state.clone();
@@ -510,7 +540,7 @@ impl CollectionView {
                 Button::new("explain-compare-prev")
                     .xsmall()
                     .ghost()
-                    .label("Compare Prev")
+                    .label("Compare prev")
                     .disabled(session_key.is_none() || !can_compare_prev)
                     .on_click({
                         let state = self.state.clone();

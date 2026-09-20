@@ -113,9 +113,8 @@ impl AppCommands {
                 return;
             };
             cx.update(|cx| {
-                state.update(cx, |_state, cx| {
-                    cx.emit(AppEvent::AgentActivityChanged);
-                    cx.notify();
+                state.update(cx, |state, cx| {
+                    state.agent_activity_changed(cx);
                 });
             });
             let result = runtime
@@ -135,8 +134,7 @@ impl AppCommands {
                         )),
                         Err(error) => StatusMessage::error(error),
                     }));
-                    cx.emit(AppEvent::AgentActivityChanged);
-                    cx.notify();
+                    state.agent_activity_changed(cx);
                 });
                 AppCommands::refresh_databases(state.clone(), target_id, cx);
             });
@@ -151,8 +149,7 @@ impl AppCommands {
                 Ok(_) => StatusMessage::info("Cancellation requested"),
                 Err(error) => StatusMessage::error(error.to_string()),
             }));
-            cx.emit(AppEvent::AgentActivityChanged);
-            cx.notify();
+            state.agent_activity_changed(cx);
         });
     }
 
@@ -163,8 +160,7 @@ impl AppCommands {
                 Ok(_) => StatusMessage::info("Agent action rejected"),
                 Err(error) => StatusMessage::error(error.to_string()),
             }));
-            cx.emit(AppEvent::AgentActivityChanged);
-            cx.notify();
+            state.agent_activity_changed(cx);
         });
     }
 }
