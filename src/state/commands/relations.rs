@@ -209,7 +209,10 @@ fn apply(
 
     // A single answer found by searching is worth keeping: the next click on this field jumps
     // straight there. A probe hit on an ObjectId is near-proof, so this needs no confirmation.
-    if let (LookupState::Found(candidate), true) = (&lookup.state, lookup.searched) {
+    // Unless the path came out of a pipeline, where it says nothing about the collection.
+    if let (LookupState::Found(candidate), true, false) =
+        (&lookup.state, lookup.searched, anchor.derived)
+    {
         let relation =
             Relation::asserted(lookup.source.clone(), candidate.target.clone(), Origin::Probe);
         state.upsert_relation(relation);
@@ -222,6 +225,29 @@ fn apply(
             let intent = lookup.intent;
             state.set_reference_lookup(None);
             open_target(state, &reference, &target, intent, cx);
+        }
+        // Pipeline results have no popover to read the answer in, so it is said in the status
+        // bar instead of being dropped.
+        (outcome, _) if anchor.derived => {
+            let id = crate::bson::bson_value_preview(lookup.reference.id(), 40);
+            let message = match outcome {
+                LookupState::Missing { searched, .. } => {
+                    format!("{id} is not in any of {searched} collections")
+                }
+                LookupState::Ambiguous(found) => format!(
+                    "{id} is in {}; open one of them to follow it",
+                    found
+                        .iter()
+                        .map(|candidate| candidate.target.collection.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                ),
+                LookupState::Failed(message) => message.clone(),
+                LookupState::Probing | LookupState::Found(_) => String::new(),
+            };
+            state.set_reference_lookup(None);
+            state.set_status_message(Some(crate::state::StatusMessage::info(message)));
+            cx.notify();
         }
         // Everything else — a peek, an empty result, several answers, a failure — stays on
         // screen for the user to read and decide.
@@ -240,7 +266,7 @@ fn open_target(
     intent: Intent,
     cx: &mut gpui_kit::Context<AppState>,
 ) {
-    let filter = mongodb::bson::doc! { "_id": reference.id().clone() };
+    let filter = reference.filter();
     let raw = filter_text(&filter);
     let database = target.database.clone();
     let collection = target.collection.clone();
@@ -833,4 +859,94 @@ async fn path_is_indexed(client: &Client, source: &FieldRef, path: &str) -> bool
         return false;
     };
     indexes.iter().any(|index| index.keys.keys().next().is_some_and(|first| first == path))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use mongodb::bson::{Bson, doc, oid::ObjectId};
+
+    use super::*;
+    use crate::bson::DocumentKey;
+    use crate::state::SessionKey;
+    use crate::state::relations::lookup::{Candidate, Intent};
+
+    /// A search that found the id in exactly one collection, which is what gets remembered.
+    fn found_in_users(id: &Bson) -> Found {
+        Found {
+            candidates: vec![Candidate {
+                target: FieldRef::id_of("shop", "users"),
+                document: doc! { "_id": id.clone() },
+            }],
+            searched: 3,
+            more: 0,
+            from_search: true,
+            error: None,
+        }
+    }
+
+    fn clicked(state: &mut AppState, path: &str, derived: bool, id: &Bson) -> Anchor {
+        let session = SessionKey::new(uuid::Uuid::new_v4(), "shop", "orders");
+        let anchor = Anchor {
+            document: DocumentKey::from_document(&doc! { "_id": 1 }, 0),
+            path: path.to_string(),
+            session,
+            derived,
+        };
+        state.set_reference_lookup(Some(ReferenceLookup::probing(
+            anchor.clone(),
+            FieldRef::new("shop", "orders", path),
+            Reference::Id(id.clone()),
+            Intent::Open,
+        )));
+        anchor
+    }
+
+    #[gpui_kit::test]
+    fn a_field_of_the_collection_teaches_the_graph_and_a_pipeline_output_does_not(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = cx.new(|_| {
+            AppState::with_config(
+                std::sync::Arc::new(crate::connection::ConnectionManager::new()),
+                crate::state::ConfigManager::with_config_dir(dir.path().into()),
+            )
+        });
+        let id = Bson::ObjectId(ObjectId::new());
+
+        state.update(cx, |state, cx| {
+            let anchor = clicked(state, "userId", false, &id);
+            apply(state, &anchor, found_in_users(&id), cx);
+            assert_eq!(state.relation_count("shop"), 1, "a real field is remembered");
+
+            // After a `$lookup`, `user.managerId` is a path in the result, not in `orders`.
+            let anchor = clicked(state, "user.managerId", true, &id);
+            apply(state, &anchor, found_in_users(&id), cx);
+            assert_eq!(state.relation_count("shop"), 1, "a pipeline's output is not");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_pipeline_output_that_leads_nowhere_says_so_in_the_status_bar(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = cx.new(|_| {
+            AppState::with_config(
+                std::sync::Arc::new(crate::connection::ConnectionManager::new()),
+                crate::state::ConfigManager::with_config_dir(dir.path().into()),
+            )
+        });
+        let id = Bson::ObjectId(ObjectId::new());
+
+        state.update(cx, |state, cx| {
+            let anchor = clicked(state, "user.managerId", true, &id);
+            let nowhere = Found { candidates: Vec::new(), ..found_in_users(&id) };
+            apply(state, &anchor, nowhere, cx);
+
+            // There is no popover over a results row to read it in, so it must not be left open.
+            assert!(state.reference_lookup().is_none());
+            let message = state.status_message().expect("said something").text.clone();
+            assert!(message.contains("not in any of 3 collections"), "{message}");
+        });
+    }
 }

@@ -344,7 +344,7 @@ pub(crate) fn render_tree_row(
                     &mut *cx,
                 )
             } else {
-                build_property_menu(menu, state.clone(), session_key, meta)
+                build_property_menu(menu, state.clone(), session_key, meta, cx)
             }
         }
     });

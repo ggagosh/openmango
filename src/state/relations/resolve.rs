@@ -24,15 +24,38 @@ pub enum Reference {
     Id(Bson),
     /// A DBRef: the document names the collection itself, so nothing has to be guessed.
     DbRef { database: Option<String>, collection: String, id: Bson },
+    /// Every id of an array, to be opened together. Never empty. They are taken to live in one
+    /// collection, which is what an array of references is, so the first one is asked about and
+    /// the rest follow it.
+    Ids(Vec<Bson>),
 }
 
 impl Reference {
+    /// The id that is looked up to find out where this points.
     pub fn id(&self) -> &Bson {
         match self {
             Reference::Id(id) => id,
             Reference::DbRef { id, .. } => id,
+            Reference::Ids(ids) => &ids[0],
         }
     }
+
+    /// The filter that shows what this points at, once the collection is known.
+    pub fn filter(&self) -> mongodb::bson::Document {
+        match self {
+            Reference::Ids(ids) => mongodb::bson::doc! { "_id": { "$in": ids.clone() } },
+            _ => mongodb::bson::doc! { "_id": self.id().clone() },
+        }
+    }
+}
+
+/// The ids of an array that holds nothing but ObjectIds, ready to be opened together.
+pub fn references_in(value: &Bson) -> Option<Reference> {
+    let Bson::Array(items) = value else {
+        return None;
+    };
+    let all_ids = !items.is_empty() && items.iter().all(|item| matches!(item, Bson::ObjectId(_)));
+    all_ids.then(|| Reference::Ids(items.clone()))
 }
 
 /// Whether a value at `path` can be followed.
@@ -119,6 +142,25 @@ mod tests {
 
     fn collections() -> Vec<String> {
         ["orders", "users", "products", "system.views"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn an_array_of_nothing_but_ids_opens_together() {
+        let ids = vec![Bson::ObjectId(ObjectId::new()), Bson::ObjectId(ObjectId::new())];
+        let reference = references_in(&Bson::Array(ids.clone())).expect("an array of ids");
+
+        // Where it points is asked of the first; all of them are shown once that is known.
+        assert_eq!(reference.id(), &ids[0]);
+        assert_eq!(reference.filter(), mongodb::bson::doc! { "_id": { "$in": ids.clone() } });
+        assert_eq!(
+            Reference::Id(ids[0].clone()).filter(),
+            mongodb::bson::doc! { "_id": ids[0].clone() }
+        );
+
+        // Mixed, empty and scalar values are not a set of references.
+        assert_eq!(references_in(&Bson::Array(vec![ids[0].clone(), Bson::Int32(1)])), None);
+        assert_eq!(references_in(&Bson::Array(Vec::new())), None);
+        assert_eq!(references_in(&ids[0]), None);
     }
 
     #[test]

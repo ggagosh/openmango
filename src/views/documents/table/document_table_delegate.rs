@@ -148,6 +148,7 @@ impl DocumentTableDelegate {
             document: self.document_key(row_ix)?,
             path,
             reference,
+            derived: false,
         })
     }
 

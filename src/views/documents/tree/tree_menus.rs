@@ -16,6 +16,8 @@ use crate::keyboard::{
     RemoveMatchingValues, RemoveSelectedField, RenameField,
 };
 use crate::state::relations::lookup::Intent;
+use crate::state::relations::path_from_segments;
+use crate::state::relations::resolve::{Reference, references_in};
 use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::export::CopyFormat;
@@ -139,6 +141,7 @@ pub(super) fn build_property_menu(
     state: Entity<AppState>,
     session_key: SessionKey,
     meta: NodeMeta,
+    cx: &App,
 ) -> PopupMenu {
     let key_label = meta.key_label.clone();
     let doc_key = meta.doc_key.clone();
@@ -446,6 +449,37 @@ pub(super) fn build_property_menu(
                 .action(Box::new(PeekReference))
                 .on_click(move |_, _window, cx| peek.follow(Intent::Peek, cx)),
         );
+    }
+
+    // An array of ids is one question, not one per element: "show me these". Read from the
+    // document when the menu opens, since a row only carries values that can be edited and an
+    // array is not one.
+    let array = resolve_document(&state, &session_key, &meta.doc_key, cx)
+        .and_then(|document| crate::bson::get_bson_at_path(&document, &meta.path).cloned())
+        .and_then(|value| references_in(&value));
+    if let Some(Reference::Ids(ids)) = &array {
+        let link = ReferenceLink {
+            state: state.clone(),
+            session: session_key.clone(),
+            document: meta.doc_key.clone(),
+            // The relation is held by the array's elements, which is how inference names it.
+            path: format!("{}[]", path_from_segments(&meta.path)),
+            reference: Reference::Ids(ids.clone()),
+            derived: false,
+        };
+        let in_new_tab = link.clone();
+        let label = format!("Open all {} referenced documents", ids.len());
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new(label)
+                    .icon(Icon::new(IconName::ArrowRight))
+                    .on_click(move |_, _window, cx| link.follow(Intent::Open, cx)),
+            )
+            .item(
+                PopupMenuItem::new("Open them in a new tab")
+                    .on_click(move |_, _window, cx| in_new_tab.follow(Intent::OpenInNewTab, cx)),
+            );
     }
 
     menu

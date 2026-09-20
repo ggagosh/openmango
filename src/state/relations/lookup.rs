@@ -18,6 +18,10 @@ pub struct Anchor {
     pub session: SessionKey,
     pub document: DocumentKey,
     pub path: String,
+    /// The path names something a pipeline produced, not a field of the collection. After a
+    /// `$lookup`, `user.companyId` is not a field of `orders`, so a value found this way is
+    /// followed but teaches the graph nothing.
+    pub derived: bool,
 }
 
 /// What the click asked for.

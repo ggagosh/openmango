@@ -35,10 +35,11 @@ use crate::components::{
     Button, ConnectionIdentity, connection_identity_tags, request_preview_collection,
 };
 use crate::keyboard::{RelationsClearFocus, RelationsFit, RelationsZoomIn, RelationsZoomOut};
+use crate::state::relations::export;
 use crate::state::relations::layout::{
     self, ARROW, CARD_WIDTH, CanvasEdge, CanvasLayout, CanvasNode, FIELD_HEIGHT, HEADER_HEIGHT,
 };
-use crate::state::{AppCommands, AppState, DatabaseKey};
+use crate::state::{AppCommands, AppState, DatabaseKey, StatusMessage};
 use crate::theme::{borders, fonts, islands, spacing};
 
 const MIN_ZOOM: f32 = 0.08;
@@ -455,50 +456,80 @@ impl RelationsView {
             )
             .children(identity.map(|identity| connection_identity_tags(&identity, cx)))
             .when(has_picture, |bar| {
-                bar.child(
-                    Button::new("relations-zoom-out")
-                        .ghost()
-                        .xsmall()
-                        .icon(Icon::new(IconName::Minus))
-                        .tooltip("Zoom out (-)")
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.zoom_about_centre(1.0 / ZOOM_STEP);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    // A fixed width in the mono face, so the buttons beside it never shift as
-                    // the number changes under a moving wheel.
-                    div()
-                        .w(px(44.0))
-                        .text_xs()
-                        .text_center()
-                        .font_family(fonts::mono())
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{}%", (self.zoom * 100.0).round())),
-                )
-                .child(
-                    Button::new("relations-zoom-in")
-                        .ghost()
-                        .xsmall()
-                        .icon(Icon::new(IconName::Plus))
-                        .tooltip("Zoom in (=)")
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.zoom_about_centre(ZOOM_STEP);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("relations-fit")
-                        .ghost()
-                        .xsmall()
-                        .label("Fit")
-                        .tooltip("Fit everything in the window (0)")
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.fit();
-                            cx.notify();
-                        })),
-                )
+                bar.child(self.export_button("relations-copy-mermaid", "Mermaid", export::mermaid))
+                    .child(self.export_button("relations-copy-dbml", "DBML", export::dbml))
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(cx.theme().border))
+                    .child(
+                        Button::new("relations-zoom-out")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Minus))
+                            .tooltip("Zoom out (-)")
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.zoom_about_centre(1.0 / ZOOM_STEP);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        // A fixed width in the mono face, so the buttons beside it never shift as
+                        // the number changes under a moving wheel.
+                        div()
+                            .w(px(44.0))
+                            .text_xs()
+                            .text_center()
+                            .font_family(fonts::mono())
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("{}%", (self.zoom * 100.0).round())),
+                    )
+                    .child(
+                        Button::new("relations-zoom-in")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Plus))
+                            .tooltip("Zoom in (=)")
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.zoom_about_centre(ZOOM_STEP);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("relations-fit")
+                            .ghost()
+                            .xsmall()
+                            .label("Fit")
+                            .tooltip("Fit everything in the window (0)")
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.fit();
+                                cx.notify();
+                            })),
+                    )
+            })
+    }
+
+    /// Copies the graph as text. The formats are ones that render as a picture where they are
+    /// pasted, so what is copied is a diagram for a pull request or a page of documentation.
+    fn export_button(
+        &self,
+        id: &'static str,
+        format: &'static str,
+        render: fn(&crate::state::relations::RelationGraph, &str) -> String,
+    ) -> impl IntoElement {
+        let state = self.state.clone();
+        let database = self.database.as_ref().map(|key| key.database.clone()).unwrap_or_default();
+        Button::new(id)
+            .ghost()
+            .xsmall()
+            .label(format)
+            .tooltip(format!("Copy these relations as {format}"))
+            .on_click(move |_, _window, cx| {
+                let text = render(state.read(cx).relations(), &database);
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                state.update(cx, |state, cx| {
+                    state.set_status_message(Some(StatusMessage::info(format!(
+                        "Copied the relations of {database} as {format}"
+                    ))));
+                    cx.notify();
+                });
             })
     }
 

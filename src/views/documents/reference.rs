@@ -39,6 +39,8 @@ pub struct ReferenceLink {
     pub document: DocumentKey,
     pub path: String,
     pub reference: Reference,
+    /// See [`LookupAnchor::derived`].
+    pub derived: bool,
 }
 
 impl ReferenceLink {
@@ -58,6 +60,7 @@ impl ReferenceLink {
             document: meta.doc_key.clone(),
             path,
             reference,
+            derived: false,
         })
     }
 
@@ -66,6 +69,7 @@ impl ReferenceLink {
             session: self.session.clone(),
             document: self.document.clone(),
             path: self.path.clone(),
+            derived: self.derived,
         }
     }
 

@@ -6,7 +6,10 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
+use crate::bson::DocumentKey;
+use crate::state::relations::resolve::reference_at;
 use crate::state::{AppState, SessionKey};
+use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down};
 
 use super::cell_renderer;
 use super::column_schema::discover_columns_raw;
@@ -83,6 +86,21 @@ impl AggregationTableDelegate {
 
     pub fn documents(&self) -> &[Document] {
         &self.documents
+    }
+
+    /// An id in a result cell, followed but never learned from: a column of a pipeline's output
+    /// is not a field of the collection it ran on.
+    fn reference_link(&self, row_ix: usize, col_ix: usize) -> Option<ReferenceLink> {
+        let path = self.column_key(col_ix)?;
+        let reference = reference_at(&path, self.cell_value(row_ix, col_ix)?)?;
+        Some(ReferenceLink {
+            state: self.state.clone(),
+            session: self.session_key.clone()?,
+            document: DocumentKey::from_document(self.documents.get(row_ix)?, row_ix),
+            path,
+            reference,
+            derived: true,
+        })
     }
 
     fn cell_value(&self, row_ix: usize, col_ix: usize) -> Option<&Bson> {
@@ -276,6 +294,7 @@ impl TableDelegate for AggregationTableDelegate {
         let content = self
             .cell_value(row_ix, col_ix)
             .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
+        let link = self.reference_link(row_ix, col_ix);
         div()
             .size_full()
             .on_mouse_down(
@@ -284,6 +303,12 @@ impl TableDelegate for AggregationTableDelegate {
                     table.delegate_mut().context_column = Some(col_ix);
                 }),
             )
+            .when_some(link, |this, link| {
+                // Stops at Cmd+click, so the row's own click-to-select is untouched.
+                this.cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+            })
             .children(content)
             .into_any_element()
     }
