@@ -37,6 +37,7 @@ pub use query_library::{
     DocumentQuery, QueryContent, QueryDefinition, QueryHistoryEntry, QueryImportReport, QueryKind,
     QueryLibrary, QueryLibraryPersistenceError, SavedQuery, SavedQueryInput, SavedQueryScope,
 };
+pub use relations::resolve::{Plan as ResolutionPlan, Reference};
 pub use relations::{
     Cardinality, Evidence, FieldRef, JoinStep, Origin, Relation, RelationGraph, RelationKind,
     RelationModel, Status as RelationStatus, Upsert,

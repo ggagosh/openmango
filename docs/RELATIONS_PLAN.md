@@ -109,7 +109,9 @@ not per view, and must be re-keyed by namespace: `collection_meta` and `forge_sc
 
 ObjectId-only removes most ambiguity: ObjectIds are near-globally unique, so a probe hit is
 near-proof. Ambiguity survives only in the rare shared-`_id` case (`users` / `user_profiles`),
-and that case opens the References view rather than a dedicated chooser.
+and then there are at most a handful of *single* documents to choose between — a popover, not
+a tab. The References view answers a different question: what points **at** this document, which
+is many documents from many collections.
 
 ### In memory: plain structs
 
@@ -157,11 +159,9 @@ replaces the stale mapping.
 3. None → rank same-database collections by name (`userId`, `user_id`, `user`, `ownerIds[]` →
    strip the id suffix, singular / plural match), probe with covered `find({_id: v}, {_id: 1})`,
    concurrency 8, `maxTimeMS` 2000. Above ~200 collections probe the top 50, offer "Search all".
-   One hit → navigate and remember. Several → the References view (§6) showing the matching
-   document from each collection, with "Always use `users` for `orders.userId`" on each group —
-   the same move Zed makes when go-to-definition is ambiguous, and one widget fewer than a
-   separate chooser. None → "No document with this `_id` in any collection of `shop`" + pick a
-   collection.
+   One hit → navigate and remember. Several → the peek popover in choose mode, one row per
+   collection holding the id, "Remember for `orders.userId`" checked. None → "No document with
+   this `_id` in any collection of `shop`" + pick a collection.
 
 Value-first probing resolves polymorphic references (`refPath`) for free. Click-time probes use
 the connection's own read preference; `secondaryPreferred` is a per-operation setting for
@@ -242,8 +242,6 @@ idea: seeing the twelve orders beats seeing "`orders.userId` · 12" and clicking
 - **Loading**: groups load lazily and independently with `limit` + `maxTimeMS`, so one slow
   collection never blocks the rest. An unindexed group on a production / protected connection
   does not run by itself: its body is a "Run anyway" button.
-- **Second use**: an ambiguous click-time probe (§5) opens this same view with one group per
-  collection that holds the id.
 - Tabular numerals for the counts, so lazy results do not jitter the headers.
 
 The peek popover stays for the common single-target jump: a glance should not cost a tab.

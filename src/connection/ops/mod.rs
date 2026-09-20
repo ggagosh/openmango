@@ -8,5 +8,6 @@ pub mod explain;
 pub mod export;
 pub mod import;
 pub mod indexes;
+pub mod relations;
 pub mod schema;
 pub mod stats;
