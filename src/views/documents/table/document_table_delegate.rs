@@ -11,7 +11,10 @@ use crate::state::relations::resolve::reference_at;
 use crate::state::{AppCommands, AppState, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::CollectionView;
-use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down, peek_arrow};
+use crate::views::documents::reference::{
+    IncomingLink, ReferenceLink, incoming_arrow, on_incoming_mouse_down, on_reference_mouse_down,
+    peek_arrow,
+};
 
 use super::cell_renderer;
 
@@ -145,6 +148,18 @@ impl DocumentTableDelegate {
             document: self.document_key(row_ix)?,
             path,
             reference,
+        })
+    }
+
+    /// The `_id` column: not a link out, but where "what points at this?" is asked from.
+    fn incoming_link(&self, row_ix: usize, col_ix: usize) -> Option<IncomingLink> {
+        if self.column_key(col_ix)? != "_id" {
+            return None;
+        }
+        Some(IncomingLink {
+            state: self.state.clone(),
+            session: self.session_key.clone()?,
+            id: self.cell_value(row_ix, col_ix)?.clone(),
         })
     }
 
@@ -341,6 +356,7 @@ impl TableDelegate for DocumentTableDelegate {
             .cell_value(row_ix, col_ix)
             .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
         let link = self.reference_link(row_ix, col_ix);
+        let incoming = self.incoming_link(row_ix, col_ix);
 
         div()
             .size_full()
@@ -360,8 +376,14 @@ impl TableDelegate for DocumentTableDelegate {
                     .hover(|style| style.underline())
                     .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
             })
+            .when_some(incoming.clone(), |this, link| {
+                this.cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
+            })
             .children(content)
             .when_some(link, |this, link| this.child(peek_arrow(link, TABLE_CELL_GROUP, cx)))
+            .when_some(incoming, |this, link| this.child(incoming_arrow(link, TABLE_CELL_GROUP)))
             .into_any_element()
     }
 

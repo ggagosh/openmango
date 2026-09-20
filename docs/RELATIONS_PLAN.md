@@ -178,6 +178,7 @@ of times a day, so almost nothing here animates.
 | --- | --- |
 | Click / double-click | Unchanged: select / edit |
 | Cmd+click on a reference | Navigate in this tab |
+| Cmd+click on a document's `_id` | Find what references it — the same gesture, asked inward |
 | Cmd+Shift+click | Navigate in a new tab |
 | Cmd held | References get underline + pointer cursor |
 | Row hover | Small arrow after the value; click = peek |
@@ -212,7 +213,8 @@ of times a day, so almost nothing here animates.
 ### Details that compound
 
 - A jump that returns exactly one document **expands it** in tree view.
-- Link affordance is underline + arrow, never color alone. Broken reference is icon + sentence,
+- Link affordance is underline + arrow, never color alone. The arrow points right on a
+  reference and left on an `_id`, because the jump each one offers goes the opposite way. Broken reference is icon + sentence,
   neutral tone, two actions ("Search other collections", "Edit relation"). "Unindexed" on a
   References group is an icon **and** a label.
 - Peek radius is concentric (inner = popover radius − padding) from existing tokens; elevation from

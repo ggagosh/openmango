@@ -19,8 +19,8 @@ use crate::bson::{DocumentKey, bson_value_preview};
 use crate::state::relations::lookup::{
     Anchor as LookupAnchor, Candidate, Intent, LookupState, ReferenceLookup,
 };
-use crate::state::relations::path_from_segments;
 use crate::state::relations::resolve::{Reference, reference_at};
+use crate::state::relations::{FieldRef, path_from_segments};
 use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{borders, spacing};
 
@@ -86,6 +86,72 @@ impl ReferenceLink {
             .reference_lookup()
             .filter(|lookup| lookup.is_at(&self.session, &self.document, &self.path))
     }
+}
+
+/// A document's own `_id`.
+///
+/// It points nowhere, so it is not a link out. But everything that points *at* this document
+/// points at this value, which makes it the one place "what references this?" belongs — and
+/// the place a reader looks for it.
+#[derive(Clone)]
+pub struct IncomingLink {
+    pub state: Entity<AppState>,
+    pub session: SessionKey,
+    pub id: Bson,
+}
+
+impl IncomingLink {
+    /// Build a link for the `_id` row of a document.
+    pub fn for_node(
+        state: &Entity<AppState>,
+        session: Option<&SessionKey>,
+        meta: &NodeMeta,
+    ) -> Option<Self> {
+        let session = session?;
+        if path_from_segments(&meta.path) != "_id" {
+            return None;
+        }
+        Some(Self { state: state.clone(), session: session.clone(), id: meta.value.clone()? })
+    }
+
+    pub fn find(&self, cx: &mut App) {
+        let target = FieldRef::id_of(&self.session.database, &self.session.collection);
+        AppCommands::find_references(self.state.clone(), target, self.id.clone(), cx);
+    }
+}
+
+/// Cmd+click an `_id` to ask what points at it — the same gesture as following a reference,
+/// because it is the same question asked the other way round.
+pub fn on_incoming_mouse_down(
+    link: IncomingLink,
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    move |event, _window, cx| {
+        if !(event.modifiers.secondary() || event.modifiers.control) || event.click_count != 1 {
+            return;
+        }
+        cx.stop_propagation();
+        link.find(cx);
+    }
+}
+
+/// The arrow that asks what points here.
+///
+/// It points the other way from a reference's arrow, because the jump it offers goes the other
+/// way: out of the document for a reference, into the collections that name it for an `_id`.
+pub fn incoming_arrow(link: IncomingLink, group: &'static str) -> AnyElement {
+    div()
+        .flex_none()
+        .invisible()
+        .group_hover(group, |style: StyleRefinement| style.visible())
+        .child(
+            KitButton::new("reference-incoming")
+                .ghost()
+                .xsmall()
+                .icon(Icon::new(IconName::ArrowLeft))
+                .tooltip("Find what references this document")
+                .on_click(move |_, _window, cx| link.find(cx)),
+        )
+        .into_any_element()
 }
 
 /// Cmd+click follows; Cmd+Shift+click opens a tab of its own. Plain and double clicks are left

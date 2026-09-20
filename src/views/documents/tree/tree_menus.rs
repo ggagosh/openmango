@@ -415,6 +415,21 @@ pub(super) fn build_property_menu(
             }),
     );
 
+    // On the `_id` row, the useful direction is inward.
+    if is_id {
+        let state = state.clone();
+        let session_key = session_key.clone();
+        let doc_key = doc_key.clone();
+        menu = menu.separator().item(
+            PopupMenuItem::new("Find references")
+                .icon(Icon::new(crate::assets::AppIcon::Workflow))
+                .action(Box::new(FindReferences))
+                .on_click(move |_, _window, cx| {
+                    find_references_for(&state, &session_key, &doc_key, cx);
+                }),
+        );
+    }
+
     // Only offered on a value that can actually be followed, so the menu never promises a jump
     // it cannot make.
     if let Some(link) = ReferenceLink::for_node(&state, Some(&session_key), &meta) {

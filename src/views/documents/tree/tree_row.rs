@@ -20,7 +20,10 @@ use crate::components::filter_builder::drag::{
 use crate::state::{AppState, SessionKey};
 use crate::theme::{borders, colors, spacing};
 use crate::views::documents::node_meta::NodeMeta;
-use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down, peek_arrow};
+use crate::views::documents::reference::{
+    IncomingLink, ReferenceLink, incoming_arrow, on_incoming_mouse_down, on_reference_mouse_down,
+    peek_arrow,
+};
 use crate::views::documents::state::SearchMatcher;
 
 use super::super::CollectionView;
@@ -128,6 +131,10 @@ pub(crate) fn render_tree_row(
     // only the value already in hand, no query.
     let reference_link =
         meta.and_then(|meta| ReferenceLink::for_node(&state, session_key.as_ref(), meta));
+    // The document's own `_id` is the other half of the same idea: not a link out, but where
+    // "what points at this?" is asked from.
+    let incoming_link =
+        meta.and_then(|meta| IncomingLink::for_node(&state, session_key.as_ref(), meta));
 
     let is_draggable_field = drag_enabled && !is_root && meta.is_some();
     // Only clone the (potentially heavy) node metadata when this row can
@@ -265,6 +272,7 @@ pub(crate) fn render_tree_row(
             view.clone(),
             value_drag,
             reference_link,
+            incoming_link,
             search_opts,
             current_match_id,
             cx,
@@ -444,6 +452,7 @@ fn render_value_column(
     view: Entity<CollectionView>,
     value_drag: Option<DragValue>,
     reference_link: Option<ReferenceLink>,
+    incoming_link: Option<IncomingLink>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     cx: &App,
@@ -502,10 +511,19 @@ fn render_value_column(
                 .hover(|style| style.underline())
                 .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
                 .into_any_element()
+        } else if let Some(link) = incoming_link.clone() {
+            // The same gesture as a reference, asking the same question the other way round.
+            value_text(value_label, value_color)
+                .id("tree-value-incoming")
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
+                .into_any_element()
         } else {
             value_text(value_label, value_color).into_any_element()
         })
-        .when_some(reference_link, |this, link| this.child(peek_arrow(link, TREE_ROW_GROUP, cx)));
+        .when_some(reference_link, |this, link| this.child(peek_arrow(link, TREE_ROW_GROUP, cx)))
+        .when_some(incoming_link, |this, link| this.child(incoming_arrow(link, TREE_ROW_GROUP)));
 
     if let Some(value_drag) = value_drag
         && !is_editing
