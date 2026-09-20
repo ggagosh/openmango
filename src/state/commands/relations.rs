@@ -272,6 +272,10 @@ const INFER_MAX_TIME: Duration = Duration::from_secs(10);
 /// remote server timed out and contributed nothing, silently.
 const SAMPLE_MAX_TIME: Duration = Duration::from_secs(60);
 
+/// Names kept for the report. Enough to read through; a database that exceeds it has a
+/// different problem than a list will solve.
+const MAX_REPORTED: usize = 500;
+
 impl AppCommands {
     /// Work out what the fields of a collection point at, and store what the data confirms.
     ///
@@ -388,6 +392,9 @@ impl AppCommands {
             let mut read = 0usize;
             let mut failed = 0usize;
             let mut unplaced = 0usize;
+            // Bounded: a pathological database should not turn a report into a memory problem.
+            let mut unplaced_fields: Vec<String> = Vec::new();
+            let mut failed_collections: Vec<String> = Vec::new();
             for (index, collection) in collections.iter().enumerate() {
                 if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
@@ -421,6 +428,9 @@ impl AppCommands {
                             log::warn!("Relations: {database}.{collection} not read: {error}");
                         }
                         failed += 1;
+                        if failed_collections.len() < MAX_REPORTED {
+                            failed_collections.push(collection.clone());
+                        }
                         cx.update(|cx| {
                             state.update(cx, |state, cx| {
                                 if let Some(run) = state.inference_run_mut() {
@@ -435,6 +445,11 @@ impl AppCommands {
                 read += 1;
                 found += inferred.relations.len();
                 unplaced += inferred.unresolved.len();
+                for field in &inferred.unresolved {
+                    if unplaced_fields.len() < MAX_REPORTED {
+                        unplaced_fields.push(format!("{collection}.{field}"));
+                    }
+                }
 
                 cx.update(|cx| {
                     state.update(cx, |state, cx| {
@@ -456,6 +471,8 @@ impl AppCommands {
                         found,
                         failed,
                         unplaced,
+                        unplaced_fields,
+                        failed_collections,
                         stopped,
                     };
                     state.set_inference_run(None);

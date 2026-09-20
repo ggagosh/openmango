@@ -393,6 +393,12 @@ pub struct InferenceSummary {
     pub found: usize,
     pub failed: usize,
     pub unplaced: usize,
+    /// The fields behind `unplaced`, qualified by collection. A count says how much was not
+    /// placed; only the names say what kind of thing it was — an embedded object's id, a
+    /// polymorphic field, or a reference genuinely missed.
+    pub unplaced_fields: Vec<String>,
+    /// Collections that could not be read, by name.
+    pub failed_collections: Vec<String>,
     pub stopped: bool,
 }
 
@@ -415,6 +421,24 @@ impl InferenceSummary {
             parts.push("stopped early".to_string());
         }
         format!("{}.", parts.join(" · "))
+    }
+
+    /// The whole outcome as text, for pasting somewhere it can be read alongside a schema.
+    pub fn report(&self) -> String {
+        let mut out = format!("{} — {}\n", self.database, self.line());
+        if !self.failed_collections.is_empty() {
+            out.push_str("\nCould not be read:\n");
+            for name in &self.failed_collections {
+                out.push_str(&format!("  {name}\n"));
+            }
+        }
+        if !self.unplaced_fields.is_empty() {
+            out.push_str("\nHeld ids that matched nothing:\n");
+            for field in &self.unplaced_fields {
+                out.push_str(&format!("  {field}\n"));
+            }
+        }
+        out
     }
 }
 
@@ -750,6 +774,30 @@ mod summary_tests {
     use super::*;
 
     #[test]
+    fn a_report_names_what_a_count_cannot_explain() {
+        // `meta.locations[]._id` is an embedded object's id and points at nothing; `modelId` is
+        // polymorphic. A count of 2 cannot tell them apart, and the names can.
+        let summary = InferenceSummary {
+            database: "au_new".into(),
+            read: 57,
+            total: 58,
+            found: 104,
+            failed: 1,
+            unplaced: 2,
+            unplaced_fields: vec!["tasks.meta.locations[]._id".into(), "auditlogs.modelId".into()],
+            failed_collections: vec!["hugecollection".into()],
+            stopped: false,
+        };
+
+        let report = summary.report();
+        assert!(report.starts_with("au_new — 104 relations found"));
+        assert!(report.contains("Could not be read:\n  hugecollection"));
+        assert!(report.contains("Held ids that matched nothing:"));
+        assert!(report.contains("  tasks.meta.locations[]._id"));
+        assert!(report.contains("  auditlogs.modelId"));
+    }
+
+    #[test]
     fn a_summary_says_what_it_could_not_do() {
         let clean = InferenceSummary {
             database: "shop".into(),
@@ -758,6 +806,8 @@ mod summary_tests {
             found: 67,
             failed: 0,
             unplaced: 0,
+            unplaced_fields: Vec::new(),
+            failed_collections: Vec::new(),
             stopped: false,
         };
         assert_eq!(clean.line(), "67 relations found · 58 of 58 collections read.");

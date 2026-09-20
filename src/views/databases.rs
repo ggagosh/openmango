@@ -288,7 +288,14 @@ impl DatabaseView {
         let last_run = state_ref
             .inference_summary()
             .filter(|summary| summary.database == database_name)
-            .map(|summary| summary.line());
+            .cloned();
+        let last_line = last_run.as_ref().map(|summary| summary.line());
+        // Worth copying only when there is something to read beyond the counts.
+        let report = last_run
+            .filter(|summary| {
+                !summary.unplaced_fields.is_empty() || !summary.failed_collections.is_empty()
+            })
+            .map(|summary| summary.report());
         let busy_elsewhere = state_ref.inference_run().is_some() && run.is_none();
 
         let mut row = div()
@@ -341,8 +348,8 @@ impl DatabaseView {
                         .text_color(cx.theme().muted_foreground)
                         // What the last search could not do is worth more than what it did: a
                         // small number with no explanation is the thing that wastes time.
-                        .child(if let Some(summary) = last_run {
-                            summary
+                        .child(if let Some(line) = last_line {
+                            line
                         } else if known == 0 {
                             "Nothing is known yet. Inferring reads a sample of every collection \
                              and confirms each guess against the data."
@@ -353,6 +360,16 @@ impl DatabaseView {
                                 .to_string()
                         }),
                 )
+                .children(report.map(|report| {
+                    Button::new("copy-inference-report")
+                        .ghost()
+                        .xsmall()
+                        .label("Copy details")
+                        .tooltip("Copy the fields this search could not place")
+                        .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(report.clone()));
+                        })
+                }))
                 .child(
                     Button::new("infer-relations-db")
                         .xsmall()
