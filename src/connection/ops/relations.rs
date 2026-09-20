@@ -45,10 +45,16 @@ pub async fn probe_id_async(
     max_time: Duration,
 ) -> Vec<String> {
     let db = client.database(database);
-    let mut found: Vec<(usize, String)> =
-        futures::stream::iter(collections.iter().enumerate().map(|(rank, collection)| {
+    // Each probe owns its name and namespace, so nothing borrows the caller's slice across an
+    // await point and the whole batch is one self-contained set of futures.
+    let probes: Vec<_> = collections
+        .iter()
+        .enumerate()
+        .map(|(rank, collection)| {
             let coll = db.collection::<Document>(collection);
             let id = id.clone();
+            let name = collection.clone();
+            let namespace = format!("{database}.{collection}");
             async move {
                 let hit = coll
                     .find_one(doc! { "_id": id })
@@ -58,19 +64,24 @@ pub async fn probe_id_async(
                 // A collection that errors or times out is reported as "not here". The search
                 // is a convenience, and one unreadable collection must not fail the whole jump.
                 match hit {
-                    Ok(Some(_)) => Some((rank, collection.clone())),
+                    Ok(Some(_)) => Some((rank, name)),
                     Ok(None) => None,
                     Err(error) => {
-                        log::debug!("Probe of {database}.{collection} failed: {error}");
+                        log::debug!("Probe of {namespace} failed: {error}");
                         None
                     }
                 }
             }
-        }))
+        })
+        .collect();
+
+    let mut found: Vec<(usize, String)> = futures::stream::iter(probes)
         .buffer_unordered(PROBE_CONCURRENCY)
-        .filter_map(|hit| async move { hit })
-        .collect()
-        .await;
+        .collect::<Vec<Option<(usize, String)>>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
 
     found.sort_by_key(|(rank, _)| *rank);
     found.into_iter().map(|(_, collection)| collection).collect()

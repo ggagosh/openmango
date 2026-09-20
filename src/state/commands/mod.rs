@@ -69,6 +69,7 @@ mod documents;
 mod explain;
 mod indexes;
 mod operations;
+mod relations;
 mod schema;
 pub use documents::save_as::ExportProgress;
 pub(crate) use schema::{SCHEMA_SAMPLE_SIZE, build_schema_analysis};

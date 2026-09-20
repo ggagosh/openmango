@@ -57,6 +57,7 @@ use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
+use crate::state::relations::lookup::ReferenceLookup;
 use crate::state::relations::{
     FieldRef, Relation, RelationGraph, Status as RelationStatus, Upsert,
 };
@@ -95,6 +96,9 @@ pub struct AppState {
     /// model learned on dev is already there against production.
     relations: RelationGraph,
     relations_persistence_blocked: bool,
+    /// The reference the user is looking at, if any. One at a time: a peek is a glance at one
+    /// value, and a second click replaces the first.
+    reference_lookup: Option<ReferenceLookup>,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -247,6 +251,7 @@ impl AppState {
             query_library_persistence_blocked,
             relations,
             relations_persistence_blocked: relations_load_error.is_some(),
+            reference_lookup: None,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -457,6 +462,21 @@ impl AppState {
 
     pub fn relations(&self) -> &RelationGraph {
         &self.relations
+    }
+
+    pub fn reference_lookup(&self) -> Option<&ReferenceLookup> {
+        self.reference_lookup.as_ref()
+    }
+
+    pub fn set_reference_lookup(&mut self, lookup: Option<ReferenceLookup>) {
+        self.reference_lookup = lookup;
+    }
+
+    /// Toggle "remember this" in the ambiguous chooser.
+    pub fn set_reference_lookup_remember(&mut self, remember: bool) {
+        if let Some(lookup) = self.reference_lookup.as_mut() {
+            lookup.remember = remember;
+        }
     }
 
     /// Store a relation and persist the model. Returns what changed, so a caller doing

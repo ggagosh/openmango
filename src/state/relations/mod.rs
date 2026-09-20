@@ -10,6 +10,7 @@
 //! running inference there. A wrong entry from two unrelated apps sharing a database name heals
 //! itself, because every jump is still confirmed by a probe.
 
+pub mod lookup;
 pub mod resolve;
 
 use std::collections::{HashMap, HashSet, VecDeque};
