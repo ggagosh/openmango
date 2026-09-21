@@ -499,6 +499,14 @@ impl FilterCondition {
             }
             FieldType::Document => parse_bson_from_relaxed_json(raw)
                 .map_err(|_| "Enter a document like { status: \"active\" }".to_string()),
+            // A type the builder has no editor for (binary, UUID, timestamp) arrives as the
+            // Extended JSON `bson_value_to_input` wrote for it. Read it back as that type, or
+            // the filter compares a string of JSON and matches nothing. A wrapper that stays a
+            // document is not one of those, and everything else is text.
+            FieldType::Unknown if raw.starts_with('{') => Ok(parse_bson_from_relaxed_json(raw)
+                .ok()
+                .filter(|value| !matches!(value, Bson::Document(_)))
+                .unwrap_or_else(|| Bson::String(raw.to_string()))),
             _ => Ok(Bson::String(raw.to_string())),
         }
     }
@@ -1381,6 +1389,28 @@ mod tests {
         FilterOperator, FilterTree,
     };
     use mongodb::bson::{Bson, doc};
+
+    /// The builder has no binary editor, so a dropped UUID is an Unknown-typed condition. It
+    /// must still filter on the binary value: as a string it matches nothing, with no error.
+    #[test]
+    fn a_dragged_uuid_filters_as_binary_not_as_text() {
+        let uuid = Bson::Binary(mongodb::bson::Binary {
+            subtype: mongodb::bson::spec::BinarySubtype::Uuid,
+            bytes: (0x00..0x10).collect(),
+        });
+        let mut condition = FilterCondition::new(1);
+        condition.field = "sessionId".to_string();
+        condition.set_field_type(FieldType::from_bson(&uuid));
+        condition.set_operator(FilterOperator::Eq);
+        condition.value = super::drag_value_for(condition.field_type, condition.operator, &uuid);
+        assert_eq!(condition.to_document(), Some(doc! { "sessionId": uuid }));
+
+        // Text a person typed into an Unknown field stays text, braces or not.
+        condition.value = ConditionValue::Scalar("{not json".to_string());
+        assert_eq!(condition.to_document(), Some(doc! { "sessionId": "{not json" }));
+        condition.value = ConditionValue::Scalar("{ a: 1 }".to_string());
+        assert_eq!(condition.to_document(), Some(doc! { "sessionId": "{ a: 1 }" }));
+    }
 
     #[test]
     fn string_contains_serializes_to_regex() {
