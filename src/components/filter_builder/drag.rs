@@ -1,9 +1,8 @@
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::{PathSegment, bson_value_preview};
-use crate::theme::{borders, fonts, spacing};
+use crate::theme::{colors, fonts, spacing};
 
 use super::types::FieldType;
 
@@ -43,44 +42,40 @@ impl DragValue {
     }
 }
 
+/// The ghost of a key lifted off a tree row: the field's whole path, in the key's own color and
+/// size, so it reads as the row's text picked up rather than a label about it.
 pub struct DragFieldPreview {
     pub path: String,
-    pub field_type: FieldType,
 }
 
 impl Render for DragFieldPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .rounded(borders::radius_sm())
-            .bg(cx.theme().primary)
-            .text_color(cx.theme().primary_foreground)
-            .text_xs()
-            .font_family(fonts::mono())
-            .shadow_md()
-            .child(format!("{} ({:?})", self.path, self.field_type))
+        tree_text_ghost(self.path.clone(), colors::syntax_key(cx), cx)
     }
 }
 
+/// The ghost of a value lifted off a tree row, in the color the row draws that value in.
 pub struct DragValuePreview {
     pub preview: String,
-    pub field_type: FieldType,
+    pub color: Hsla,
 }
 
 impl Render for DragValuePreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .rounded(borders::radius_sm())
-            .bg(cx.theme().secondary)
-            .text_color(cx.theme().foreground)
-            .text_xs()
-            .font_family(fonts::mono())
-            .shadow_md()
-            .child(format!("{} ({:?})", self.preview, self.field_type))
+        tree_text_ghost(self.preview.clone(), self.color, cx)
     }
+}
+
+/// The padding matches the tree's own search highlight, which is as far as the ghost's text
+/// sits from the text it was lifted off.
+fn tree_text_ghost(text: String, color: Hsla, cx: &App) -> Div {
+    crate::components::drag::ghost(cx)
+        .px(spacing::xs())
+        .py(px(1.0))
+        .font_family(fonts::mono())
+        .text_sm()
+        .text_color(color)
+        .child(text)
 }
 
 /// `[Key("address"), Key("city")]` → `"address.city"`, array indices as `items.0.name`.

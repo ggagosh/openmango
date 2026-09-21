@@ -396,8 +396,64 @@ fn render_key_column(
         && search_opts.matcher.as_ref().is_some_and(|matcher| matcher.matches(&key_label));
     let is_current_match = current_match_id.is_some_and(|id| id == item_id);
 
+    let key_text = div()
+        .flex()
+        .items_center()
+        .gap(spacing::xs())
+        .text_sm()
+        .text_color(key_color)
+        .overflow_hidden()
+        .text_ellipsis()
+        // Highlights pad outward through matching negative margins, so the key keeps its
+        // place and size.
+        .when(is_key_match && !is_dirty, {
+            let dirty_bg = colors::bg_dirty(cx);
+            move |s: Div| {
+                s.bg(dirty_bg)
+                    .rounded(borders::radius_sm())
+                    .px(spacing::xs())
+                    .mx(-spacing::xs())
+                    .py(px(1.0))
+                    .my(px(-1.0))
+            }
+        })
+        .when(is_current_match && is_key_match, |s: Div| {
+            s.border_1()
+                .border_color(cx.theme().primary)
+                .rounded(borders::radius_sm())
+                .px(spacing::xs())
+                .mx(-(spacing::xs() + px(1.0)))
+                .py(px(1.0))
+                .my(px(-2.0))
+        })
+        .child(key_label)
+        // Trailing, so marking a document unsaved never pushes its key sideways.
+        .when(is_root && is_dirty, |s: Div| {
+            s.child(div().flex_shrink_0().size(px(6.0)).rounded_full().bg(cx.theme().primary))
+        });
+
+    // The text is the drag source, not the column around it: the ghost is drawn at its source's
+    // origin, so it lifts off the key it came from and stays under the pointer.
+    let key_text = match key_drag {
+        Some(key_drag) => {
+            let path = key_drag.path.clone();
+            div()
+                .id("tree-key-text")
+                .min_w(px(0.0))
+                .cursor_grab()
+                .on_drag(key_drag, move |_drag, _grab_offset, window, cx| {
+                    cx.stop_propagation();
+                    crate::components::drag::closed_hand_while_dragging(window, cx);
+                    cx.new(|_| DragFieldPreview { path: path.clone() })
+                })
+                .child(key_text)
+                .into_any_element()
+        }
+        None => key_text.into_any_element(),
+    };
+
     // Static: the row around it is keyed by node.
-    let mut key = div()
+    div()
         .id("tree-key")
         .flex()
         .items_center()
@@ -406,57 +462,7 @@ fn render_key_column(
         .min_w(px(0.0))
         .pl(px(6.0 + 14.0 * depth as f32))
         .child(leading)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(spacing::xs())
-                .text_sm()
-                .text_color(key_color)
-                .overflow_hidden()
-                .text_ellipsis()
-                // Highlights pad outward through matching negative margins, so the key keeps its
-                // place and size.
-                .when(is_key_match && !is_dirty, {
-                    let dirty_bg = colors::bg_dirty(cx);
-                    move |s: Div| {
-                        s.bg(dirty_bg)
-                            .rounded(borders::radius_sm())
-                            .px(spacing::xs())
-                            .mx(-spacing::xs())
-                            .py(px(1.0))
-                            .my(px(-1.0))
-                    }
-                })
-                .when(is_current_match && is_key_match, |s: Div| {
-                    s.border_1()
-                        .border_color(cx.theme().primary)
-                        .rounded(borders::radius_sm())
-                        .px(spacing::xs())
-                        .mx(-(spacing::xs() + px(1.0)))
-                        .py(px(1.0))
-                        .my(px(-2.0))
-                })
-                .child(key_label)
-                // Trailing, so marking a document unsaved never pushes its key sideways.
-                .when(is_root && is_dirty, |s: Div| {
-                    s.child(
-                        div().flex_shrink_0().size(px(6.0)).rounded_full().bg(cx.theme().primary),
-                    )
-                }),
-        );
-
-    if let Some(key_drag) = key_drag {
-        let preview_path = key_drag.path.clone();
-        let preview_type = key_drag.field_type;
-        key = key.cursor_grab().on_drag(key_drag, move |_drag, grab_offset, window, cx| {
-            cx.stop_propagation();
-            let preview = DragFieldPreview { path: preview_path.clone(), field_type: preview_type };
-            crate::components::drag::at_cursor(grab_offset, preview, window, cx)
-        });
-    }
-
-    key
+        .child(key_text)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -522,47 +528,57 @@ fn render_value_column(
                 )
             }
         })
-        .child(if is_editing {
-            render_inline_editor(inline_state, inline_error, view.clone(), cx)
-        } else if let Some(link) = reference_link.clone() {
-            // Underlined on hover and followed on Cmd+click. Plain click still selects and
-            // double-click still edits, because this handler ignores everything else.
-            value_text(value_label, value_color)
-                .id("tree-value-link")
-                .cursor_pointer()
-                .hover(|style| style.underline())
-                .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
-                .into_any_element()
-        } else if let Some(link) = incoming_link.clone() {
-            // The same gesture as a reference, asking the same question the other way round.
-            value_text(value_label, value_color)
-                .id("tree-value-incoming")
-                .cursor_pointer()
-                .hover(|style| style.underline())
-                .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
-                .into_any_element()
-        } else if let Some(tooltip) = details_tooltip {
-            value_text(value_label, value_color)
-                .id("tree-value-details")
-                .tooltip(tooltip)
-                .into_any_element()
-        } else {
-            value_text(value_label, value_color).into_any_element()
+        .child({
+            let text = if is_editing {
+                render_inline_editor(inline_state, inline_error, view.clone(), cx)
+            } else if let Some(link) = reference_link.clone() {
+                // Underlined on hover and followed on Cmd+click. Plain click still selects and
+                // double-click still edits, because this handler ignores everything else.
+                value_text(value_label, value_color)
+                    .id("tree-value-link")
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+                    .into_any_element()
+            } else if let Some(link) = incoming_link.clone() {
+                // The same gesture as a reference, asking the same question the other way round.
+                value_text(value_label, value_color)
+                    .id("tree-value-incoming")
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
+                    .into_any_element()
+            } else if let Some(tooltip) = details_tooltip {
+                value_text(value_label, value_color)
+                    .id("tree-value-details")
+                    .tooltip(tooltip)
+                    .into_any_element()
+            } else {
+                value_text(value_label, value_color).into_any_element()
+            };
+            // The text is the drag source, not the column around it: the ghost is drawn at its
+            // source's origin, so it lifts off the value it came from and stays under the pointer.
+            match value_drag.filter(|_| !is_editing) {
+                Some(value_drag) => {
+                    let preview = value_drag.preview.clone();
+                    div()
+                        .id("tree-value-text")
+                        .min_w(px(0.0))
+                        .cursor_grab()
+                        .on_drag(value_drag, move |_drag, _grab_offset, window, cx| {
+                            cx.stop_propagation();
+                            crate::components::drag::closed_hand_while_dragging(window, cx);
+                            let preview = preview.clone();
+                            cx.new(|_| DragValuePreview { preview, color: value_color })
+                        })
+                        .child(text)
+                        .into_any_element()
+                }
+                None => text,
+            }
         })
         .when_some(reference_link, |this, link| this.child(peek_arrow(link, TREE_ROW_GROUP, cx)))
         .when_some(incoming_link, |this, link| this.child(incoming_arrow(link, TREE_ROW_GROUP)));
-
-    if let Some(value_drag) = value_drag
-        && !is_editing
-    {
-        let preview = value_drag.preview.clone();
-        let preview_type = value_drag.field_type;
-        value = value.cursor_grab().on_drag(value_drag, move |_drag, grab_offset, window, cx| {
-            cx.stop_propagation();
-            let preview = DragValuePreview { preview: preview.clone(), field_type: preview_type };
-            crate::components::drag::at_cursor(grab_offset, preview, window, cx)
-        });
-    }
 
     value
 }

@@ -126,7 +126,7 @@ impl Render for TabGhost {
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().tab_active)
-                .opacity(0.75)
+                .opacity(crate::components::drag::GHOST_OPACITY)
                 .font_family(fonts::tabs())
                 .text_size(px(13.0))
                 .text_color(cx.theme().tab_active_foreground)

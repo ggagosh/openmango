@@ -50,21 +50,28 @@ struct DraggedFilterNode {
     label: String,
 }
 
+/// The handle a condition or group is dragged by, and what its ghost starts with.
+const DRAG_HANDLE_SIZE: f32 = 24.0;
+
 struct DraggedFilterPreview {
     label: String,
 }
 
 impl Render for DraggedFilterPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .rounded(borders::radius_sm())
-            .bg(cx.theme().primary)
-            .text_color(cx.theme().primary_foreground)
+        // Drawn at the handle's origin and starting with the same icon, so the ghost's handle
+        // lands on the one being held and the condition's summary trails from it.
+        crate::components::drag::ghost(cx)
+            .pr(spacing::sm())
             .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .shadow_md()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(DRAG_HANDLE_SIZE))
+                    .child(Icon::new(IconName::ChevronsUpDown).small()),
+            )
             .child(self.label.clone())
     }
 }
@@ -2134,7 +2141,7 @@ impl FilterBuilderPanel {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(24.0))
+            .size(px(DRAG_HANDLE_SIZE))
             .rounded(borders::radius_sm())
             .cursor_grab()
             .text_color(cx.theme().muted_foreground)
@@ -2147,13 +2154,13 @@ impl FilterBuilderPanel {
                 },
                 {
                     let view = view.clone();
-                    move |drag: &DraggedFilterNode, grab_offset, window, cx| {
+                    move |drag: &DraggedFilterNode, _grab_offset, window, cx| {
                         cx.stop_propagation();
                         view.update(cx, |this, _cx| {
                             this.drag_source = Some(node_id);
                         });
-                        let preview = DraggedFilterPreview { label: drag.label.clone() };
-                        crate::components::drag::at_cursor(grab_offset, preview, window, cx)
+                        crate::components::drag::closed_hand_while_dragging(window, cx);
+                        cx.new(|_| DraggedFilterPreview { label: drag.label.clone() })
                     }
                 },
             )

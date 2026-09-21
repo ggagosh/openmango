@@ -1,56 +1,45 @@
-//! What every drag in the app shares: a preview that sits at the pointer, a closed hand while
+//! What every drag in the app shares: a ghost that lifts off in place, a closed hand while
 //! dragging, Escape to cancel, and lists that scroll when a drag nears their edge.
 //!
 //! gpui supplies the drag itself (`on_drag`, `on_drop`, `drag_over`); none of these come with it.
+//!
+//! A drag preview here is a ghost of what was grabbed, and it stays where it was grabbed. gpui
+//! draws a preview at the dragged element's own origin, so that comes free as long as two things
+//! hold: the drag source is the thing itself (a row's text, not the full-width column around it),
+//! and the ghost starts with whatever the source starts with (a grip, the text). Then the pointer
+//! stays on the ghost and the ghost covers what it came from. A stand-in placed beside the
+//! pointer was tried first and felt detached at any distance.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 
-/// How far right of and below the pointer's hotspot the preview starts. The closed hand is about
-/// 16px across with its hotspot in the middle, so this tucks the preview's corner under the hand,
-/// which then reads as holding it, while the spot being pointed at stays uncovered.
-const PREVIEW_NUDGE: f32 = 4.0;
+use crate::theme::{borders, spacing};
+
+/// See-through enough to read what the ghost passes over, solid enough to read the ghost.
+pub const GHOST_OPACITY: f32 = 0.85;
 /// How close to a list's edge a drag starts scrolling it.
 const EDGE_ZONE: f32 = 36.0;
 /// Scroll speed with the pointer at, or past, the edge. It ramps up from zero across the zone.
 const MAX_SPEED: f32 = 900.0;
 
-/// A drag preview drawn at the pointer.
-///
-/// gpui draws a preview where the dragged element's own origin would be. That suits a preview
-/// the size of its source; a small chip dragged from a wide row ends up far from the pointer.
-/// Padding the preview by the point it was grabbed at puts the chip back under the pointer.
-pub struct AtCursor<V: Render> {
-    grab_offset: Point<Pixels>,
-    preview: Entity<V>,
-}
-
-impl<V: Render> Render for AtCursor<V> {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .pl(self.grab_offset.x.max(px(0.0)) + px(PREVIEW_NUDGE))
-            .pt(self.grab_offset.y.max(px(0.0)) + px(PREVIEW_NUDGE))
-            .child(self.preview.clone())
-    }
-}
-
-/// Wrap a drag preview so it follows the pointer, and show a closed hand for the whole drag.
-/// Call it from an `on_drag` constructor, passing on the grab offset gpui hands that closure.
-///
-/// For a small stand-in dragged out of something larger. A preview that is a ghost of its
-/// source (a tab) should stay where it was grabbed instead: return it as it is and call
-/// `closed_hand_while_dragging`.
-pub fn at_cursor<V: Render>(
-    grab_offset: Point<Pixels>,
-    preview: V,
-    window: &mut Window,
-    cx: &mut App,
-) -> Entity<AtCursor<V>> {
-    closed_hand_while_dragging(window, cx);
-    let preview = cx.new(|_| preview);
-    cx.new(|_| AtCursor { grab_offset, preview })
+/// The surface a drag ghost sits on: a piece of the interface lifted off the page. The shadow
+/// carries the lift; the caller adds padding to suit what the ghost starts with.
+pub fn ghost(cx: &App) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::xs())
+        .rounded(borders::radius_sm())
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().popover)
+        .text_color(cx.theme().popover_foreground)
+        .shadow_md()
+        .opacity(GHOST_OPACITY)
+        .whitespace_nowrap()
 }
 
 /// Show a closed hand for the drag an `on_drag` constructor is starting. Without it the drag
