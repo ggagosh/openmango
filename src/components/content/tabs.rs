@@ -10,6 +10,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::components::drag::DragAutoscroll as _;
 use crate::components::{
     Button, ConnectionIdentity, ConnectionManager as ConnectionManagerView,
     connection_identity_tags, request_unsaved_action,
@@ -486,7 +487,7 @@ impl Render for OpenTabsBar {
                         })
                         .on_drag(DraggedOpenTab { from_index: index, label: drag_label }, {
                             let state = drag_state.clone();
-                            move |drag, _, _, cx| {
+                            move |drag, grab_offset, window, cx| {
                                 cx.stop_propagation();
                                 state.update(cx, |state, cx| {
                                     if state.tab_drag_over().is_some() {
@@ -494,7 +495,12 @@ impl Render for OpenTabsBar {
                                         cx.notify();
                                     }
                                 });
-                                cx.new(|_| drag.clone())
+                                crate::components::drag::at_cursor(
+                                    grab_offset,
+                                    drag.clone(),
+                                    window,
+                                    cx,
+                                )
                             }
                         })
                 })
@@ -532,6 +538,7 @@ impl Render for OpenTabsBar {
                         .overflow_x_scroll()
                         .overflow_y_hidden()
                         .track_scroll(&scroll_handle)
+                        .autoscroll_on_drag::<DraggedOpenTab>(&scroll_handle, Axis::Horizontal)
                         .children(tab_items),
                 )
             })

@@ -11,6 +11,7 @@ use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::components::drag::DragAutoscroll as _;
 use crate::components::{Button, QueryLibraryDialog, QueryLibraryTarget};
 use crate::keyboard::{AGGREGATION_STAGES_CONTEXT, AddAggregationStage, OpenQueryLibrary};
 use crate::state::app_state::{PipelineState, StageStatsMode};
@@ -120,6 +121,10 @@ impl CollectionView {
                             .size_full()
                             .overflow_y_scroll()
                             .track_scroll(&self.aggregation_stage_list_scroll)
+                            .autoscroll_on_drag::<stage_row::DragStage>(
+                                &self.aggregation_stage_list_scroll,
+                                Axis::Vertical,
+                            )
                             .px(spacing::xs())
                             .pb(spacing::sm())
                             .children(render_stage_rows(

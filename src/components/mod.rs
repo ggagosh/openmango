@@ -32,6 +32,7 @@ pub mod connection_identity;
 pub mod connection_manager;
 mod content;
 pub mod dialog_helpers;
+pub mod drag;
 pub mod error_callout;
 pub mod error_history;
 pub mod file_picker;

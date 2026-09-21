@@ -478,13 +478,14 @@ fn drag_handle(
         .cursor_grab()
         .hover(|el| el.text_color(cx.theme().foreground))
         .child(Icon::new(AppIcon::GripVertical).xsmall())
-        .on_drag(DragStage { session_key, from_index: idx }, move |_, _, _, cx| {
+        .on_drag(DragStage { session_key, from_index: idx }, move |_, grab_offset, window, cx| {
             cx.stop_propagation();
             view_entity.update(cx, |view, cx| {
                 view.aggregation_drag_source = Some(idx);
                 cx.notify();
             });
-            cx.new(|_| DragStagePreview(label.clone()))
+            let preview = DragStagePreview(label.clone());
+            crate::components::drag::at_cursor(grab_offset, preview, window, cx)
         })
         .into_any_element()
 }

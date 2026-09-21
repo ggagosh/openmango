@@ -449,9 +449,10 @@ fn render_key_column(
     if let Some(key_drag) = key_drag {
         let preview_path = key_drag.path.clone();
         let preview_type = key_drag.field_type;
-        key = key.cursor_move().on_drag(key_drag, move |_drag, _position, _window, cx| {
+        key = key.cursor_grab().on_drag(key_drag, move |_drag, grab_offset, window, cx| {
             cx.stop_propagation();
-            cx.new(|_| DragFieldPreview { path: preview_path.clone(), field_type: preview_type })
+            let preview = DragFieldPreview { path: preview_path.clone(), field_type: preview_type };
+            crate::components::drag::at_cursor(grab_offset, preview, window, cx)
         });
     }
 
@@ -556,9 +557,10 @@ fn render_value_column(
     {
         let preview = value_drag.preview.clone();
         let preview_type = value_drag.field_type;
-        value = value.cursor_move().on_drag(value_drag, move |_drag, _position, _window, cx| {
+        value = value.cursor_grab().on_drag(value_drag, move |_drag, grab_offset, window, cx| {
             cx.stop_propagation();
-            cx.new(|_| DragValuePreview { preview: preview.clone(), field_type: preview_type })
+            let preview = DragValuePreview { preview: preview.clone(), field_type: preview_type };
+            crate::components::drag::at_cursor(grab_offset, preview, window, cx)
         });
     }
 
