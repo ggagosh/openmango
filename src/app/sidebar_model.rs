@@ -29,7 +29,7 @@ impl SidebarModel {
         connections: Vec<SavedConnection>,
         active: std::collections::HashMap<Uuid, ActiveConnection>,
     ) -> Self {
-        let entries = Self::build_entries(&connections, &active, None, &HashSet::new());
+        let entries = Self::build_entries(&connections, &active, None, &HashSet::new(), false);
         let entry_index_by_id = Self::build_index(&entries);
         Self {
             connecting_connection: None,
@@ -52,12 +52,14 @@ impl SidebarModel {
         &mut self,
         connections: &[SavedConnection],
         active: &std::collections::HashMap<Uuid, ActiveConnection>,
+        show_system: bool,
     ) -> Option<usize> {
         self.entries = Self::build_entries(
             connections,
             active,
             self.connecting_connection,
             &self.expanded_nodes,
+            show_system,
         );
         self.rebuild_index();
         self.sync_selected_index();
@@ -297,6 +299,7 @@ impl SidebarModel {
         active: &std::collections::HashMap<Uuid, ActiveConnection>,
         connecting: Option<Uuid>,
         expanded: &HashSet<TreeNodeId>,
+        show_system: bool,
     ) -> Vec<SidebarEntry> {
         let mut items = Vec::new();
         for conn in connections {
@@ -329,7 +332,13 @@ impl SidebarModel {
                     ));
 
                     if db_expanded && let Some(collections) = active_conn.collections.get(db_name) {
-                        for col_name in collections {
+                        // Hidden here, not filtered from the data. When shown they go last,
+                        // so `system.views` never sits between two real collections.
+                        let (system, regular): (Vec<_>, Vec<_>) = collections
+                            .iter()
+                            .partition(|name| crate::models::is_system_collection(name));
+                        let system = if show_system { system } else { Vec::new() };
+                        for col_name in regular.into_iter().chain(system) {
                             let col_node_id = TreeNodeId::collection(conn.id, db_name, col_name);
                             items.push(SidebarEntry::new(
                                 col_node_id,
@@ -379,6 +388,7 @@ mod tests {
             &std::collections::HashMap::new(),
             Some(connecting.id),
             &expanded,
+            false,
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, id);
@@ -414,6 +424,7 @@ mod tests {
                 ("a".to_string(), vec!["c".to_string()]),
                 ("b".to_string(), vec!["c".to_string()]),
             ]),
+            collection_details: Default::default(),
             runtime_meta: Default::default(),
         };
         let active = HashMap::from([(saved.id, conn)]);
@@ -422,23 +433,42 @@ mod tests {
     }
 
     #[test]
+    fn system_collections_are_hidden_or_listed_last() {
+        let (_, saved, mut active) = open_model();
+        let id = saved[0].id;
+        // A user collection that merely mentions "system" must never be treated as one.
+        let names = ["system.views", "system_audit", "zebra"].map(String::from).to_vec();
+        active.get_mut(&id).unwrap().collections.insert("a".into(), names);
+        let expanded = HashSet::from([TreeNodeId::connection(id), TreeNodeId::database(id, "a")]);
+        let labels = |show_system| {
+            SidebarModel::build_entries(&saved, &active, None, &expanded, show_system)
+                .into_iter()
+                .filter(|entry| entry.depth == 2)
+                .map(|entry| entry.label.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(false), ["system_audit", "zebra"]);
+        assert_eq!(labels(true), ["system_audit", "zebra", "system.views"]);
+    }
+
+    #[test]
     fn collapsing_moves_the_selection_up_and_nothing_reopens() {
         let (mut model, saved, active) = open_model();
         let id = saved[0].id;
         let col = TreeNodeId::collection(id, "a", "c");
         assert!(model.expand_ancestors(&col));
-        model.refresh_entries(&saved, &active);
+        model.refresh_entries(&saved, &active, false);
         assert!(model.select_node(col).is_some());
 
         // Collapse the database holding the selection: the selection lands on the database.
         let db_a = TreeNodeId::database(id, "a");
         assert!(model.set_expanded(&db_a, false, false));
-        model.refresh_entries(&saved, &active);
+        model.refresh_entries(&saved, &active, false);
         assert_eq!(model.selected_tree_id, Some(db_a.clone()));
 
         // Opening a sibling leaves the collapsed one closed.
         assert!(model.set_expanded(&TreeNodeId::database(id, "b"), true, false));
-        model.refresh_entries(&saved, &active);
+        model.refresh_entries(&saved, &active, false);
         assert!(!model.expanded_nodes.contains(&db_a));
         assert_eq!(model.entries.len(), 4);
     }
@@ -456,7 +486,7 @@ mod tests {
     fn arrows_stop_at_the_ends() {
         let (mut model, saved, active) = open_model();
         model.expand_ancestors(&TreeNodeId::database(saved[0].id, "a"));
-        model.refresh_entries(&saved, &active);
+        model.refresh_entries(&saved, &active, false);
 
         assert_eq!(model.move_sidebar_selection(1).map(|(ix, _)| ix), Some(0));
         assert_eq!(model.move_sidebar_selection(-1).map(|(ix, _)| ix), Some(0));

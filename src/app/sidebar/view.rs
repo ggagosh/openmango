@@ -21,7 +21,7 @@ use crate::keyboard::{
     OpenForge, OpenSelection, OpenSelectionInNewTab, OpenSelectionPreview, PasteTreeItem,
     RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
-use crate::models::TreeNodeId;
+use crate::models::{CollectionDetail, TreeNodeId};
 use crate::state::TransferMode;
 use crate::theme::{borders, colors, islands, sizing, spacing};
 
@@ -580,12 +580,33 @@ impl Render for Sidebar {
                                         let is_loading_db =
                                             is_database && sidebar.model.loading_databases.contains(&node_id);
 
-                                        let node_kind = if is_connection {
-                                            "Connection"
-                                        } else if is_database {
-                                            "Database"
-                                        } else {
-                                            "Collection"
+                                        let detail = node_id
+                                            .database_name()
+                                            .zip(node_id.collection_name())
+                                            .and_then(|(database, collection)| {
+                                                active_connections
+                                                    .get(&connection_id)?
+                                                    .collection_detail(database, collection)
+                                            });
+                                        let is_view =
+                                            matches!(detail, Some(CollectionDetail::View { .. }));
+                                        let is_timeseries =
+                                            matches!(detail, Some(CollectionDetail::Timeseries));
+                                        let is_system = is_collection
+                                            && crate::models::is_system_collection(&label);
+                                        let row_tooltip = match detail {
+                                            Some(CollectionDetail::View { view_on, .. }) => {
+                                                format!("View: {label} · on {view_on}, read-only")
+                                            }
+                                            Some(CollectionDetail::Timeseries) => {
+                                                format!("Time series: {label}")
+                                            }
+                                            None if is_connection => format!("Connection: {label}"),
+                                            None if is_database => format!("Database: {label}"),
+                                            None if is_system => {
+                                                format!("System collection: {label}")
+                                            }
+                                            None => format!("Collection: {label}"),
                                         };
                                         let selected =
                                             sidebar.model.selected_tree_id.as_ref() == Some(&node_id);
@@ -641,12 +662,8 @@ impl Render for Sidebar {
                                                     .hover(|s| s.bg(theme_list_active))
                                             })
                                             .cursor_pointer()
-                                            .tooltip({
-                                                let label = label.clone();
-                                                move |window, cx| {
-                                                    Tooltip::new(format!("{node_kind}: {label}"))
-                                                        .build(window, cx)
-                                                }
+                                            .tooltip(move |window, cx| {
+                                                Tooltip::new(row_tooltip.clone()).build(window, cx)
                                             })
                                             // Chevron for expandable items — single-click to toggle
                                             .when(is_folder, |this| {
@@ -759,13 +776,26 @@ impl Render for Sidebar {
                                                         .text_color(theme_info),
                                                 )
                                             })
-                                            // Collection: braces icon (amber)
+                                            // The kind rides on the icon, not on a tree level: braces
+                                            // for a collection, an eye for a view, a chart for time
+                                            // series. Server-internal namespaces are muted.
                                             .when(is_collection, |this| {
-                                                this.child(
+                                                let icon = if is_view {
+                                                    Icon::new(IconName::Eye)
+                                                } else if is_timeseries {
+                                                    Icon::new(crate::assets::AppIcon::ChartLine)
+                                                } else {
                                                     Icon::new(crate::assets::AppIcon::Braces)
-                                                        .size(sizing::icon_md())
-                                                        .text_color(theme_warning),
-                                                )
+                                                };
+                                                // One color for every namespace: blue already means
+                                                // "database", so the glyph alone carries the kind.
+                                                this.child(icon.size(sizing::icon_md()).text_color(
+                                                    if is_system {
+                                                        theme_muted_foreground
+                                                    } else {
+                                                        theme_warning
+                                                    },
+                                                ))
                                             })
                                             // Label
                                             .child(
@@ -773,11 +803,14 @@ impl Render for Sidebar {
                                                     .flex_1()
                                                     .min_w(px(0.0))
                                                     .text_sm()
-                                                    .text_color(if selected {
+                                                    .text_color(if is_system {
+                                                        theme_muted_foreground
+                                                    } else if selected {
                                                         theme_foreground
                                                     } else {
                                                         theme_secondary_foreground
                                                     })
+                                                    .when(is_system, |label| label.italic())
                                                     .truncate()
                                                     .child(label.clone()),
                                             )

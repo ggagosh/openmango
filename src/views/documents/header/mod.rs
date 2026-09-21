@@ -25,13 +25,16 @@ pub use tabs_row::render_subview_tabs;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{EditorState, InputState};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::bson::DocumentKey;
 use crate::helpers::format_number;
-use crate::state::{CollectionSubview, SessionKey};
+use crate::models::CollectionDetail;
+use crate::state::{AppState, CollectionSubview, SessionKey};
 use crate::theme::{islands, spacing};
 
 use super::CollectionView;
@@ -156,6 +159,7 @@ impl CollectionView {
                 collection_name,
                 total,
                 &breadcrumb,
+                render_kind_badges(&self.state, session_key.as_ref(), cx),
                 render_relations_chip(&self.state, session_key.as_ref(), cx),
                 action_row,
                 cx,
@@ -201,11 +205,86 @@ impl CollectionView {
     }
 }
 
+struct KindBadges {
+    is_view: bool,
+    element: AnyElement,
+}
+
+/// What this namespace is and why it refuses writes, said beside its name. "View" and
+/// "read-only" are separate facts with separate tags: a plain collection on a read-only
+/// connection gets the second without the first. A view names its source as a link, because
+/// that is where an edit has to go.
+fn render_kind_badges(
+    state: &Entity<AppState>,
+    session_key: Option<&SessionKey>,
+    cx: &App,
+) -> Option<KindBadges> {
+    let key = session_key?;
+    let state_ref = state.read(cx);
+    let detail = state_ref.collection_detail(key);
+    let read_only_reason = state_ref.session_read_only_reason(key);
+    if detail.is_none() && read_only_reason.is_none() {
+        return None;
+    }
+
+    let source = state_ref.view_source(key).map(str::to_owned);
+    let row = div()
+        .flex()
+        .items_center()
+        .gap(spacing::xs())
+        .when(matches!(detail, Some(CollectionDetail::Timeseries)), |row| {
+            row.child(Tag::secondary().xsmall().child("TIME SERIES"))
+        })
+        .when_some(source.clone(), |row, source| {
+            let state = state.clone();
+            let database = key.database.clone();
+            row.child(Tag::info().xsmall().child("VIEW"))
+                .child(div().text_sm().text_color(cx.theme().muted_foreground).child("on"))
+                .child(
+                    div()
+                        .id("view-source-link")
+                        .text_sm()
+                        .text_color(cx.theme().link)
+                        .cursor_pointer()
+                        .hover(|style| style.underline())
+                        .tooltip({
+                            let source = source.clone();
+                            move |window, cx| {
+                                Tooltip::new(format!(
+                                    "Open {source}, the collection this view reads"
+                                ))
+                                .build(window, cx)
+                            }
+                        })
+                        .on_click({
+                            let source = source.clone();
+                            move |_, _, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.select_collection(database.clone(), source.clone(), cx);
+                                });
+                            }
+                        })
+                        .child(source),
+                )
+        })
+        .when_some(read_only_reason, |row, reason| {
+            row.child(
+                div()
+                    .id("read-only-badge")
+                    .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
+                    .child(Tag::secondary().xsmall().child("READ-ONLY")),
+            )
+        });
+
+    Some(KindBadges { is_view: source.is_some(), element: row.into_any_element() })
+}
+
 /// Render the title row with collection name, doc count, breadcrumb, and actions.
 fn render_title_row(
     collection_name: &str,
     total: u64,
     breadcrumb: &str,
+    kind: Option<KindBadges>,
     relations: Option<AnyElement>,
     action_row: Div,
     cx: &mut Context<CollectionView>,
@@ -226,7 +305,15 @@ fn render_title_row(
                         .flex()
                         .items_center()
                         .gap(spacing::sm())
-                        .child(Icon::new(IconName::Folder).small().text_color(cx.theme().primary))
+                        .child(
+                            Icon::new(if kind.as_ref().is_some_and(|kind| kind.is_view) {
+                                IconName::Eye
+                            } else {
+                                IconName::Folder
+                            })
+                            .small()
+                            .text_color(cx.theme().primary),
+                        )
                         .child(
                             div()
                                 .text_lg()
@@ -241,6 +328,7 @@ fn render_title_row(
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("({} docs)", format_number(total))),
                         )
+                        .children(kind.map(|kind| kind.element))
                         .children(relations),
                 )
                 .child(

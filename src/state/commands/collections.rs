@@ -2,6 +2,7 @@ use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::error::ErrorReport;
+use crate::models::CollectionDetail;
 use crate::state::{AppEvent, AppState, StatusMessage};
 
 use super::AppCommands;
@@ -236,10 +237,14 @@ impl AppCommands {
                 cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
-                            if let Some(conn) = state.active_connection_mut(connection_id)
-                                && let Some(entry) = conn.collections.get_mut(&database)
-                            {
-                                entry.retain(|name| name != &collection);
+                            if let Some(conn) = state.active_connection_mut(connection_id) {
+                                if let Some(entry) = conn.collections.get_mut(&database) {
+                                    entry.retain(|name| name != &collection);
+                                }
+                                // Or a collection later created under this name reads as a view.
+                                if let Some(details) = conn.collection_details.get_mut(&database) {
+                                    details.remove(&collection);
+                                }
                             }
                             state.close_tabs_for_collection(
                                 connection_id,
@@ -292,7 +297,11 @@ impl AppCommands {
         // Run blocking MongoDB operation in background thread
         let task = cx.background_spawn({
             let database = database.clone();
-            async move { manager.list_collections(&client, &database) }
+            async move {
+                manager
+                    .list_collection_specs(&client, &database)
+                    .map(|specs| CollectionDetail::split_specs(&specs))
+            }
         });
 
         // Handle result on main thread
@@ -300,13 +309,14 @@ impl AppCommands {
             let state = state.clone();
             let database = database.clone();
             async move |cx: &mut gpui_kit::AsyncApp| {
-                let result: Result<Vec<String>, crate::error::Error> = task.await;
+                let result = task.await;
 
                 cx.update(|cx| match result {
-                    Ok(collections) => {
+                    Ok((collections, details)) => {
                         state.update(cx, |state, cx| {
                             if let Some(conn) = state.active_connection_mut(connection_id) {
                                 conn.collections.insert(database.clone(), collections.clone());
+                                conn.collection_details.insert(database.clone(), details);
                             }
                             if state.selected_connection_is(connection_id) {
                                 let event = AppEvent::CollectionsLoaded(collections.clone());

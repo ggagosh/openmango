@@ -75,6 +75,47 @@ impl CollectionView {
             .overflow_hidden()
             .bg(cx.theme().background);
 
+        // Checked before the error state: a tab restored before its database was listed may
+        // have asked the server anyway, and that refusal is not worth showing.
+        let view_source = session_key
+            .as_ref()
+            .and_then(|key| self.state.read(cx).view_source(key).map(str::to_owned));
+        if let (Some(source), Some(key)) = (view_source, session_key.as_ref()) {
+            let state = self.state.clone();
+            let database = key.database.clone();
+            return content
+                .child(
+                    centered_state(cx)
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().foreground)
+                                .child("A view has no indexes of its own"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("Queries on it use the indexes of {source}.")),
+                        )
+                        .child(
+                            Button::new("open-view-source-indexes")
+                                .xsmall()
+                                .label(format!("Open {source}"))
+                                .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                    state.update(cx, |state, cx| {
+                                        state.select_collection(
+                                            database.clone(),
+                                            source.clone(),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        ),
+                )
+                .into_any_element();
+        }
+
         if indexes_loading {
             return content
                 .child(

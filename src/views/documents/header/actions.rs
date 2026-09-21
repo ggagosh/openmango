@@ -152,11 +152,7 @@ fn render_delete_menu(
     let button = MenuButton::new("delete-menu")
         .xsmall()
         .rounded(borders::radius_sm())
-        .disabled(
-            session_key
-                .as_ref()
-                .is_none_or(|key| state.read(cx).connection_read_only(key.connection_id)),
-        )
+        .disabled(session_key.as_ref().is_none_or(|key| state.read(cx).session_read_only(key)))
         .with_size(Size::Small)
         .custom(clean_delete_variant)
         .icon(Icon::new(IconName::Delete).xsmall())
@@ -437,9 +433,7 @@ fn render_documents_actions_clean(
     let state_for_insert = state.clone();
     let state_for_delete = state.clone();
     let state_for_transfer = state.clone();
-    let writable = session_key
-        .as_ref()
-        .is_some_and(|key| !state.read(cx).connection_read_only(key.connection_id));
+    let writable = session_key.as_ref().is_some_and(|key| !state.read(cx).session_read_only(key));
 
     let insert_button = clean_toolbar_icon_button(
         Button::new("insert-document-clean").xsmall().disabled(!writable).on_click({

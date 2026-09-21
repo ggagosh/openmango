@@ -157,6 +157,7 @@ fn connection_editor_failed_save_keeps_draft_and_active_session(cx: &mut TestApp
                 client,
                 databases: vec!["keep_this_session".into()],
                 collections: Default::default(),
+                collection_details: Default::default(),
                 runtime_meta: Default::default(),
             },
         )

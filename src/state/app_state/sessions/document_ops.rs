@@ -205,6 +205,8 @@ impl AppState {
     pub fn document_field_edit_restriction(&self, key: &SessionKey) -> Option<&'static str> {
         if self.connection_read_only(key.connection_id) {
             Some("Connection is read-only.")
+        } else if self.view_source(key).is_some() {
+            Some("Views are read-only. Edit the documents in the source collection.")
         } else if self.session_view(key).is_some_and(|view| !view.saving_documents.is_empty()) {
             Some("Wait for the document save to finish before editing.")
         } else if self.session_data(key).is_some_and(|data| data.is_loading) {

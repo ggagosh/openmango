@@ -225,18 +225,6 @@ impl ConnectionManager {
         })
     }
 
-    /// List collections in a database (runs in Tokio runtime)
-    pub fn list_collections(&self, client: &Client, database: &str) -> Result<Vec<String>> {
-        let client = client.clone();
-        let database = database.to_string();
-        self.runtime.block_on(async {
-            let db = client.database(&database);
-            let mut collections = db.list_collection_names().await?;
-            collections.sort_unstable_by_key(|name| name.to_lowercase());
-            Ok(collections)
-        })
-    }
-
     /// List collection specs in a database (runs in Tokio runtime)
     pub fn list_collection_specs(
         &self,

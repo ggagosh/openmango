@@ -250,9 +250,10 @@ impl DetachedJsonEditorView {
         cx.notify();
         if self.save_in_flight
             || self.reloading
-            || self.sessions.snapshot(self.session_id).is_some_and(|session| {
-                self.state.read(cx).connection_read_only(session.session_key.connection_id)
-            })
+            || self
+                .sessions
+                .snapshot(self.session_id)
+                .is_some_and(|session| self.state.read(cx).session_read_only(&session.session_key))
         {
             return;
         }
@@ -334,8 +335,8 @@ impl DetachedJsonEditorView {
             self.set_error("Editor session is no longer available.");
             return;
         };
-        if self.state.read(cx).connection_read_only(session.session_key.connection_id) {
-            self.set_error("Connection is read-only.");
+        if let Some(reason) = self.state.read(cx).session_read_only_reason(&session.session_key) {
+            self.set_error(reason);
             return;
         }
         if self.state.read(cx).active_connection_client(session.session_key.connection_id).is_none()
@@ -688,8 +689,8 @@ impl DetachedJsonEditorView {
             self.set_error("Editor session is no longer available.");
             return;
         };
-        if self.state.read(cx).connection_read_only(session.session_key.connection_id) {
-            self.set_error("Connection is read-only.");
+        if let Some(reason) = self.state.read(cx).session_read_only_reason(&session.session_key) {
+            self.set_error(reason);
             return;
         }
         if self.state.read(cx).active_connection_client(session.session_key.connection_id).is_none()
@@ -794,7 +795,7 @@ impl Render for DetachedJsonEditorView {
         let sync_issue = self.sync_issue;
         let state_ref = self.state.read(cx);
         let appearance = state_ref.settings.appearance.clone();
-        let read_only = state_ref.connection_read_only(session.session_key.connection_id);
+        let read_only = state_ref.session_read_only(&session.session_key);
         let connection_identity = crate::components::connection_identity_for(
             &self.state,
             session.session_key.connection_id,

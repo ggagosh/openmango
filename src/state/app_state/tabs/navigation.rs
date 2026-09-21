@@ -239,6 +239,7 @@ mod tests {
                         "shop".to_string(),
                         vec!["users".into(), "orders".into(), "products".into()],
                     )]),
+                    collection_details: Default::default(),
                     runtime_meta: Default::default(),
                 },
             );

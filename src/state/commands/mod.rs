@@ -42,6 +42,23 @@ impl AppCommands {
         authorized
     }
 
+    /// `ensure_writable` for a write aimed at one namespace. The view check runs first so a
+    /// refused write never spends a production-write authorization.
+    pub(super) fn ensure_collection_writable(
+        state: &Entity<AppState>,
+        session_key: &SessionKey,
+        cx: &mut App,
+    ) -> bool {
+        if let Some(reason) = state.read(cx).view_read_only_reason(session_key) {
+            state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error(reason)));
+                cx.notify();
+            });
+            return false;
+        }
+        Self::ensure_writable(state, Some(session_key.connection_id), cx)
+    }
+
     pub(super) fn active_client(
         state: &Entity<AppState>,
         connection_id: Uuid,

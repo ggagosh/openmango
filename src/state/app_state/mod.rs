@@ -487,6 +487,13 @@ impl AppState {
         cx.notify();
     }
 
+    pub fn set_show_system_collections(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.settings.appearance.show_system_collections = show;
+        self.save_settings();
+        cx.emit(AppEvent::SystemCollectionsVisibilityChanged);
+        cx.notify();
+    }
+
     pub fn toggle_date_display(&mut self, cx: &mut Context<Self>) {
         use crate::bson::DateDisplay;
         let next = match self.settings.appearance.date_display {

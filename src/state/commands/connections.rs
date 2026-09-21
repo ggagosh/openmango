@@ -87,6 +87,7 @@ impl AppCommands {
                                     client: client.clone(),
                                     databases: databases.clone(),
                                     collections: std::collections::HashMap::new(),
+                                    collection_details: Default::default(),
                                     runtime_meta,
                                 },
                             );

@@ -116,6 +116,7 @@ impl Sidebar {
                     this.model.loading_databases.clear();
                     this.refresh_tree(cx);
                 }
+                AppEvent::SystemCollectionsVisibilityChanged => this.rebuild_entries(cx),
                 AppEvent::CollectionsFailed(_) => {
                     this.model.loading_databases.clear();
                     cx.notify();
@@ -345,7 +346,8 @@ impl Sidebar {
     /// Rebuilds the rows from the cached snapshot: all an expansion change needs. It neither
     /// scrolls nor touches what is expanded, so the list stays put under the pointer.
     fn rebuild_entries(&mut self, cx: &mut Context<Self>) {
-        self.model.refresh_entries(&self.cached_connections, &self.cached_active);
+        let show_system = self.state.read(cx).settings.appearance.show_system_collections;
+        self.model.refresh_entries(&self.cached_connections, &self.cached_active, show_system);
         cx.notify();
     }
 

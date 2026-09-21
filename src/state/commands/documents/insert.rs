@@ -31,7 +31,7 @@ impl AppCommands {
         editor: Option<EditorSessionId>,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+        if !Self::ensure_collection_writable(&state, &session_key, cx) {
             return;
         }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
