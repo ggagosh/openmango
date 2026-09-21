@@ -194,6 +194,86 @@ pub(crate) fn request_delete_confirmation(
 }
 
 /// The first `$out`/`$merge` stage a run through `target` would execute, as (operator, namespace).
+/// Saves the aggregation screen's pipeline as a view. A pipeline that was opened from a view's
+/// definition updates that view, after saying what that means for its readers; any other
+/// pipeline is given a name first.
+pub(crate) fn request_save_view(
+    state: Entity<AppState>,
+    session_key: SessionKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some((stages, editing_view)) = state.read(cx).session(&session_key).map(|session| {
+        let aggregation = &session.data.aggregation;
+        (aggregation.stages.clone(), aggregation.editing_view.clone())
+    }) else {
+        return;
+    };
+    let pipeline = match crate::state::view_pipeline(&stages) {
+        Ok(pipeline) => pipeline,
+        Err(message) => {
+            state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.notify();
+            });
+            return;
+        }
+    };
+    let SessionKey { connection_id, database, collection: view_on, .. } = session_key;
+    let Some(view) = editing_view else {
+        crate::app::dialogs::open_new_view_dialog(
+            state,
+            connection_id,
+            database,
+            crate::app::dialogs::NewView::Pipeline { view_on, pipeline },
+            window,
+            cx,
+        );
+        return;
+    };
+
+    let namespace = format!("{database}.{view}");
+    let confirmation = crate::components::WriteConfirmation {
+        title: format!("Update view \"{namespace}\"?"),
+        message: "Everything that reads this view gets the new pipeline from now on. Its \
+                  collation stays as it is."
+            .to_string(),
+        confirm_label: "Update view".into(),
+        destructive: false,
+    };
+    let state_for_write = state.clone();
+    crate::components::request_connection_write(
+        state,
+        crate::components::WriteRequest::new(
+            connection_id,
+            namespace,
+            "Update a view",
+            Some(confirmation),
+        ),
+        window,
+        cx,
+        move |_window, cx| {
+            AppCommands::save_view(
+                state_for_write,
+                crate::state::ViewSave {
+                    connection_id,
+                    database,
+                    name: view,
+                    source: crate::state::ViewSource::Pipeline {
+                        view_on,
+                        pipeline,
+                        collation: None,
+                    },
+                    replace: true,
+                },
+                cx,
+                // A failure is already recorded by the command; there is no dialog to keep open.
+                |_, _| {},
+            );
+        },
+    );
+}
+
 pub(crate) fn aggregation_write_impact(
     stages: &[PipelineStage],
     target: Option<usize>,

@@ -71,14 +71,36 @@ pub fn confirm_delete_node(
         }
         TreeNodeId::Collection { connection, database, collection } => {
             let namespace = format!("{database}.{collection}");
+            // Dropping a view is far less than it sounds, so the dialog says what survives.
+            let view_source = state
+                .read(cx)
+                .active_connection_by_id(connection)
+                .and_then(|conn| conn.collection_detail(&database, &collection))
+                .and_then(|detail| match detail {
+                    crate::models::CollectionDetail::View { view_on, .. } => Some(view_on.clone()),
+                    crate::models::CollectionDetail::Timeseries => None,
+                });
+            let (title, message, operation) = match view_source {
+                Some(source) => (
+                    format!("Drop view \"{namespace}\"?"),
+                    format!(
+                        "Only the view is removed. The documents in {source} are untouched. {FINAL}"
+                    ),
+                    "Drop a view",
+                ),
+                None => (
+                    format!("Drop collection \"{namespace}\"?"),
+                    FINAL.to_string(),
+                    "Drop a collection",
+                ),
+            };
             let confirmation = WriteConfirmation {
-                title: format!("Drop collection \"{namespace}\"?"),
-                message: FINAL.to_string(),
+                title,
+                message,
                 confirm_label: "Drop".into(),
                 destructive: true,
             };
-            let request =
-                WriteRequest::new(connection, namespace, "Drop a collection", Some(confirmation));
+            let request = WriteRequest::new(connection, namespace, operation, Some(confirmation));
             request_connection_write(state.clone(), request, window, cx, move |_window, cx| {
                 AppCommands::drop_collection(state, connection, database, collection, cx);
             });

@@ -41,6 +41,22 @@ fn operator_key(operator: &str) -> String {
     if bare { operator.to_string() } else { serde_json::Value::from(operator).to_string() }
 }
 
+/// A pipeline the server holds, as stages the builder can edit. Bodies are relaxed Extended
+/// JSON, which the stage parser reads back to the same value: regular expressions, dates and
+/// ObjectIds survive the trip, which is the test below.
+// ponytail: relaxed JSON writes a small Int64 as a bare number, so it comes back as Int32.
+// MongoDB compares them as equal; switch the body to canonical form if exact width ever matters.
+pub(crate) fn stages_from_pipeline(pipeline: &[mongodb::bson::Document]) -> Vec<PipelineStage> {
+    pipeline
+        .iter()
+        .filter_map(|stage| {
+            let (operator, body) = stage.iter().next()?;
+            let body = crate::bson::format_relaxed_json_value(&body.clone().into_relaxed_extjson());
+            Some(PipelineStage::with(operator.clone(), body, true))
+        })
+        .collect()
+}
+
 pub(crate) fn parse_pipeline_text(text: &str) -> Result<Vec<PipelineStage>, String> {
     let (code, disabled_lines) = uncomment_disabled_stages(text);
 

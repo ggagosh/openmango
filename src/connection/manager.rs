@@ -17,6 +17,15 @@ use crate::models::{ConnectionRuntimeMeta, ProxyConfig, ProxyKind, SavedConnecti
 
 const SSH_PROXY_CONFLICT_ERROR: &str = "SSH tunnel and SOCKS5 proxy cannot be enabled together yet";
 
+/// Everything the server needs to create a view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewDefinition {
+    pub name: String,
+    pub view_on: String,
+    pub pipeline: Vec<mongodb::bson::Document>,
+    pub collation: Option<mongodb::bson::Document>,
+}
+
 /// Manages MongoDB client connections with cached runtime resources.
 pub struct ConnectionManager {
     /// Tokio runtime for MongoDB async operations
@@ -258,6 +267,72 @@ impl ConnectionManager {
             let db = client.database(&database);
             db.create_collection(&collection).await?;
             Ok(())
+        })
+    }
+
+    /// Create a view, or with `replace` change an existing one in place.
+    ///
+    /// Replacing goes through `collMod`, which takes no collation: the server keeps the one the
+    /// view was created with. Dropping and recreating, as some tools do, would lose it.
+    pub fn save_view(
+        &self,
+        client: &Client,
+        database: &str,
+        definition: &ViewDefinition,
+        replace: bool,
+    ) -> Result<()> {
+        let client = client.clone();
+        let database = database.to_string();
+        let mut command = if replace {
+            doc! { "collMod": &definition.name }
+        } else {
+            doc! { "create": &definition.name }
+        };
+        command.insert("viewOn", &definition.view_on);
+        command.insert("pipeline", definition.pipeline.clone());
+        if let (false, Some(collation)) = (replace, &definition.collation) {
+            command.insert("collation", collation.clone());
+        }
+        self.runtime.block_on(async {
+            client.database(&database).run_command(command).await?;
+            Ok(())
+        })
+    }
+
+    /// A view's definition as the server holds it now, or `None` if `name` is not a view.
+    pub fn view_definition(
+        &self,
+        client: &Client,
+        database: &str,
+        name: &str,
+    ) -> Result<Option<ViewDefinition>> {
+        use futures::TryStreamExt;
+
+        let client = client.clone();
+        let database = database.to_string();
+        let filter = doc! { "name": name };
+        self.runtime.block_on(async {
+            let mut cursor = client.database(&database).list_collections().filter(filter).await?;
+            let Some(spec) = cursor.try_next().await? else {
+                return Ok(None);
+            };
+            let Some(view_on) = spec.options.view_on else {
+                return Ok(None);
+            };
+            let collation = match spec.options.collation {
+                Some(collation) => {
+                    Some(mongodb::bson::to_document(&collation).map_err(|err| {
+                        Error::Parse(format!("Couldn't read the collation: {err}"))
+                    })?)
+                }
+                None => None,
+            };
+            Ok(Some(ViewDefinition {
+                name: spec.name,
+                view_on,
+                pipeline: spec.options.pipeline.unwrap_or_default(),
+                collation,
+            }))
         })
     }
 

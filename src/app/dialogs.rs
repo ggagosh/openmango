@@ -339,3 +339,162 @@ pub(crate) fn open_rename_collection_dialog(
             })
     });
 }
+
+/// What a new view is made from, as far as the dialog needs to know.
+pub(crate) enum NewView {
+    /// The aggregation screen's pipeline over `view_on`. Offers a collation.
+    Pipeline { view_on: String, pipeline: Vec<mongodb::bson::Document> },
+    /// A copy of an existing view, which brings its own collation along.
+    CopyOf(String),
+}
+
+/// Asks for the name of a new view, and for a collation when the view is new rather than a
+/// copy. A collation can only be given at creation, so this is the one place to ask.
+pub(crate) fn open_new_view_dialog(
+    state: Entity<AppState>,
+    connection_id: uuid::Uuid,
+    database: String,
+    new_view: NewView,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (title, summary, suggested) = match &new_view {
+        NewView::Pipeline { view_on, pipeline } => (
+            format!("Save as View in {database}"),
+            format!(
+                "Reads {view_on} through {}. A view is read-only and stores no data of its own.",
+                match pipeline.len() {
+                    0 => "no stages".to_string(),
+                    1 => "1 stage".to_string(),
+                    count => format!("{count} stages"),
+                }
+            ),
+            String::new(),
+        ),
+        NewView::CopyOf(view) => (
+            format!("Duplicate View {database}.{view}"),
+            "The copy gets the same source, pipeline and collation.".to_string(),
+            format!("{view}_copy"),
+        ),
+    };
+    let offers_collation = matches!(new_view, NewView::Pipeline { .. });
+    let new_view = std::rc::Rc::new(new_view);
+    let name_state =
+        cx.new(|cx| InputState::new(window, cx).placeholder("view_name").default_value(suggested));
+    let collation_state = cx.new(|cx| {
+        InputState::new(window, cx).placeholder("{ locale: \"en\", strength: 2 }").default_value("")
+    });
+    let run = cx.new(|_| DialogRun::default());
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
+        let busy = run.read(cx).busy;
+        let mut fields = div()
+            .flex()
+            .flex_col()
+            .gap(spacing::md())
+            .p(spacing::md())
+            .child(selected_connection_identity(&state, cx))
+            .child(FormField::new("View name", &name_state).render(cx));
+        if offers_collation {
+            fields = fields
+                .child(FormField::new("Collation (optional)", &collation_state).render(cx));
+        }
+        dialog
+            .title(title.clone())
+            .min_w(px(460.0))
+            .child(
+                fields
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(
+                                gpui_kit::component::ActiveTheme::theme(cx).muted_foreground,
+                            )
+                            .child(summary.clone()),
+                    )
+                    .children(run_error("new-view-error", &run, &state, cx)),
+            )
+            .footer({
+                let state = state.clone();
+                let database = database.clone();
+                let name_state = name_state.clone();
+                let collation_state = collation_state.clone();
+                let new_view = new_view.clone();
+                let run = run.clone();
+                gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                    cancel_button("cancel-new-view"),
+                    busy_label(Button::new("create-view").primary(), Size::Medium, "Create view", busy)
+                        .on_click(move |_, window, cx| {
+                            if run.read(cx).busy {
+                                return;
+                            }
+                            let name = name_state.read(cx).value().trim().to_string();
+                            if name.is_empty() {
+                                return;
+                            }
+                            let collation_text = collation_state.read(cx).value().trim().to_string();
+                            let collation = if collation_text.is_empty() {
+                                None
+                            } else {
+                                match crate::bson::parse_bson_from_relaxed_json(&collation_text) {
+                                    Ok(mongodb::bson::Bson::Document(collation)) => Some(collation),
+                                    _ => {
+                                        run.update(cx, |run, cx| {
+                                            run.error = Some(ErrorReport::new(
+                                                "The collation isn't a document",
+                                                "Write it like { locale: \"en\", strength: 2 }, or leave it empty.",
+                                            ));
+                                            cx.notify();
+                                        });
+                                        return;
+                                    }
+                                }
+                            };
+                            let source = match new_view.as_ref() {
+                                NewView::Pipeline { view_on, pipeline } => {
+                                    crate::state::ViewSource::Pipeline {
+                                        view_on: view_on.clone(),
+                                        pipeline: pipeline.clone(),
+                                        collation,
+                                    }
+                                }
+                                NewView::CopyOf(view) => {
+                                    crate::state::ViewSource::CopyOf(view.clone())
+                                }
+                            };
+                            let state_for_write = state.clone();
+                            let database_for_write = database.clone();
+                            let run = run.clone();
+                            let target = format!("{database}.{name}");
+                            request_connection_write(
+                                state.clone(),
+                                crate::components::WriteRequest::new(
+                                    connection_id,
+                                    target,
+                                    "Create a view",
+                                    None,
+                                ),
+                                window,
+                                cx,
+                                move |window, cx| {
+                                    begin(&run, cx);
+                                    let done = finish(run.downgrade(), window.window_handle());
+                                    AppCommands::save_view(
+                                        state_for_write,
+                                        crate::state::ViewSave {
+                                            connection_id,
+                                            database: database_for_write,
+                                            name,
+                                            source,
+                                            replace: false,
+                                        },
+                                        cx,
+                                        done,
+                                    );
+                                },
+                            );
+                        })
+                        .into_any_element(),
+                ])
+            })
+    });
+}

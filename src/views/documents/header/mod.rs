@@ -24,6 +24,7 @@ pub use stats_panel::render_stats_row;
 pub use tabs_row::render_subview_tabs;
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{EditorState, InputState};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::tooltip::Tooltip;
@@ -130,11 +131,15 @@ impl CollectionView {
         } else if is_stats {
             render_stats_actions(self.state.clone(), session_key.clone(), stats_loading)
         } else if is_aggregation {
+            let editing_view = session_key.as_ref().and_then(|key| {
+                self.state.read(cx).session(key)?.data.aggregation.editing_view.clone()
+            });
             render_aggregation_actions(
                 self.state.clone(),
                 session_key.clone(),
                 aggregation_loading,
                 explain_loading,
+                editing_view,
             )
         } else if is_schema {
             render_schema_actions(self.state.clone(), session_key.clone(), schema_loading)
@@ -236,7 +241,7 @@ fn render_kind_badges(
             row.child(Tag::secondary().xsmall().child("TIME SERIES"))
         })
         .when_some(source.clone(), |row, source| {
-            let state = state.clone();
+            let state_for_link = state.clone();
             let database = key.database.clone();
             row.child(Tag::info().xsmall().child("VIEW"))
                 .child(div().text_sm().text_color(cx.theme().muted_foreground).child("on"))
@@ -259,12 +264,32 @@ fn render_kind_badges(
                         .on_click({
                             let source = source.clone();
                             move |_, _, cx| {
-                                state.update(cx, |state, cx| {
+                                state_for_link.update(cx, |state, cx| {
                                     state.select_collection(database.clone(), source.clone(), cx);
                                 });
                             }
                         })
                         .child(source),
+                )
+                .child(
+                    crate::components::Button::new("edit-view-definition")
+                        .xsmall()
+                        .ghost()
+                        .label("Edit definition")
+                        .tooltip("Open this view's pipeline in the aggregation builder")
+                        .on_click({
+                            let state = state.clone();
+                            let key = key.clone();
+                            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                crate::state::AppCommands::edit_view_definition(
+                                    state.clone(),
+                                    key.connection_id,
+                                    key.database.clone(),
+                                    key.collection.clone(),
+                                    cx,
+                                );
+                            }
+                        }),
                 )
         })
         .when_some(read_only_reason, |row, reason| {

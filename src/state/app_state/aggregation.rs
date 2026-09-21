@@ -170,6 +170,9 @@ pub struct PipelineState {
     pub undo_group: Option<UndoGroup>,
     /// Text mode input that doesn't parse yet, kept per session.
     pub text_draft: Option<String>,
+    /// The view whose definition this pipeline is an edit of. Saving then updates that view
+    /// instead of asking for a new name.
+    pub editing_view: Option<String>,
 }
 
 impl Default for PipelineState {
@@ -200,6 +203,7 @@ impl Default for PipelineState {
             undo_serial: 0,
             undo_group: None,
             text_draft: None,
+            editing_view: None,
         }
     }
 }

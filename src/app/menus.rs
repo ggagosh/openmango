@@ -392,6 +392,11 @@ pub(crate) fn build_collection_menu(
     let label_for_copy = label.clone();
     let database_for_copy = database.clone();
     let collection_for_copy = collection.clone();
+    let is_view = state
+        .read(_cx)
+        .active_connection_by_id(connection_id)
+        .and_then(|conn| conn.collection_detail(&database, &collection))
+        .is_some_and(|detail| matches!(detail, crate::models::CollectionDetail::View { .. }));
 
     menu = menu
         .item(
@@ -471,11 +476,31 @@ pub(crate) fn build_collection_menu(
                 })
                 .action(Box::new(OpenForge)),
         )
-        .item(
-            PopupMenuItem::new("Rename collection…")
-                .icon(Icon::new(IconName::Settings2))
-                .action(Box::new(RenameCollection))
-                .on_click({
+        // A view can't be renamed, only redefined or copied under another name.
+        .when(is_view, |menu: PopupMenu| {
+            menu.item(
+                PopupMenuItem::new("Edit view definition")
+                    .icon(Icon::new(IconName::Settings2))
+                    .on_click({
+                        let state = state.clone();
+                        let database = database.clone();
+                        let collection = collection.clone();
+                        move |_, _window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.select_connection(Some(connection_id), cx);
+                            });
+                            AppCommands::edit_view_definition(
+                                state.clone(),
+                                connection_id,
+                                database.clone(),
+                                collection.clone(),
+                                cx,
+                            );
+                        }
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Duplicate view…").icon(Icon::new(IconName::Copy)).on_click({
                     let state = state.clone();
                     let database = database.clone();
                     let collection = collection.clone();
@@ -483,18 +508,44 @@ pub(crate) fn build_collection_menu(
                         state.update(cx, |state, cx| {
                             state.select_connection(Some(connection_id), cx);
                         });
-                        open_rename_collection_dialog(
+                        super::dialogs::open_new_view_dialog(
                             state.clone(),
+                            connection_id,
                             database.clone(),
-                            collection.clone(),
+                            super::dialogs::NewView::CopyOf(collection.clone()),
                             window,
                             cx,
                         );
                     }
                 }),
-        )
+            )
+        })
+        .when(!is_view, |menu: PopupMenu| {
+            menu.item(
+                PopupMenuItem::new("Rename collection…")
+                    .icon(Icon::new(IconName::Settings2))
+                    .action(Box::new(RenameCollection))
+                    .on_click({
+                        let state = state.clone();
+                        let database = database.clone();
+                        let collection = collection.clone();
+                        move |_, window, cx| {
+                            state.update(cx, |state, cx| {
+                                state.select_connection(Some(connection_id), cx);
+                            });
+                            open_rename_collection_dialog(
+                                state.clone(),
+                                database.clone(),
+                                collection.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+            )
+        })
         .item(
-            PopupMenuItem::new("Drop collection…")
+            PopupMenuItem::new(if is_view { "Drop view…" } else { "Drop collection…" })
                 .icon(Icon::new(IconName::Delete))
                 .action(Box::new(DeleteSelection))
                 .on_click({
@@ -530,6 +581,8 @@ pub(crate) fn build_collection_menu(
         .item(
             menu_item_with_shortcut("Import data…", &TransferImport, window)
                 .action(Box::new(TransferImport))
+                // Nothing can be imported into a view; the data goes into its source.
+                .disabled(is_view)
                 .on_click({
                     let state = state.clone();
                     let database = database.clone();

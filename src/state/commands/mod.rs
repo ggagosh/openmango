@@ -88,6 +88,8 @@ mod indexes;
 mod operations;
 mod relations;
 mod schema;
+pub(crate) use aggregation::view_pipeline;
+pub use collections::{ViewSave, ViewSource};
 pub use documents::save_as::ExportProgress;
 pub(crate) use schema::{SCHEMA_SAMPLE_SIZE, build_schema_analysis};
 pub use schema::{schema_to_compass, schema_to_json_schema, schema_to_summary};

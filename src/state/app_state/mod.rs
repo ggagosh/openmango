@@ -28,7 +28,7 @@ pub(crate) use connection::{
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
-pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
+pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text, stages_from_pipeline};
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,

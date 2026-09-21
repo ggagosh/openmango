@@ -1226,6 +1226,7 @@ pub fn render_aggregation_actions(
     session_key: Option<SessionKey>,
     run_disabled: bool,
     explain_loading: bool,
+    editing_view: Option<String>,
 ) -> Div {
     div()
         .flex()
@@ -1272,6 +1273,36 @@ pub fn render_aggregation_actions(
                             return;
                         };
                         AppCommands::run_explain_for_aggregation(state.clone(), session_key, cx);
+                    }
+                }),
+        )
+        .child(
+            // One button, two jobs: a pipeline opened from a view's definition saves back to
+            // that view, and says which; any other pipeline becomes a new view.
+            Button::new("agg-save-view")
+                .xsmall()
+                .label(match &editing_view {
+                    Some(view) => format!("Update view {view}"),
+                    None => "Save as view…".to_string(),
+                })
+                .tooltip(match &editing_view {
+                    Some(view) => format!("Replace the definition of {view} with this pipeline"),
+                    None => "Create a read-only view from this pipeline".to_string(),
+                })
+                .disabled(session_key.is_none())
+                .on_click({
+                    let session_key = session_key.clone();
+                    let state = state.clone();
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        let Some(session_key) = session_key.clone() else {
+                            return;
+                        };
+                        crate::views::documents::request_save_view(
+                            state.clone(),
+                            session_key,
+                            window,
+                            cx,
+                        );
                     }
                 }),
         )

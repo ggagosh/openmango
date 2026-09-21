@@ -1,11 +1,30 @@
 use gpui_kit::{App, AppContext as _, Entity};
+use mongodb::bson::Document;
 use uuid::Uuid;
 
+use crate::connection::manager::ViewDefinition;
 use crate::error::ErrorReport;
 use crate::models::CollectionDetail;
-use crate::state::{AppEvent, AppState, StatusMessage};
+use crate::state::{AppEvent, AppState, CollectionSubview, StatusMessage};
 
 use super::AppCommands;
+
+/// Where a new view's definition comes from.
+pub enum ViewSource {
+    /// A pipeline over a collection, as built on the aggregation screen.
+    Pipeline { view_on: String, pipeline: Vec<Document>, collation: Option<Document> },
+    /// Another view in the same database, as the server defines it right now.
+    CopyOf(String),
+}
+
+/// One request to create a view, or with `replace` to redefine the view of that name.
+pub struct ViewSave {
+    pub connection_id: Uuid,
+    pub database: String,
+    pub name: String,
+    pub source: ViewSource,
+    pub replace: bool,
+}
 
 impl AppCommands {
     /// Create a collection.
@@ -99,6 +118,183 @@ impl AppCommands {
                     }
                 });
             }
+        })
+        .detach();
+    }
+
+    /// Create a view, or with `replace` change an existing one. The caller has already asked
+    /// for the write; `on_done` lets the dialog that asked close or show why it failed.
+    pub fn save_view(
+        state: Entity<AppState>,
+        save: ViewSave,
+        cx: &mut App,
+        on_done: impl FnOnce(Result<(), ErrorReport>, &mut App) + 'static,
+    ) {
+        let ViewSave { connection_id, database, name, source, replace } = save;
+        let title = if replace { "Couldn't update the view" } else { "Couldn't create the view" };
+        if !Self::ensure_writable(&state, Some(connection_id), cx) {
+            on_done(Err(not_writable(title)), cx);
+            return;
+        }
+        let Some(client) = Self::active_client(&state, connection_id, cx) else {
+            on_done(Err(not_connected(title)), cx);
+            return;
+        };
+        let manager = state.read(cx).connection_manager();
+
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let name = name.clone();
+            async move {
+                let definition = match source {
+                    ViewSource::Pipeline { view_on, pipeline, collation } => {
+                        ViewDefinition { name, view_on, pipeline, collation }
+                    }
+                    // Read now, not from what the sidebar last listed: a copy of a stale
+                    // definition would look right and be wrong.
+                    ViewSource::CopyOf(view) => ViewDefinition {
+                        name,
+                        ..manager.view_definition(&client, &database, &view)?.ok_or_else(|| {
+                            crate::error::Error::Parse(format!("{view} is no longer a view."))
+                        })?
+                    },
+                };
+                manager.save_view(&client, &database, &definition, replace)?;
+                Ok::<_, crate::error::Error>(definition)
+            }
+        });
+
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            let result = task.await;
+            cx.update(|cx| match result {
+                Ok(definition) => {
+                    state.update(cx, |state, cx| {
+                        let name = definition.name.clone();
+                        let Some(conn) = state.active_connection_mut(connection_id) else {
+                            return;
+                        };
+                        let names = conn.collections.entry(database.clone()).or_default();
+                        if !names.contains(&name) {
+                            names.push(name.clone());
+                            names.sort_unstable_by_key(|name| name.to_lowercase());
+                        }
+                        let names = names.clone();
+                        conn.collection_details.entry(database.clone()).or_default().insert(
+                            name.clone(),
+                            CollectionDetail::View {
+                                view_on: definition.view_on,
+                                pipeline: definition.pipeline,
+                            },
+                        );
+                        state.set_status_message(Some(StatusMessage::info(format!(
+                            "{} view {database}.{name}",
+                            if replace { "Updated" } else { "Created" }
+                        ))));
+                        if state.selected_connection_is(connection_id) {
+                            cx.emit(AppEvent::CollectionsLoaded(names));
+                            // Opening a new view is the confirmation, and it puts the sidebar
+                            // on the row. An update stays on the builder, to keep iterating.
+                            if !replace {
+                                state.select_collection(database.clone(), name, cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                    on_done(Ok(()), cx);
+                }
+                Err(e) => {
+                    log::error!("Failed to save view: {e:?}");
+                    let report = ErrorReport::from_error(title, &e);
+                    state.update(cx, |state, cx| {
+                        state.record_error(report.clone());
+                        cx.notify();
+                    });
+                    on_done(Err(report), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Opens a view's definition for editing: its source collection in a tab of its own, on the
+    /// aggregation screen, holding the pipeline the server has right now. Never the copy the
+    /// sidebar listed earlier, which someone else may have changed since.
+    pub fn edit_view_definition(
+        state: Entity<AppState>,
+        connection_id: Uuid,
+        database: String,
+        view: String,
+        cx: &mut App,
+    ) {
+        const TITLE: &str = "Couldn't open the view's definition";
+        let Some(client) = Self::active_client(&state, connection_id, cx) else {
+            state.update(cx, |state, cx| {
+                state.record_error(not_connected(TITLE));
+                cx.notify();
+            });
+            return;
+        };
+        let manager = state.read(cx).connection_manager();
+        let task = cx.background_spawn({
+            let database = database.clone();
+            let view = view.clone();
+            async move { manager.view_definition(&client, &database, &view) }
+        });
+
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            let result = task.await;
+            cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    let definition = match result {
+                        Ok(Some(definition)) => definition,
+                        Ok(None) => {
+                            state.record_error(ErrorReport::new(
+                                TITLE,
+                                format!(
+                                    "{database}.{view} is no longer a view. Refresh the database."
+                                ),
+                            ));
+                            cx.notify();
+                            return;
+                        }
+                        Err(e) => {
+                            state.record_error(ErrorReport::from_error(TITLE, &e));
+                            cx.notify();
+                            return;
+                        }
+                    };
+                    if !state.selected_connection_is(connection_id) {
+                        return;
+                    }
+                    let Some(key) = state.open_collection_in_new_tab(
+                        database.clone(),
+                        definition.view_on.clone(),
+                        String::new(),
+                        None,
+                        cx,
+                    ) else {
+                        return;
+                    };
+                    state.set_collection_subview(&key, CollectionSubview::Aggregation);
+                    state.replace_pipeline_stages(
+                        &key,
+                        crate::state::app_state::stages_from_pipeline(&definition.pipeline),
+                    );
+                    if let Some(session) = state.session_mut(&key) {
+                        session.data.aggregation.editing_view = Some(view.clone());
+                    }
+                    if let Some(conn) = state.active_connection_mut(connection_id) {
+                        conn.collection_details.entry(database.clone()).or_default().insert(
+                            view.clone(),
+                            CollectionDetail::View {
+                                view_on: definition.view_on,
+                                pipeline: definition.pipeline,
+                            },
+                        );
+                    }
+                    cx.notify();
+                });
+            });
         })
         .detach();
     }
@@ -237,13 +433,17 @@ impl AppCommands {
                 cx.update(|cx| match result {
                     Ok(()) => {
                         state.update(cx, |state, cx| {
+                            let mut kind = "collection";
                             if let Some(conn) = state.active_connection_mut(connection_id) {
                                 if let Some(entry) = conn.collections.get_mut(&database) {
                                     entry.retain(|name| name != &collection);
                                 }
                                 // Or a collection later created under this name reads as a view.
-                                if let Some(details) = conn.collection_details.get_mut(&database) {
-                                    details.remove(&collection);
+                                if let Some(details) = conn.collection_details.get_mut(&database)
+                                    && let Some(CollectionDetail::View { .. }) =
+                                        details.remove(&collection)
+                                {
+                                    kind = "view";
                                 }
                             }
                             state.close_tabs_for_collection(
@@ -253,7 +453,7 @@ impl AppCommands {
                                 cx,
                             );
                             state.set_status_message(Some(StatusMessage::info(format!(
-                                "Dropped collection {database}.{collection}"
+                                "Dropped {kind} {database}.{collection}"
                             ))));
                             if state.selected_connection_is(connection_id) {
                                 let collections = state
