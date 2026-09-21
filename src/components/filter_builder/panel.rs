@@ -15,6 +15,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
+use crate::components::drag::DragAutoscroll as _;
 use crate::components::{Button, open_confirm_dialog};
 use crate::state::{AppCommands, AppState, SessionKey, StatusMessage};
 use crate::theme::{borders, fonts, spacing};
@@ -49,21 +50,28 @@ struct DraggedFilterNode {
     label: String,
 }
 
+/// The handle a condition or group is dragged by, and what its ghost starts with.
+const DRAG_HANDLE_SIZE: f32 = 24.0;
+
 struct DraggedFilterPreview {
     label: String,
 }
 
 impl Render for DraggedFilterPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .rounded(borders::radius_sm())
-            .bg(cx.theme().primary)
-            .text_color(cx.theme().primary_foreground)
+        // Drawn at the handle's origin and starting with the same icon, so the ghost's handle
+        // lands on the one being held and the condition's summary trails from it.
+        crate::components::drag::ghost(cx)
+            .pr(spacing::sm())
             .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .shadow_md()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(DRAG_HANDLE_SIZE))
+                    .child(Icon::new(IconName::ChevronsUpDown).small()),
+            )
             .child(self.label.clone())
     }
 }
@@ -112,6 +120,8 @@ pub struct FilterBuilderPanel {
     active_suggestion_row: Option<u64>,
     suppress_suggestion_row: Option<u64>,
     drag_source: Option<u64>,
+    /// The condition list's scroll position, held here so a drag near its edge can move it.
+    body_scroll: ScrollHandle,
     calendar_target: Option<CalendarTarget>,
     calendar_state: Option<Entity<CalendarState>>,
     _subscriptions: Vec<Subscription>,
@@ -147,6 +157,7 @@ impl FilterBuilderPanel {
             active_suggestion_row: None,
             suppress_suggestion_row: None,
             drag_source: None,
+            body_scroll: ScrollHandle::new(),
             calendar_target: None,
             calendar_state: None,
             _subscriptions: Vec::new(),
@@ -2130,9 +2141,9 @@ impl FilterBuilderPanel {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(24.0))
+            .size(px(DRAG_HANDLE_SIZE))
             .rounded(borders::radius_sm())
-            .cursor_move()
+            .cursor_grab()
             .text_color(cx.theme().muted_foreground)
             .hover(|style| style.bg(cx.theme().list_hover).text_color(cx.theme().foreground))
             .on_drag(
@@ -2143,11 +2154,12 @@ impl FilterBuilderPanel {
                 },
                 {
                     let view = view.clone();
-                    move |drag: &DraggedFilterNode, _position, _window, cx| {
+                    move |drag: &DraggedFilterNode, _grab_offset, window, cx| {
                         cx.stop_propagation();
                         view.update(cx, |this, _cx| {
                             this.drag_source = Some(node_id);
                         });
+                        crate::components::drag::closed_hand_while_dragging(window, cx);
                         cx.new(|_| DraggedFilterPreview { label: drag.label.clone() })
                     }
                 },
@@ -2375,16 +2387,24 @@ impl Render for FilterBuilderPanel {
         let header = self.render_shell_header(&view, cx);
         let toolbar = self.render_shell_toolbar(&view, cx);
 
+        // Scrolls on its own handle, not the kit's hidden one, so that dragging a condition or a
+        // field from the tree toward either edge can scroll the list. Same shape as the pipeline
+        // stage list: this scrolls, and the wrapper below holds the scrollbar.
         let body = div()
+            .id("filter-builder-body")
             .flex()
             .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scrollbar()
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.body_scroll)
+            .autoscroll_on_drag::<DraggedFilterNode>(&self.body_scroll, Axis::Vertical)
+            .autoscroll_on_drag::<DragField>(&self.body_scroll, Axis::Vertical)
+            .autoscroll_on_drag::<DragValue>(&self.body_scroll, Axis::Vertical)
             .px(spacing::md())
             .pt(spacing::sm())
             .pb(spacing::md())
-            .child(self.render_root_group(&view, window, cx));
+            // A scrolling column would otherwise squeeze its child to fit instead of overflowing.
+            .child(div().flex_none().child(self.render_root_group(&view, window, cx)));
 
         let footer =
             self.render_shell_footer(dirty, can_run, validation_error.as_deref(), &view, cx);
@@ -2427,7 +2447,8 @@ impl Render for FilterBuilderPanel {
                     .flex_1()
                     .min_h(px(0.0))
                     .min_w(px(0.0))
-                    .child(body),
+                    .child(body)
+                    .vertical_scrollbar(&self.body_scroll),
             )
             .child(footer)
     }

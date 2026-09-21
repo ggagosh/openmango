@@ -216,3 +216,64 @@ async fn test_collection_stats() {
     // Should have count
     assert_eq!(stats.get_i32("count").unwrap_or(0), 100);
 }
+
+/// A view is created, told apart from its source, redefined in place, and dropped. Redefining
+/// goes through `collMod`, so the collation the view was created with must still be there.
+#[tokio::test]
+async fn test_view_lifecycle_keeps_collation_across_an_update() {
+    use openmango::connection::manager::ViewDefinition;
+    use openmango::models::CollectionDetail;
+
+    let mongo = MongoTestContainer::start().await;
+    let database = mongo.db_name("views");
+    mongo
+        .collection::<Document>("views", "orders")
+        .insert_many([doc! { "status": "open", "n": 1 }, doc! { "status": "done", "n": 2 }])
+        .await
+        .unwrap();
+
+    let client = mongo.client.clone();
+    let db = database.clone();
+    tokio::task::spawn_blocking(move || {
+        let manager = ConnectionManager::new();
+        let mut view = ViewDefinition {
+            name: "open_orders".into(),
+            view_on: "orders".into(),
+            pipeline: vec![doc! { "$match": { "status": "open" } }],
+            collation: Some(doc! { "locale": "en", "strength": 2 }),
+        };
+        manager.save_view(&client, &db, &view, false)?;
+
+        let specs = manager.list_collection_specs(&client, &db)?;
+        let (names, details) = CollectionDetail::split_specs(&specs);
+        assert!(
+            names.contains(&"orders".to_string()) && names.contains(&"open_orders".to_string())
+        );
+        assert!(!details.contains_key("orders"));
+        assert_eq!(
+            details.get("open_orders"),
+            Some(&CollectionDetail::View {
+                view_on: "orders".into(),
+                pipeline: view.pipeline.clone()
+            })
+        );
+
+        view.pipeline = vec![doc! { "$match": { "status": "done" } }];
+        manager.save_view(&client, &db, &view, true)?;
+        let stored = manager.view_definition(&client, &db, "open_orders")?.expect("still a view");
+        assert_eq!(stored.pipeline, view.pipeline);
+        let collation = stored.collation.expect("collMod must keep the collation");
+        assert_eq!(collation.get_str("locale"), Ok("en"));
+
+        assert!(manager.view_definition(&client, &db, "orders")?.is_none());
+        manager.drop_collection(&client, &db, "open_orders")?;
+        assert!(manager.view_definition(&client, &db, "open_orders")?.is_none());
+        Ok::<_, openmango::error::Error>(())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    let remaining = mongo.collection::<Document>("views", "orders").count_documents(doc! {}).await;
+    assert_eq!(remaining.unwrap(), 2, "dropping a view must leave its source alone");
+}

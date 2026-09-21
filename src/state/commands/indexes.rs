@@ -13,6 +13,10 @@ impl AppCommands {
         force: bool,
         cx: &mut App,
     ) {
+        // A view has no storage or indexes of its own, and the server refuses to report either.
+        if state.read(cx).view_source(&session_key).is_some() {
+            return;
+        }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };
@@ -41,19 +45,28 @@ impl AppCommands {
         let task = cx.background_spawn({
             let database = database.clone();
             let collection = collection.clone();
-            async move { manager.list_indexes(&client, &database, &collection) }
+            async move {
+                let indexes = manager.list_indexes(&client, &database, &collection)?;
+                // Usage is a bonus column. Without the privilege, or on a view, the list still loads.
+                let usage = manager
+                    .index_usage(&client, &database, &collection)
+                    .inspect_err(|error| log::debug!("Index usage unavailable: {error}"))
+                    .ok();
+                Ok((indexes, usage))
+            }
         });
 
         cx.spawn({
             let state = state.clone();
             let session_key = session_key.clone();
             async move |cx: &mut gpui_kit::AsyncApp| {
-                let result: Result<Vec<IndexModel>, crate::error::Error> = task.await;
+                let result: Result<(Vec<IndexModel>, _), crate::error::Error> = task.await;
                 cx.update(|cx| match result {
-                    Ok(indexes) => {
+                    Ok((indexes, usage)) => {
                         state.update(cx, |state, cx| {
                             if let Some(session) = state.session_mut(&session_key) {
                                 session.data.indexes = Some(indexes.clone());
+                                session.data.index_usage = usage;
                                 session.data.indexes_loading = false;
                                 session.data.indexes_error = None;
                             }
@@ -89,7 +102,7 @@ impl AppCommands {
         index_name: String,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+        if !Self::ensure_collection_writable(&state, &session_key, cx) {
             return;
         }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
@@ -149,7 +162,7 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+        if !Self::ensure_collection_writable(&state, &session_key, cx) {
             return;
         }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
@@ -217,7 +230,7 @@ impl AppCommands {
         index_doc: Document,
         cx: &mut App,
     ) {
-        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+        if !Self::ensure_collection_writable(&state, &session_key, cx) {
             return;
         }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {

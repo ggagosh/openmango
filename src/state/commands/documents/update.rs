@@ -73,7 +73,7 @@ impl AppCommands {
             reject("A save is already in progress for this document.", true, cx);
             return;
         }
-        if !Self::ensure_writable(&state, Some(session_key.connection_id), cx) {
+        if !Self::ensure_collection_writable(&state, &session_key, cx) {
             reject("Document could not be saved. Check connection write permissions.", false, cx);
             return;
         }

@@ -5,7 +5,10 @@ use super::snapshot::ViewExportSnapshot;
 
 pub fn render_to_clipboard(snapshot: &ViewExportSnapshot, format: CopyFormat) -> String {
     match format {
-        CopyFormat::Json => render_json(snapshot),
+        CopyFormat::Json => render_json(snapshot, Bson::into_canonical_extjson),
+        CopyFormat::PlainJson => {
+            render_json(snapshot, |value| crate::bson::bson_to_plain_json(&value))
+        }
         CopyFormat::JsonLines => render_jsonl(snapshot),
         CopyFormat::Csv => render_csv(snapshot),
         CopyFormat::Markdown => render_markdown(snapshot),
@@ -16,23 +19,27 @@ pub fn render_to_clipboard(snapshot: &ViewExportSnapshot, format: CopyFormat) ->
 fn filter_doc_to_columns(
     doc: &mongodb::bson::Document,
     snapshot: &ViewExportSnapshot,
+    to_json: fn(Bson) -> serde_json::Value,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     for col in &snapshot.columns {
         if let Some(val) = doc.get(&col.key) {
-            map.insert(col.key.clone(), val.clone().into_canonical_extjson());
+            map.insert(col.key.clone(), to_json(val.clone()));
         }
     }
     serde_json::Value::Object(map)
 }
 
-fn render_json(snapshot: &ViewExportSnapshot) -> String {
+fn render_json(snapshot: &ViewExportSnapshot, to_json: fn(Bson) -> serde_json::Value) -> String {
     if snapshot.documents.is_empty() {
         return "[]".to_string();
     }
 
-    let values: Vec<serde_json::Value> =
-        snapshot.documents.iter().map(|doc| filter_doc_to_columns(doc, snapshot)).collect();
+    let values: Vec<serde_json::Value> = snapshot
+        .documents
+        .iter()
+        .map(|doc| filter_doc_to_columns(doc, snapshot, to_json))
+        .collect();
 
     if values.len() == 1 {
         serde_json::to_string_pretty(&values[0]).unwrap_or_default()
@@ -46,7 +53,7 @@ fn render_jsonl(snapshot: &ViewExportSnapshot) -> String {
         .documents
         .iter()
         .map(|doc| {
-            let val = filter_doc_to_columns(doc, snapshot);
+            let val = filter_doc_to_columns(doc, snapshot, Bson::into_canonical_extjson);
             serde_json::to_string(&val).unwrap_or_default()
         })
         .collect::<Vec<_>>()

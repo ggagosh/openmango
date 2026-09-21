@@ -2,8 +2,8 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use mongodb::bson::Bson;
 
-use crate::bson::bson_value_preview;
-use crate::theme::colors;
+use crate::bson::{bson_value_details, bson_value_preview, has_value_details};
+use crate::theme::{colors, spacing};
 
 const CELL_PREVIEW_MAX_LEN: usize = 80;
 const NESTED_TOOLTIP_PREVIEW_MAX_LEN: usize = 500;
@@ -27,12 +27,54 @@ pub fn value_color(value: &Bson, cx: &App) -> Hsla {
     }
 }
 
+/// The hover card for a date or binary value: every other way to read it, labels in one column
+/// and readings in the next so they line up. Built when the card opens, never per frame.
+pub fn value_details_tooltip(value: &Bson, window: &mut Window, cx: &mut App) -> AnyView {
+    let rows = bson_value_details(value);
+    gpui_kit::component::tooltip::Tooltip::element(move |_window, cx| {
+        let label_color = cx.theme().muted_foreground;
+        div()
+            .flex()
+            .gap(spacing::md())
+            .text_xs()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .text_color(label_color)
+                    .children(rows.iter().map(|(label, _)| div().child(*label))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .children(rows.iter().map(|(_, text)| div().child(text.clone()))),
+            )
+    })
+    .build(window, cx)
+}
+
 pub fn render_cell(value: &Bson, row_ix: usize, col_ix: usize, cx: &App) -> AnyElement {
     let text = bson_value_preview(value, CELL_PREVIEW_MAX_LEN);
     let color = value_color(value, cx);
     let is_nested = matches!(value, Bson::Document(_) | Bson::Array(_));
 
-    if is_nested {
+    if has_value_details(value) {
+        // ponytail: clones the value for the card on each render, as nested cells below do. If
+        // multi-megabyte binaries ever make the table stutter, capture the row and column and
+        // resolve the value on hover instead.
+        let value = value.clone();
+        div()
+            .id(("doc-cell", row_ix * 64 + col_ix))
+            .text_xs()
+            .text_color(color)
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .overflow_x_hidden()
+            .tooltip(move |window, cx| value_details_tooltip(&value, window, cx))
+            .child(text)
+            .into_any_element()
+    } else if is_nested {
         // Build the (bounded) nested preview lazily on hover instead of every
         // frame — the string is only ever shown inside the tooltip. Index-based
         // id avoids a per-cell `format!` allocation each render.

@@ -8,16 +8,16 @@ use crate::components::node_commands::confirm_delete_node;
 use crate::components::{WriteConfirmation, request_connection_write};
 use crate::keyboard::{
     AddAggregationStage, AddElement, AddField, ClearAggregationStage, CloseSearch, CopyAs,
-    CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv, CopyDocumentJson, CopyKey,
-    CopyValue, DeleteAggregationStage, DeleteCollection, DeleteDocument, DiscardDocumentChanges,
-    DuplicateAggregationStage, DuplicateDocument, EditDocumentJson, EditValueType, FindInResults,
-    FindReferences, FocusAggregationStageEditor, FormatAggregationStage, GoToReference,
-    InsertDocument, MoveAggregationStageDown, MoveAggregationStageUp, NextSearchMatch,
-    PasteDocuments, PeekReference, PrevSearchMatch, RedoAggregationEdit, RemoveMatchingValues,
-    RemoveSelectedField, RenameField, RunAggregation, SaveDocument, SelectNextAggregationStage,
-    SelectPrevAggregationStage, ShowAggregationSubview, ShowDocumentsSubview, ShowHistorySubview,
-    ShowIndexesSubview, ShowSchemaSubview, ShowStatsSubview, ToggleAggregationStageEnabled,
-    UndoAggregationEdit,
+    CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsPlainJson, CopyAsTsv,
+    CopyDocumentJson, CopyKey, CopyValue, DeleteAggregationStage, DeleteCollection, DeleteDocument,
+    DiscardDocumentChanges, DuplicateAggregationStage, DuplicateDocument, EditDocumentJson,
+    EditValueType, FindInResults, FindReferences, FocusAggregationStageEditor,
+    FormatAggregationStage, GoToReference, InsertDocument, MoveAggregationStageDown,
+    MoveAggregationStageUp, NextSearchMatch, PasteDocuments, PeekReference, PrevSearchMatch,
+    RedoAggregationEdit, RemoveMatchingValues, RemoveSelectedField, RenameField, RunAggregation,
+    SaveDocument, SelectNextAggregationStage, SelectPrevAggregationStage, ShowAggregationSubview,
+    ShowDocumentsSubview, ShowHistorySubview, ShowIndexesSubview, ShowSchemaSubview,
+    ShowStatsSubview, ToggleAggregationStageEnabled, UndoAggregationEdit,
 };
 use crate::models::TreeNodeId;
 use crate::state::relations::lookup::Intent;
@@ -566,6 +566,9 @@ impl CollectionView {
         }))
         .on_action(cx.listener(|this, _: &CopyAsJson, _window, cx| {
             copy_documents_as(this, CopyFormat::Json, ExportScope::Selected, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CopyAsPlainJson, _window, cx| {
+            copy_documents_as(this, CopyFormat::PlainJson, ExportScope::Selected, cx);
         }))
         .on_action(cx.listener(|this, _: &CopyAsJsonLines, _window, cx| {
             copy_documents_as(this, CopyFormat::JsonLines, ExportScope::Selected, cx);

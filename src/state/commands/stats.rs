@@ -8,6 +8,10 @@ use super::AppCommands;
 impl AppCommands {
     /// Load collection stats for a session.
     pub fn load_collection_stats(state: Entity<AppState>, session_key: SessionKey, cx: &mut App) {
+        // A view has no storage or indexes of its own, and the server refuses to report either.
+        if state.read(cx).view_source(&session_key).is_some() {
+            return;
+        }
         let Some(client) = Self::client_for_session(&state, &session_key, cx) else {
             return;
         };

@@ -28,6 +28,8 @@ pub use app_state::{
     UnsavedInventory, UnsavedScope, View,
 };
 pub use commands::AppCommands;
+pub(crate) use commands::view_pipeline;
+pub use commands::{ViewSave, ViewSource};
 pub use config::ConfigManager;
 pub use editor_sessions::{
     EditorSession, EditorSessionId, EditorSessionStore, EditorSessionTarget,

@@ -170,6 +170,29 @@ pub struct PipelineState {
     pub undo_group: Option<UndoGroup>,
     /// Text mode input that doesn't parse yet, kept per session.
     pub text_draft: Option<String>,
+    /// The view whose definition this pipeline is an edit of. Saving then updates that view
+    /// instead of asking for a new name.
+    pub editing_view: Option<EditingView>,
+}
+
+/// A view's definition open in the builder, and what the server holds for it.
+#[derive(Debug, Clone)]
+pub struct EditingView {
+    pub name: String,
+    /// The definition as last read or written, in the form the builder produces. Held in that
+    /// form, not the server's, so an untouched pipeline compares equal: the server may store
+    /// `5` as a double where the builder writes an integer.
+    pub saved: Vec<Document>,
+    pub updating: bool,
+}
+
+/// Where an edit of a view stands against the server's copy of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewEditStatus {
+    /// The pipeline is the view's definition. There is nothing to save.
+    UpToDate,
+    Changed,
+    Updating,
 }
 
 impl Default for PipelineState {
@@ -200,6 +223,7 @@ impl Default for PipelineState {
             undo_serial: 0,
             undo_group: None,
             text_draft: None,
+            editing_view: None,
         }
     }
 }

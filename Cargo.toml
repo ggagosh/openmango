@@ -21,7 +21,8 @@ gpui-fps = "0.6.2"
 tree-sitter = "0.26"
 tree-sitter-javascript = "0.25"
 lsp-types = "0.97"
-mongodb = { version = "3.5", features = ["socks5-proxy", "cert-key-password"] }
+# aws-auth: without it the driver rejects authMechanism=MONGODB-AWS outright.
+mongodb = { version = "3.5", features = ["socks5-proxy", "cert-key-password", "aws-auth"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

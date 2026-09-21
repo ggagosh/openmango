@@ -197,10 +197,6 @@ impl BulkUpdateDialog {
         }
     }
 
-    fn is_read_only(&self, cx: &mut Context<Self>) -> bool {
-        self.state.read(cx).connection_read_only(self.session_key.connection_id)
-    }
-
     fn start_operation(&mut self, filter: Document, update_doc: Document, cx: &mut Context<Self>) {
         self.updating = true;
         self.error_message = None;
@@ -235,8 +231,8 @@ impl BulkUpdateDialog {
         if self.updating {
             return;
         }
-        if self.is_read_only(cx) {
-            self.error_message = Some("Read-only connection: writes are disabled.".to_string());
+        if let Some(reason) = self.state.read(cx).session_read_only_reason(&self.session_key) {
+            self.error_message = Some(reason);
             cx.notify();
             return;
         }

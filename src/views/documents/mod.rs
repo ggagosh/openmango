@@ -193,6 +193,176 @@ pub(crate) fn request_delete_confirmation(
     .detach();
 }
 
+/// Saves the aggregation screen's pipeline as a view. A pipeline that was opened from a view's
+/// definition updates that view, after saying what that means for its readers; any other
+/// pipeline is given a name first.
+pub(crate) fn request_save_view(
+    state: Entity<AppState>,
+    session_key: SessionKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some((stages, editing_view)) = state.read(cx).session(&session_key).map(|session| {
+        let aggregation = &session.data.aggregation;
+        let editing = aggregation.editing_view.as_ref().map(|editing| editing.name.clone());
+        (aggregation.stages.clone(), editing)
+    }) else {
+        return;
+    };
+    let pipeline = match crate::state::view_pipeline(&stages) {
+        Ok(pipeline) => pipeline,
+        Err(message) => {
+            state.update(cx, |state, cx| {
+                state.set_status_message(Some(StatusMessage::error(message)));
+                cx.notify();
+            });
+            return;
+        }
+    };
+    let SessionKey { connection_id, database, collection: view_on, .. } = session_key.clone();
+    let Some(view) = editing_view else {
+        crate::app::dialogs::open_new_view_dialog(
+            state,
+            connection_id,
+            database,
+            crate::app::dialogs::NewView::Pipeline { view_on, pipeline },
+            window,
+            cx,
+        );
+        return;
+    };
+
+    let namespace = format!("{database}.{view}");
+    let confirmation = crate::components::WriteConfirmation {
+        title: format!("Update view \"{namespace}\"?"),
+        message: "Everything that reads this view gets the new pipeline from now on. Its \
+                  collation stays as it is."
+            .to_string(),
+        confirm_label: "Update view".into(),
+        destructive: false,
+    };
+    let state_for_write = state.clone();
+    crate::components::request_connection_write(
+        state,
+        crate::components::WriteRequest::new(
+            connection_id,
+            namespace,
+            "Update a view",
+            Some(confirmation),
+        ),
+        window,
+        cx,
+        move |_window, cx| {
+            // What the button shows follows this: busy while the write runs, then "up to date"
+            // against the pipeline that was sent, or back to "changed" if the server refused.
+            let mark = |state: &Entity<AppState>,
+                        key: &SessionKey,
+                        saved: Option<Vec<mongodb::bson::Document>>,
+                        updating: bool,
+                        cx: &mut App| {
+                state.update(cx, |state, cx| {
+                    let editing = state
+                        .session_mut(key)
+                        .and_then(|session| session.data.aggregation.editing_view.as_mut());
+                    if let Some(editing) = editing {
+                        editing.updating = updating;
+                        if let Some(saved) = saved {
+                            editing.saved = saved;
+                        }
+                    }
+                    cx.notify();
+                });
+            };
+            mark(&state_for_write, &session_key, None, true, cx);
+            let state_when_done = state_for_write.clone();
+            let sent = pipeline.clone();
+            AppCommands::save_view(
+                state_for_write,
+                crate::state::ViewSave {
+                    connection_id,
+                    database,
+                    name: view,
+                    source: crate::state::ViewSource::Pipeline {
+                        view_on,
+                        pipeline,
+                        collation: None,
+                    },
+                    replace: true,
+                },
+                cx,
+                // A failure is already recorded by the command; there is no dialog to keep open.
+                move |result, cx| {
+                    mark(&state_when_done, &session_key, result.is_ok().then_some(sent), false, cx);
+                },
+            );
+        },
+    );
+}
+
+/// Where the aggregation screen's pipeline stands against the view it is an edit of, or `None`
+/// when it isn't one. Compared as parsed pipelines, so reformatting a stage or adding a
+/// disabled one is not a change; a stage that doesn't parse is, since it can't be the saved one.
+pub(crate) fn view_edit_status(
+    state: &AppState,
+    session_key: &SessionKey,
+) -> Option<(String, crate::state::app_state::ViewEditStatus)> {
+    let aggregation = &state.session(session_key)?.data.aggregation;
+    let editing = aggregation.editing_view.as_ref()?;
+    Some((editing.name.clone(), edit_status(&aggregation.stages, editing)))
+}
+
+fn edit_status(
+    stages: &[PipelineStage],
+    editing: &crate::state::app_state::EditingView,
+) -> crate::state::app_state::ViewEditStatus {
+    use crate::state::app_state::ViewEditStatus;
+    if editing.updating {
+        ViewEditStatus::Updating
+    } else if crate::state::view_pipeline(stages).is_ok_and(|now| now == editing.saved) {
+        ViewEditStatus::UpToDate
+    } else {
+        ViewEditStatus::Changed
+    }
+}
+
+#[cfg(test)]
+mod view_edit_tests {
+    use mongodb::bson::doc;
+
+    use super::edit_status;
+    use crate::state::app_state::{
+        EditingView, PipelineStage, ViewEditStatus, stages_from_pipeline,
+    };
+
+    /// Opened the way `edit_view_definition` opens it: the saved form is what the builder
+    /// makes of the server's pipeline, which here holds `$limit` as a double.
+    fn opened() -> (Vec<PipelineStage>, EditingView) {
+        let server = [doc! { "$match": { "status": "open" } }, doc! { "$limit": 5.0 }];
+        let stages = stages_from_pipeline(&server);
+        let saved = crate::state::view_pipeline(&stages).unwrap();
+        (stages, EditingView { name: "open_orders".into(), saved, updating: false })
+    }
+
+    #[test]
+    fn only_a_real_change_asks_for_an_update() {
+        let (mut stages, mut editing) = opened();
+        assert_eq!(edit_status(&stages, &editing), ViewEditStatus::UpToDate);
+
+        // Reformatting and a switched-off stage leave the definition as it is.
+        stages[0].body = "{\n  status:   \"open\"\n}".into();
+        stages.push(PipelineStage::with("$sort".to_string(), "{ n: 1 }".to_string(), false));
+        assert_eq!(edit_status(&stages, &editing), ViewEditStatus::UpToDate);
+
+        stages[0].body = "{ status: \"done\" }".into();
+        assert_eq!(edit_status(&stages, &editing), ViewEditStatus::Changed);
+        stages[0].body = "{ status: ".into();
+        assert_eq!(edit_status(&stages, &editing), ViewEditStatus::Changed);
+
+        editing.updating = true;
+        assert_eq!(edit_status(&stages, &editing), ViewEditStatus::Updating);
+    }
+}
+
 /// The first `$out`/`$merge` stage a run through `target` would execute, as (operator, namespace).
 pub(crate) fn aggregation_write_impact(
     stages: &[PipelineStage],

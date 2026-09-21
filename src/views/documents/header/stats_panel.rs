@@ -30,6 +30,16 @@ pub fn render_stats_row(
         .border_t_1()
         .border_color(cx.theme().border);
 
+    let view_source =
+        session_key.as_ref().and_then(|key| state.read(cx).view_source(key).map(str::to_owned));
+    if let Some(source) = view_source {
+        return row
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(format!(
+                "A view stores nothing of its own, so it has no stats. Its data lives in {source}."
+            )))
+            .into_any_element();
+    }
+
     if stats_loading {
         row = row
             .child(Spinner::new().small())

@@ -346,6 +346,26 @@ fn pipeline_has_write_stage(stages: &[PipelineStage], target: Option<usize>) -> 
     })
 }
 
+/// The enabled stages as a view definition, or why they can't be one. A view is read through,
+/// never written by, so the server refuses `$out` and `$merge`; saying so here names the stage.
+pub(crate) fn view_pipeline(stages: &[PipelineStage]) -> Result<Vec<Document>, String> {
+    let mut pipeline = Vec::new();
+    for (idx, stage) in stages.iter().enumerate().filter(|(_, stage)| stage.enabled) {
+        let operator = stage.operator.trim();
+        if matches!(operator, "$out" | "$merge") {
+            return Err(format!(
+                "Stage {} is {operator}, which writes. A view can only read; turn the stage off first.",
+                idx + 1
+            ));
+        }
+        pipeline.push(build_stage_doc(stage, idx).map_err(|err| match err {
+            AggregationRunError::Pipeline { message, .. } => message,
+            _ => format!("Stage {} can't be read", idx + 1),
+        })?);
+    }
+    Ok(pipeline)
+}
+
 fn build_stage_doc(stage: &PipelineStage, idx: usize) -> Result<Document, AggregationRunError> {
     let operator = stage.operator.trim();
     if operator.is_empty() {
@@ -665,7 +685,38 @@ fn count_from_doc(doc: &Document) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_stage_doc, is_cancelled, pipeline_has_write_stage};
+    use super::{build_stage_doc, is_cancelled, pipeline_has_write_stage, view_pipeline};
+
+    /// Opening a view's definition and saving it untouched must not change the view. Compass
+    /// rewrites `$regexFind` on this trip (COMPASS-4737), so that is what the pipeline holds.
+    #[test]
+    fn a_view_definition_survives_the_builder_unchanged() {
+        use mongodb::bson::{DateTime, Regex, doc, oid::ObjectId};
+        let pipeline = vec![
+            doc! { "$match": {
+                "name": Regex { pattern: "^a.*\\d+$".into(), options: "i".into() },
+                "at": { "$gte": DateTime::from_millis(1_706_693_400_000) },
+                "owner": ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap(),
+                "score": 1.5,
+            } },
+            doc! { "$addFields": { "found": { "$regexFind": {
+                "input": "$line",
+                "regex": Regex { pattern: "(\\w+)@".into(), options: String::new() },
+            } } } },
+            doc! { "$limit": 5 },
+        ];
+        let stages = crate::state::app_state::stages_from_pipeline(&pipeline);
+        assert_eq!(stages.len(), 3);
+        assert_eq!(view_pipeline(&stages).unwrap(), pipeline);
+    }
+
+    #[test]
+    fn a_view_refuses_a_stage_that_writes() {
+        let stages = [PipelineStage::with("$out".to_string(), "\"copy\"".to_string(), true)];
+        assert!(view_pipeline(&stages).unwrap_err().contains("$out"));
+        let off = [PipelineStage::with("$out".to_string(), "\"copy\"".to_string(), false)];
+        assert_eq!(view_pipeline(&off).unwrap(), Vec::new());
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},

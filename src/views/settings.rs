@@ -334,6 +334,12 @@ impl Render for SettingsView {
                         "theme",
                         "appearance",
                         "status bar",
+                        "dates",
+                        "time zone",
+                        "utc",
+                        "local time",
+                        "system collections",
+                        "views",
                         "query timeout",
                         "collection",
                         "double click",
@@ -556,6 +562,42 @@ fn render_appearance_section(
         )
     };
 
+    let system_collections_checkbox = {
+        let state = state.clone();
+        let checked = settings.appearance.show_system_collections;
+        gpui_kit::component::checkbox::Checkbox::new("show-system-collections")
+            .checked(checked)
+            .on_click(move |_, _, cx| {
+                state.update(cx, |state, cx| state.set_show_system_collections(!checked, cx));
+            })
+    };
+
+    let date_display_dropdown = {
+        use crate::bson::DateDisplay;
+        let label = |display| match display {
+            DateDisplay::Utc => "UTC",
+            DateDisplay::Local => "Local time",
+        };
+        let state = state.clone();
+        gpui_kit::component::button::Button::new("date-display-dropdown")
+            .xsmall()
+            .label(label(settings.appearance.date_display))
+            .dropdown_caret(true)
+            .rounded(borders::radius_sm())
+            .with_size(Size::Small)
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu: PopupMenu, _window, _cx| {
+                let mut menu = menu;
+                for display in [DateDisplay::Utc, DateDisplay::Local] {
+                    let state = state.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new(label(display)).on_click(move |_, _, cx| {
+                            state.update(cx, |state, cx| state.set_date_display(display, cx));
+                        }));
+                }
+                menu
+            })
+    };
+
     section(
         "Appearance",
         div()
@@ -573,6 +615,18 @@ fn render_appearance_section(
                 "Show status bar",
                 "Display the status bar at the bottom of the window",
                 status_bar_checkbox,
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Show dates in",
+                "The time zone dates are displayed in. Copied and exported dates are always UTC. You can also switch from the status bar.",
+                date_display_dropdown,
+                cx,
+            ))
+            .child(setting_row_with_description(
+                "Show system collections",
+                "List server-internal collections such as system.views in the sidebar",
+                system_collections_checkbox,
                 cx,
             )),
         cx,

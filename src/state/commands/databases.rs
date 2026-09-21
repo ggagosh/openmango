@@ -2,6 +2,7 @@ use gpui_kit::{App, AppContext as _, Entity};
 use uuid::Uuid;
 
 use crate::error::ErrorReport;
+use crate::models::CollectionDetail;
 use crate::state::{
     AppEvent, AppState, CollectionOverview, DatabaseKey, DatabaseStats, StatusMessage, View,
 };
@@ -152,12 +153,12 @@ impl AppCommands {
                     .map(|doc| DatabaseStats::from_document(&doc));
                 let collections_result =
                     manager.list_collection_specs(&client, &database).map(|specs| {
-                        let names = specs.iter().map(|spec| spec.name.clone()).collect::<Vec<_>>();
+                        let (names, details) = CollectionDetail::split_specs(&specs);
                         let collections = specs
                             .into_iter()
                             .map(CollectionOverview::from_spec)
                             .collect::<Vec<_>>();
-                        (names, collections)
+                        (names, details, collections)
                     });
 
                 (stats_result, collections_result)
@@ -194,13 +195,14 @@ impl AppCommands {
                             }
 
                             match collections_result {
-                                Ok((names, collections)) => {
+                                Ok((names, details, collections)) => {
                                     session.data.collections = collections;
                                     session.data.collections_error = None;
                                     if let Some(conn) =
                                         state.active_connection_mut(database_key.connection_id)
                                     {
                                         conn.collections.insert(database.clone(), names.clone());
+                                        conn.collection_details.insert(database.clone(), details);
                                     }
                                     loaded_collections = Some(names);
                                 }

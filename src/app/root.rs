@@ -557,6 +557,7 @@ impl AppRoot {
 
         let key_debug = std::env::var("OPENMANGO_DEBUG_KEYS").is_ok();
         let mut subscriptions = Vec::new();
+        subscriptions.push(crate::components::drag::cancel_drag_on_escape(cx));
         // Startup already shows the matching theme; this records it and follows later changes.
         crate::theme::sync_system_theme(&state, window, cx);
         subscriptions.push(cx.observe_in(&state, window, |this, _, window, cx| {

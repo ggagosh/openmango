@@ -29,18 +29,28 @@ pub(super) struct DragStage {
     pub from_index: usize,
 }
 
+/// The grip a stage is dragged by, and what its ghost starts with.
+const STAGE_HANDLE_WIDTH: f32 = 16.0;
+const STAGE_HANDLE_HEIGHT: f32 = 20.0;
+
 struct DragStagePreview(SharedString);
 
 impl Render for DragStagePreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(spacing::xs())
-            .rounded(borders::radius_sm())
-            .bg(cx.theme().popover)
-            .border_1()
-            .border_color(cx.theme().border)
+        // Drawn at the handle's origin and starting with the same grip, so the ghost's grip
+        // lands on the one being held and the stage's name trails from it.
+        crate::components::drag::ghost(cx)
+            .pr(spacing::sm())
             .text_sm()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(STAGE_HANDLE_WIDTH))
+                    .h(px(STAGE_HANDLE_HEIGHT))
+                    .child(Icon::new(AppIcon::GripVertical).xsmall()),
+            )
             .child(self.0.clone())
     }
 }
@@ -466,8 +476,8 @@ fn drag_handle(
         .flex()
         .items_center()
         .justify_center()
-        .w(px(16.0))
-        .h(px(20.0))
+        .w(px(STAGE_HANDLE_WIDTH))
+        .h(px(STAGE_HANDLE_HEIGHT))
         .rounded(borders::radius_sm())
         .text_color(cx.theme().muted_foreground);
     let Some(session_key) = session_key else {
@@ -478,12 +488,13 @@ fn drag_handle(
         .cursor_grab()
         .hover(|el| el.text_color(cx.theme().foreground))
         .child(Icon::new(AppIcon::GripVertical).xsmall())
-        .on_drag(DragStage { session_key, from_index: idx }, move |_, _, _, cx| {
+        .on_drag(DragStage { session_key, from_index: idx }, move |_, _grab_offset, window, cx| {
             cx.stop_propagation();
             view_entity.update(cx, |view, cx| {
                 view.aggregation_drag_source = Some(idx);
                 cx.notify();
             });
+            crate::components::drag::closed_hand_while_dragging(window, cx);
             cx.new(|_| DragStagePreview(label.clone()))
         })
         .into_any_element()

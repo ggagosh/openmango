@@ -378,6 +378,14 @@ impl CollectionView {
                     this.ensure_subview_data_loaded(&session_key, &state, cx);
                 }
             }
+            AppEvent::DateDisplayChanged => {
+                this.view_model.clear_tree_cache();
+                this.view_model.rebuild_tree(&state, cx);
+                this.view_model.invalidate_table();
+                // Search matches against the text the rows show.
+                this.update_search_results(cx);
+                cx.notify();
+            }
             AppEvent::DocumentsLoaded { session, .. } => {
                 if !this.view_model.is_current_session(session) {
                     return;
@@ -1101,6 +1109,7 @@ fn search_node_meta(
         is_folder: matches!(value, Bson::Document(_) | Bson::Array(_)),
         is_editable,
         is_dirty: original_value.map(|orig| orig != value).unwrap_or(true),
+        has_details: crate::bson::has_value_details(value),
         doc_key: doc_key.clone(),
         path: path.to_vec(),
         value: if is_editable { Some(value.clone()) } else { None },

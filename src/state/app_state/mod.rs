@@ -19,8 +19,8 @@ pub mod updater;
 mod workspace;
 
 pub(crate) use aggregation::{
-    PIPELINE_UNDO_LIMIT, PipelineRun, PipelineSnapshot, PipelineStage, PipelineState,
-    StageDocCounts, StageStatsMode, UndoGroup, default_stage_body,
+    EditingView, PIPELINE_UNDO_LIMIT, PipelineRun, PipelineSnapshot, PipelineStage, PipelineState,
+    StageDocCounts, StageStatsMode, UndoGroup, ViewEditStatus, default_stage_body,
 };
 pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,
@@ -28,7 +28,7 @@ pub(crate) use connection::{
 pub(crate) use database_sessions::DatabaseSessionStore;
 pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
-pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
+pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text, stages_from_pipeline};
 pub(crate) use sessions::SessionStore;
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
@@ -223,6 +223,7 @@ impl AppState {
         {
             log::warn!("Failed to persist Islands tab style migration: {e}");
         }
+        crate::bson::set_date_display(settings.appearance.date_display);
         let workspace = config.load_workspace().unwrap_or_else(|e| {
             log::warn!("Failed to load workspace: {}", e);
             WorkspaceState::default()
@@ -475,6 +476,31 @@ impl AppState {
         if let Err(e) = self.config.save_settings(&self.settings) {
             log::error!("Failed to save settings: {}", e);
         }
+    }
+
+    /// Draw BSON dates in UTC or local time. Open document views redraw their rows.
+    pub fn set_date_display(&mut self, display: crate::bson::DateDisplay, cx: &mut Context<Self>) {
+        self.settings.appearance.date_display = display;
+        crate::bson::set_date_display(display);
+        self.save_settings();
+        cx.emit(AppEvent::DateDisplayChanged);
+        cx.notify();
+    }
+
+    pub fn set_show_system_collections(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.settings.appearance.show_system_collections = show;
+        self.save_settings();
+        cx.emit(AppEvent::SystemCollectionsVisibilityChanged);
+        cx.notify();
+    }
+
+    pub fn toggle_date_display(&mut self, cx: &mut Context<Self>) {
+        use crate::bson::DateDisplay;
+        let next = match self.settings.appearance.date_display {
+            DateDisplay::Utc => DateDisplay::Local,
+            DateDisplay::Local => DateDisplay::Utc,
+        };
+        self.set_date_display(next, cx);
     }
 
     // =========================================================================

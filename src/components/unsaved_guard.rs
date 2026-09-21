@@ -575,7 +575,7 @@ fn prepare_saves(
             | UnsavedChange::InvalidInlineEdit { session_key } => session_key,
             UnsavedChange::DetachedEditor(session) => &session.session_key,
         };
-        if state.read(cx).connection_read_only(session_key.connection_id) {
+        if state.read(cx).session_read_only(session_key) {
             return Err(Error::Parse(format!(
                 "{} is read-only; discard or cancel instead.",
                 session_key.collection

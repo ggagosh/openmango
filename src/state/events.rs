@@ -191,6 +191,11 @@ pub enum AppEvent {
     // View navigation
     ViewChanged,
 
+    // Dates are now drawn in the other zone; rows that cache their text must rebuild it.
+    DateDisplayChanged,
+    /// "Show system collections" was switched; the sidebar lists or hides `system.*` rows.
+    SystemCollectionsVisibilityChanged,
+
     // Auto-update
     UpdateAvailable {
         version: String,

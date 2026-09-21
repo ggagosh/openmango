@@ -309,7 +309,59 @@ pub struct ActiveConnection {
     pub databases: Vec<String>,
     /// Collections per database (db_name -> collection_names)
     pub collections: HashMap<String, Vec<String>>,
+    /// Views and time-series collections per database (db_name -> name -> detail). A name
+    /// absent here is a plain collection, so readers of `collections` need not care.
+    pub collection_details: HashMap<String, HashMap<String, CollectionDetail>>,
     pub runtime_meta: ConnectionRuntimeMeta,
+}
+
+impl ActiveConnection {
+    pub fn collection_detail(&self, database: &str, collection: &str) -> Option<&CollectionDetail> {
+        self.collection_details.get(database)?.get(collection)
+    }
+}
+
+/// What a namespace is when it is not a plain collection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollectionDetail {
+    /// A read-only view: the collection it reads from and the pipeline that defines it.
+    View {
+        view_on: String,
+        pipeline: Vec<mongodb::bson::Document>,
+    },
+    Timeseries,
+}
+
+impl CollectionDetail {
+    pub fn from_spec(spec: &mongodb::results::CollectionSpecification) -> Option<Self> {
+        use mongodb::results::CollectionType;
+        match spec.collection_type {
+            CollectionType::View => Some(Self::View {
+                view_on: spec.options.view_on.clone().unwrap_or_default(),
+                pipeline: spec.options.pipeline.clone().unwrap_or_default(),
+            }),
+            CollectionType::Timeseries => Some(Self::Timeseries),
+            _ => None,
+        }
+    }
+
+    /// Names and details from one `listCollections` result, ready to store on the connection.
+    pub fn split_specs(
+        specs: &[mongodb::results::CollectionSpecification],
+    ) -> (Vec<String>, HashMap<String, CollectionDetail>) {
+        let names = specs.iter().map(|spec| spec.name.clone()).collect();
+        let details = specs
+            .iter()
+            .filter_map(|spec| Some((spec.name.clone(), Self::from_spec(spec)?)))
+            .collect();
+        (names, details)
+    }
+}
+
+/// Server-internal namespaces such as `system.views`. Only the exact `system.` prefix counts:
+/// a user collection named `system_audit` or `my.system.log` is not one.
+pub fn is_system_collection(name: &str) -> bool {
+    name.starts_with("system.")
 }
 
 #[cfg(test)]

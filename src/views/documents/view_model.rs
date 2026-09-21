@@ -741,6 +741,12 @@ impl DocumentViewModel {
         self.table_generation = None;
     }
 
+    /// Drop every cached tree. Their rows hold formatted text, which a display setting such as
+    /// the date zone makes stale without the session's data changing.
+    pub fn clear_tree_cache(&mut self) {
+        self.tree_cache.clear();
+    }
+
     // ── Aggregation table ────────────────────────────────────────────
 
     pub fn agg_table_state(&self) -> Option<&Entity<TableState<AggregationTableDelegate>>> {

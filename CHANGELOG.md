@@ -32,6 +32,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Adding an aggregation stage offers Join a related collection, which writes the `$lookup` from a known relation and the `$unwind` when the join arrives at one document; From relation on a `$lookup` stage fills in its four fields
 - Ids in aggregation results can be followed with Cmd/Ctrl+click, in the tree and the table, and an array of ids has Open all in its menu
 - The assistant and MCP clients can ask what references what (`get_relations`) and how two collections join (`join_path`), and get the `$lookup` stages back. Over MCP the graph is given only for a database the shared connection has
+- Dates can be shown in your local time: Show dates in, under Settings, a chip in the status bar that says `UTC` or your offset, and a command in the palette all switch it. A local date always carries its offset, such as `2024-01-31T13:30:00+04:00`, and everything copied or exported stays UTC whatever the setting
+- A UUID shows as a UUID and other binary as its size, with the subtype in the type column, instead of a dump of bytes. A legacy UUID shows as stored, and says so
+- Hovering a date or a binary value lists its other forms: UTC, local, how long ago and the epoch for a date; subtype, size and Base64 for binary, and the Java and C# byte orders for a legacy UUID
+- Copy value as, on a date or binary field: `ISODate("…")`, UTC, local or epoch milliseconds for a date, and `UUID("…")`, the plain string, Base64 or Hex for a UUID
+- Plain JSON under Copy as, where ObjectIds, dates and UUIDs are ordinary strings, for pasting somewhere that doesn't speak Extended JSON
+- AWS IAM sign-in works: `MONGODB-AWS` was refused by the driver before. The authentication mechanism is picked from a list (Automatic, SCRAM, X.509, LDAP, AWS IAM) that explains what each one expects, and a mechanism typed into the URI that isn't on the list is kept
+- The Indexes tab shows how often the server has used each index and since when, and marks one that nothing has used as Unused. The column is left out where the server won't report usage
+- Views are told apart from collections: an eye icon in the sidebar, and in the tab a VIEW tag, a link to the collection it reads, and a READ-ONLY tag that says why. A time-series collection gets an icon of its own
+- Save as view on the aggregation screen makes a view from the pipeline, offering a name read off what the pipeline does, such as `orders_open_by_country`, in the source collection's naming style, and taking an optional collation
+- Edit view definition, in the sidebar menu and the view's header, opens the view's pipeline in the aggregation builder as the server holds it now. The builder says the view is up to date until a stage really changes, then offers Update view, which keeps the view's collation
+- Duplicate view and Drop view in the sidebar menu; dropping says that the documents in the source collection are untouched
+- Show system collections under Settings lists `system.*` collections in the sidebar, muted and last. They are hidden by default now that creating a view adds `system.views`; a collection that merely has "system" in its name is never hidden
+- Escape cancels a drag, and the pipeline stage list, the filter builder and the tab bar scroll when a drag nears their edge
 
 ### Changed
 - Filters are written with spaces inside their braces, `{ _id: ObjectId("…") }`, everywhere one is shown, copied or saved
@@ -53,6 +66,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A long run of tool calls shows only its last few while it works, with the rest one click away, instead of pushing the answer off the screen
 - The status bar and the chat are built on gpui-kit's own components, so the chat scrolls, follows new messages and renders markdown the way the rest of the app does
 - Headings in an answer are bigger than the text they introduce, field names in a sentence carry the same blue the document tree gives them, code blocks have room around them, and the answer no longer changes size the moment it finishes streaming
+- The existing JSON copy format is named Extended JSON, now that Plain JSON sits beside it
+- What you drag is the thing you grabbed, lifted off in place and held where you took hold of it: a key or value in its own color, a stage or condition by its grip, a tab as a tab. The hand closes while you drag, and the blue chips beside the pointer are gone
+- In the tree, a drag starts on the key or value text rather than anywhere in its column
+- Inserting, editing, deleting and bulk-updating documents in a view, and changing its indexes, are refused in the app with the name of the collection to change instead, rather than by a server error. Import is off for a view, and Rename is not offered
+- A view's Indexes tab says it uses its source's indexes and links to them, and its Stats row says a view stores nothing of its own
 
 ### Removed
 - The Vibrancy setting: windows are always opaque, so text keeps the same contrast whatever sits behind the window, and theme changes no longer ask for a restart
@@ -83,6 +101,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The chat's text box starts the caret at the edge of the box, and grows as you type
 - The model picker opens on the model you are using, and Settings says when the model list could not be loaded instead of showing "Ready"
 - A group of tool calls can be collapsed while the assistant is still working, and no longer blinks open and shut between calls
+- Dragging a date or boolean field's key into the filter builder made a condition that compared text against the field and matched nothing
+- Dragging a UUID or other binary value into the filter builder filters on the value instead of on its JSON as text
+- On a narrow window the collection header's buttons were drawn over the collection name. They now move below it, and the chips beside the name wrap
+- The edit value dialog prefilled binary and decimal values with debug text instead of the Extended JSON it asks for
 
 ## [0.3.0] - 2026-09-14
 

@@ -39,6 +39,7 @@ fn setup(cx: &mut TestAppContext) -> (Entity<Sidebar>, uuid::Uuid, &mut VisualTe
                     ("a".to_string(), (0..60).map(|n| format!("col_{n:02}")).collect()),
                     ("b".to_string(), vec!["only".to_string()]),
                 ]),
+                collection_details: Default::default(),
                 runtime_meta: Default::default(),
             },
         );

@@ -12,9 +12,10 @@ use crate::helpers::validate::{
     UriSecrets, extract_uri_secrets, inject_uri_secrets, strip_uri_secrets,
 };
 use crate::models::TreeNodeId;
-use crate::models::{ActiveConnection, SavedConnection};
+use crate::models::{ActiveConnection, CollectionDetail, SavedConnection};
 use crate::state::ActiveTab;
 use crate::state::AppCommands;
+use crate::state::SessionKey;
 use crate::state::View;
 use crate::state::events::AppEvent;
 
@@ -151,6 +152,42 @@ impl AppState {
         self.conn.active.get(&connection_id).map(|conn| conn.config.read_only).unwrap_or_else(
             || self.connection_by_id(connection_id).is_some_and(|connection| connection.read_only),
         )
+    }
+
+    /// What this session's namespace is when it is not a plain collection.
+    pub fn collection_detail(&self, key: &SessionKey) -> Option<&CollectionDetail> {
+        self.conn.active.get(&key.connection_id)?.collection_detail(&key.database, &key.collection)
+    }
+
+    /// The collection a view reads from. `Some` means the session is a view.
+    pub fn view_source(&self, key: &SessionKey) -> Option<&str> {
+        match self.collection_detail(key)? {
+            CollectionDetail::View { view_on, .. } => Some(view_on),
+            CollectionDetail::Timeseries => None,
+        }
+    }
+
+    /// Why a view refuses writes, naming where the change belongs. `None` when not a view.
+    pub fn view_read_only_reason(&self, key: &SessionKey) -> Option<String> {
+        self.view_source(key).map(|source| {
+            format!(
+                "{} is a view, so it is read-only. Make the change in {source}.",
+                key.collection
+            )
+        })
+    }
+
+    /// Why this session refuses writes: the connection forbids them, or the namespace is a
+    /// view. Two separate facts, so each keeps its own wording.
+    pub fn session_read_only_reason(&self, key: &SessionKey) -> Option<String> {
+        if self.connection_read_only(key.connection_id) {
+            return Some("Read-only connection: writes are disabled.".to_string());
+        }
+        self.view_read_only_reason(key)
+    }
+
+    pub fn session_read_only(&self, key: &SessionKey) -> bool {
+        self.connection_read_only(key.connection_id) || self.view_source(key).is_some()
     }
 
     pub fn connection_history_enabled(&self, connection_id: Uuid) -> bool {
