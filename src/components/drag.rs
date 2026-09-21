@@ -36,19 +36,28 @@ impl<V: Render> Render for AtCursor<V> {
 
 /// Wrap a drag preview so it follows the pointer, and show a closed hand for the whole drag.
 /// Call it from an `on_drag` constructor, passing on the grab offset gpui hands that closure.
+///
+/// For a small stand-in dragged out of something larger. A preview that is a ghost of its
+/// source (a tab) should stay where it was grabbed instead: return it as it is and call
+/// `closed_hand_while_dragging`.
 pub fn at_cursor<V: Render>(
     grab_offset: Point<Pixels>,
     preview: V,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<AtCursor<V>> {
-    // The drag exists only once the constructor that called this has returned. Without this
-    // the drag keeps whatever cursor its source had, which differs from one source to the next.
+    closed_hand_while_dragging(window, cx);
+    let preview = cx.new(|_| preview);
+    cx.new(|_| AtCursor { grab_offset, preview })
+}
+
+/// Show a closed hand for the drag an `on_drag` constructor is starting. Without it the drag
+/// keeps whatever cursor its source had, which differs from one source to the next.
+pub fn closed_hand_while_dragging(window: &mut Window, cx: &mut App) {
+    // The drag exists only once the constructor that called this has returned.
     window.defer(cx, |window, cx| {
         cx.set_active_drag_cursor_style(CursorStyle::ClosedHand, window);
     });
-    let preview = cx.new(|_| preview);
-    cx.new(|_| AtCursor { grab_offset, preview })
 }
 
 /// Escape puts a drag back where it came from. Registered once, by the root view; it runs

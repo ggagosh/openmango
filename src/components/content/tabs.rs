@@ -89,25 +89,56 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
 }
 
+/// A tab is never narrower than this; its drag ghost is exactly this wide.
+const TAB_MIN_WIDTH: f32 = 180.0;
+const TAB_BAR_HEIGHT: f32 = 28.0;
+
 #[derive(Clone)]
 struct DraggedOpenTab {
     from_index: usize,
     label: SharedString,
 }
 
-impl Render for DraggedOpenTab {
+/// What follows the pointer while a tab is dragged: a ghost of the tab that stays where it was
+/// grabbed, so it lifts off the bar in place. The same convention as the kit's dock tabs, and
+/// the opposite of `drag::at_cursor`, which is for a small chip dragged out of something large.
+struct TabGhost {
+    label: SharedString,
+    /// How far into the tab it was grabbed. gpui draws the ghost at the tab's own origin.
+    grab_x: Pixels,
+}
+
+impl Render for TabGhost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(spacing::sm())
-            .py(px(4.0))
-            .rounded(borders::radius_sm())
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_active)
-            .font_family(fonts::tabs())
-            .text_sm()
-            .text_color(cx.theme().tab_active_foreground)
-            .child(self.label.clone())
+        // A tab stretches to fill the bar, so it can be grabbed further in than the ghost is
+        // wide. Slide the ghost along just enough to keep it under the pointer.
+        let keep_under_pointer = (self.grab_x - px(TAB_MIN_WIDTH - 24.0)).max(px(0.0));
+        div().pl(keep_under_pointer).child(
+            div()
+                .w(px(TAB_MIN_WIDTH))
+                .h(px(TAB_BAR_HEIGHT))
+                .flex()
+                .items_center()
+                // Where the tab's label starts: its padding, its icon, the gap after it.
+                .pl(spacing::sm() + px(13.0) + spacing::sm())
+                .pr(spacing::sm())
+                .rounded(borders::radius_sm())
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().tab_active)
+                .opacity(0.75)
+                .font_family(fonts::tabs())
+                .text_size(px(13.0))
+                .text_color(cx.theme().tab_active_foreground)
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(self.label.clone()),
+                ),
+        )
     }
 }
 
@@ -288,7 +319,7 @@ impl Render for OpenTabsBar {
                     .set_position(index + 1, tab_count)
                     .selected(is_selected)
                     .flex_1()
-                    .min_w(px(180.0))
+                    .min_w(px(TAB_MIN_WIDTH))
                     .h_full()
                     .gap(spacing::sm())
                     .px(spacing::sm())
@@ -495,12 +526,9 @@ impl Render for OpenTabsBar {
                                         cx.notify();
                                     }
                                 });
-                                crate::components::drag::at_cursor(
-                                    grab_offset,
-                                    drag.clone(),
-                                    window,
-                                    cx,
-                                )
+                                crate::components::drag::closed_hand_while_dragging(window, cx);
+                                let (label, grab_x) = (drag.label.clone(), grab_offset.x);
+                                cx.new(|_| TabGhost { label, grab_x })
                             }
                         })
                 })
@@ -531,7 +559,7 @@ impl Render for OpenTabsBar {
                         .items_center()
                         .flex_1()
                         .min_w(px(0.0))
-                        .h(px(28.0))
+                        .h(px(TAB_BAR_HEIGHT))
                         .rounded(borders::radius_sm())
                         .bg(track)
                         .gap(px(2.0))
