@@ -5,40 +5,152 @@
 <h1 align="center">OpenMango</h1>
 
 <p align="center">
-  <strong>A native MongoDB workbench for macOS, Windows, and Linux.</strong><br />
-  Browse, query, edit, analyze, and move data without Electron or web views.
+  <strong>A native MongoDB GUI for macOS, Windows, and Linux.</strong><br />
+  It opens in half a second, stays light on big collections, and every feature is free.
 </p>
 
 <p align="center">
   <a href="https://openmango.app">Website</a> ·
   <a href="https://github.com/ggagosh/openmango/releases/latest">Download</a> ·
   <a href="https://github.com/ggagosh/openmango/releases/tag/nightly">Nightly</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/ggagosh/openmango/releases/latest"><img src="https://img.shields.io/github/v/release/ggagosh/openmango?label=release" alt="Latest release" /></a>
   <a href="https://github.com/ggagosh/openmango/actions/workflows/ci.yml"><img src="https://github.com/ggagosh/openmango/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/ggagosh/openmango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="GPL-3.0 license" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="macOS, Windows, and Linux" />
 </p>
 
 <p align="center">
   <img src="assets/readme/overview.png" width="900" alt="OpenMango inspecting The Matrix in Atlas sample data, with nested fields and BSON types" />
 </p>
 
+> [!NOTE]
+> **Status:** actively developed and pre-1.0; the current release is 0.3.0. macOS releases are signed and notarized. Windows and Linux ship as nightly builds until the next stable release.
+
 ## Why OpenMango
 
-OpenMango puts the tools used in day-to-day MongoDB work into one fast, keyboard-friendly desktop app. Its interface is written in Rust with [GPUI](https://gpui.rs) and rendered natively on the GPU—there is no browser runtime between you and your data.
+OpenMango is one desktop app for day-to-day MongoDB work: browsing, editing, querying, aggregating, tuning, and moving data. It is written in Rust with [GPUI](https://gpui.rs) and drawn on the GPU, with no Electron or web views inside.
 
-| Area | What you can do |
+- **It is fast and light.** The window is up 0.5 seconds after launch, and the app uses about 110 MB with a collection open. Memory follows the page you are looking at, not the size of the collection. The numbers are under [Performance](#performance).
+- **Every feature is free.** There are no paid tiers, connection limits, or accounts. The licence is GPL-3.0.
+- **Writes are guarded.** A connection can be read-only, production connections ask before writing, and History can put a document back the way it was.
+- **Nothing is collected.** There is no telemetry, and credentials stay in the operating system's keychain.
+
+## Built around what MongoDB users ask for
+
+The same requests come up again and again in MongoDB forums and feature trackers. This is what OpenMango does about each of them.
+
+### Working with documents
+
+- **Update many documents without dropping to the shell.** Run bulk updates and deletes from the collection view. OpenMango counts the documents that match and shows you the filter before it writes anything.
+- **See schemaless data as a table.** Switch between a tree, a table, and syntax-highlighted Extended JSON. Nested fields expand inside the table, and columns can be hidden and resized.
+- **Edit values without fighting their types.** Edit in place or in a full JSON editor. Values accept mongosh forms such as `ObjectId("…")`, `ISODate("…")`, and `NumberLong(42)`.
+- **Follow an ObjectId like a link.** Cmd/Ctrl+click an id to open the document it points at, and press Shift+F12 to find every document that references the current one. Back and forward work like a browser's. OpenMango can also infer a database's relations, draw them on a canvas, and copy the diagram as Mermaid or DBML.
+- **Undo a bad write.** History records updates, replaces, and deletes from the deployment's change stream and restores a document to what it was. It needs change streams, so it works on replica sets and Atlas.
+
+<details>
+  <summary>Tree and JSON views of the same document — 6-second loop</summary>
+
+  <p align="center">
+    <img src="assets/readme/document-views.gif" width="900" alt="The same Atlas sample movie shown in OpenMango's Tree view and syntax-highlighted JSON editor" />
+  </p>
+</details>
+
+### Querying
+
+- **A real query editor, in tabs.** Every collection opens in its own tab with filter, projection, sort, and limit. The same collection can be open twice with different filters. Forge adds a mongosh-compatible shell with completion and multiple cursors.
+- **Autocomplete that knows your data.** Suggestions cover field names, operators, and values sampled from the collection.
+- **Describe the query instead of writing it.** Ask AI (Cmd/Ctrl+I) writes the filter from a sentence, using the collection's own fields. It is optional and works with Gemini, OpenAI, Anthropic, OpenRouter, or a local Ollama model.
+- **Keep your queries.** History is recorded automatically. The Query Library saves queries and pipelines with tags, and imports and exports them.
+- **Aggregation pipelines you can see through.** Reorder, duplicate, and switch off stages, and see each stage's output as you go. You can also edit the whole pipeline as text, or add a `$lookup` from a known relation instead of typing the join.
+- **Find out why a query is slow.** Read the explain plan as a tree or as raw JSON, and compare two runs side by side. Manage indexes, and analyse a collection's schema for field types, missing fields, and mixed types.
+
+### Moving data
+
+- **Export more than one collection at a time.** Export a whole database with include and exclude lists, as JSON, NDJSON, CSV, BSON, or Excel. Import JSON, NDJSON, CSV, and BSON.
+- **Copy data between environments safely.** Copy a collection or a database across connections, or sync a whole database. A sync takes a verified backup of the target first and can be reverted. Every transfer shows progress, can be cancelled, and is staged, so a failure does not replace existing data.
+
+### Connections and workspace
+
+- **Reach servers behind a bastion or a proxy.** Connect directly or over SRV, through SSH tunnels, with TLS client certificates, or through a SOCKS5 proxy.
+- **Make production hard to mistake.** Give a connection a colour and an environment, and its tabs carry that colour. Make it read-only, or require confirmation before any write to production.
+- **Get your session back.** Tabs, connections, and unsaved work are restored when you reopen the app.
+- **Stay on the keyboard.** The command palette (Cmd/Ctrl+K) reaches every command, database, and collection. Every shortcut can be remapped, and there are 15 themes.
+- **Work with a coding agent.** A built-in MCP server gives agents 25 tools on the connections you choose to share, with per-client grants, approval for writes, and an audit log.
+
+### Not there yet
+
+OpenMango does not yet have server monitoring (a profiler, current operations, or live metrics), user and role administration, GridFS browsing, SQL queries, export of a query as driver code, or Kerberos, LDAP, and OIDC sign-in. If your work depends on one of these today, OpenMango is not the right tool yet.
+
+## Performance
+
+These numbers come from one machine and are not a comparison with other tools. The scripts that produced them are in this repository.
+
+**Machine:** Apple M2 Max, 32 GB, macOS 27.0. **Build:** OpenMango 0.3.0, the signed release.
+
+### Launch and size
+
+| Measurement | Result |
 | --- | --- |
-| **Documents** | Browse in tree or table view, filter, sort, project, paginate, edit inline or as JSON, and run guarded bulk operations. |
-| **Queries** | Build aggregation pipelines, inspect schemas and explain plans, use mongosh-compatible Forge, and save or restore work from the Query Library. |
-| **Data movement** | Import JSON, NDJSON, CSV, or BSON; export those formats plus Excel; copy between collections or databases with progress and cancellation. |
-| **Connections** | Use direct or SRV connections, SSH tunnels, and SOCKS5 proxies. Import and export connection profiles in redacted or encrypted form. |
-| **AI (optional)** | Ask MongoDB-aware questions with Gemini, OpenAI, Anthropic, or Ollama; review tool calls and control whether document samples are shared. |
-| **Workspace** | Restore tabs and connections, use a command palette and keyboard shortcuts, choose from 13 themes, and check for verified updates in-app. |
+| Launch to first window, first launch with an empty profile | 0.55 s |
+| Launch to first window, later launches (median of 5) | 0.48 s |
+| Download size | 83 MB |
+| Installed size | 212 MB |
+
+The app is 85 MB of the installed size. The other 125 MB is three bundled helpers: the Forge shell engine, `mongodump`, and `mongorestore`.
+
+### Memory
+
+This is the app's memory as Activity Monitor reports it, read 15 seconds after launch (8 seconds for the idle row). For the rows with data, the app reopened a saved session by itself, reconnected, and loaded the collection. The idle row has 6 launches and the others have 3.
+
+| State | Memory |
+| --- | --- |
+| Idle, no connection open | 59–82 MB |
+| A page of 50 small documents open, from a 1,000,000-document collection | 106–117 MB |
+| One 13.2 MB document loaded | 188–197 MB |
+| A page of 50 documents of about 1 MB each loaded (49.6 MB of BSON) | 421–426 MB |
+
+Memory grows by about 6 MB for each MB of BSON on the open page. It depends on what is loaded, not on how large the collection is.
+
+### Data path
+
+These time the code the app runs to fetch, prepare, and move data, in a release build against MongoDB 7.0 in a local Docker container. They do not include drawing to the screen. Each result is the median of 9 runs, except export and import, which ran once.
+
+| Operation | Result |
+| --- | --- |
+| First page of 50 from a 1,000,000-document collection | 176 ms |
+| Page 18,000 of the same collection (skip 900,000) | 294 ms |
+| Filtered and sorted page on an index (200,000 matches) | 32 ms |
+| Fetch one 13.2 MB document | 63 ms |
+| Expand that document fully: build 360,004 tree rows | 264 ms |
+| Render that document as JSON text | 80 ms |
+| Export 1,000,000 documents to JSON Lines (252 MB) | 5.0 s (200,000 documents/s) |
+| Import that file into a new collection | 11.6 s (86,000 documents/s) |
+
+Nearly all of the first-page time is the exact document count that MongoDB runs for the pager, which takes 177 ms on its own for a million documents.
+
+<details>
+  <summary>Reproduce these numbers</summary>
+
+```sh
+# Data path; needs Docker
+cargo test --release --test bench_tests -- --ignored --nocapture
+
+# Launch time and idle memory; uses an empty throwaway profile
+swift scripts/bench-launch.swift /Applications/OpenMango.app/Contents/MacOS/OpenMango 6
+
+# Memory with data open: seed a throwaway MongoDB, then reopen each collection 3 times
+docker run -d --rm --name openmango-bench -p 27018:27017 mongo:7.0
+mongosh --quiet mongodb://localhost:27018 scripts/bench-seed.js
+for c in orders fat big; do
+  swift scripts/bench-launch.swift /Applications/OpenMango.app/Contents/MacOS/OpenMango 3 $c
+done
+docker rm -f -v openmango-bench
+```
+
+</details>
 
 ## Install
 
@@ -73,27 +185,7 @@ chmod +x OpenMango-*-linux-*.AppImage
 In **Settings**, under **Updates**, choose **Install shortcut** to add it to your application menu.
 See [Linux support](docs/LINUX.md).
 
-### Updates
-
-Every download has a SHA-256 checksum, and Windows and Linux updates are additionally
-verified against a signed manifest. OpenMango can download the matching update in the
-background and installs it only after you choose **Restart and install**.
-Windows and Linux packages are published with nightly builds today; stable releases include
-them starting with the next version. Nightly builds include unreleased changes and may be unstable.
-
-## Document views
-
-Browse nested BSON in Tree view, then open the complete document as syntax-highlighted Extended JSON.
-
-<details>
-  <summary>Compare Tree and JSON views — 6-second loop</summary>
-
-  <p align="center">
-    <img src="assets/readme/document-views.gif" width="900" alt="The same Atlas sample movie shown in OpenMango's Tree view and syntax-highlighted JSON editor" />
-  </p>
-</details>
-
-## Get started
+### First run
 
 1. Open the connection manager with the **+** button.
 2. Add a `mongodb://` or `mongodb+srv://` connection string and test it.
@@ -101,6 +193,14 @@ Browse nested BSON in Tree view, then open the complete document as syntax-highl
 4. Browse documents or open **Aggregation**, **Schema**, **Explain**, **Forge**, or the **Query Library** for deeper work.
 
 For AI features, open **Settings**, enable AI, and choose a provider. Remote-provider keys can be entered in the app; Ollama is supported without an API key.
+
+### Updates
+
+Every download has a SHA-256 checksum, and Windows and Linux updates are additionally
+verified against a signed manifest. OpenMango can download the matching update in the
+background and installs it only after you choose **Restart and install**.
+Windows and Linux packages are published with nightly builds today; stable releases include
+them starting with the next version. Nightly builds include unreleased changes and may be unstable.
 
 ## Data safety and privacy
 
@@ -111,30 +211,9 @@ For AI features, open **Settings**, enable AI, and choose a provider. Remote-pro
 - AI document sharing is opt-in: selected-document and automatic sample sharing are disabled by default.
 - Settings can export a redacted support bundle without connection secrets.
 
-## Architecture
+## Build from source
 
-| Layer | Location | Responsibility |
-| --- | --- | --- |
-| Native UI | `src/app/`, `src/views/`, `src/components/` | GPUI shell, screens, dialogs, editors, and shared controls |
-| State and actions | `src/state/` | Workspace state, commands, persistence, query library, and updater |
-| MongoDB access | `src/connection/` | Driver operations, transfers, SSH tunnels, SOCKS5 transport, and BSON tools |
-| Forge shell | `tools/forge-sidecar/` | Bun/TypeScript sidecar for mongosh-compatible execution and completion |
-| Assets and themes | `assets/`, `themes/`, `resources/` | Embedded fonts, icons, themes, and packaged helper binaries |
-
-The main data path is deliberately direct: GPUI views dispatch state commands, commands call the connection layer, and the official Rust MongoDB driver talks to the server. Forge reuses the active connection transport through its compiled sidecar.
-
-## Development
-
-### Prerequisites
-
-- macOS and the stable Rust toolchain, or the [Linux](docs/LINUX.md#development) or [Windows](docs/WINDOWS.md#development) development environment
-- Xcode 26 or newer on macOS for app icon compilation, packaging, and `just ci-macos`
-- [just](https://github.com/casey/just)
-- [Bun](https://bun.sh/) when changing or rebuilding Forge
-- Docker for the Testcontainers integration suites
-- A local or remote MongoDB deployment for manual testing
-
-### Run locally
+You need the stable Rust toolchain and [just](https://github.com/casey/just).
 
 ```sh
 git clone https://github.com/ggagosh/openmango.git
@@ -142,72 +221,12 @@ cd openmango
 just dev
 ```
 
-The repository includes the Apple Silicon helper binaries used by normal local development. Rebuild or download them for your host when working on Forge or BSON transfer support:
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full prerequisites, the development commands, the project layout, macOS signing notes, and the pull request checklist. For other platforms, see [Linux development](docs/LINUX.md#development) and [Windows development](docs/WINDOWS.md#development).
 
-```sh
-just build-sidecar
-just download-tools
-```
+The data path is deliberately direct: GPUI views dispatch state commands, commands call the connection layer, and the official Rust MongoDB driver talks to the server. Forge runs mongosh-compatible code in a compiled sidecar that reuses the active connection.
 
-No `.env` file is required. Use `just debug` to start with `RUST_LOG=debug`.
-
-On macOS, the Cargo runner signs development builds with an Apple Development
-identity and a stable app-and-team requirement. Unchanged, valid builds are not
-signed again. Set `OPENMANGO_DEV_SIGNING_IDENTITY` to a full identity name or SHA-1
-to select a different Apple signing identity; the runner stops if no matching
-identity is available instead of launching an unsigned app.
-
-Keychain items approved for older unsigned builds or an older certificate may
-need one approval for the corrected development signature. Approve the signing
-key and each requested OpenMango item with **Always Allow** in the macOS dialogs.
-Credentials remain in Keychain; development does not fall back to a plaintext file.
-
-### Common commands
-
-| Command | Purpose |
-| --- | --- |
-| `just dev` | Run the debug build |
-| `just check` | Fast compile check |
-| `just fmt-check` | Check Rust formatting |
-| `just lint` | Run Clippy with warnings denied |
-| `just app-icon` | Compile the native macOS app icon and PNG export |
-| `just unit-test` | Run library tests serially |
-| `just test` | Run all Rust tests; integration suites require Docker |
-| `just ci` | Common checks: format, release Clippy, sidecar check, and unit tests |
-| `just ci-macos` | Common checks plus macOS app icon compilation |
-| `just bootstrap-linux` | Install Ubuntu/Debian build dependencies inside Linux |
-| `just package-linux` | Build the native Linux AppImage and bundled helpers |
-| `just package-windows` | Build the native Windows installer and bundled helpers (Git Bash) |
-| `just precommit` | Run `just ci` followed by the full test suite |
-
-Run one integration suite serially with:
-
-```sh
-cargo test --test transfer_tests -- --test-threads=1
-```
-
-### Project layout
-
-```text
-src/
-  app/          Application shell, sidebar, and top-level layout
-  state/        State, persistence, and commands
-  connection/   MongoDB operations and transports
-  views/        Documents, aggregation, Forge, transfer, AI, and settings screens
-  components/   Reusable GPUI controls
-  models/       Connection and tree models
-  helpers/      Validation, Keychain, logging, crypto, and support utilities
-tests/          Docker-backed integration suites and shared test helpers
-tools/          Forge sidecar source
-scripts/        Tool download, packaging, and release scripts
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards and the pull request checklist. Shipped changes are tracked in [CHANGELOG.md](CHANGELOG.md).
-
-## AI disclosure
-
-OpenMango is human-directed and machine-authored: its architecture, implementation, tests, and tooling were written with AI.
-
-## License
+## Licence and AI disclosure
 
 OpenMango is available under the [GNU General Public License v3.0](LICENSE).
+
+It is human-directed and machine-authored: its architecture, implementation, tests, and tooling were written with AI.
