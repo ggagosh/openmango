@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 
-/// How far the preview sits from the pointer, so the pointer's tip stays on what it points at.
-const PREVIEW_NUDGE: f32 = 10.0;
+/// How far right of and below the pointer's hotspot the preview starts. The closed hand is about
+/// 16px across with its hotspot in the middle, so this tucks the preview's corner under the hand,
+/// which then reads as holding it, while the spot being pointed at stays uncovered.
+const PREVIEW_NUDGE: f32 = 4.0;
 /// How close to a list's edge a drag starts scrolling it.
 const EDGE_ZONE: f32 = 36.0;
 /// Scroll speed with the pointer at, or past, the edge. It ramps up from zero across the zone.
