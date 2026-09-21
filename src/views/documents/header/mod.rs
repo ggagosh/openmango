@@ -235,8 +235,10 @@ fn render_kind_badges(
     let source = state_ref.view_source(key).map(str::to_owned);
     let row = div()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(spacing::xs())
+        .min_w(px(0.0))
         .when(matches!(detail, Some(CollectionDetail::Timeseries)), |row| {
             row.child(Tag::secondary().xsmall().child("TIME SERIES"))
         })
@@ -312,24 +314,33 @@ fn render_title_row(
     kind: Option<KindBadges>,
     relations: Option<AnyElement>,
     action_row: Div,
-    cx: &mut Context<CollectionView>,
+    cx: &App,
 ) -> Div {
+    // Narrow windows: the title keeps its natural width as its flex basis, so when it and the
+    // actions no longer fit side by side the actions wrap below instead of covering it. What
+    // still doesn't fit wraps in turn: chips under the name, buttons under buttons.
     div()
         .flex()
+        .flex_wrap()
         .items_center()
         .justify_between()
+        .gap_x(spacing::md())
+        .gap_y(spacing::sm())
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(spacing::xs())
-                .flex_1()
+                .flex_auto()
                 .min_w(px(0.0))
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .items_center()
-                        .gap(spacing::sm())
+                        .gap_x(spacing::sm())
+                        .gap_y(spacing::xs())
+                        .min_w(px(0.0))
                         .child(
                             Icon::new(if kind.as_ref().is_some_and(|kind| kind.is_view) {
                                 IconName::Eye
@@ -345,6 +356,10 @@ fn render_title_row(
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(cx.theme().foreground)
                                 .font_family(crate::theme::fonts::heading())
+                                .min_w(px(0.0))
+                                .max_w_full()
+                                .truncate()
+                                .debug_selector(|| "collection-title".into())
                                 .child(collection_name.to_string()),
                         )
                         .child(
@@ -364,5 +379,74 @@ fn render_title_row(
                         .child(breadcrumb.to_string()),
                 ),
         )
-        .child(action_row.flex_shrink_0())
+        .child(action_row.flex_wrap().gap_y(spacing::xs()).max_w_full())
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::Root;
+    use gpui_kit::{
+        AppContext as _, Bounds, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+        Pixels, Render, Styled as _, TestAppContext, Window, div, px,
+    };
+
+    use super::render_title_row;
+    use crate::components::Button;
+
+    struct TitleRow(f32);
+
+    impl Render for TitleRow {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let actions = div()
+                .flex()
+                .items_center()
+                .debug_selector(|| "title-actions".into())
+                .child(Button::new("run").label("Run"))
+                .child(Button::new("explain").label("Explain"))
+                .child(Button::new("update").label("Update view auditlogs_by_month"));
+            let chip = div().child("2 relations").into_any_element();
+            div().w(px(self.0)).child(render_title_row(
+                "auditlogs",
+                3229,
+                "Local / au_new / auditlogs",
+                None,
+                Some(chip),
+                actions,
+                cx,
+            ))
+        }
+    }
+
+    fn bounds_at(width: f32, cx: &mut TestAppContext) -> (Bounds<Pixels>, Bounds<Pixels>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::apply_design_tokens(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let row = cx.new(|_| TitleRow(width));
+            Root::new(row, window, cx).bordered(false)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (
+            cx.debug_bounds("collection-title").expect("title"),
+            cx.debug_bounds("title-actions").expect("actions"),
+        )
+    }
+
+    /// The width of the window in the bug report: the buttons used to be painted over the name.
+    #[gpui_kit::test]
+    fn a_narrow_header_puts_its_actions_below_the_title(cx: &mut TestAppContext) {
+        let (title, actions) = bounds_at(430.0, cx);
+        assert!(!title.intersects(&actions), "{title:?} overlaps {actions:?}");
+        assert!(actions.top() >= title.bottom(), "actions should wrap below the title");
+        assert!(actions.right() <= px(430.0), "actions must stay inside the header");
+    }
+
+    #[gpui_kit::test]
+    fn a_wide_header_keeps_its_actions_beside_the_title(cx: &mut TestAppContext) {
+        let (title, actions) = bounds_at(1200.0, cx);
+        assert!(actions.top() < title.bottom(), "actions should share the title's line");
+        assert!(actions.left() > title.right());
+    }
 }

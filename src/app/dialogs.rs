@@ -358,6 +358,13 @@ pub(crate) fn open_new_view_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // Only an offer: it says what the pipeline does, in the source's naming style, and the
+    // person types over it if they had something else in mind.
+    let taken = state
+        .read(cx)
+        .active_connection_by_id(connection_id)
+        .and_then(|conn| conn.collections.get(&database).cloned())
+        .unwrap_or_default();
     let (title, summary, suggested) = match &new_view {
         NewView::Pipeline { view_on, pipeline } => (
             format!("Save as View in {database}"),
@@ -369,12 +376,12 @@ pub(crate) fn open_new_view_dialog(
                     count => format!("{count} stages"),
                 }
             ),
-            String::new(),
+            crate::helpers::view_name::suggest_view_name(view_on, pipeline, &taken),
         ),
         NewView::CopyOf(view) => (
             format!("Duplicate View {database}.{view}"),
             "The copy gets the same source, pipeline and collation.".to_string(),
-            format!("{view}_copy"),
+            crate::helpers::view_name::suggest_copy_name(view, &taken),
         ),
     };
     let offers_collation = matches!(new_view, NewView::Pipeline { .. });

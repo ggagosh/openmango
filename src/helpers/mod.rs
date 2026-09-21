@@ -8,6 +8,7 @@ pub mod linux;
 pub mod query_library_io;
 pub mod support;
 pub mod validate;
+pub mod view_name;
 
 pub use format::{format_bytes, format_number, truncate_chars};
 pub use validate::{
