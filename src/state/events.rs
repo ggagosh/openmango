@@ -191,6 +191,9 @@ pub enum AppEvent {
     // View navigation
     ViewChanged,
 
+    // Dates are now drawn in the other zone; rows that cache their text must rebuild it.
+    DateDisplayChanged,
+
     // Auto-update
     UpdateAvailable {
         version: String,

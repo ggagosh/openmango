@@ -152,6 +152,31 @@ impl RenderOnce for StatusBar {
                         }),
                 )
             })
+            // The zone dates are drawn in, always in view because it changes how every date
+            // reads. One click flips it, for checking rows against logs kept in the other zone.
+            .when(self.is_connected, |bar| {
+                let state = self.state.clone();
+                let local = crate::bson::date_display() == crate::bson::DateDisplay::Local;
+                bar.right(
+                    Button::new("status-date-display")
+                        .ghost()
+                        .xsmall()
+                        .label(crate::bson::date_display_label())
+                        .tooltip(if local {
+                            "Dates are shown in local time. Click to show UTC."
+                        } else {
+                            "Dates are shown in UTC. Click to show local time."
+                        })
+                        .text_color(if local {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |state, cx| state.toggle_date_display(cx));
+                        }),
+                )
+            })
             .map(|bar| match &self.update_status {
                 UpdateStatus::Idle
                 | UpdateStatus::UpToDate { .. }

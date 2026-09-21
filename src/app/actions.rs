@@ -351,6 +351,9 @@ impl AppRoot {
             "cmd:whats-new" => {
                 crate::changelog::open_changelog_tab(state.clone(), cx);
             }
+            "cmd:date-display" => {
+                state.update(cx, |state, cx| state.toggle_date_display(cx));
+            }
             "cmd:fps-monitor" => {
                 state.update(cx, |state, cx| {
                     state.show_fps_monitor = !state.show_fps_monitor;

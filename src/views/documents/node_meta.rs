@@ -15,6 +15,8 @@ pub struct NodeMeta {
     pub is_folder: bool,
     pub is_editable: bool,
     pub is_dirty: bool,
+    /// A date or binary value, whose hover card shows its other readings.
+    pub has_details: bool,
     pub doc_key: DocumentKey,
     pub path: Vec<PathSegment>,
     pub value: Option<Bson>,

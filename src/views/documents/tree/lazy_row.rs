@@ -8,13 +8,14 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use gpui_kit::*;
 use mongodb::bson::Bson;
 
-use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};
+use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path, has_value_details};
 use crate::state::relations::path_from_segments;
 use crate::state::relations::resolve::{Reference, reference_at};
 use crate::state::{AppState, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::CollectionView;
 use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down};
+use crate::views::documents::table::cell_renderer::value_details_tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 
 use super::lazy_tree::VisibleRow;
@@ -27,6 +28,9 @@ pub struct LazyRowMeta {
     pub type_label: String,
     /// Set when the value is an id that can be followed to the document it names.
     pub reference: Option<RowReference>,
+    /// A date or binary value, kept for the hover card that shows its other readings. Cloned
+    /// per visible row, the same ceiling as `cell_renderer::render_cell`.
+    pub details: Option<Bson>,
 }
 
 /// An id in a pipeline's output, and where in the result it sits.
@@ -49,6 +53,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
             value_color: cx.theme().muted_foreground,
             type_label: "Document".to_string(),
             reference: None,
+            details: None,
         }
     } else {
         // Get the value at this path
@@ -72,6 +77,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
                     value_color,
                     type_label,
                     reference,
+                    details: has_value_details(value).then(|| value.clone()),
                 }
             }
             None => {
@@ -82,6 +88,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
                     value_color: cx.theme().muted_foreground,
                     type_label: "Unknown".to_string(),
                     reference: None,
+                    details: None,
                 }
             }
         }
@@ -204,9 +211,9 @@ pub fn render_lazy_readonly_row(
                     reference: found.reference.clone(),
                     derived: true,
                 });
-                render_value_column(&value_label, value_color, link)
+                render_value_column(&value_label, value_color, link, None)
             }
-            None => render_value_column(&value_label, value_color, None),
+            None => render_value_column(&value_label, value_color, None, meta.details.clone()),
         })
         .child(
             div()
@@ -252,6 +259,7 @@ fn render_value_column(
     value_label: &str,
     value_color: Hsla,
     link: Option<ReferenceLink>,
+    details: Option<Bson>,
 ) -> impl IntoElement {
     div().flex_1().min_w(px(0.0)).overflow_hidden().child(
         div()
@@ -265,6 +273,9 @@ fn render_value_column(
                     .cursor_pointer()
                     .hover(|style| style.underline())
                     .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+            })
+            .when_some(details, |value, details| {
+                value.tooltip(move |window, cx| value_details_tooltip(&details, window, cx))
             })
             .child(value_label.to_string()),
     )

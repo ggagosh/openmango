@@ -223,6 +223,7 @@ impl AppState {
         {
             log::warn!("Failed to persist Islands tab style migration: {e}");
         }
+        crate::bson::set_date_display(settings.appearance.date_display);
         let workspace = config.load_workspace().unwrap_or_else(|e| {
             log::warn!("Failed to load workspace: {}", e);
             WorkspaceState::default()
@@ -475,6 +476,24 @@ impl AppState {
         if let Err(e) = self.config.save_settings(&self.settings) {
             log::error!("Failed to save settings: {}", e);
         }
+    }
+
+    /// Draw BSON dates in UTC or local time. Open document views redraw their rows.
+    pub fn set_date_display(&mut self, display: crate::bson::DateDisplay, cx: &mut Context<Self>) {
+        self.settings.appearance.date_display = display;
+        crate::bson::set_date_display(display);
+        self.save_settings();
+        cx.emit(AppEvent::DateDisplayChanged);
+        cx.notify();
+    }
+
+    pub fn toggle_date_display(&mut self, cx: &mut Context<Self>) {
+        use crate::bson::DateDisplay;
+        let next = match self.settings.appearance.date_display {
+            DateDisplay::Utc => DateDisplay::Local,
+            DateDisplay::Local => DateDisplay::Utc,
+        };
+        self.set_date_display(next, cx);
     }
 
     // =========================================================================

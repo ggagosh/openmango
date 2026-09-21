@@ -131,6 +131,7 @@ actions!(
         FindInForgeOutput,
         CopyAs,
         CopyAsJson,
+        CopyAsPlainJson,
         CopyAsJsonLines,
         CopyAsCsv,
         CopyAsMarkdown,

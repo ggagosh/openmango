@@ -12,7 +12,9 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Si
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::bson::DocumentKey;
+use mongodb::bson::Bson;
+
+use crate::bson::{DocumentKey, get_bson_at_path};
 use crate::components::Button;
 use crate::components::filter_builder::drag::{
     DragField, DragFieldPreview, DragValue, DragValuePreview,
@@ -25,6 +27,7 @@ use crate::views::documents::reference::{
     peek_arrow,
 };
 use crate::views::documents::state::SearchMatcher;
+use crate::views::documents::table::cell_renderer::value_details_tooltip;
 
 use super::super::CollectionView;
 use super::tree_menus::{build_document_menu, build_property_menu};
@@ -135,6 +138,22 @@ pub(crate) fn render_tree_row(
     // "what points at this?" is asked from.
     let incoming_link =
         meta.and_then(|meta| IncomingLink::for_node(&state, session_key.as_ref(), meta));
+
+    // A date or binary value shows its other readings on hover. The row keeps no value for a
+    // field that can't be edited, so the card looks it up when it opens.
+    let details_tooltip: Option<ValueTooltip> =
+        meta.filter(|meta| meta.has_details).zip(session_key.clone()).map(|(meta, session_key)| {
+            let state = state.clone();
+            let (doc_key, path) = (meta.doc_key.clone(), meta.path.clone());
+            Box::new(move |window: &mut Window, cx: &mut App| {
+                let value = state
+                    .read(cx)
+                    .session_draft_or_document(&session_key, &doc_key)
+                    .and_then(|doc| get_bson_at_path(&doc, &path).cloned())
+                    .unwrap_or(Bson::Null);
+                value_details_tooltip(&value, window, cx)
+            }) as ValueTooltip
+        });
 
     let is_draggable_field = drag_enabled && !is_root && meta.is_some();
     // Only clone the (potentially heavy) node metadata when this row can
@@ -273,6 +292,7 @@ pub(crate) fn render_tree_row(
             value_drag,
             reference_link,
             incoming_link,
+            details_tooltip,
             search_opts,
             current_match_id,
             cx,
@@ -344,7 +364,7 @@ pub(crate) fn render_tree_row(
                     &mut *cx,
                 )
             } else {
-                build_property_menu(menu, state.clone(), session_key, meta, cx)
+                build_property_menu(menu, state.clone(), session_key, meta, window, &mut *cx)
             }
         }
     });
@@ -453,6 +473,7 @@ fn render_value_column(
     value_drag: Option<DragValue>,
     reference_link: Option<ReferenceLink>,
     incoming_link: Option<IncomingLink>,
+    details_tooltip: Option<ValueTooltip>,
     search_opts: &SearchOptions,
     current_match_id: Option<&str>,
     cx: &App,
@@ -519,6 +540,11 @@ fn render_value_column(
                 .hover(|style| style.underline())
                 .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
                 .into_any_element()
+        } else if let Some(tooltip) = details_tooltip {
+            value_text(value_label, value_color)
+                .id("tree-value-details")
+                .tooltip(tooltip)
+                .into_any_element()
         } else {
             value_text(value_label, value_color).into_any_element()
         })
@@ -538,6 +564,9 @@ fn render_value_column(
 
     value
 }
+
+/// Builds a value's hover card when it opens.
+type ValueTooltip = Box<dyn Fn(&mut Window, &mut App) -> AnyView>;
 
 /// The value text shares one line box with its inline editor: the kit input's single-line height.
 const VALUE_LINE_HEIGHT: Rems = Rems(1.25);

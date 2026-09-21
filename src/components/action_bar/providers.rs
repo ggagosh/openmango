@@ -372,6 +372,19 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: SharedString::from("cmd:date-display"),
+            keywords: &["utc", "local", "time zone", "timezone", "date"],
+            label: SharedString::from(match crate::bson::date_display() {
+                crate::bson::DateDisplay::Utc => "Show dates in local time",
+                crate::bson::DateDisplay::Local => "Show dates in UTC",
+            }),
+            detail: Some(SharedString::from("Copied and exported dates stay UTC")),
+            category: ActionCategory::Command,
+            available: true,
+            priority: 104,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:whats-new"),
             label: SharedString::from("What's new"),
             detail: Some(SharedString::from("View changelog")),

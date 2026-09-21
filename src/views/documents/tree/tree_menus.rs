@@ -4,15 +4,15 @@ use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::{
-    DocumentKey, PathSegment, document_to_json_string, format_bson_for_clipboard,
+    DocumentKey, PathSegment, bson_copy_forms, document_to_json_string, format_bson_for_clipboard,
     format_relaxed_json_value, get_bson_at_path, parse_document_from_json,
     parse_documents_from_json,
 };
 use crate::components::request_connection_write;
 use crate::keyboard::{
-    AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
-    CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument, EditDocumentJson,
-    EditValueType, FindReferences, GoToReference, PasteDocuments, PeekReference,
+    AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsPlainJson,
+    CopyAsTsv, CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument,
+    EditDocumentJson, EditValueType, FindReferences, GoToReference, PasteDocuments, PeekReference,
     RemoveMatchingValues, RemoveSelectedField, RenameField,
 };
 use crate::state::relations::lookup::Intent;
@@ -88,6 +88,7 @@ pub(in crate::views::documents) fn build_document_menu(
         for &fmt in formats {
             let action: Box<dyn Action> = match fmt {
                 CopyFormat::Json => Box::new(CopyAsJson),
+                CopyFormat::PlainJson => Box::new(CopyAsPlainJson),
                 CopyFormat::JsonLines => Box::new(CopyAsJsonLines),
                 CopyFormat::Csv => Box::new(CopyAsCsv),
                 CopyFormat::Markdown => Box::new(CopyAsMarkdown),
@@ -141,7 +142,8 @@ pub(super) fn build_property_menu(
     state: Entity<AppState>,
     session_key: SessionKey,
     meta: NodeMeta,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> PopupMenu {
     let key_label = meta.key_label.clone();
     let doc_key = meta.doc_key.clone();
@@ -343,6 +345,23 @@ pub(super) fn build_property_menu(
                 }
             }),
     );
+    // A date or binary value has other readings worth copying. "Copy value" above stays the
+    // raw one; each of these is named for exactly what it puts on the clipboard.
+    let copy_forms = resolve_document(&state, &session_key, &doc_key, cx)
+        .and_then(|doc| get_bson_at_path(&doc, &path).map(bson_copy_forms))
+        .unwrap_or_default();
+    if !copy_forms.is_empty() {
+        let submenu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
+            for (label, text) in copy_forms.clone() {
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                }));
+            }
+            menu
+        });
+        menu = menu
+            .item(PopupMenuItem::submenu("Copy value as", submenu).icon(Icon::new(IconName::Copy)));
+    }
     menu = menu.item(
         PopupMenuItem::new("Copy key")
             .icon(Icon::new(IconName::Copy))

@@ -161,6 +161,9 @@ pub struct AppearanceSettings {
     pub follow_system: bool,
     #[serde(default = "default_true")]
     pub show_status_bar: bool,
+    /// The zone BSON dates are drawn in. UTC unless the user asks for local time.
+    #[serde(default)]
+    pub date_display: crate::bson::DateDisplay,
     #[serde(default)]
     pub islands: IslandsAppearanceSettings,
 }
@@ -171,6 +174,7 @@ impl Default for AppearanceSettings {
             theme: AppTheme::default(),
             follow_system: true,
             show_status_bar: true,
+            date_display: crate::bson::DateDisplay::default(),
             islands: IslandsAppearanceSettings::default(),
         }
     }

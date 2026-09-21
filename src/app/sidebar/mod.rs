@@ -206,6 +206,7 @@ impl Sidebar {
                 | AppEvent::CollectionProgressUpdate { .. }
                 | AppEvent::SchemaAnalyzed { .. }
                 | AppEvent::SchemaFailed { .. }
+                | AppEvent::DateDisplayChanged
                 | AppEvent::UpdateAvailable { .. } => {}
                 AppEvent::AgentActivityChanged => {
                     cx.notify();
