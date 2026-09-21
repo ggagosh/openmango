@@ -10,6 +10,8 @@ use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -21,6 +23,7 @@ use crate::keyboard::{
     DiscardDocumentChanges, RunAggregation, SaveDocument, TransferCopy, TransferExport,
     TransferImport,
 };
+use crate::state::app_state::ViewEditStatus;
 use crate::state::{
     AppCommands, AppState, DocumentViewMode, SessionKey, TransferMode, TransferScope,
 };
@@ -1226,7 +1229,7 @@ pub fn render_aggregation_actions(
     session_key: Option<SessionKey>,
     run_disabled: bool,
     explain_loading: bool,
-    editing_view: Option<String>,
+    view_edit: Option<(String, ViewEditStatus)>,
 ) -> Div {
     div()
         .flex()
@@ -1276,34 +1279,65 @@ pub fn render_aggregation_actions(
                     }
                 }),
         )
-        .child(
-            // One button, two jobs: a pipeline opened from a view's definition saves back to
-            // that view, and says which; any other pipeline becomes a new view.
-            Button::new("agg-save-view")
-                .xsmall()
-                .label(match &editing_view {
-                    Some(view) => format!("Update view {view}"),
-                    None => "Save as view…".to_string(),
-                })
-                .tooltip(match &editing_view {
-                    Some(view) => format!("Replace the definition of {view} with this pipeline"),
-                    None => "Create a read-only view from this pipeline".to_string(),
-                })
-                .disabled(session_key.is_none())
-                .on_click({
-                    let session_key = session_key.clone();
-                    let state = state.clone();
-                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                        let Some(session_key) = session_key.clone() else {
-                            return;
-                        };
-                        crate::views::documents::request_save_view(
-                            state.clone(),
-                            session_key,
-                            window,
-                            cx,
-                        );
+        // The last slot says where the pipeline stands as a view. Opened from a view's
+        // definition it is that view: a quiet tag while it matches what the server holds, the
+        // update button only once it differs, busy while the update runs. Any other pipeline
+        // can become a new view. It is the row's last child, so swapping it moves nothing else.
+        .child(match view_edit {
+            Some((view, ViewEditStatus::UpToDate)) => div()
+                .id("agg-view-up-to-date")
+                .tooltip({
+                    let view = view.clone();
+                    move |window, cx| {
+                        Tooltip::new(format!(
+                            "This pipeline is the definition of {view}. Change a stage to update it."
+                        ))
+                        .build(window, cx)
                     }
-                }),
-        )
+                })
+                .child(
+                    Tag::secondary().xsmall().child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .child(Icon::new(IconName::Check).xsmall())
+                            .child(format!("View {view} is up to date")),
+                    ),
+                )
+                .into_any_element(),
+            view_edit => {
+                let (label, tooltip, busy) = match &view_edit {
+                    Some((view, status)) => (
+                        format!("Update view {view}"),
+                        format!("Replace the definition of {view} with this pipeline"),
+                        *status == ViewEditStatus::Updating,
+                    ),
+                    None => (
+                        "Save as view…".to_string(),
+                        "Create a read-only view from this pipeline".to_string(),
+                        false,
+                    ),
+                };
+                busy_label(Button::new("agg-save-view"), Size::XSmall, label, busy)
+                    .tooltip(tooltip)
+                    .disabled(session_key.is_none() || busy)
+                    .on_click({
+                        let session_key = session_key.clone();
+                        let state = state.clone();
+                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                            let Some(session_key) = session_key.clone() else {
+                                return;
+                            };
+                            crate::views::documents::request_save_view(
+                                state.clone(),
+                                session_key,
+                                window,
+                                cx,
+                            );
+                        }
+                    })
+                    .into_any_element()
+            }
+        })
 }

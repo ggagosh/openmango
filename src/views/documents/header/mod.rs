@@ -131,15 +131,15 @@ impl CollectionView {
         } else if is_stats {
             render_stats_actions(self.state.clone(), session_key.clone(), stats_loading)
         } else if is_aggregation {
-            let editing_view = session_key.as_ref().and_then(|key| {
-                self.state.read(cx).session(key)?.data.aggregation.editing_view.clone()
+            let view_edit = session_key.as_ref().and_then(|key| {
+                crate::views::documents::view_edit_status(self.state.read(cx), key)
             });
             render_aggregation_actions(
                 self.state.clone(),
                 session_key.clone(),
                 aggregation_loading,
                 explain_loading,
-                editing_view,
+                view_edit,
             )
         } else if is_schema {
             render_schema_actions(self.state.clone(), session_key.clone(), schema_loading)

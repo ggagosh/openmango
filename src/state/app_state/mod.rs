@@ -19,8 +19,8 @@ pub mod updater;
 mod workspace;
 
 pub(crate) use aggregation::{
-    PIPELINE_UNDO_LIMIT, PipelineRun, PipelineSnapshot, PipelineStage, PipelineState,
-    StageDocCounts, StageStatsMode, UndoGroup, default_stage_body,
+    EditingView, PIPELINE_UNDO_LIMIT, PipelineRun, PipelineSnapshot, PipelineStage, PipelineState,
+    StageDocCounts, StageStatsMode, UndoGroup, ViewEditStatus, default_stage_body,
 };
 pub(crate) use connection::{
     ConnectionSecrets, LEGACY_CONNECTION_SECRET_KEYS, connection_secret_bundle_key,

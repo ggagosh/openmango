@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::connection::manager::ViewDefinition;
 use crate::error::ErrorReport;
 use crate::models::CollectionDetail;
+use crate::state::app_state::EditingView;
 use crate::state::{AppEvent, AppState, CollectionSubview, StatusMessage};
 
 use super::AppCommands;
@@ -276,12 +277,14 @@ impl AppCommands {
                         return;
                     };
                     state.set_collection_subview(&key, CollectionSubview::Aggregation);
-                    state.replace_pipeline_stages(
-                        &key,
-                        crate::state::app_state::stages_from_pipeline(&definition.pipeline),
-                    );
+                    let stages =
+                        crate::state::app_state::stages_from_pipeline(&definition.pipeline);
+                    let saved = super::aggregation::view_pipeline(&stages)
+                        .unwrap_or_else(|_| definition.pipeline.clone());
+                    state.replace_pipeline_stages(&key, stages);
                     if let Some(session) = state.session_mut(&key) {
-                        session.data.aggregation.editing_view = Some(view.clone());
+                        session.data.aggregation.editing_view =
+                            Some(EditingView { name: view.clone(), saved, updating: false });
                     }
                     if let Some(conn) = state.active_connection_mut(connection_id) {
                         conn.collection_details.entry(database.clone()).or_default().insert(
