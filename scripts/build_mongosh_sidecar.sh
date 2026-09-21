@@ -16,7 +16,8 @@ mkdir -p "$OUT_DIR"
 
 cd "$SIDECAR_DIR"
 
-bun install --frozen-lockfile
+# The native addons are all --external below, so their node-gyp postinstalls (~5 min on Windows) build nothing we ship.
+bun install --frozen-lockfile --ignore-scripts
 
 # Keep bytecode shallow: most of the startup gain without embedding every mongosh function.
 bun build ./src/bun-entry.ts --compile --format=esm \

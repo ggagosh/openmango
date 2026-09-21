@@ -12,7 +12,8 @@ fi
 # Verify sidecar source compiles without errors (bundle-only, no binary output)
 cd "$SIDECAR_DIR"
 
-bun install --frozen-lockfile
+# The native addons are all --external below, so their node-gyp postinstalls (~5 min on Windows) build nothing we ship.
+bun install --frozen-lockfile --ignore-scripts
 
 TMP_OUT="$(mktemp)"
 trap 'rm -f "$TMP_OUT"' EXIT

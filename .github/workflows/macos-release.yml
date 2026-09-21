@@ -50,6 +50,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-${{ matrix.target }}
+          # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Forge mongosh sidecar
         run: bash scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
       - name: Download MongoDB Database Tools

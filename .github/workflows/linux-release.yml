@@ -50,6 +50,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-release-${{ matrix.arch }}
+          # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Load Linux signing key
