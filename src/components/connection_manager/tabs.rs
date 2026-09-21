@@ -10,6 +10,7 @@ use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -135,7 +136,69 @@ impl ConnectionManager {
             .into_any_element()
     }
 
-    pub(super) fn render_authentication_tab(&self) -> AnyElement {
+    pub(super) fn render_authentication_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // The mechanisms the bundled driver can run, by their URI names. Anything else typed
+        // into the URI (GSSAPI, MONGODB-OIDC) still shows here by name; it just isn't offered.
+        const MECHANISMS: [(&str, &str); 6] = [
+            ("", "Automatic"),
+            ("SCRAM-SHA-256", "SCRAM-SHA-256"),
+            ("SCRAM-SHA-1", "SCRAM-SHA-1"),
+            ("MONGODB-X509", "X.509 certificate"),
+            ("PLAIN", "LDAP (PLAIN)"),
+            ("MONGODB-AWS", "AWS IAM"),
+        ];
+        let mechanism = self.draft.auth_mechanism_state.read(cx).value().trim().to_string();
+        let mechanism_label = MECHANISMS
+            .iter()
+            .find(|(value, _)| value.eq_ignore_ascii_case(&mechanism))
+            .map_or(mechanism.clone(), |(_, label)| label.to_string());
+        // What the other fields on this tab mean under the chosen mechanism.
+        let mechanism_help = match mechanism.to_ascii_uppercase().as_str() {
+            "" => "MongoDB negotiates the mechanism, normally SCRAM.",
+            "MONGODB-X509" => {
+                "Signs in with the client certificate on the TLS tab. No password; the username \
+                 is optional."
+            }
+            "PLAIN" => {
+                "LDAP. The password is sent as it is, so turn TLS on. The authentication \
+                 database defaults to $external."
+            }
+            "MONGODB-AWS" => {
+                "Username is the access key ID and password the secret access key; leave both \
+                 empty to use the AWS credentials in your environment. A session token goes in \
+                 Mechanism properties as AWS_SESSION_TOKEN:<token>."
+            }
+            _ => "Username and password, checked against the authentication database.",
+        };
+        let mechanism_dropdown = {
+            let view = cx.entity();
+            gpui_kit::component::button::Button::new("auth-mechanism-dropdown")
+                .small()
+                .label(mechanism_label)
+                .dropdown_caret(true)
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu: PopupMenu, _, _| {
+                    for (value, label) in MECHANISMS {
+                        let view = view.clone();
+                        menu =
+                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.draft
+                                        .auth_mechanism_state
+                                        .update(cx, |input, cx| input.set_value(value, window, cx));
+                                    // As typing in any field does: a passed test no longer
+                                    // describes this draft.
+                                    if !matches!(this.status, super::TestStatus::Testing) {
+                                        this.status = super::TestStatus::Idle;
+                                        this.last_tested_fingerprint = None;
+                                    }
+                                    cx.notify();
+                                });
+                            }));
+                    }
+                    menu
+                })
+        };
+
         v_form()
             .child(field().label("Username").child(Input::new(&self.draft.username_state)))
             .child(
@@ -152,8 +215,8 @@ impl ConnectionManager {
             .child(
                 field()
                     .label("Authentication mechanism")
-                    .description("Optional. MongoDB negotiates the mechanism when empty.")
-                    .child(Input::new(&self.draft.auth_mechanism_state)),
+                    .description(mechanism_help)
+                    .child(mechanism_dropdown),
             )
             .child(
                 field()

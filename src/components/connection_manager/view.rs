@@ -69,7 +69,7 @@ impl ConnectionManager {
             .children(ManagerTab::all().into_iter().map(|tab| Tab::new().label(tab.label())));
         let content = match self.active_tab {
             ManagerTab::General => self.render_general_tab(None, window, cx),
-            ManagerTab::Authentication => self.render_authentication_tab(),
+            ManagerTab::Authentication => self.render_authentication_tab(cx),
             ManagerTab::Tls => self.render_tls_tab(window, cx),
             ManagerTab::Network => self.render_network_tab(window, cx),
             ManagerTab::Advanced => self.render_advanced_tab(window, cx),

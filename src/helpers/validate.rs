@@ -296,6 +296,16 @@ pub fn extract_host_from_uri(uri: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The app offers AWS IAM and keeps its session token; both are dead weight if the driver
+    /// is built without `aws-auth`, because it then refuses the mechanism by name.
+    #[test]
+    fn the_driver_accepts_every_mechanism_the_connection_form_offers() {
+        use mongodb::options::AuthMechanism;
+        for name in ["SCRAM-SHA-256", "SCRAM-SHA-1", "MONGODB-X509", "PLAIN", "MONGODB-AWS"] {
+            assert!(name.parse::<AuthMechanism>().is_ok(), "driver rejects {name}");
+        }
+    }
+
     #[test]
     fn uri_secrets_round_trip_without_persisting_credentials() {
         let uri = "mongodb://user:authority-secret@host/db?retryWrites=true&TLSCertificateKeyFilePassword=tls%20secret&proxyPassword=proxy%2Fsecret&authMechanismProperties=SERVICE_NAME%3Amongodb%2CAWS_SESSION_TOKEN%3Aaws%2Bsecret";
