@@ -9,8 +9,8 @@ use crate::components::node_commands::{confirm_delete_node, copy_node_name};
 use crate::components::{ConnectionManager, request_disconnect_connection};
 use crate::keyboard::{
     CopyConnectionUri, CopySelectionName, CopyTreeItem, CreateCollection, DeleteSelection,
-    DisconnectConnection, EditConnection, OpenForge, OpenSelection, PasteTreeItem, RefreshView,
-    RenameCollection, TransferCopy, TransferExport, TransferImport,
+    DisconnectConnection, EditConnection, OpenForge, OpenSelection, OpenSelectionInNewTab,
+    PasteTreeItem, RefreshView, RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::models::TreeNodeId;
 use crate::state::{
@@ -408,6 +408,47 @@ pub(crate) fn build_collection_menu(
                             state.select_database(database.clone(), cx);
                             state.select_collection(database.clone(), collection.clone(), cx);
                         });
+                    }
+                }),
+        )
+        .item(
+            menu_item_with_shortcut("Open in new tab", &OpenSelectionInNewTab, window)
+                .icon(Icon::new(crate::assets::AppIcon::Braces))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                            state.open_collection_in_new_tab(
+                                database.clone(),
+                                collection.clone(),
+                                String::new(),
+                                None,
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Infer relations")
+                .icon(Icon::new(crate::assets::AppIcon::Workflow))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.select_connection(Some(connection_id), cx);
+                        });
+                        AppCommands::infer_relations(
+                            state.clone(),
+                            database.clone(),
+                            collection.clone(),
+                            cx,
+                        );
                     }
                 }),
         )

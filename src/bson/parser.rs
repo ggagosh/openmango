@@ -505,8 +505,10 @@ fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String
     if let Some(shell) = try_format_shell_constructor(map) {
         return shell;
     }
+    // Padded inside the braces, the way a filter is written by hand and the way mongosh prints
+    // one: `{ _id: ObjectId("…") }`. Arrays keep tight brackets, which is also how they are read.
     let mut out = String::new();
-    out.push('{');
+    out.push_str("{ ");
     let len = map.len();
     for (idx, (key, value)) in map.iter().enumerate() {
         if is_relaxed_key(key) {
@@ -520,7 +522,7 @@ fn format_relaxed_object_compact(map: &serde_json::Map<String, Value>) -> String
             out.push_str(", ");
         }
     }
-    out.push('}');
+    out.push_str(" }");
     out
 }
 

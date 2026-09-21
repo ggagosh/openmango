@@ -3167,6 +3167,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dugong"
+version = "0.8.0-alpha.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a773dcadac5836ffd8b9f3836beeb02ac382b55e2e5dd40c0061a29a9279ae5c"
+dependencies = [
+ "dugong-graphlib",
+ "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dugong-graphlib"
+version = "0.8.0-alpha.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d39983e5e33f39b7289f3172bf2b4d859413e59ab976c5146d00dc95b6f237f"
+dependencies = [
+ "hashbrown 0.17.1",
+ "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4946,6 +4970,7 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -8092,6 +8117,7 @@ dependencies = [
  "chrono",
  "csv",
  "dirs 6.0.0",
+ "dugong",
  "encoding_rs",
  "env_logger",
  "fast-socks5 1.0.0",
@@ -10398,9 +10424,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "indexmap 2.13.0",
  "itoa",

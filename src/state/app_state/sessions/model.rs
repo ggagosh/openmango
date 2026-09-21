@@ -73,8 +73,16 @@ impl SessionStore {
 }
 
 impl AppState {
-    /// Build a session key for the current connection + collection selection.
+    /// The view the user is looking at.
+    ///
+    /// Read from the active tab, because a collection can be open in more than one tab and each
+    /// tab can be showing a different view of it; the sidebar selection alone cannot say which.
     pub fn current_session_key(&self) -> Option<SessionKey> {
+        if let Some(key) = self.active_collection_session() {
+            return Some(key);
+        }
+        // Transfer tabs point the selection at their source namespace without owning a document
+        // session. The action bar and AI context still expect a key for it.
         let conn_id = self.conn.selected_connection?;
         if !self.conn.active.contains_key(&conn_id) {
             return None;

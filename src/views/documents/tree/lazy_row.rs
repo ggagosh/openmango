@@ -9,9 +9,13 @@ use gpui_kit::*;
 use mongodb::bson::Bson;
 
 use crate::bson::{bson_type_label, bson_value_preview, get_bson_at_path};
-use crate::state::SessionDocument;
+use crate::state::relations::path_from_segments;
+use crate::state::relations::resolve::{Reference, reference_at};
+use crate::state::{AppState, SessionDocument, SessionKey};
 use crate::theme::{colors, spacing};
 use crate::views::documents::CollectionView;
+use crate::views::documents::reference::{ReferenceLink, on_reference_mouse_down};
+use gpui_kit::prelude::FluentBuilder as _;
 
 use super::lazy_tree::VisibleRow;
 
@@ -21,6 +25,15 @@ pub struct LazyRowMeta {
     pub value_label: String,
     pub value_color: Hsla,
     pub type_label: String,
+    /// Set when the value is an id that can be followed to the document it names.
+    pub reference: Option<RowReference>,
+}
+
+/// An id in a pipeline's output, and where in the result it sits.
+pub struct RowReference {
+    pub document: crate::bson::DocumentKey,
+    pub path: String,
+    pub reference: Reference,
 }
 
 /// Compute metadata for a row on-demand.
@@ -35,6 +48,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
             value_label,
             value_color: cx.theme().muted_foreground,
             type_label: "Document".to_string(),
+            reference: None,
         }
     } else {
         // Get the value at this path
@@ -46,11 +60,18 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
                 let type_label = bson_type_label(value).to_string();
                 let value_color = bson_value_color(value, cx);
 
+                let path = path_from_segments(&row.path);
+                let reference = reference_at(&path, value).map(|reference| RowReference {
+                    document: documents[row.doc_index].key.clone(),
+                    path,
+                    reference,
+                });
                 LazyRowMeta {
                     key_label: row.key_label.clone(),
                     value_label,
                     value_color,
                     type_label,
+                    reference,
                 }
             }
             None => {
@@ -60,6 +81,7 @@ pub fn compute_row_meta(row: &VisibleRow, documents: &[SessionDocument], cx: &Ap
                     value_label: "—".to_string(),
                     value_color: cx.theme().muted_foreground,
                     type_label: "Unknown".to_string(),
+                    reference: None,
                 }
             }
         }
@@ -93,6 +115,9 @@ pub fn render_lazy_readonly_row(
     meta: &LazyRowMeta,
     _selected: bool,
     view_entity: Entity<CollectionView>,
+    // Where a followed id starts from. Passed in, not read off `view_entity`: rows are built
+    // while the view is being updated, and reading it then panics.
+    link_base: Option<&(Entity<AppState>, SessionKey)>,
     cx: &App,
 ) -> AnyElement {
     let node_id = row.node_id.clone();
@@ -167,7 +192,22 @@ pub fn render_lazy_readonly_row(
             }
         })
         .child(render_key_column(depth, leading, &key_label, cx))
-        .child(render_value_column(&value_label, value_color))
+        .child(match &meta.reference {
+            Some(found) => {
+                // Followed, never learned from: a pipeline's output path is not a field of the
+                // collection, so it has nothing to teach the graph.
+                let link = link_base.map(|(state, session)| ReferenceLink {
+                    state: state.clone(),
+                    session: session.clone(),
+                    document: found.document.clone(),
+                    path: found.path.clone(),
+                    reference: found.reference.clone(),
+                    derived: true,
+                });
+                render_value_column(&value_label, value_color, link)
+            }
+            None => render_value_column(&value_label, value_color, None),
+        })
         .child(
             div()
                 .w(px(120.0))
@@ -208,13 +248,24 @@ fn render_key_column(
         )
 }
 
-fn render_value_column(value_label: &str, value_color: Hsla) -> impl IntoElement {
+fn render_value_column(
+    value_label: &str,
+    value_color: Hsla,
+    link: Option<ReferenceLink>,
+) -> impl IntoElement {
     div().flex_1().min_w(px(0.0)).overflow_hidden().child(
         div()
+            .id("agg-row-value")
             .text_sm()
             .text_color(value_color)
             .overflow_hidden()
             .text_ellipsis()
+            .when_some(link, |value, link| {
+                value
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+            })
             .child(value_label.to_string()),
     )
 }

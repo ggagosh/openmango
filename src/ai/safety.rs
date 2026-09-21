@@ -73,6 +73,8 @@ const AUTO_EXECUTE_TOOLS: &[&str] = &[
     "sample_field_values",
     "generate_report",
     "recall_conversations",
+    "get_relations",
+    "join_path",
 ];
 
 const CONFIRM_FIRST_TOOLS: &[&str] = &["insert_documents", "create_index"];

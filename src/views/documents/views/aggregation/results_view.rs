@@ -617,7 +617,11 @@ fn render_results_tree(
                         row_count,
                         cx.processor({
                             let view_entity = view_entity.clone();
-                            move |_view, range: std::ops::Range<usize>, _window, cx| {
+                            move |view, range: std::ops::Range<usize>, _window, cx| {
+                                let link_base = view
+                                    .view_model
+                                    .current_session()
+                                    .map(|session| (view.state.clone(), session));
                                 range
                                     .map(|ix| {
                                         let row = &visible_rows[ix];
@@ -627,6 +631,7 @@ fn render_results_tree(
                                             &meta,
                                             false,
                                             view_entity.clone(),
+                                            link_base.as_ref(),
                                             cx,
                                         )
                                     })

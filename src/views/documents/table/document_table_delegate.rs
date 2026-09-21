@@ -7,11 +7,20 @@ use gpui_kit::*;
 use mongodb::bson::{Bson, Document};
 
 use crate::bson::DocumentKey;
+use crate::state::relations::resolve::reference_at;
 use crate::state::{AppCommands, AppState, SessionDocument, SessionKey};
-use crate::theme::colors;
+use crate::theme::{colors, spacing};
 use crate::views::documents::CollectionView;
+use crate::views::documents::reference::{
+    IncomingLink, ReferenceLink, incoming_arrow, on_incoming_mouse_down, on_reference_mouse_down,
+    peek_arrow,
+};
 
 use super::cell_renderer;
+
+/// The hover group a cell forms, so its peek arrow appears with the cell rather than sitting in
+/// every ObjectId column permanently.
+const TABLE_CELL_GROUP: &str = "table-cell-group";
 use super::column_menu;
 use super::column_schema::discover_columns;
 use super::table_columns::TableColumns;
@@ -123,6 +132,37 @@ impl DocumentTableDelegate {
 
     pub fn document_key(&self, row_ix: usize) -> Option<DocumentKey> {
         self.documents.get(row_ix).map(|item| item.key.clone())
+    }
+
+    /// A link for the cell, when the value in it points somewhere.
+    ///
+    /// Table columns are top-level fields, so the column key is the whole field path — no array
+    /// markers to reconstruct.
+    fn reference_link(&self, row_ix: usize, col_ix: usize) -> Option<ReferenceLink> {
+        let session = self.session_key.clone()?;
+        let path = self.column_key(col_ix)?;
+        let reference = reference_at(&path, self.cell_value(row_ix, col_ix)?)?;
+        Some(ReferenceLink {
+            state: self.state.clone(),
+            session,
+            document: self.document_key(row_ix)?,
+            path,
+            reference,
+            derived: false,
+        })
+    }
+
+    /// The `_id` column: not a link out, but where "what points at this?" is asked from.
+    fn incoming_link(&self, row_ix: usize, col_ix: usize) -> Option<IncomingLink> {
+        if self.column_key(col_ix)? != "_id" {
+            return None;
+        }
+        // Table columns are top-level fields, so the column name is the whole path.
+        Some(IncomingLink {
+            state: self.state.clone(),
+            session: self.session_key.clone()?,
+            document: self.document_key(row_ix)?,
+        })
     }
 
     fn resolved_doc(&self, row_ix: usize) -> Option<&Document> {
@@ -317,15 +357,35 @@ impl TableDelegate for DocumentTableDelegate {
         let content = self
             .cell_value(row_ix, col_ix)
             .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
+        let link = self.reference_link(row_ix, col_ix);
+        let incoming = self.incoming_link(row_ix, col_ix);
+
         div()
             .size_full()
+            .group(TABLE_CELL_GROUP)
+            .flex()
+            .items_center()
+            .gap(spacing::xs())
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |table, _, _, _| {
                     table.delegate_mut().context_column = Some(col_ix);
                 }),
             )
+            .when_some(link.clone(), |this, link| {
+                // Stops at Cmd+click, so the row's own click-to-select is untouched.
+                this.cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_reference_mouse_down(link))
+            })
+            .when_some(incoming.clone(), |this, link| {
+                this.cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_mouse_down(MouseButton::Left, on_incoming_mouse_down(link))
+            })
             .children(content)
+            .when_some(link, |this, link| this.child(peek_arrow(link, TABLE_CELL_GROUP, cx)))
+            .when_some(incoming, |this, link| this.child(incoming_arrow(link, TABLE_CELL_GROUP)))
             .into_any_element()
     }
 

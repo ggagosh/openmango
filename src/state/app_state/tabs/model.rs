@@ -11,8 +11,8 @@ use crate::state::events::AppEvent;
 use crate::state::{AppState, StatusLevel};
 
 use crate::state::app_state::types::{
-    ActiveTab, ConnectionManagerRequest, DatabaseKey, ForgeTabKey, ForgeTabState, SessionKey,
-    TabKey, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    ActiveTab, ConnectionManagerRequest, DatabaseKey, ForgeTabKey, ForgeTabState, ReferencesTabKey,
+    SessionKey, TabKey, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +76,7 @@ impl AppState {
         }
     }
 
-    fn set_active_index(&mut self, index: usize) {
+    pub(super) fn set_active_index(&mut self, index: usize) {
         self.tabs.active = ActiveTab::Index(index);
     }
 
@@ -131,6 +131,20 @@ impl AppState {
                 self.conn.selected_collection = None;
                 self.current_view = View::Forge;
             }
+            TabKey::References(tab) => {
+                self.set_selected_connection_internal(tab.connection_id);
+                self.conn.selected_database = Some(tab.database.clone());
+                self.conn.selected_collection = Some(tab.collection.clone());
+                self.current_view = View::References;
+            }
+            TabKey::Relations(tab) => {
+                // Looking at the canvas is what "seen" means.
+                self.clear_unseen_relations(&tab.database);
+                self.set_selected_connection_internal(tab.connection_id);
+                self.conn.selected_database = Some(tab.database.clone());
+                self.conn.selected_collection = None;
+                self.current_view = View::Relations;
+            }
             TabKey::AgentActivity => {
                 self.current_view = View::AgentActivity;
             }
@@ -148,18 +162,120 @@ impl AppState {
     }
 
     pub(super) fn cleanup_session(&mut self, key: &SessionKey) {
-        let still_referenced = self.tabs.open.iter().any(|tab| matches_collection(tab, key))
-            || self.tabs.preview.as_ref() == Some(key);
-        if !still_referenced {
-            self.sessions.remove(key);
-            self.invalid_inline_edits.remove(key);
-            // Drop per-collection metadata caches as well, so they don't
-            // accumulate for every collection ever opened in a connection
-            // (previously only freed when the whole connection was removed).
-            self.forge_schema.remove(key);
-            self.forge_schema_inflight.remove(key);
-            self.collection_meta.remove(key);
-            self.collection_meta_inflight.remove(key);
+        if self.session_is_referenced(key) {
+            return;
+        }
+        self.sessions.remove(key);
+        self.invalid_inline_edits.remove(key);
+        self.tabs.dirty.remove(key);
+
+        // Per-collection metadata caches are shared by every view of the collection, so they
+        // only go when the last view does. Dropping them here keeps them from accumulating for
+        // every collection ever opened in a connection.
+        if !self.collection_has_open_view(key) {
+            let collection = key.collection_key();
+            self.forge_schema.remove(&collection);
+            self.forge_schema_inflight.remove(&collection);
+            self.collection_meta.remove(&collection);
+            self.collection_meta_inflight.remove(&collection);
+        }
+    }
+
+    /// True while some tab shows this view, or can go back or forward to it.
+    fn session_is_referenced(&self, key: &SessionKey) -> bool {
+        self.tabs.preview.as_ref() == Some(key)
+            || self.tabs.open.iter().any(|tab| matches_collection(tab, key))
+            || self.tabs.history.values().any(|history| history.sessions().any(|held| held == key))
+    }
+
+    /// True while some tab shows, or can navigate back to, any view of this collection.
+    fn collection_has_open_view(&self, key: &SessionKey) -> bool {
+        self.tabs.preview.as_ref().is_some_and(|preview| preview.same_collection(key))
+            || self
+                .tabs
+                .open
+                .iter()
+                .any(|tab| matches!(tab, TabKey::Collection(tab) if tab.same_collection(key)))
+            || self
+                .tabs
+                .history
+                .values()
+                .any(|history| history.sessions().any(|held| held.same_collection(key)))
+    }
+
+    /// Take a tab's whole history and drop every view it held. Used when the tab itself closes.
+    pub(super) fn discard_tab_history(&mut self, key: &SessionKey) {
+        let Some(history) = self.tabs.history.remove(key) else {
+            return;
+        };
+        for held in history.back.into_iter().chain(history.forward) {
+            self.tabs.dirty.remove(&held);
+            self.cleanup_session(&held);
+        }
+    }
+
+    /// Hand out an unused view number.
+    pub(super) fn allocate_session_instance(&mut self) -> u32 {
+        let instance = self.tabs.next_instance;
+        // ponytail: wraps after 4 billion opens in one run, by which point instance 0 is long
+        // closed. Widen to u64 if that assumption ever stops holding.
+        self.tabs.next_instance = self.tabs.next_instance.wrapping_add(1);
+        instance
+    }
+
+    /// Every view of a collection that is currently on a tab, in tab order.
+    ///
+    /// A collection can be open in more than one tab, so anything that changes data outside the
+    /// tab machinery has to refresh all of them rather than guess at one key.
+    pub fn open_sessions_for_collection(
+        &self,
+        connection_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> Vec<SessionKey> {
+        self.tabs
+            .open
+            .iter()
+            .filter_map(|tab| match tab {
+                TabKey::Collection(key)
+                    if key.is_collection(connection_id, database, collection) =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .chain(
+                self.tabs
+                    .preview
+                    .iter()
+                    .filter(|key| key.is_collection(connection_id, database, collection))
+                    .cloned(),
+            )
+            .collect()
+    }
+
+    /// The view the active tab is showing, when that tab is a collection tab.
+    pub fn active_collection_session(&self) -> Option<SessionKey> {
+        match self.tabs.active {
+            ActiveTab::Preview => self.tabs.preview.clone(),
+            ActiveTab::Index(index) => match self.tabs.open.get(index) {
+                Some(TabKey::Collection(key)) => Some(key.clone()),
+                _ => None,
+            },
+            ActiveTab::None => None,
+        }
+    }
+
+    /// Point the active collection tab at another view, in place.
+    pub(super) fn replace_active_collection_session(&mut self, key: SessionKey) {
+        match self.tabs.active {
+            ActiveTab::Preview => self.tabs.preview = Some(key),
+            ActiveTab::Index(index) => {
+                if let Some(tab @ TabKey::Collection(_)) = self.tabs.open.get_mut(index) {
+                    *tab = TabKey::Collection(key);
+                }
+            }
+            ActiveTab::None => {}
         }
     }
 
@@ -180,9 +296,25 @@ impl AppState {
         if !self.conn.active.contains_key(&conn_id) {
             return;
         }
-        let new_tab = SessionKey::new(conn_id, database.clone(), collection.clone());
-        let existing_index =
-            self.tabs.open.iter().position(|tab| matches_collection(tab, &new_tab));
+        // The sidebar opens a collection, not one particular view of it, so reuse whichever
+        // view is already on screen instead of adding a second tab for the same collection.
+        let existing_index = self
+            .tabs
+            .open
+            .iter()
+            .position(|tab| tab_shows_collection(tab, conn_id, &database, &collection));
+        let new_tab = match existing_index.map(|index| &self.tabs.open[index]) {
+            Some(TabKey::Collection(key)) => key.clone(),
+            _ => match self.tabs.preview.clone() {
+                Some(preview) if preview.is_collection(conn_id, &database, &collection) => preview,
+                _ => SessionKey::with_instance(
+                    conn_id,
+                    database.clone(),
+                    collection.clone(),
+                    self.allocate_session_instance(),
+                ),
+            },
+        };
         let selection_changed = self.conn.selected_database.as_ref() != Some(&database)
             || self.conn.selected_collection.as_ref() != Some(&collection);
         let mut tab_changed = false;
@@ -463,6 +595,79 @@ impl AppState {
     }
 
     /// Open Agent Activity as a singleton workspace tab.
+    /// Open a tab answering what points at one document.
+    ///
+    /// Always a new tab. The answer is about one `_id`, so re-asking about another document is
+    /// a second question rather than a changed answer, and the tab it came from is untouched.
+    pub fn open_references_tab(
+        &mut self,
+        target: crate::state::relations::FieldRef,
+        id: mongodb::bson::Bson,
+        cx: &mut Context<Self>,
+    ) -> Option<uuid::Uuid> {
+        let connection_id = self.conn.selected_connection?;
+        let tab_id = Uuid::new_v4();
+        let key = ReferencesTabKey {
+            id: tab_id,
+            connection_id,
+            database: target.database.clone(),
+            collection: target.collection.clone(),
+        };
+        self.references_tabs.insert(
+            tab_id,
+            crate::state::relations::references::ReferencesTabState::new(target, id),
+        );
+        self.tabs.open.push(TabKey::References(key));
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::References;
+        self.update_workspace_from_state_debounced();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+        Some(tab_id)
+    }
+
+    /// Open the relation canvas of a database, or return to it if it is already open.
+    pub fn open_relations_tab(&mut self, database: String, cx: &mut Context<Self>) {
+        let Some(connection_id) = self.conn.selected_connection else {
+            return;
+        };
+        let key = TabKey::Relations(DatabaseKey { connection_id, database });
+        let index = match self.tabs.open.iter().position(|tab| *tab == key) {
+            Some(index) => index,
+            None => {
+                self.tabs.open.push(key.clone());
+                self.tabs.open.len() - 1
+            }
+        };
+        self.set_active_index(index);
+        self.apply_tab_selection(key);
+        self.update_workspace_from_state_debounced();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+    }
+
+    /// The database whose relation canvas is on screen, if that is what is on screen.
+    pub fn active_relations_tab(&self) -> Option<&DatabaseKey> {
+        match self.tabs.active {
+            ActiveTab::Index(index) => match self.tabs.open.get(index) {
+                Some(TabKey::Relations(key)) => Some(key),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The references tab on screen, if that is what is on screen.
+    pub fn active_references_tab(&self) -> Option<&ReferencesTabKey> {
+        match self.tabs.active {
+            ActiveTab::Index(index) => match self.tabs.open.get(index) {
+                Some(TabKey::References(key)) => Some(key),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn open_agent_activity_tab(&mut self, cx: &mut Context<Self>) {
         if let Some(index) =
             self.tabs.open.iter().position(|tab| matches!(tab, TabKey::AgentActivity))
@@ -781,6 +986,7 @@ impl AppState {
         match &removed {
             TabKey::Collection(key) => {
                 self.tabs.dirty.remove(key);
+                self.discard_tab_history(key);
                 self.cleanup_session(key);
             }
             TabKey::Database(key) => {
@@ -792,7 +998,14 @@ impl AppState {
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
-            TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog => {
+            TabKey::References(key) => {
+                self.references_tabs.remove(&key.id);
+            }
+            TabKey::Relations(_)
+            | TabKey::AgentActivity
+            | TabKey::Connections
+            | TabKey::Settings
+            | TabKey::Changelog => {
                 // No cleanup needed
             }
         }
@@ -845,11 +1058,12 @@ impl AppState {
             return;
         }
         let was_active = self.is_preview_active();
-        if let Some(tab) = self.tabs.preview.clone() {
+        let closed = self.tabs.preview.take();
+        if let Some(tab) = closed {
             self.tabs.dirty.remove(&tab);
+            self.discard_tab_history(&tab);
             self.cleanup_session(&tab);
         }
-        self.tabs.preview = None;
 
         if was_active {
             if let Some(index) = self.active_index() {
@@ -905,12 +1119,12 @@ impl AppState {
         }
 
         if let Some(tab) = self.tabs.preview.clone()
-            && tab.connection_id == connection_id
-            && tab.database == database
-            && tab.collection == collection
+            && tab.is_collection(connection_id, database, collection)
         {
             self.close_preview_tab(cx);
         }
+
+        self.prune_history_entries(|held| !held.is_collection(connection_id, database, collection));
     }
 
     pub fn close_tabs_for_database(
@@ -934,6 +1148,12 @@ impl AppState {
                 TabKey::Forge(tab) => {
                     tab.connection_id == connection_id && tab.database == database
                 }
+                TabKey::References(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
+                TabKey::Relations(tab) => {
+                    tab.connection_id == connection_id && tab.database == database
+                }
                 TabKey::Transfer(_)
                 | TabKey::AgentActivity
                 | TabKey::Connections
@@ -952,6 +1172,10 @@ impl AppState {
         {
             self.close_preview_tab(cx);
         }
+
+        self.prune_history_entries(|held| {
+            held.connection_id != connection_id || held.database != database
+        });
     }
 
     pub fn rename_collection_keys(
@@ -996,8 +1220,56 @@ impl AppState {
             self.tabs.dirty = updated;
         }
 
+        // Back/forward entries name the collection too, so a rename has to follow them into
+        // every tab's history as well as into the map's keys.
+        if !self.tabs.history.is_empty() {
+            let rename = |key: &mut SessionKey| {
+                if key.is_collection(connection_id, database, from) {
+                    key.collection = to.to_string();
+                }
+            };
+            let renamed = self
+                .tabs
+                .history
+                .drain()
+                .map(|(mut current, mut history)| {
+                    rename(&mut current);
+                    history.back.iter_mut().for_each(&rename);
+                    history.forward.iter_mut().for_each(&rename);
+                    (current, history)
+                })
+                .collect();
+            self.tabs.history = renamed;
+        }
+
         self.sessions.rename_collection(connection_id, database, from, to);
         self.update_workspace_from_state_debounced();
+    }
+
+    /// Drop back/forward entries for collections that no longer exist, so Back cannot land on
+    /// a view of something that was deleted. Their sessions go with them.
+    fn prune_history_entries(&mut self, keep: impl Fn(&SessionKey) -> bool) {
+        let mut dropped: Vec<SessionKey> = Vec::new();
+        for history in self.tabs.history.values_mut() {
+            history.back.retain(|held| {
+                let kept = keep(held);
+                if !kept {
+                    dropped.push(held.clone());
+                }
+                kept
+            });
+            history.forward.retain(|held| {
+                let kept = keep(held);
+                if !kept {
+                    dropped.push(held.clone());
+                }
+                kept
+            });
+        }
+        for held in dropped {
+            self.tabs.dirty.remove(&held);
+            self.cleanup_session(&held);
+        }
     }
 
     pub fn set_collection_dirty(
@@ -1046,8 +1318,18 @@ impl AppState {
     }
 }
 
-fn matches_collection(tab: &TabKey, key: &SessionKey) -> bool {
+pub(super) fn matches_collection(tab: &TabKey, key: &SessionKey) -> bool {
     matches!(tab, TabKey::Collection(tab) if tab == key)
+}
+
+/// Matches a collection tab by namespace, whichever view of the collection it currently shows.
+pub(super) fn tab_shows_collection(
+    tab: &TabKey,
+    connection_id: Uuid,
+    database: &str,
+    collection: &str,
+) -> bool {
+    matches!(tab, TabKey::Collection(key) if key.is_collection(connection_id, database, collection))
 }
 
 fn tab_kind_label(tab: &TabKey) -> &'static str {
@@ -1056,6 +1338,8 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Database(_) => "database",
         TabKey::Transfer(_) => "transfer",
         TabKey::Forge(_) => "forge",
+        TabKey::References(_) => "references",
+        TabKey::Relations(_) => "relations",
         TabKey::AgentActivity => "agent_activity",
         TabKey::Connections => "connections",
         TabKey::Settings => "settings",
@@ -1149,5 +1433,82 @@ mod tests {
         // Active tab unaffected when move does not cross it.
         assert_eq!(remap_active_index_after_tab_move(0, 3, 5), 0);
         assert_eq!(remap_active_index_after_tab_move(5, 1, 3), 5);
+    }
+
+    /// A tab showing `orders` but able to go back to `users`.
+    fn state_with_history() -> (AppState, uuid::Uuid, SessionKey, SessionKey) {
+        let mut state = AppState::new();
+        let connection_id = uuid::Uuid::new_v4();
+        let users = SessionKey::with_instance(connection_id, "shop", "users", 0);
+        let orders = SessionKey::with_instance(connection_id, "shop", "orders", 1);
+        state.conn.selected_connection = Some(connection_id);
+        state.ensure_session(users.clone());
+        state.ensure_session(orders.clone());
+        state.tabs.open.push(TabKey::Collection(orders.clone()));
+        state.tabs.active = crate::state::ActiveTab::Index(0);
+        state.tabs.history.insert(
+            orders.clone(),
+            crate::state::NavHistory { back: vec![users.clone()], forward: Vec::new() },
+        );
+        (state, connection_id, users, orders)
+    }
+
+    #[test]
+    fn renaming_a_collection_follows_it_into_tab_history() {
+        let (mut state, connection_id, users, orders) = state_with_history();
+
+        state.rename_collection_keys(connection_id, "shop", "users", "members");
+
+        let history = state.tabs.history.get(&orders).expect("history survives the rename");
+        assert_eq!(history.back.len(), 1);
+        assert_eq!(history.back[0].collection, "members", "Back must not point at the old name");
+        assert!(state.session(&users).is_none(), "the old key no longer names a session");
+        assert!(state.session(&history.back[0]).is_some(), "the view moved with the rename");
+    }
+
+    #[test]
+    fn dropping_a_collection_prunes_it_from_history() {
+        let (mut state, connection_id, users, orders) = state_with_history();
+
+        state.prune_history_entries(|held| !held.is_collection(connection_id, "shop", "users"));
+
+        let history = state.tabs.history.get(&orders).expect("the tab still has its entry");
+        assert!(history.back.is_empty(), "Back cannot land on a collection that is gone");
+        assert!(state.session(&users).is_none(), "its view goes with it");
+        assert!(state.session(&orders).is_some(), "the visible view is untouched");
+    }
+
+    #[test]
+    fn a_view_held_only_by_history_is_not_cleaned_up() {
+        let (mut state, _connection_id, users, _orders) = state_with_history();
+
+        state.cleanup_session(&users);
+
+        assert!(state.session(&users).is_some(), "Back would have nothing to return to");
+    }
+
+    #[test]
+    fn collection_caches_outlive_one_of_several_views() {
+        let mut state = AppState::new();
+        let connection_id = uuid::Uuid::new_v4();
+        let first = SessionKey::with_instance(connection_id, "shop", "users", 0);
+        let second = SessionKey::with_instance(connection_id, "shop", "users", 1);
+        state.ensure_session(first.clone());
+        state.ensure_session(second.clone());
+        state.tabs.open.push(TabKey::Collection(second.clone()));
+        state.set_forge_schema_fields(first.collection_key(), vec!["name".to_string()]);
+
+        state.cleanup_session(&first);
+        assert!(
+            state.forge_schema_fields(&second.collection_key()).is_some(),
+            "the other view still needs the collection's schema"
+        );
+
+        state.tabs.open.clear();
+        state.cleanup_session(&second);
+        assert!(
+            state.forge_schema_fields(&second.collection_key()).is_none(),
+            "the last view takes the cache with it"
+        );
     }
 }

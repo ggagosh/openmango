@@ -26,6 +26,8 @@ pub enum View {
     Database,
     Transfer,
     Forge,
+    References,
+    Relations,
     AgentActivity,
     Connections,
     Settings,
@@ -75,14 +77,17 @@ impl CollectionSubview {
     }
 }
 
+/// Identifies a collection. Everything cached per collection rather than per open view
+/// (schema metadata, Forge field lists) is keyed by this, so several views of one collection
+/// share a single cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SessionKey {
+pub struct CollectionKey {
     pub connection_id: Uuid,
     pub database: String,
     pub collection: String,
 }
 
-impl SessionKey {
+impl CollectionKey {
     pub fn new(
         connection_id: Uuid,
         database: impl Into<String>,
@@ -93,6 +98,59 @@ impl SessionKey {
 
     pub fn namespace(&self) -> String {
         format!("{}.{}", self.database, self.collection)
+    }
+}
+
+/// Identifies one open view of a collection: its documents, filter, selection and scroll.
+///
+/// `instance` separates two views of the same collection, which is what lets a tab keep its
+/// previous view alive in history while showing another, and lets the same collection be open
+/// in two tabs at once. Instance 0 is the view a plain sidebar open creates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionKey {
+    pub connection_id: Uuid,
+    pub database: String,
+    pub collection: String,
+    pub instance: u32,
+}
+
+impl SessionKey {
+    pub fn new(
+        connection_id: Uuid,
+        database: impl Into<String>,
+        collection: impl Into<String>,
+    ) -> Self {
+        Self::with_instance(connection_id, database, collection, 0)
+    }
+
+    pub fn with_instance(
+        connection_id: Uuid,
+        database: impl Into<String>,
+        collection: impl Into<String>,
+        instance: u32,
+    ) -> Self {
+        Self { connection_id, database: database.into(), collection: collection.into(), instance }
+    }
+
+    pub fn namespace(&self) -> String {
+        format!("{}.{}", self.database, self.collection)
+    }
+
+    pub fn collection_key(&self) -> CollectionKey {
+        CollectionKey::new(self.connection_id, &self.database, &self.collection)
+    }
+
+    /// True when both keys name the same collection, whichever view each one is.
+    pub fn same_collection(&self, other: &SessionKey) -> bool {
+        self.connection_id == other.connection_id
+            && self.database == other.database
+            && self.collection == other.collection
+    }
+
+    pub fn is_collection(&self, connection_id: Uuid, database: &str, collection: &str) -> bool {
+        self.connection_id == connection_id
+            && self.database == database
+            && self.collection == collection
     }
 }
 
@@ -114,6 +172,10 @@ pub enum TabKey {
     Database(DatabaseKey),
     Transfer(TransferTabKey),
     Forge(ForgeTabKey),
+    References(ReferencesTabKey),
+    /// The relation canvas of one database. One per database: it shows a place, so asking again
+    /// returns to the tab that is already open.
+    Relations(DatabaseKey),
     AgentActivity,
     Connections,
     Settings,
@@ -243,6 +305,19 @@ pub struct ForgeTabKey {
     pub id: Uuid,
     pub connection_id: Uuid,
     pub database: String,
+}
+
+/// Identifies a tab answering "what points at this document?".
+///
+/// Carries its own id because the same document can be asked about twice, and because the tab
+/// holds a result rather than a place — re-asking is a new tab, not a changed one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReferencesTabKey {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub database: String,
+    /// The collection being pointed at.
+    pub collection: String,
 }
 
 /// Default content for a Forge query shell tab.
@@ -500,6 +575,29 @@ pub struct ConnectionState {
     pub selection_cache: HashMap<Uuid, (Option<String>, Option<String>)>,
 }
 
+/// Where a collection tab has been, so Back returns to the exact view it left.
+///
+/// Every entry is a live `SessionKey`: its documents, filter, selection and scroll are still in
+/// the session store, so going back restores the view instead of re-running the query.
+#[derive(Debug, Default, Clone)]
+pub struct NavHistory {
+    /// Views behind the current one, oldest first.
+    pub back: Vec<SessionKey>,
+    /// Views ahead of the current one, nearest first.
+    pub forward: Vec<SessionKey>,
+}
+
+impl NavHistory {
+    /// Every session this history holds, excluding whichever one the tab shows now.
+    pub fn sessions(&self) -> impl Iterator<Item = &SessionKey> {
+        self.back.iter().chain(self.forward.iter())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.back.is_empty() && self.forward.is_empty()
+    }
+}
+
 /// Tab management state
 #[derive(Default)]
 pub struct TabState {
@@ -513,6 +611,13 @@ pub struct TabState {
     pub dirty: HashSet<SessionKey>,
     /// Current drag-over target for open tab reordering: (tab_index, insert_after)
     pub drag_over: Option<(usize, bool)>,
+    /// Back/forward stacks, keyed by the session the owning tab currently shows. Navigating
+    /// moves a tab's entry from its old key to its new one, so the key is always the tab's
+    /// current view and no separate tab identity is needed.
+    pub history: HashMap<SessionKey, NavHistory>,
+    /// Source of `SessionKey::instance`. Never reused, so a closed view's key cannot collide
+    /// with a later one.
+    pub next_instance: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

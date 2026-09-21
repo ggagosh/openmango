@@ -90,6 +90,30 @@ impl AppState {
         })
     }
 
+    /// Insert several stages at once, as one step to undo: a generated join is a `$lookup` and
+    /// its `$unwind`, and undoing half of it leaves a pipeline nobody asked for.
+    pub fn insert_pipeline_stages(
+        &mut self,
+        session_key: &SessionKey,
+        index: usize,
+        stages: Vec<PipelineStage>,
+    ) -> Option<usize> {
+        if stages.is_empty() {
+            return None;
+        }
+        self.edit_pipeline(session_key, Undo::Step, |aggregation| {
+            let index = index.min(aggregation.stages.len());
+            for (offset, stage) in stages.into_iter().enumerate() {
+                aggregation.stages.insert(index + offset, stage);
+                insert_counts(aggregation, index + offset);
+            }
+            // The `$lookup` is what gets edited next, not the `$unwind` after it.
+            aggregation.selected_stage = Some(index);
+            aggregation.error_stage = None;
+            Some(index)
+        })
+    }
+
     /// Replace the pipeline from the library or an import. Undoable.
     pub fn replace_pipeline_stages(
         &mut self,
@@ -477,6 +501,34 @@ mod tests {
         let outputs: Vec<_> = aggregation.stage_doc_counts.iter().map(|c| c.output).collect();
         assert_eq!(operators, ["$sort", "$limit", "$group"]);
         assert_eq!(outputs, [Some(2), None, Some(1)]);
+    }
+
+    #[test]
+    fn a_generated_join_goes_in_together_and_comes_out_together() {
+        use crate::state::app_state::PipelineStage;
+
+        let (mut state, key) = state_with(&["$match", "$limit"]);
+        let join = vec![
+            PipelineStage::with("$lookup", "{ from: \"users\" }", true),
+            PipelineStage::with("$unwind", "{ path: \"$user\" }", true),
+        ];
+
+        assert_eq!(state.insert_pipeline_stages(&key, 1, join), Some(1));
+
+        let operators = |state: &AppState| -> Vec<String> {
+            let stages = &state.session(&key).unwrap().data.aggregation.stages;
+            stages.iter().map(|stage| stage.operator.clone()).collect()
+        };
+        assert_eq!(operators(&state), ["$match", "$lookup", "$unwind", "$limit"]);
+        let aggregation = &state.session(&key).unwrap().data.aggregation;
+        // The `$lookup` is what gets edited next, and every stage still has its count slot.
+        assert_eq!(aggregation.selected_stage, Some(1));
+        assert_eq!(aggregation.stage_doc_counts.len(), 4);
+
+        // One undo, not two: half a join is a pipeline nobody asked for.
+        assert!(state.undo_pipeline_edit(&key));
+        assert_eq!(operators(&state), ["$match", "$limit"]);
+        assert_eq!(state.insert_pipeline_stages(&key, 0, Vec::new()), None);
     }
 
     #[test]

@@ -450,7 +450,10 @@ impl AppCommands {
             cx.notify();
         });
         let state_for_poll = state.clone();
-        let session_key = SessionKey::new(connection_id, database, collection);
+        // A collection can be open in several tabs; refresh every view of it rather than
+        // guessing at one.
+        let session_keys =
+            state.read(cx).open_sessions_for_collection(connection_id, &database, &collection);
         cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
@@ -471,20 +474,24 @@ impl AppCommands {
                         }
                         cx.notify();
                     });
-                    AppCommands::load_collection_history(
-                        state_for_poll.clone(),
-                        session_key.clone(),
-                        cx,
-                    );
-                    if done {
-                        state_for_poll.update(cx, |state, _| {
-                            state.refresh_history_usage(connection_id);
-                        });
-                        AppCommands::load_documents_for_session(
+                    for session_key in &session_keys {
+                        AppCommands::load_collection_history(
                             state_for_poll.clone(),
                             session_key.clone(),
                             cx,
                         );
+                    }
+                    if done {
+                        state_for_poll.update(cx, |state, _| {
+                            state.refresh_history_usage(connection_id);
+                        });
+                        for session_key in &session_keys {
+                            AppCommands::load_documents_for_session(
+                                state_for_poll.clone(),
+                                session_key.clone(),
+                                cx,
+                            );
+                        }
                     }
                 });
                 if done || progress.is_err() {

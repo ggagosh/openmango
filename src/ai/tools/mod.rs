@@ -11,6 +11,7 @@ pub mod indexes;
 pub mod insert;
 pub mod list_collections;
 pub mod recall;
+pub mod relations;
 pub mod replace;
 pub mod sample_values;
 pub mod schema;
@@ -31,6 +32,9 @@ pub struct MongoContext {
     pub conversation_id: String,
     pub database: String,
     pub collection: Option<String>,
+    /// The relation graph as it stood when the turn began. A snapshot, because tools run off
+    /// the main thread and the graph lives on it.
+    pub relations: std::sync::Arc<crate::state::relations::RelationGraph>,
     pub write_identity: ConnectionWriteIdentity,
     pub read_only: bool,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
@@ -107,6 +111,8 @@ pub const TOOL_NAMES: &[&str] = &[
     sample_values::SampleFieldValuesTool::NAME,
     generate_report::GenerateReportTool::NAME,
     recall::RecallConversationsTool::NAME,
+    relations::GetRelationsTool::NAME,
+    relations::JoinPathTool::NAME,
     insert::InsertDocumentsTool::NAME,
     replace::ReplaceDocumentsTool::NAME,
     delete::DeleteDocumentsTool::NAME,
@@ -134,7 +140,9 @@ pub fn build_agent(builder: AgentBuilder<NoToolConfig>, ctx: Option<MongoContext
         .tool(explain::ExplainQueryTool::new(ctx.clone()))
         .tool(sample_values::SampleFieldValuesTool::new(ctx.clone()))
         .tool(generate_report::GenerateReportTool::new(ctx.clone()))
-        .tool(recall::RecallConversationsTool::new(ctx.clone()));
+        .tool(recall::RecallConversationsTool::new(ctx.clone()))
+        .tool(relations::GetRelationsTool::new(ctx.clone()))
+        .tool(relations::JoinPathTool::new(ctx.clone()));
     if read_only {
         return builder.build();
     }

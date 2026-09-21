@@ -16,6 +16,7 @@ mod query_completion;
 mod query_editor;
 mod query_format;
 mod query_values;
+pub mod reference;
 mod schema_filter;
 mod schema_filter_completion;
 mod state;

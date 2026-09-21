@@ -39,6 +39,16 @@ actions!(
         CloseEditorWindow,
         NextTab,
         PrevTab,
+        NavigateBack,
+        NavigateForward,
+        GoToReference,
+        PeekReference,
+        FindReferences,
+        RelationsZoomIn,
+        RelationsZoomOut,
+        RelationsFit,
+        RelationsClearFocus,
+        OpenSelectionInNewTab,
         SelectTab1,
         SelectTab2,
         SelectTab3,
@@ -153,6 +163,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("return", OpenSelection, Some("Sidebar")),
         KeyBinding::new("cmd-enter", OpenSelectionPreview, Some("Sidebar")),
         KeyBinding::new("ctrl-enter", OpenSelectionPreview, Some("Sidebar")),
+        KeyBinding::new("cmd-shift-enter", OpenSelectionInNewTab, Some("Sidebar")),
+        KeyBinding::new("ctrl-shift-enter", OpenSelectionInNewTab, Some("Sidebar")),
         KeyBinding::new("cmd-shift-f", OpenForge, Some("Sidebar")),
         KeyBinding::new("ctrl-shift-f", OpenForge, Some("Sidebar")),
         KeyBinding::new("cmd-e", EditConnection, Some("Sidebar")),
@@ -303,6 +315,20 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-n", NewConnection, Some("Workspace && Collections")),
         KeyBinding::new("cmd-shift-n", CreateDatabase, Some("Workspace && !Documents")),
         KeyBinding::new("ctrl-shift-n", CreateDatabase, Some("Workspace && !Documents")),
+        KeyBinding::new("cmd-b", GoToReference, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("ctrl-b", GoToReference, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("f12", GoToReference, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("space", PeekReference, Some(DOCUMENT_EDIT_CONTEXT)),
+        KeyBinding::new("shift-f12", FindReferences, Some(DOCUMENT_EDIT_CONTEXT)),
+        // Plain keys: the canvas has no text input for them to land in.
+        KeyBinding::new("=", RelationsZoomIn, Some("Relations && !Input")),
+        KeyBinding::new("-", RelationsZoomOut, Some("Relations && !Input")),
+        KeyBinding::new("0", RelationsFit, Some("Relations && !Input")),
+        KeyBinding::new("escape", RelationsClearFocus, Some("Relations && !Input")),
+        KeyBinding::new("cmd-[", NavigateBack, Some("Workspace && !Input")),
+        KeyBinding::new("ctrl-[", NavigateBack, Some("Workspace && !Input")),
+        KeyBinding::new("cmd-]", NavigateForward, Some("Workspace && !Input")),
+        KeyBinding::new("ctrl-]", NavigateForward, Some("Workspace && !Input")),
         KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
         KeyBinding::new("ctrl-w", CloseTab, Some("Workspace")),
         KeyBinding::new("cmd-w", CloseEditorWindow, Some("JsonEditorWindow")),
@@ -433,6 +459,15 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("secondary-enter", RunAggregation, Some("Documents && Aggregation")),
+        // Bound on the editor as well: the input's own secondary-enter inserts a newline and then
+        // lets the key fall through, so without these the pipeline runs and the stage gains a line.
+        KeyBinding::new("cmd-enter", RunAggregation, Some("Documents && Aggregation > Input")),
+        KeyBinding::new("ctrl-enter", RunAggregation, Some("Documents && Aggregation > Input")),
+        KeyBinding::new(
+            "secondary-enter",
+            RunAggregation,
+            Some("Documents && Aggregation > Input"),
+        ),
         KeyBinding::new("cmd-shift-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-shift-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("cmd-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
@@ -1012,6 +1047,31 @@ mod tests {
             Some("Transfer && !TransferRunning && !TransferQueryModal"),
             Some("Transfer && TransferQueryModal")
         ));
+    }
+
+    #[test]
+    fn running_a_pipeline_outranks_the_stage_editors_own_enter() {
+        // The input binds secondary-enter itself, inserts a newline, and lets the key fall
+        // through. A run binding that matches no deeper than the view loses to it, and the
+        // pipeline runs with a line added to the stage.
+        let contexts = [
+            KeyContext::parse("Workspace").unwrap(),
+            KeyContext::parse("Documents Aggregation").unwrap(),
+            KeyContext::parse("Input").unwrap(),
+        ];
+        let input = KeyBindingContextPredicate::parse("Input").unwrap().depth_of(&contexts);
+        let deepest_run = default_keybindings()
+            .iter()
+            .filter(|binding| binding.action().name().ends_with("RunAggregation"))
+            .filter(|binding| {
+                normalize_shortcut(&binding.keystrokes()[0].inner().unparse())
+                    == normalize_shortcut("secondary-enter")
+            })
+            .filter_map(|binding| binding.predicate()?.depth_of(&contexts))
+            .max();
+
+        assert!(input.is_some());
+        assert!(deepest_run >= input, "run matched at {deepest_run:?}, the input at {input:?}");
     }
 
     #[test]

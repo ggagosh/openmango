@@ -9,6 +9,7 @@ Thanks for your interest in contributing! This guide will help you get set up an
 - **MongoDB** — local instance or remote connection for manual testing
 - **Docker** — required for integration tests (Testcontainers)
 - **[Bun](https://bun.sh)** — for the Forge shell sidecar (`tools/forge-sidecar/`)
+- **Xcode 26 or newer** on macOS — for app icon compilation, packaging, and `just ci-macos`
 
 For Linux dependencies, AppImage packaging, and desktop checks, see
 [Linux development](docs/LINUX.md). Keep Linux build output in a separate target
@@ -23,7 +24,29 @@ cd openmango
 just dev
 ```
 
-This compiles and launches the app in development mode.
+This compiles and launches the app in development mode. No `.env` file is required. Use
+`just debug` to start with `RUST_LOG=debug`.
+
+The repository includes the Apple Silicon helper binaries used by normal local development.
+Rebuild or download them for your host when working on Forge or BSON transfer support:
+
+```sh
+just build-sidecar
+just download-tools
+```
+
+### macOS signing
+
+The Cargo runner signs development builds with an Apple Development identity and a stable
+app-and-team requirement. Unchanged, valid builds are not signed again. Set
+`OPENMANGO_DEV_SIGNING_IDENTITY` to a full identity name or SHA-1 to select a different Apple
+signing identity; the runner stops if no matching identity is available instead of launching
+an unsigned app.
+
+Keychain items approved for older unsigned builds or an older certificate may need one
+approval for the corrected development signature. Approve the signing key and each requested
+OpenMango item with **Always Allow** in the macOS dialogs. Credentials remain in Keychain;
+development does not fall back to a plaintext file.
 
 ## Development Commands
 
@@ -34,9 +57,13 @@ This compiles and launches the app in development mode.
 | `just check` | Fast compile verification |
 | `just lint` | Clippy with `-D warnings` |
 | `just fmt-check` | Check formatting |
+| `just unit-test` | Run library tests serially |
 | `just test` | Run all tests |
 | `just ci` | Common CI checks: formatting, release Clippy, sidecar bundle, and unit tests |
 | `just ci-macos` | Common checks plus macOS icon compilation |
+| `just precommit` | Run `just ci` followed by the full test suite |
+| `just app-icon` | Compile the native macOS app icon and PNG export |
+| `just bootstrap-linux` | Install Ubuntu/Debian build dependencies inside Linux |
 | `just package-linux` | Build the native Linux AppImage and bundled tools |
 | `just package-windows` | Build the native Windows installer and bundled tools |
 

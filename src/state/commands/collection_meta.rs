@@ -2,7 +2,7 @@
 
 use gpui_kit::{App, AppContext as _, Entity};
 
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppState, CollectionKey};
 
 use super::{AppCommands, SCHEMA_SAMPLE_SIZE, build_schema_analysis};
 
@@ -41,7 +41,7 @@ impl AppCommands {
                 .into_iter()
                 .filter(|name| name != &current_col && !name.starts_with("system."))
                 .filter(|name| {
-                    let key = SessionKey::new(conn_id, &database, name);
+                    let key = CollectionKey::new(conn_id, &database, name);
                     s.collection_meta_stale(&key) && !s.is_collection_meta_inflight(&key)
                 })
                 .take(MAX_CONCURRENT_PREFETCH)
@@ -55,7 +55,7 @@ impl AppCommands {
         }
 
         for collection in siblings {
-            let key = SessionKey::new(conn_id, &database, &collection);
+            let key = CollectionKey::new(conn_id, &database, &collection);
 
             state.update(cx, |s, _| {
                 s.mark_collection_meta_inflight(&key);
@@ -98,7 +98,7 @@ impl AppCommands {
     }
 
     /// Fetch schema metadata for a single collection (used by @-mention).
-    pub fn fetch_single_collection_meta(state: Entity<AppState>, key: SessionKey, cx: &mut App) {
+    pub fn fetch_single_collection_meta(state: Entity<AppState>, key: CollectionKey, cx: &mut App) {
         let (client, manager) = {
             let s = state.read(cx);
             let conn_id = key.connection_id;

@@ -18,8 +18,8 @@ use crate::components::{ConnectionIdentity, connection_identity_tags};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenConnectionSwitcher,
-    OpenForge, OpenSelection, OpenSelectionPreview, PasteTreeItem, RenameCollection, TransferCopy,
-    TransferExport, TransferImport,
+    OpenForge, OpenSelection, OpenSelectionInNewTab, OpenSelectionPreview, PasteTreeItem,
+    RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::models::TreeNodeId;
 use crate::state::TransferMode;
@@ -132,6 +132,9 @@ impl Render for Sidebar {
             }))
             .on_action(cx.listener(|this, _: &OpenSelectionPreview, window, cx| {
                 this.handle_open_preview(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSelectionInNewTab, window, cx| {
+                this.handle_open_in_new_tab(window, cx);
             }))
             .on_action(cx.listener(|this, _: &EditConnection, window, cx| {
                 this.handle_edit_connection(window, cx);

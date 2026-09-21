@@ -12,7 +12,10 @@ use gpui_kit::*;
 
 use crate::components::{Button, ErrorCallout, cancel_button};
 use crate::error::{ErrorKind, ErrorReport, sentence};
-use crate::state::app_state::{SessionKey, parse_pipeline_text};
+use crate::state::app_state::{PipelineStage, SessionKey, parse_pipeline_text};
+use crate::state::relations::JoinStep;
+use crate::state::relations::export::{describe_join, stage_texts};
+use crate::state::relations::resolve::NAVIGATION_CONFIDENCE;
 use crate::state::{AppState, StatusMessage};
 use crate::theme::spacing;
 
@@ -45,6 +48,18 @@ pub(in crate::views::documents) fn open_operator_picker(
         OperatorPick::Insert(_) => "Add stage",
         OperatorPick::Replace(_) => "Change operator",
     };
+    // Adding a stage can add a whole join, written from what is known about this collection.
+    // Changing one stage's operator cannot: a join is two stages.
+    let joins: Vec<JoinStep> = match pick {
+        OperatorPick::Insert(_) => state.read(cx).relations().joins_from(
+            &session_key.database,
+            &session_key.collection,
+            NAVIGATION_CONFIDENCE,
+        ),
+        OperatorPick::Replace(_) => Vec::new(),
+    };
+    // The joins, when there are any, are the first section, and every operator moves down one.
+    let first_operators = usize::from(!joins.is_empty());
     let command = cx.new(|cx| CommandState::new(window, cx));
     window.defer(cx, {
         let command = command.clone();
@@ -68,9 +83,27 @@ pub(in crate::views::documents) fn open_operator_picker(
             .on_confirm({
                 let state = state.clone();
                 let session_key = session_key.clone();
+                let joins = joins.clone();
                 move |index, window, cx| {
+                    if let (OperatorPick::Insert(at), true) =
+                        (pick, index.section < first_operators)
+                    {
+                        let Some(step) = joins.get(index.row) else {
+                            return;
+                        };
+                        let stages = stage_texts(std::slice::from_ref(step))
+                            .into_iter()
+                            .map(|(operator, body)| PipelineStage::with(operator, body, true))
+                            .collect();
+                        state.update(cx, |state, cx| {
+                            state.insert_pipeline_stages(&session_key, at, stages);
+                            cx.notify();
+                        });
+                        window.close_dialog(cx);
+                        return;
+                    }
                     let Some((operator, _)) = OPERATOR_GROUPS
-                        .get(index.section)
+                        .get(index.section - first_operators)
                         .and_then(|group| group.operators.get(index.row))
                     else {
                         return;
@@ -94,6 +127,34 @@ pub(in crate::views::documents) fn open_operator_picker(
                 }
             })
             .on_cancel(|window, cx| window.close_dialog(cx));
+
+        if !joins.is_empty() {
+            let items = joins.iter().map(|step| {
+                let (collection, via) = describe_join(step);
+                CommandItem::new()
+                    .label(format!("$lookup {collection}"))
+                    .keywords([collection.clone(), via.clone(), "join".into(), "lookup".into()])
+                    .child(move |_, cx| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(spacing::sm())
+                            .child(div().flex_none().child(format!("$lookup {collection}")))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(via.clone()),
+                            )
+                    })
+            });
+            picker =
+                picker.group(CommandGroup::new().label("Join a related collection").items(items));
+        }
 
         for group in OPERATOR_GROUPS {
             let items = group.operators.iter().map(|&(operator, description)| {

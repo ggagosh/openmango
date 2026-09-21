@@ -20,10 +20,10 @@ use crate::helpers::validate::UriSecrets;
 use crate::keyboard::{
     self, CloseTab, CopyConnectionUri, CopySelectionName, CreateCollection, CreateDatabase,
     CreateIndex, DeleteConnection, DeleteDatabase, DisconnectConnection, DownloadUpdate,
-    EditConnection, FocusContent, FocusSidebar, InstallUpdate, NewConnection, NextTab,
-    OpenActionBar, OpenConnectionSwitcher, OpenForge, OpenQueryLibrary, OpenSettings, PrevTab,
-    QuitApp, RefreshView, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
-    SelectTab7, SelectTab8, SelectTab9, ToggleAiPanel,
+    EditConnection, FocusContent, FocusSidebar, InstallUpdate, NavigateBack, NavigateForward,
+    NewConnection, NextTab, OpenActionBar, OpenConnectionSwitcher, OpenForge, OpenQueryLibrary,
+    OpenSettings, PrevTab, QuitApp, RefreshView, SelectTab1, SelectTab2, SelectTab3, SelectTab4,
+    SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9, ToggleAiPanel,
 };
 use crate::models::TreeNodeId;
 use crate::state::app_state::updater::UpdateStatus;
@@ -883,6 +883,8 @@ impl Render for AppRoot {
             View::Collections => key_context.push_str(" Collections"),
             View::Transfer => {}
             View::Forge => key_context.push_str(" Forge"),
+            View::References => key_context.push_str(" References"),
+            View::Relations => key_context.push_str(" Relations"),
             View::AgentActivity => key_context.push_str(" AgentActivity"),
             View::Connections => key_context.push_str(" Connections"),
             View::Welcome => key_context.push_str(" Welcome"),
@@ -909,6 +911,18 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.handle_close_tab(window, cx);
                 window.focus(&this.focus_handle, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NavigateBack, window, cx| {
+                let moved = this.state.update(cx, |state, cx| state.navigate_back(cx));
+                if moved {
+                    this.focus_current_content(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NavigateForward, window, cx| {
+                let moved = this.state.update(cx, |state, cx| state.navigate_forward(cx));
+                if moved {
+                    this.focus_current_content(window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.state.update(cx, |state, cx| state.select_next_tab(cx));

@@ -96,6 +96,8 @@ Read tools remain bounded and require only explicit sharing plus a connected cli
 - `openmango_inspect_collection`
 - `openmango_aggregate`
 - `openmango_explain_query`
+- `openmango_get_relations`: which fields reference which collections, in a compact line-per-collection text rather than JSON, about a thirteenth of the tokens
+- `openmango_join_path`: the chain of references between two collections and its `$lookup` stages
 
 Database-derived values are untrusted content. Read aggregation rejects write stages and JavaScript recursively. Responses use canonical Extended JSON where BSON fidelity matters and never include transport or secret material.
 

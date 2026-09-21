@@ -517,6 +517,8 @@ impl AppRoot {
             }
             View::Transfer
             | View::Forge
+            | View::References
+            | View::Relations
             | View::AgentActivity
             | View::Connections
             | View::Settings

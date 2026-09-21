@@ -660,6 +660,27 @@ impl Sidebar {
         }
     }
 
+    /// Open the selected collection in a tab of its own, leaving any tab already showing that
+    /// collection untouched. This is how two filtered views of one collection sit side by side.
+    fn handle_open_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_keyboard_preview();
+        self.clear_typeahead(cx);
+        let Some(node_id) = self.model.selected_tree_id.clone() else {
+            return;
+        };
+        let (Some(database), Some(collection)) = (
+            node_id.database_name().map(str::to_string),
+            node_id.collection_name().map(str::to_string),
+        ) else {
+            return;
+        };
+        self.state.update(cx, |state, cx| {
+            state.select_connection(Some(node_id.connection_id()), cx);
+            state.open_collection_in_new_tab(database, collection, String::new(), None, cx);
+        });
+        window.dispatch_action(Box::new(FocusContent), cx);
+    }
+
     fn handle_open_forge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_keyboard_preview();
         self.clear_typeahead(cx);

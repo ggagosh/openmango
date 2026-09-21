@@ -400,7 +400,7 @@ impl AiView {
             if let (Some(conn_id), Some(db)) =
                 (s.selected_connection_id(), s.selected_database_name())
             {
-                let key = crate::state::SessionKey::new(conn_id, &db, &collection);
+                let key = crate::state::CollectionKey::new(conn_id, &db, &collection);
                 if s.collection_meta_stale(&key) && !s.is_collection_meta_inflight(&key) {
                     Some(key)
                 } else {
@@ -666,6 +666,7 @@ impl AiView {
                     conversation_id: conversation_id.to_string(),
                     database: db,
                     collection: col,
+                    relations: std::sync::Arc::new(s.relations().clone()),
                     write_identity,
                     read_only: s.connection_read_only(id),
                     event_tx: None,

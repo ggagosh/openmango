@@ -109,6 +109,8 @@ impl AppState {
                         self.conn.selected_collection = None;
                         self.current_view = View::Forge;
                     }
+                    // References tabs are not persisted, so one can never be restored here.
+                    TabKey::References(_) | TabKey::Relations(_) => {}
                     TabKey::AgentActivity => {
                         self.current_view = View::AgentActivity;
                     }

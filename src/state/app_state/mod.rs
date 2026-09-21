@@ -31,16 +31,17 @@ pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text};
 pub(crate) use sessions::SessionStore;
 pub use types::{
-    ActiveTab, BsonOutputFormat, CardinalityBand, CollectionOverview, CollectionProgress,
-    CollectionStats, CollectionSubview, CollectionTransferStatus, CompressionMode,
-    ConnectionManagerRequest, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
+    ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
+    CollectionProgress, CollectionStats, CollectionSubview, CollectionTransferStatus,
+    CompressionMode, ConnectionManagerRequest, CopiedTreeItem, DatabaseKey, DatabaseSessionData,
     DatabaseSessionState, DatabaseStats, DatabaseTransferProgress, DocumentViewMode, Encoding,
     ExplainBottleneck, ExplainCostBand, ExplainDiff, ExplainNode, ExplainOpenMode, ExplainPanelTab,
     ExplainRejectedPlan, ExplainRun, ExplainScope, ExplainSeverity, ExplainStageDelta,
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
-    InsertMode, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
-    SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, View,
+    InsertMode, NavHistory, ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField,
+    SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
+    TabKey, TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey,
+    TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
@@ -56,6 +57,12 @@ use crate::connection::ConnectionManager;
 use crate::models::connection::SavedConnection;
 use crate::state::editor_sessions::EditorSessionStore;
 use crate::state::events::AppEvent;
+use crate::state::relations::infer::{InferenceRun, InferenceSummary};
+use crate::state::relations::lookup::ReferenceLookup;
+use crate::state::relations::references::ReferencesTabState;
+use crate::state::relations::{
+    FieldRef, Relation, RelationGraph, Status as RelationStatus, Upsert,
+};
 use crate::state::settings::{AppSettings, migrate_islands_tab_style_to_islands};
 use crate::state::{ConfigManager, QueryLibrary, WorkspaceState};
 use crate::state::{StatusLevel, StatusMessage};
@@ -87,6 +94,24 @@ pub struct AppState {
     pub settings: AppSettings,
     query_library: QueryLibrary,
     query_library_persistence_blocked: bool,
+    /// Which field points at which collection. Keyed by database name, not connection, so a
+    /// model learned on dev is already there against production.
+    relations: RelationGraph,
+    relations_persistence_blocked: bool,
+    /// The reference the user is looking at, if any. One at a time: a peek is a glance at one
+    /// value, and a second click replaces the first.
+    reference_lookup: Option<ReferenceLookup>,
+    /// A relation search in flight, so the database it is reading can say so and stop it.
+    inference_run: Option<InferenceRun>,
+    /// What the last search found, and what it could not.
+    inference_summary: Option<InferenceSummary>,
+    /// Relations found per database since its canvas was last looked at. Not persisted: it is
+    /// about this sitting, and a number that survived a restart would be about nothing.
+    unseen_relations: HashMap<String, usize>,
+    /// A request to open the canvas holding one collection. Numbered, so the view can tell a
+    /// new request from the one it has already honoured without the state being written to
+    /// from a render.
+    relations_focus: Option<(u64, String)>,
 
     /// Keymap state from startup. Runtime changes require restart.
     pub startup_keybindings: crate::state::KeybindingSettings,
@@ -101,10 +126,13 @@ pub struct AppState {
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
-    forge_schema: HashMap<SessionKey, ForgeSchemaCache>,
-    forge_schema_inflight: HashSet<SessionKey>,
-    collection_meta: HashMap<SessionKey, CollectionMetaCache>,
-    collection_meta_inflight: HashSet<SessionKey>,
+    /// One answer each to "what points at this document?". Not persisted: a result about a
+    /// document that may not exist next session is not worth restoring.
+    references_tabs: HashMap<uuid::Uuid, ReferencesTabState>,
+    forge_schema: HashMap<CollectionKey, ForgeSchemaCache>,
+    forge_schema_inflight: HashSet<CollectionKey>,
+    collection_meta: HashMap<CollectionKey, CollectionMetaCache>,
+    collection_meta_inflight: HashSet<CollectionKey>,
     pub ai_chat: AiChatState,
 
     // View state
@@ -210,6 +238,16 @@ impl AppState {
             }
         };
         let query_library_persistence_blocked = query_library_load_error.is_some();
+        let (relations, relations_load_error) = match config.load_relations() {
+            Ok(model) => (RelationGraph::from_model(model), None),
+            Err(error) => {
+                let message = format!(
+                    "Relations could not be loaded. The original file was preserved: {error}"
+                );
+                log::error!("{message}");
+                (RelationGraph::new(), Some(message))
+            }
+        };
         let workspace_restore_pending = workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
@@ -227,6 +265,13 @@ impl AppState {
             settings,
             query_library,
             query_library_persistence_blocked,
+            relations,
+            relations_persistence_blocked: relations_load_error.is_some(),
+            reference_lookup: None,
+            inference_run: None,
+            inference_summary: None,
+            unseen_relations: HashMap::new(),
+            relations_focus: None,
             startup_keybindings,
             connection_manager,
             conn: ConnectionState::default(),
@@ -235,6 +280,7 @@ impl AppState {
             db_sessions: DatabaseSessionStore::new(),
             transfer_tabs: HashMap::new(),
             forge_tabs: HashMap::new(),
+            references_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
             forge_schema_inflight: std::collections::HashSet::new(),
             collection_meta: HashMap::new(),
@@ -431,31 +477,159 @@ impl AppState {
         }
     }
 
-    pub(crate) fn collection_meta(&self, key: &SessionKey) -> Option<&CollectionMetaCache> {
+    // =========================================================================
+    // Relations
+    // =========================================================================
+
+    pub fn relations(&self) -> &RelationGraph {
+        &self.relations
+    }
+
+    pub fn references_tab(&self, id: uuid::Uuid) -> Option<&ReferencesTabState> {
+        self.references_tabs.get(&id)
+    }
+
+    pub fn references_tab_mut(&mut self, id: uuid::Uuid) -> Option<&mut ReferencesTabState> {
+        self.references_tabs.get_mut(&id)
+    }
+
+    pub fn inference_run(&self) -> Option<&InferenceRun> {
+        self.inference_run.as_ref()
+    }
+
+    pub fn inference_summary(&self) -> Option<&InferenceSummary> {
+        self.inference_summary.as_ref()
+    }
+
+    pub fn set_inference_summary(&mut self, summary: Option<InferenceSummary>) {
+        self.inference_summary = summary;
+    }
+
+    pub fn inference_run_mut(&mut self) -> Option<&mut InferenceRun> {
+        self.inference_run.as_mut()
+    }
+
+    pub fn set_inference_run(&mut self, run: Option<InferenceRun>) {
+        self.inference_run = run;
+    }
+
+    /// Relations found for `database` that nobody has looked at yet.
+    pub fn unseen_relations(&self, database: &str) -> usize {
+        self.unseen_relations.get(database).copied().unwrap_or(0)
+    }
+
+    pub fn clear_unseen_relations(&mut self, database: &str) {
+        self.unseen_relations.remove(database);
+    }
+
+    /// The collection the canvas was last asked to open on, and the number of the request.
+    pub fn relations_focus(&self) -> Option<&(u64, String)> {
+        self.relations_focus.as_ref()
+    }
+
+    pub fn request_relations_focus(&mut self, collection: String) {
+        let next = self.relations_focus.as_ref().map_or(1, |(number, _)| number + 1);
+        self.relations_focus = Some((next, collection));
+    }
+
+    /// Record that a whole database has been read, so it stops being offered.
+    pub fn mark_database_inferred(&mut self, database: &str) {
+        self.relations.mark_inferred(database, chrono::Utc::now());
+        self.save_relations();
+    }
+
+    /// Store what a database-wide search found, counting what is new for the badge.
+    pub fn upsert_inferred_relation(&mut self, relation: Relation) {
+        let database = relation.source.database.clone();
+        if self.upsert_relation(relation) == Upsert::Added {
+            *self.unseen_relations.entry(database).or_default() += 1;
+        }
+    }
+
+    /// How many relations are known for a database, whatever their status.
+    pub fn relation_count(&self, database: &str) -> usize {
+        self.relations
+            .relations()
+            .iter()
+            .filter(|relation| relation.source.database == database)
+            .count()
+    }
+
+    pub fn reference_lookup(&self) -> Option<&ReferenceLookup> {
+        self.reference_lookup.as_ref()
+    }
+
+    pub fn set_reference_lookup(&mut self, lookup: Option<ReferenceLookup>) {
+        self.reference_lookup = lookup;
+    }
+
+    /// Toggle "remember this" in the ambiguous chooser.
+    pub fn set_reference_lookup_remember(&mut self, remember: bool) {
+        if let Some(lookup) = self.reference_lookup.as_mut() {
+            lookup.remember = remember;
+        }
+    }
+
+    /// Store a relation and persist the model. Returns what changed, so a caller doing
+    /// re-inference can tell "already knew that" from "a decision says otherwise".
+    pub fn upsert_relation(&mut self, relation: Relation) -> Upsert {
+        let outcome = self.relations.upsert(relation);
+        if outcome != Upsert::Refused {
+            self.save_relations();
+        }
+        outcome
+    }
+
+    /// Record a review of a relation. The decision outranks any later inference.
+    pub fn set_relation_status(
+        &mut self,
+        source: &FieldRef,
+        target: &FieldRef,
+        status: RelationStatus,
+    ) -> bool {
+        let changed = self.relations.set_status(source, target, status);
+        if changed {
+            self.save_relations();
+        }
+        changed
+    }
+
+    /// A model that failed to load is never overwritten: a hand-edited file is worth more than
+    /// whatever this run happened to infer.
+    fn save_relations(&self) {
+        if self.relations_persistence_blocked {
+            return;
+        }
+        if let Err(error) = self.config.save_relations(&self.relations.to_model()) {
+            log::error!("Failed to save relations: {error}");
+        }
+    }
+
+    pub(crate) fn collection_meta(&self, key: &CollectionKey) -> Option<&CollectionMetaCache> {
         self.collection_meta.get(key)
     }
 
-    pub(crate) fn collection_meta_stale(&self, key: &SessionKey) -> bool {
+    pub(crate) fn collection_meta_stale(&self, key: &CollectionKey) -> bool {
         match self.collection_meta.get(key) {
             Some(cache) => cache.fetched_at.elapsed().as_secs() > COLLECTION_META_TTL_SECS,
             None => true,
         }
     }
 
-    pub(crate) fn set_collection_meta(&mut self, key: SessionKey, schema: SchemaAnalysis) {
+    pub(crate) fn set_collection_meta(&mut self, key: CollectionKey, schema: SchemaAnalysis) {
         self.collection_meta
             .insert(key, CollectionMetaCache { schema, fetched_at: Instant::now() });
     }
 
-    pub(crate) fn mark_collection_meta_inflight(&mut self, key: &SessionKey) -> bool {
+    pub(crate) fn mark_collection_meta_inflight(&mut self, key: &CollectionKey) -> bool {
         self.collection_meta_inflight.insert(key.clone())
     }
 
-    pub(crate) fn is_collection_meta_inflight(&self, key: &SessionKey) -> bool {
+    pub(crate) fn is_collection_meta_inflight(&self, key: &CollectionKey) -> bool {
         self.collection_meta_inflight.contains(key)
     }
 
-    pub(crate) fn clear_collection_meta_inflight(&mut self, key: &SessionKey) {
+    pub(crate) fn clear_collection_meta_inflight(&mut self, key: &CollectionKey) {
         self.collection_meta_inflight.remove(key);
     }
 

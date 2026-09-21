@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn normalized_filter_query_wraps_missing_braces() {
-        assert_eq!(normalized_filter_query("name: \"alice\""), "{name: \"alice\"}");
+        assert_eq!(normalized_filter_query("name: \"alice\""), "{ name: \"alice\" }");
         assert_eq!(normalized_filter_query(""), "{}");
     }
 
@@ -282,7 +282,7 @@ mod tests {
     fn format_filter_query_wraps_and_formats() {
         assert_eq!(
             format_filter_query("name:\"alice\",age:1").expect("format"),
-            "{name: \"alice\", age: 1}"
+            "{ name: \"alice\", age: 1 }"
         );
     }
 }

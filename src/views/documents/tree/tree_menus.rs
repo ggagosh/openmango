@@ -12,12 +12,17 @@ use crate::components::request_connection_write;
 use crate::keyboard::{
     AddElement, AddField, CopyAsCsv, CopyAsJson, CopyAsJsonLines, CopyAsMarkdown, CopyAsTsv,
     CopyDocumentJson, CopyKey, CopyValue, DeleteDocument, DuplicateDocument, EditDocumentJson,
-    EditValueType, PasteDocuments, RemoveMatchingValues, RemoveSelectedField, RenameField,
+    EditValueType, FindReferences, GoToReference, PasteDocuments, PeekReference,
+    RemoveMatchingValues, RemoveSelectedField, RenameField,
 };
+use crate::state::relations::lookup::Intent;
+use crate::state::relations::path_from_segments;
+use crate::state::relations::resolve::{Reference, references_in};
 use crate::state::{AppCommands, AppState, DocumentViewMode, SessionKey, StatusMessage};
 use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::export::CopyFormat;
 use crate::views::documents::node_meta::NodeMeta;
+use crate::views::documents::reference::ReferenceLink;
 
 use super::super::CollectionView;
 
@@ -95,6 +100,21 @@ pub(in crate::views::documents) fn build_document_menu(
     menu = menu
         .item(PopupMenuItem::submenu("Copy as", copy_as_submenu).icon(Icon::new(IconName::Copy)));
 
+    menu = menu.item(
+        PopupMenuItem::new("Find references")
+            .icon(Icon::new(crate::assets::AppIcon::Workflow))
+            .action(Box::new(FindReferences))
+            .disabled(multi)
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                let doc_key = doc_key.clone();
+                move |_, _window, cx| {
+                    find_references_for(&state, &session_key, &doc_key, cx);
+                }
+            }),
+    );
+
     menu = menu
         .item(
             PopupMenuItem::new("Duplicate as new document…")
@@ -121,6 +141,7 @@ pub(super) fn build_property_menu(
     state: Entity<AppState>,
     session_key: SessionKey,
     meta: NodeMeta,
+    cx: &App,
 ) -> PopupMenu {
     let key_label = meta.key_label.clone();
     let doc_key = meta.doc_key.clone();
@@ -397,7 +418,89 @@ pub(super) fn build_property_menu(
             }),
     );
 
+    // On the `_id` row, the useful direction is inward.
+    if is_id {
+        let state = state.clone();
+        let session_key = session_key.clone();
+        let doc_key = doc_key.clone();
+        menu = menu.separator().item(
+            PopupMenuItem::new("Find references")
+                .icon(Icon::new(crate::assets::AppIcon::Workflow))
+                .action(Box::new(FindReferences))
+                .on_click(move |_, _window, cx| {
+                    find_references_for(&state, &session_key, &doc_key, cx);
+                }),
+        );
+    }
+
+    // Only offered on a value that can actually be followed, so the menu never promises a jump
+    // it cannot make.
+    if let Some(link) = ReferenceLink::for_node(&state, Some(&session_key), &meta) {
+        let peek = link.clone();
+        menu = menu.separator().item(
+            PopupMenuItem::new("Go to referenced document")
+                .icon(Icon::new(IconName::ArrowRight))
+                .action(Box::new(GoToReference))
+                .on_click(move |_, _window, cx| link.follow(Intent::Open, cx)),
+        );
+        menu = menu.item(
+            PopupMenuItem::new("Peek at referenced document")
+                .icon(Icon::new(IconName::Eye))
+                .action(Box::new(PeekReference))
+                .on_click(move |_, _window, cx| peek.follow(Intent::Peek, cx)),
+        );
+    }
+
+    // An array of ids is one question, not one per element: "show me these". Read from the
+    // document when the menu opens, since a row only carries values that can be edited and an
+    // array is not one.
+    let array = resolve_document(&state, &session_key, &meta.doc_key, cx)
+        .and_then(|document| crate::bson::get_bson_at_path(&document, &meta.path).cloned())
+        .and_then(|value| references_in(&value));
+    if let Some(Reference::Ids(ids)) = &array {
+        let link = ReferenceLink {
+            state: state.clone(),
+            session: session_key.clone(),
+            document: meta.doc_key.clone(),
+            // The relation is held by the array's elements, which is how inference names it.
+            path: format!("{}[]", path_from_segments(&meta.path)),
+            reference: Reference::Ids(ids.clone()),
+            derived: false,
+        };
+        let in_new_tab = link.clone();
+        let label = format!("Open all {} referenced documents", ids.len());
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new(label)
+                    .icon(Icon::new(IconName::ArrowRight))
+                    .on_click(move |_, _window, cx| link.follow(Intent::Open, cx)),
+            )
+            .item(
+                PopupMenuItem::new("Open them in a new tab")
+                    .on_click(move |_, _window, cx| in_new_tab.follow(Intent::OpenInNewTab, cx)),
+            );
+    }
+
     menu
+}
+
+/// Ask what points at this document. The `_id` is read from the document itself, so the
+/// question is about the row the user actually right-clicked.
+pub(in crate::views::documents) fn find_references_for(
+    state: &Entity<AppState>,
+    session_key: &SessionKey,
+    doc_key: &DocumentKey,
+    cx: &mut App,
+) {
+    let Some(id) = resolve_document(state, session_key, doc_key, cx)
+        .and_then(|document| document.get("_id").cloned())
+    else {
+        return;
+    };
+    let target =
+        crate::state::relations::FieldRef::id_of(&session_key.database, &session_key.collection);
+    AppCommands::find_references(state.clone(), target, id, cx);
 }
 
 fn resolve_document(

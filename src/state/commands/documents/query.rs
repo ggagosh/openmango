@@ -1,7 +1,7 @@
 use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Bson, Document, doc};
 
-use crate::bson::{DocumentKey, format_relaxed_json_compact};
+use crate::bson::{DocumentKey, doc_root_id, format_relaxed_json_compact};
 use crate::connection::FindDocumentsOptions;
 use crate::connection::ops::documents::find_documents_page_async;
 use crate::state::{
@@ -51,6 +51,26 @@ fn record_document_query_success(
     data.query_error = None;
     data.query_cancellation = None;
     true
+}
+
+/// A filter that names one `_id` and returns one document is someone reading that document —
+/// a followed reference, or an id typed into the filter bar. Expanding it saves the click the
+/// user was always going to make.
+fn expand_single_document_lookup(session: &mut crate::state::SessionState) {
+    if session.data.items.len() != 1 {
+        return;
+    }
+    let is_id_lookup = session
+        .data
+        .filter
+        .as_ref()
+        .is_some_and(|filter| filter.len() == 1 && filter.contains_key("_id"));
+    if !is_id_lookup {
+        return;
+    }
+    if let Some(item) = session.data.items.first() {
+        session.view.expanded_nodes.insert(doc_root_id(&item.key));
+    }
 }
 
 fn record_document_query_failure(
@@ -246,6 +266,7 @@ impl AppCommands {
                             session.view.selected_docs.clear();
                             session.view.selected_doc = None;
                             session.view.selected_node_id = None;
+                            expand_single_document_lookup(session);
 
                             session.generation = session.generation.wrapping_add(1);
                             let event = AppEvent::DocumentsLoaded {
