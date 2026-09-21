@@ -1202,6 +1202,10 @@ pub struct SessionData {
     pub indexes: Option<Vec<IndexModel>>,
     pub indexes_loading: bool,
     pub indexes_error: Option<String>,
+    /// How often each index is used, by name. `None` when the server would not say: no
+    /// privilege, a view, or a server too old. Loaded with `indexes`, never an error by itself.
+    pub index_usage:
+        Option<std::collections::HashMap<String, crate::connection::ops::indexes::IndexUsage>>,
     pub aggregation: PipelineState,
     pub explain: ExplainState,
     pub ai_chat: AiChatState,
@@ -1246,6 +1250,7 @@ impl Default for SessionData {
             indexes: None,
             indexes_loading: false,
             indexes_error: None,
+            index_usage: None,
             aggregation: PipelineState::default(),
             explain: ExplainState::default(),
             ai_chat: AiChatState::default(),

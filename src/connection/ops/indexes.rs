@@ -55,6 +55,56 @@ pub async fn list_indexes_async(
     Ok(coll.list_indexes().max_time(max_time).await?.try_collect().await?)
 }
 
+/// How often the server has used one index, and since when it has been counting. The count
+/// starts over when the server restarts or the index is rebuilt, so it means little without
+/// its `since`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexUsage {
+    pub ops: i64,
+    pub since: Option<mongodb::bson::DateTime>,
+}
+
+/// Index usage by index name, from `$indexStats`. It needs the `indexStats` privilege and does
+/// not exist for views, so callers treat a failure as "usage unknown", not as an error to show.
+pub async fn index_usage_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    max_time: Duration,
+) -> Result<std::collections::HashMap<String, IndexUsage>> {
+    let coll = client.database(database).collection::<Document>(collection);
+    let stats: Vec<Document> = coll
+        .aggregate([doc! { "$indexStats": {} }])
+        .max_time(max_time)
+        .await?
+        .try_collect()
+        .await?;
+    Ok(index_usage_from_stats(stats))
+}
+
+/// A sharded cluster reports every index once per shard. Their counts add up; the latest
+/// `since` is kept, because that is how far back all of them have been counting.
+fn index_usage_from_stats(
+    stats: impl IntoIterator<Item = Document>,
+) -> std::collections::HashMap<String, IndexUsage> {
+    let mut usage = std::collections::HashMap::<String, IndexUsage>::new();
+    for stat in stats {
+        let (Ok(name), Ok(accesses)) = (stat.get_str("name"), stat.get_document("accesses")) else {
+            continue;
+        };
+        let ops = match accesses.get("ops") {
+            Some(mongodb::bson::Bson::Int64(ops)) => *ops,
+            Some(mongodb::bson::Bson::Int32(ops)) => i64::from(*ops),
+            _ => continue,
+        };
+        let since = accesses.get_datetime("since").ok().copied();
+        let entry = usage.entry(name.to_string()).or_insert(IndexUsage { ops: 0, since: None });
+        entry.ops += ops;
+        entry.since = entry.since.max(since);
+    }
+    usage
+}
+
 impl ConnectionManager {
     /// List indexes for a collection (runs in Tokio runtime)
     pub fn list_indexes(
@@ -71,6 +121,21 @@ impl ConnectionManager {
             &client,
             &database,
             &collection,
+            Duration::from_secs(30),
+        ))
+    }
+
+    /// How often each index of a collection has been used (runs in Tokio runtime)
+    pub fn index_usage(
+        &self,
+        client: &Client,
+        database: &str,
+        collection: &str,
+    ) -> Result<std::collections::HashMap<String, IndexUsage>> {
+        self.runtime.block_on(index_usage_async(
+            client,
+            database,
+            collection,
             Duration::from_secs(30),
         ))
     }
@@ -282,6 +347,22 @@ impl ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_usage_adds_up_across_shards_and_keeps_the_latest_since() {
+        let early = mongodb::bson::DateTime::from_millis(1_000);
+        let late = mongodb::bson::DateTime::from_millis(2_000);
+        let usage = index_usage_from_stats([
+            doc! { "name": "_id_", "shard": "a", "accesses": { "ops": 5_i64, "since": early } },
+            doc! { "name": "_id_", "shard": "b", "accesses": { "ops": 7_i32, "since": late } },
+            doc! { "name": "email_1", "accesses": { "ops": 0_i64, "since": early } },
+            // A shape this can't read is skipped, not counted as zero.
+            doc! { "name": "broken" },
+        ]);
+        assert_eq!(usage["_id_"], IndexUsage { ops: 12, since: Some(late) });
+        assert_eq!(usage["email_1"], IndexUsage { ops: 0, since: Some(early) });
+        assert!(!usage.contains_key("broken"));
+    }
 
     #[test]
     fn copied_index_document_preserves_supported_metadata() {

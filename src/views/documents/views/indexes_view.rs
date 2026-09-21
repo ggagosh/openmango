@@ -3,6 +3,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mongodb::IndexModel;
 use mongodb::bson::Document;
@@ -17,7 +18,45 @@ use super::super::dialogs::index_create::IndexCreateDialog;
 
 const NAME_SHARE: f32 = 0.3;
 const PROPERTIES_WIDTH: f32 = 180.0;
+const USAGE_WIDTH: f32 = 96.0;
 const ACTIONS_WIDTH: f32 = 112.0;
+
+/// How often the server has used an index. An index nothing has used is the one worth seeing,
+/// so it says "Unused" in the warning color; the built-in `_id` index, which can't be dropped,
+/// stays a plain zero. The count only means something next to when it started, which the
+/// tooltip gives.
+fn render_usage(
+    usage: Option<&crate::connection::ops::indexes::IndexUsage>,
+    droppable: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let cell = div()
+        .id("index-usage")
+        .w(px(USAGE_WIDTH))
+        .flex_shrink_0()
+        .font_family(fonts::mono())
+        .text_sm();
+    let Some(usage) = usage else {
+        return cell.text_color(cx.theme().muted_foreground).child("—");
+    };
+    let ops = crate::helpers::format::format_number(usage.ops.max(0) as u64);
+    let since = usage.since.map(crate::bson::format_datetime_displayed);
+    let tooltip = match since {
+        Some(since) => format!(
+            "Used {ops} times since {since}. The count starts over when the server restarts \
+             or the index is rebuilt."
+        ),
+        None => format!("Used {ops} times since the server started counting."),
+    };
+    let cell = if usage.ops == 0 && droppable {
+        cell.text_color(cx.theme().warning).child("Unused")
+    } else {
+        cell.text_color(cx.theme().foreground).child(ops)
+    };
+    cell.tooltip(move |window, cx| {
+        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+    })
+}
 
 impl CollectionView {
     pub(in crate::views::documents) fn render_indexes_view(
@@ -86,6 +125,12 @@ impl CollectionView {
                 .into_any_element();
         }
 
+        // Read here rather than threaded through the view snapshot: it is a bonus column, absent
+        // whenever the server won't report usage, and then the column is not drawn at all.
+        let usage = session_key.as_ref().and_then(|session_key| {
+            self.state.read(cx).session(session_key)?.data.index_usage.clone()
+        });
+
         let column_label = |label: &'static str| {
             div().text_xs().text_color(cx.theme().muted_foreground).child(label)
         };
@@ -99,6 +144,9 @@ impl CollectionView {
             .child(column_label("Name").w(relative(NAME_SHARE)).min_w(px(140.0)))
             .child(column_label("Keys").flex_1().min_w(px(0.0)))
             .child(column_label("Properties").w(px(PROPERTIES_WIDTH)).flex_shrink_0())
+            .when(usage.is_some(), |row| {
+                row.child(column_label("Usage").w(px(USAGE_WIDTH)).flex_shrink_0())
+            })
             .child(div().w(px(ACTIONS_WIDTH)).flex_shrink_0());
 
         let rows = indexes
@@ -137,7 +185,10 @@ impl CollectionView {
                         render_property_tags(&properties, cx)
                             .w(px(PROPERTIES_WIDTH))
                             .flex_shrink_0(),
-                    );
+                    )
+                    .when_some(usage.as_ref(), |row, usage| {
+                        row.child(render_usage(usage.get(&name_label), editable, cx))
+                    });
 
                 let actions = div()
                     .flex()
