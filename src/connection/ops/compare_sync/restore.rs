@@ -284,6 +284,14 @@ pub fn sweep(directory: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    // Windows locks are mandatory: a second handle cannot read the locked file, ours can.
+    fn contents(log: &mut Log) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        log.file.seek(SeekFrom::Start(0)).unwrap();
+        log.file.read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
     #[test]
     fn records_are_encrypted_authenticated_and_cleaned_without_touching_live_logs() {
         let directory = tempfile::tempdir().unwrap();
@@ -309,7 +317,8 @@ mod tests {
             restore.read_pending(0).unwrap().1[0].1.before.as_ref().unwrap().as_bytes(),
             document.as_bytes()
         );
-        assert!(!fs::read(&path).unwrap().windows(19).any(|b| b == b"before-image-secret"));
+        let bytes = contents(&mut restore.log.lock().unwrap());
+        assert!(!bytes.windows(19).any(|b| b == b"before-image-secret"));
         sweep(directory.path()).unwrap();
         assert!(path.exists());
         restore.log.lock().unwrap().cipher = Aes256Gcm::new_from_slice(&[0; 32]).unwrap();
@@ -339,8 +348,7 @@ mod tests {
         }
         assert_eq!(restore.uncertain(), 2);
         let mut log = restore.log.lock().unwrap();
-        let path = log.file.path().to_owned();
-        let original = fs::read(&path).unwrap();
+        let original = contents(&mut log);
         let start = log.frames[0].offset as usize;
         let second = log.frames[1].offset as usize;
         let mut changed = original.clone();
