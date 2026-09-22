@@ -430,13 +430,20 @@ pub(crate) fn row_filter(
             doc! {field: {"$eq": value, "$exists": true}}
         })
         .collect();
-    let filter = if config.filter.trim().is_empty() {
-        Document::new()
-    } else {
-        crate::bson::parse_document_from_json(&config.filter).map_err(Error::Parse)?
-    };
-    let filter = doc! {"$and": [filter, doc! {"$and": clauses}]};
+    let filter = doc! {"$and": [scan_filter(config)?, doc! {"$and": clauses}]};
     Ok(crate::connection::ops::compare::key_filters(&filter, &config.fields).0)
+}
+
+/// The documents a run skipped for lacking a usable key. None when matching by _id.
+pub(crate) fn skipped_filter(config: &CompareConfig) -> crate::error::Result<Option<Document>> {
+    Ok(crate::connection::ops::compare::key_filters(&scan_filter(config)?, &config.fields).1)
+}
+
+fn scan_filter(config: &CompareConfig) -> crate::error::Result<Document> {
+    if config.filter.trim().is_empty() {
+        return Ok(Document::new());
+    }
+    crate::bson::parse_document_from_json(&config.filter).map_err(Error::Parse)
 }
 
 #[cfg(test)]
@@ -472,5 +479,20 @@ mod tests {
         );
         row.kind = DiffKind::MultipleMatches;
         assert_eq!(row_filter(&config, &row, 0).unwrap(), fallback);
+    }
+
+    #[test]
+    fn skipped_links_open_exactly_the_documents_the_scan_skipped() {
+        let mut config = CompareConfig {
+            fields: vec!["sku".into()],
+            filter: "{active:true}".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            skipped_filter(&config).unwrap(),
+            crate::connection::ops::compare::key_filters(&doc! {"active": true}, &config.fields).1
+        );
+        config.fields = vec!["_id".into()];
+        assert_eq!(skipped_filter(&config).unwrap(), None);
     }
 }

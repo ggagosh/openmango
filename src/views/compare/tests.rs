@@ -682,3 +682,176 @@ fn a_new_run_keeps_the_previous_results_until_it_reports() {
     tab.receive(done());
     assert!(tab.rows.is_empty() && tab.selected.is_none() && !tab.running);
 }
+
+#[gpui_kit::test]
+fn two_picked_documents_open_side_by_side_with_id_as_information(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply_design_tokens(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let state = cx.new(|_| {
+        AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        )
+    });
+    let documents = [
+        doc! {"_id": 1, "name": "left", "n": 1, "same": true},
+        doc! {"_id": 2, "name": "right", "n": 1, "same": true},
+    ];
+    // Picked documents are never paired by _id: it is information, not a difference.
+    let pair = CompareDetail {
+        documents: documents.clone().map(|document| vec![document]),
+        changed_since_scan: false,
+    };
+    let config = CompareConfig { fields: Vec::new(), ..Default::default() };
+    let rows = detail_rows(&pair, &config, &Default::default()).unwrap();
+    assert!(matches!(&rows[0], DetailRow::Field { informational: true, .. }));
+    assert!(matches!(&rows[1], DetailRow::Field { kind: Some(_), informational: false, .. }));
+    assert!(matches!(rows[2], DetailRow::Unchanged { count: 2, .. }));
+    assert_eq!(rows.len(), 3);
+
+    // The app's root view draws the dialog layer; this host stands in for it.
+    struct DialogHost;
+    impl gpui_kit::Render for DialogHost {
+        fn render(
+            &mut self,
+            window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{ParentElement as _, Styled as _};
+            gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
+        }
+    }
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let host = cx.new(|_| DialogHost);
+        Root::new(host, window, cx).bordered(false)
+    });
+    cx.simulate_resize(size(px(1400.0), px(900.0)));
+    cx.update(|window, cx| {
+        super::open_document_compare(state.clone(), "shop.items".into(), documents, window, cx)
+    });
+    draw(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("document-compare").is_some(), "the dialog opens");
+    for (cell, heading) in
+        [("compare-value-0", "compare-heading-0"), ("compare-value-3", "compare-heading-1")]
+    {
+        let value = cx.debug_bounds(cell).unwrap_or_else(|| panic!("missing {cell}"));
+        let title = cx.debug_bounds(heading).unwrap();
+        assert!(
+            (f32::from(value.left() - title.left())).abs() <= 1.0,
+            "{cell} is not under {heading}: value={value:?}, heading={title:?}"
+        );
+    }
+    assert!(
+        cx.debug_bounds("compare-detail-row-2").is_some(),
+        "unchanged fields fold into one row"
+    );
+}
+
+#[gpui_kit::test]
+fn a_closed_connection_picked_in_compare_opens_in_place(cx: &mut TestAppContext) {
+    use std::collections::HashMap;
+
+    use crate::models::{ActiveConnection, SavedConnection};
+    use crate::state::{AppEvent, View};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply_design_tokens(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let local = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
+    let remote = SavedConnection::new("Remote".into(), "mongodb://localhost:27018".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let client = || {
+        runtime.block_on(async {
+            mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
+        })
+    };
+    let active = |saved: &SavedConnection, client| ActiveConnection {
+        config: saved.clone(),
+        client,
+        databases: vec!["shop".into()],
+        // Collections are known, so no picker reaches for the runtime.
+        collections: HashMap::from([("shop".to_string(), Vec::new())]),
+        collection_details: Default::default(),
+        runtime_meta: Default::default(),
+    };
+    let state = cx.new(|_| {
+        let mut state = AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        );
+        state.connections = vec![local.clone(), remote.clone()];
+        state.insert_active_connection(local.id, active(&local, client()));
+        // A connect attempt fails at once instead of dialing a server.
+        state.connections_persistence_blocked = true;
+        state
+    });
+    let id = state.update(cx, |state, cx| {
+        state.open_compare_tab(
+            Some(CompareEndpoint {
+                connection_id: Some(local.id),
+                database: "shop".into(),
+                collection: String::new(),
+            }),
+            cx,
+        );
+        state.active_compare_tab_id().unwrap()
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        Root::new(view, window, cx).bordered(false)
+    });
+    cx.simulate_resize(size(px(1400.0), px(900.0)));
+    draw(cx);
+    draw(cx);
+    let right = |cx: &mut VisualTestContext| {
+        state.update(cx, |state, _| state.compare_tab(id).unwrap().config.sides[1].clone())
+    };
+    let pick_right_connection = |keys: &[&str], cx: &mut VisualTestContext| {
+        let trigger = cx
+            .update(|window, _| gpui_kit::base::test_support::snapshots(window))
+            .iter()
+            .find(|node| node.label() == Some("Right connection"))
+            .expect("right connection picker")
+            .bounds();
+        cx.simulate_click(trigger.center(), gpui_kit::Modifiers::default());
+        draw(cx);
+        for key in keys {
+            cx.simulate_keystrokes(key);
+            draw(cx);
+        }
+    };
+    let connect_button = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| gpui_kit::base::test_support::snapshots(window))
+            .iter()
+            .any(|node| node.path().last() == Some(&gpui_kit::ElementId::from("compare-connect")))
+    };
+
+    // The closed connection is listed after the open one and picking it stays in this tab.
+    pick_right_connection(&["down", "down", "enter"], cx);
+    assert_eq!(right(cx).connection_id, Some(remote.id), "closed connections are offered");
+    state.update(cx, |state, _| {
+        assert_eq!(state.current_view, View::Compare);
+        assert_eq!(state.active_compare_tab_id(), Some(id));
+    });
+    assert!(connect_button(cx), "a failed attempt leaves a way to retry");
+
+    // Once it opens, the right side follows the left database.
+    state.update(cx, |state, cx| {
+        state.insert_active_connection(remote.id, active(&remote, client()));
+        cx.emit(AppEvent::Connected(remote.id));
+        cx.notify();
+    });
+    draw(cx);
+    draw(cx);
+    assert_eq!(right(cx).database, "shop");
+    assert!(!connect_button(cx));
+
+    // Picking the same connection again keeps what was chosen under it.
+    pick_right_connection(&["enter"], cx);
+    assert_eq!(right(cx).database, "shop");
+}

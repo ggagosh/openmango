@@ -14,7 +14,8 @@ pub(super) struct EndpointControls {
     connection: Entity<SelectState<SearchableVec<ConnectionItem>>>,
     database: Entity<SelectState<SearchableVec<SharedString>>>,
     collection: Entity<SelectState<SearchableVec<SharedString>>>,
-    last_connections: Vec<ConnectionIdentity>,
+    /// Every saved connection and whether it is closed.
+    last_connections: Vec<(ConnectionIdentity, bool)>,
     last_databases: Vec<String>,
     last_collections: Vec<String>,
     /// The endpoint last pushed into the three pickers.
@@ -47,8 +48,7 @@ impl CompareView {
         self.control_subscriptions.clear();
         self.metadata_requested = [None, None];
         self.detail_signature = None;
-        self.expansion = Default::default();
-        self.tree_error = None;
+        self.diff = None;
         self.find_error = None;
         self.auto_right = false;
         let config = self.state.read(cx).compare_tab(id).unwrap().config.clone();
@@ -70,40 +70,53 @@ impl CompareView {
                 window,
                 move |this, _, event, _, cx| {
                     if let SelectEvent::Confirm(Some(connection)) = event {
-                        let database = {
+                        let connection = *connection;
+                        let (current, connected, database) = {
                             let app = this.state.read(cx);
-                            let left = &app.compare_tab(id).unwrap().config.sides[0];
-                            if side == 1
+                            let config = &app.compare_tab(id).unwrap().config;
+                            let left = &config.sides[0];
+                            let database = if side == 1
                                 && app
-                                    .active_connection_by_id(*connection)
+                                    .active_connection_by_id(connection)
                                     .is_some_and(|c| c.databases.contains(&left.database))
                             {
                                 left.database.clone()
                             } else {
                                 String::new()
-                            }
-                        };
-                        this.auto_right = side == 1;
-                        this.state.update(cx, |app, cx| {
-                            app.update_compare_config(
-                                id,
-                                |config| {
-                                    config.sides[side] = CompareEndpoint {
-                                        connection_id: Some(*connection),
-                                        database: database.clone(),
-                                        collection: String::new(),
-                                    }
-                                },
-                                cx,
-                            )
-                        });
-                        if !database.is_empty() {
-                            AppCommands::load_collections(
-                                this.state.clone(),
-                                *connection,
+                            };
+                            (
+                                config.sides[side].connection_id,
+                                app.is_connected(connection),
                                 database,
-                                cx,
-                            );
+                            )
+                        };
+                        // Picking the current connection again keeps its database and collection.
+                        if current != Some(connection) {
+                            this.auto_right = side == 1;
+                            this.state.update(cx, |app, cx| {
+                                app.update_compare_config(
+                                    id,
+                                    |config| {
+                                        config.sides[side] = CompareEndpoint {
+                                            connection_id: Some(connection),
+                                            database: database.clone(),
+                                            collection: String::new(),
+                                        }
+                                    },
+                                    cx,
+                                )
+                            });
+                            if !database.is_empty() {
+                                AppCommands::load_collections(
+                                    this.state.clone(),
+                                    connection,
+                                    database,
+                                    cx,
+                                );
+                            }
+                        }
+                        if !connected && !this.connecting.contains(&connection) {
+                            AppCommands::connect_in_background(this.state.clone(), connection, cx);
                         }
                     }
                 },
@@ -253,10 +266,9 @@ impl CompareView {
             let mut connections: Vec<_> = app
                 .connections
                 .iter()
-                .filter(|c| app.is_connected(c.id))
-                .map(ConnectionIdentity::from)
+                .map(|c| (ConnectionIdentity::from(c), !app.is_connected(c.id)))
                 .collect();
-            connections.sort_by_key(ConnectionIdentity::display_name);
+            connections.sort_by_key(|(identity, _)| identity.display_name());
             let databases: [Vec<String>; 2] = config.sides.each_ref().map(|e| {
                 e.connection_id
                     .and_then(|id| app.active_connection_by_id(id))
@@ -331,6 +343,23 @@ impl CompareView {
                 })
             });
         }
+        if self.auto_right
+            && config.sides[1].database.is_empty()
+            && !config.sides[0].database.is_empty()
+            && databases[1].contains(&config.sides[0].database)
+        {
+            // A connection opened from the picker lists its databases only after the pick.
+            let state = self.state.clone();
+            let expected = config.sides[1].clone();
+            let database = config.sides[0].database.clone();
+            cx.defer(move |cx| {
+                state.update(cx, |app, cx| {
+                    if app.compare_tab(id).is_some_and(|t| t.config.sides[1] == expected) {
+                        app.update_compare_config(id, |c| c.sides[1].database = database, cx);
+                    }
+                })
+            });
+        }
         let controls = self.controls.as_mut().unwrap();
         for side in 0..2 {
             let endpoint = &config.sides[side];
@@ -352,10 +381,11 @@ impl CompareView {
             if controls.last_connections != connections {
                 let items: Vec<ConnectionItem> = connections
                     .iter()
-                    .map(|identity| ConnectionItem {
+                    .map(|(identity, closed)| ConnectionItem {
                         id: identity.id,
                         name: identity.display_name().into(),
                         identity: identity.clone(),
+                        closed: *closed,
                     })
                     .collect();
                 controls.connection.update(cx, |select, cx| {
@@ -388,7 +418,7 @@ impl CompareView {
                 controls.connection.update(cx, |select, cx| {
                     let index = connections
                         .iter()
-                        .position(|c| Some(c.id) == endpoint.connection_id)
+                        .position(|(c, _)| Some(c.id) == endpoint.connection_id)
                         .map(|i| IndexPath::default().row(i));
                     select.set_selected_index(index, window, cx);
                 });
@@ -484,6 +514,15 @@ impl CompareView {
                 ),
                 _ => m.error.clone().unwrap_or_else(|| "Size unavailable".into()),
             });
+            let connection = config.sides[side].connection_id;
+            let (line, failed) = match connection {
+                Some(c) if self.connecting.contains(&c) => ("Connecting…".to_string(), false),
+                Some(c) if self.connect_errors.contains_key(&c) => {
+                    (format!("Couldn't connect: {}", self.connect_errors[&c]), true)
+                }
+                Some(c) if !app.is_connected(c) => ("Not connected".to_string(), false),
+                _ => (stats.unwrap_or_default(), false),
+            };
             sides = sides.child(
                 div()
                     .id(("compare-side", side))
@@ -523,7 +562,7 @@ impl CompareView {
                                     Select::new(&selectors.connection)
                                         .accessibility_label(format!("{title} connection"))
                                         .small()
-                                        .placeholder("Open connection")
+                                        .placeholder("Connection")
                                         .disabled(running)
                                         .w_full(),
                                 )
@@ -557,12 +596,19 @@ impl CompareView {
                     // Always present, so the header holds still when a size arrives or sides swap.
                     .child(
                         div()
+                            .id(("compare-size", side))
                             .debug_selector(move || format!("compare-size-{side}"))
                             .h(px(16.0))
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(if failed { cx.theme().danger } else { muted })
                             .truncate()
-                            .child(stats.unwrap_or_default()),
+                            .child(line.clone())
+                            .when(failed, |status| {
+                                status.tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(line.clone())
+                                        .build(window, cx)
+                                })
+                            }),
                     ),
             );
         }
@@ -747,12 +793,23 @@ impl CompareView {
             );
 
         let mut notes: Vec<String> = Vec::new();
-        if config.sides.iter().all(|side| side.connection_id.is_none()) {
-            notes.push("Only open connections are listed. Open one from the sidebar first.".into());
-        }
-        if let Some(reason) = reason {
-            notes.push(reason);
-        }
+        let mut closed: Vec<Uuid> = config
+            .sides
+            .iter()
+            .filter_map(|side| side.connection_id)
+            .filter(|c| !app.is_connected(*c) && !self.connecting.contains(c))
+            .collect();
+        closed.dedup();
+        let connect = (!closed.is_empty()).then(|| {
+            let state = self.state.clone();
+            Button::new("compare-connect").outline().xsmall().label("Connect").on_click(
+                move |_, _, cx| {
+                    for connection in &closed {
+                        AppCommands::connect_in_background(state.clone(), *connection, cx);
+                    }
+                },
+            )
+        });
         if let [Some(left), Some(right)] = &metadata
             && left.endpoint == config.sides[0]
             && right.endpoint == config.sides[1]
@@ -791,6 +848,17 @@ impl CompareView {
             .border_color(islands::panel_border(&appearance, cx))
             .child(sides)
             .child(actions)
+            .when_some(reason, |setup, reason| {
+                setup.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x(spacing::sm())
+                        .child(note(reason, cx))
+                        .children(connect),
+                )
+            })
             .children(notes.into_iter().map(|text| note(text, cx)))
             .into_any_element()
     }

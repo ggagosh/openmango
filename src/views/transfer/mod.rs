@@ -366,6 +366,7 @@ impl Render for TransferView {
                     id: *id,
                     name: SharedString::from(identity.display_name()),
                     identity: identity.clone(),
+                    closed: false,
                 })
                 .collect();
 

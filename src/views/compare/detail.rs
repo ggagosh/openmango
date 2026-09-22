@@ -1,36 +1,222 @@
 use std::sync::Arc;
 
 use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::dialog::{Dialog, DialogFooter};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::tooltip::Tooltip;
-use mongodb::bson::Bson;
+use gpui_kit::component::{WindowExt as _, h_flex};
+use mongodb::bson::{Bson, Document};
 
-use super::detail_tree::label;
 pub(super) use super::detail_tree::{DetailRow, detail_rows};
+use super::detail_tree::{Expansion, label};
 use super::*;
 use crate::bson::compare::ChangeKind;
 use crate::bson::{PathSegment, bson_value_preview, get_bson_at_path};
 use crate::connection::ops::compare::DiffKind;
 use crate::connection::ops::compare_sync::RowOutcome;
+use crate::state::AppearanceSettings;
 use crate::state::compare::{CompareConfig, CompareDetail};
 use crate::views::documents::table::cell_renderer::{value_color, value_details_tooltip};
 
-impl CompareView {
-    fn rebuild_detail(&mut self, pair: &CompareDetail, config: &CompareConfig) {
-        match detail_rows(pair, config, &self.expansion) {
+/// The field-by-field table for one document pair. The compare tab shows the selected
+/// difference in it; the two-document dialog shows a pair picked in a collection.
+pub(crate) struct DiffTable {
+    pair: Arc<CompareDetail>,
+    config: CompareConfig,
+    rows: Vec<DetailRow>,
+    expansion: Expansion,
+    pub(super) error: Option<String>,
+    scroll: UniformListScrollHandle,
+}
+
+impl DiffTable {
+    pub(super) fn new(pair: Arc<CompareDetail>, config: CompareConfig) -> Self {
+        let mut table = Self {
+            pair,
+            config,
+            rows: Vec::new(),
+            expansion: Default::default(),
+            error: None,
+            scroll: UniformListScrollHandle::new(),
+        };
+        table.rebuild();
+        table
+    }
+
+    fn rebuild(&mut self) {
+        match detail_rows(&self.pair, &self.config, &self.expansion) {
             Ok(rows) => {
-                self.detail_rows = rows;
-                self.tree_error = None;
+                self.rows = rows;
+                self.error = None;
             }
             Err(error) => {
-                self.detail_rows.clear();
-                self.tree_error = Some(error.to_string());
+                self.rows.clear();
+                self.error = Some(error.to_string());
             }
         }
     }
+}
 
+impl Render for DiffTable {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "compare-detail-body".into())
+            .flex_1()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .min_w_0()
+            .w_full()
+            .overflow_hidden()
+            .child(
+                uniform_list(
+                    "compare-document-diff",
+                    self.rows.len(),
+                    cx.processor(|table, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .filter_map(|index| {
+                                let row = table.rows.get(index)?;
+                                Some(render_row(index, row, &table.pair, &table.expansion, cx))
+                            })
+                            .collect()
+                    }),
+                )
+                .flex_1()
+                .w_full()
+                .track_scroll(&self.scroll),
+            )
+            .vertical_scrollbar(&self.scroll)
+    }
+}
+
+/// Two documents picked in a collection view, side by side. Nothing is matched or written.
+pub(crate) fn open_document_compare(
+    state: Entity<AppState>,
+    namespace: String,
+    documents: [Document; 2],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // Picked documents are not paired by _id, so it shows as information, as with a custom key.
+    let config = CompareConfig { fields: Vec::new(), ..Default::default() };
+    let summary = match crate::bson::compare::field_changes(
+        &documents[0],
+        &documents[1],
+        &config.ignore_set(),
+    ) {
+        Ok(changes) if changes.is_empty() => "No differences".to_string(),
+        Ok(changes) if changes.len() == 1 => "1 difference".to_string(),
+        Ok(changes) => format!("{} differences", changes.len()),
+        Err(error) => error.to_string(),
+    };
+    let names = documents.each_ref().map(|document| {
+        document.get("_id").map_or_else(|| "No _id".into(), |id| bson_value_preview(id, 80))
+    });
+    let pair = Arc::new(CompareDetail {
+        documents: documents.map(|document| vec![document]),
+        changed_since_scan: false,
+    });
+    let table = cx.new(|_| DiffTable::new(pair.clone(), config));
+    window.open_dialog(cx, move |dialog: Dialog, window, cx| {
+        let appearance = state.read(cx).settings.appearance.clone();
+        dialog
+            .title("Compare documents")
+            .w(px(960.0))
+            .child(
+                div()
+                    .debug_selector(|| "document-compare".into())
+                    .h((window.viewport_size().height * 0.6).clamp(px(240.0), px(640.0)))
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::sm())
+                    .child(note(format!("{namespace} · {summary}"), cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .border_1()
+                            .border_color(islands::panel_border(&appearance, cx))
+                            .rounded(borders::radius_sm())
+                            .overflow_hidden()
+                            .child(diff_heading(&pair, names.clone(), &appearance, cx))
+                            .child(table.clone()),
+                    ),
+            )
+            .footer(
+                DialogFooter::new().child(
+                    Button::new("document-compare-close")
+                        .label("Close")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                ),
+            )
+    });
+}
+
+/// Column titles for a pair. They share the rows' columns, even when a side is absent.
+fn diff_heading(
+    pair: &CompareDetail,
+    names: [String; 2],
+    appearance: &AppearanceSettings,
+    cx: &App,
+) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let mut heading = comparison_row()
+        .flex_shrink_0()
+        .h(px(28.0))
+        .items_center()
+        .border_b_1()
+        .border_color(islands::panel_border(appearance, cx))
+        .bg(islands::tool_bg(appearance, cx))
+        .child(
+            field_column()
+                .debug_selector(|| "compare-heading-field".into())
+                .flex()
+                .items_center()
+                .child(div().text_xs().text_color(muted).child("Field")),
+        );
+    for (side, name) in names.into_iter().enumerate() {
+        let missing = pair.documents[side].is_empty();
+        heading = heading.child(
+            h_flex()
+                .debug_selector(move || format!("compare-heading-{side}"))
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .px(spacing::xs())
+                .gap(spacing::sm())
+                .child(
+                    h_flex()
+                        .gap(spacing::xs())
+                        .flex_shrink_0()
+                        .child(dot(side_color(side, cx)))
+                        .child(
+                            div().text_xs().font_weight(FontWeight::MEDIUM).child(side_name(side)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(("compare-column-name", side))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(name.clone())
+                        .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx)),
+                )
+                .when(missing, |column| {
+                    column.child(Tag::secondary().xsmall().child("No document"))
+                }),
+        );
+    }
+    heading
+}
+
+impl CompareView {
     pub(super) fn render_detail(&mut self, id: Uuid, cx: &mut Context<Self>) -> AnyElement {
         let app = self.state.read(cx);
         let tab = app.compare_tab(id).unwrap();
@@ -67,12 +253,7 @@ impl CompareView {
             .and_then(|pair| loaded_row.map(|row| (id, tab.run, row, Arc::as_ptr(pair) as usize)));
         if self.detail_signature != signature {
             self.detail_signature = signature;
-            self.expansion = Default::default();
-            if let Some(pair) = &detail {
-                self.rebuild_detail(pair, &config);
-            } else {
-                self.detail_rows.clear();
-            }
+            self.diff = detail.clone().map(|pair| cx.new(|_| DiffTable::new(pair, config.clone())));
         }
         let mut panel = div()
             .size_full()
@@ -175,30 +356,9 @@ impl CompareView {
                                         PopupMenuItem::new(label)
                                             .disabled(filter.is_none())
                                             .on_click(move |_, _, cx| {
-                                                let Some(filter) = &filter else {
-                                                    return;
-                                                };
-                                                state.update(cx, |app, cx| {
-                                                    if !endpoint
-                                                        .connection_id
-                                                        .is_some_and(|id| app.is_connected(id))
-                                                    {
-                                                        return;
-                                                    }
-                                                    app.select_connection(
-                                                        endpoint.connection_id,
-                                                        cx,
-                                                    );
-                                                    app.open_collection_in_new_tab(
-                                                        endpoint.database.clone(),
-                                                        endpoint.collection.clone(),
-                                                        crate::state::relations::filter_text(
-                                                            filter,
-                                                        ),
-                                                        Some(filter.clone()),
-                                                        cx,
-                                                    );
-                                                });
+                                                if let Some(filter) = &filter {
+                                                    open_side(&state, &endpoint, filter, cx);
+                                                }
                                             }),
                                     );
                                 }
@@ -206,7 +366,8 @@ impl CompareView {
                             }),
                     ),
             );
-        if let Some(error) = error.or_else(|| self.tree_error.clone()) {
+        let tree_error = self.diff.as_ref().and_then(|table| table.read(cx).error.clone());
+        if let Some(error) = error.or(tree_error) {
             header = header.child(div().text_xs().text_color(cx.theme().danger).child(error));
         }
         if !enabled {
@@ -282,95 +443,10 @@ impl CompareView {
             return panel.child(matches.overflow_y_scrollbar()).into_any_element();
         }
 
-        let mut heading = comparison_row()
-            .flex_shrink_0()
-            .h(px(28.0))
-            .items_center()
-            .border_b_1()
-            .border_color(islands::panel_border(&appearance, cx))
-            .bg(islands::tool_bg(&appearance, cx))
-            .child(
-                field_column()
-                    .debug_selector(|| "compare-heading-field".into())
-                    .flex()
-                    .items_center()
-                    .child(div().text_xs().text_color(muted).child("Field")),
-            );
-        for (side, name) in names.into_iter().enumerate() {
-            let missing = detail.documents[side].is_empty();
-            heading = heading.child(
-                div()
-                    .debug_selector(move || format!("compare-heading-{side}"))
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .px(spacing::xs())
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(spacing::xs())
-                            .flex_shrink_0()
-                            .child(dot(side_color(side, cx)))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(side_name(side)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id(("compare-column-name", side))
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(name.clone())
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(name.clone()).build(window, cx)
-                            }),
-                    )
-                    .when(missing, |column| {
-                        column.child(Tag::secondary().xsmall().child("No document"))
-                    }),
-            );
-        }
-        panel = panel.child(heading);
-        let count = self.detail_rows.len();
-        let body = div()
-            .debug_selector(|| "compare-detail-body".into())
-            .flex_1()
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .min_w_0()
-            .w_full()
-            .overflow_hidden()
-            .child(
-                uniform_list(
-                    "compare-document-diff",
-                    count,
-                    cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .filter_map(|index| {
-                                view.detail_rows.get(index).map(|row| {
-                                    render_row(index, row, &detail, &config, &view.expansion, cx)
-                                })
-                            })
-                            .collect()
-                    }),
-                )
-                .flex_1()
-                .w_full()
-                .track_scroll(&self.detail_scroll),
-            )
-            .vertical_scrollbar(&self.detail_scroll);
-        panel.child(body).into_any_element()
+        panel
+            .child(diff_heading(&detail, names, &appearance, cx))
+            .children(self.diff.clone())
+            .into_any_element()
     }
 }
 
@@ -398,9 +474,8 @@ fn render_row(
     index: usize,
     row: &DetailRow,
     pair: &Arc<CompareDetail>,
-    config: &CompareConfig,
-    expansion: &super::detail_tree::Expansion,
-    cx: &Context<CompareView>,
+    expansion: &Expansion,
+    cx: &Context<DiffTable>,
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let base = comparison_row()
@@ -411,8 +486,6 @@ fn render_row(
     match row {
         DetailRow::Unchanged { path, count } => {
             let expanded = expansion.unchanged.contains(path);
-            let pair = pair.clone();
-            let config = config.clone();
             let path = path.clone();
             base.child(
                 field_column().flex().items_center().child(
@@ -433,11 +506,11 @@ fn render_row(
                                 if *count == 1 { "" } else { "s" }
                             ))
                             .tooltip("Show or hide unchanged fields")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if !view.expansion.unchanged.remove(&path) {
-                                    view.expansion.unchanged.insert(path.clone());
+                            .on_click(cx.listener(move |table, _, _, cx| {
+                                if !table.expansion.unchanged.remove(&path) {
+                                    table.expansion.unchanged.insert(path.clone());
                                 }
-                                view.rebuild_detail(&pair, &config);
+                                table.rebuild();
                                 cx.notify();
                             })),
                     ),
@@ -498,8 +571,6 @@ fn render_row(
             };
             let field = indent(path.len().saturating_sub(1));
             let field = if *container {
-                let pair = pair.clone();
-                let config = config.clone();
                 let path = path.clone();
                 field.child(
                     Button::new(("compare-branch", index))
@@ -514,11 +585,11 @@ fn render_row(
                         })
                         .label(name)
                         .tooltip(label(&path))
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            if !view.expansion.collapsed.remove(&path) {
-                                view.expansion.collapsed.insert(path.clone());
+                        .on_click(cx.listener(move |table, _, _, cx| {
+                            if !table.expansion.collapsed.remove(&path) {
+                                table.expansion.collapsed.insert(path.clone());
                             }
-                            view.rebuild_detail(&pair, &config);
+                            table.rebuild();
                             cx.notify();
                         })),
                 )

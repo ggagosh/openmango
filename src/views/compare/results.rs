@@ -1,6 +1,7 @@
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -116,16 +117,12 @@ impl CompareView {
         }
 
         let mut status = vec![format!("{} identical", format_number(c.identical))];
+        let mut skipped = None;
         if let Some(summary) = &tab.summary {
-            if let Some([left, right]) = summary.skipped
-                && left + right > 0
+            if let Some(counts) = summary.skipped
+                && counts.iter().sum::<u64>() > 0
             {
-                status.push(format!(
-                    "{} without key skipped (left {}, right {})",
-                    format_number(left + right),
-                    format_number(left),
-                    format_number(right)
-                ));
+                skipped = Some(self.skipped_menu(id, counts, cx));
             }
             status.push(format_elapsed(summary.elapsed));
             if summary.cancelled {
@@ -169,19 +166,26 @@ impl CompareView {
                             .into_any_element()
                     }
                     None => div()
-                        .id("compare-status")
-                        .text_xs()
-                        .text_color(muted)
-                        .child(status.join(" · "))
-                        .when_some(compared_at, |status, at| {
-                            status.tooltip(move |window, cx| {
-                                Tooltip::new(format!(
-                                    "Compared {}",
-                                    crate::bson::format_datetime_displayed(at)
-                                ))
-                                .build(window, cx)
-                            })
-                        })
+                        .flex()
+                        .items_center()
+                        .gap(spacing::sm())
+                        .child(
+                            div()
+                                .id("compare-status")
+                                .text_xs()
+                                .text_color(muted)
+                                .child(status.join(" · "))
+                                .when_some(compared_at, |status, at| {
+                                    status.tooltip(move |window, cx| {
+                                        Tooltip::new(format!(
+                                            "Compared {}",
+                                            crate::bson::format_datetime_displayed(at)
+                                        ))
+                                        .build(window, cx)
+                                    })
+                                }),
+                        )
+                        .children(skipped)
                         .into_any_element(),
                 }),
         );
@@ -266,6 +270,45 @@ impl CompareView {
             );
         }
         bar.into_any_element()
+    }
+
+    /// Documents without a usable key never reach the comparison; this opens them on each side.
+    fn skipped_menu(&self, id: Uuid, counts: [u64; 2], cx: &Context<Self>) -> AnyElement {
+        let app = self.state.read(cx);
+        let config = app.compare_tab(id).unwrap().results_config().clone();
+        let filter = crate::state::commands::compare::skipped_filter(&config).ok().flatten();
+        let open = config
+            .sides
+            .each_ref()
+            .map(|side| side.connection_id.is_some_and(|id| app.is_connected(id)));
+        let state = self.state.clone();
+        Button::new("compare-skipped")
+            .ghost()
+            .xsmall()
+            .label(format!("{} without key skipped", format_number(counts[0] + counts[1])))
+            .dropdown_caret(true)
+            .dropdown_menu(move |mut menu, _, _| {
+                for side in 0..2 {
+                    let state = state.clone();
+                    let endpoint = config.sides[side].clone();
+                    let filter = filter.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!(
+                            "Show {} on {}",
+                            format_number(counts[side]),
+                            side_name(side)
+                        ))
+                        .disabled(counts[side] == 0 || filter.is_none() || !open[side])
+                        .on_click(move |_, _, cx| {
+                            if let Some(filter) = &filter {
+                                open_side(&state, &endpoint, filter, cx);
+                            }
+                        }),
+                    );
+                }
+                menu
+            })
+            .into_any_element()
     }
 
     pub(super) fn render_results(&self, id: Uuid, cx: &Context<Self>) -> AnyElement {

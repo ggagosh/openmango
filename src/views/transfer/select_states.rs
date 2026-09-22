@@ -16,6 +16,8 @@ pub(crate) struct ConnectionItem {
     pub id: Uuid,
     pub name: SharedString,
     pub identity: ConnectionIdentity,
+    /// Listed although closed; picking it opens the connection.
+    pub closed: bool,
 }
 
 impl SelectItem for ConnectionItem {
@@ -26,7 +28,25 @@ impl SelectItem for ConnectionItem {
     }
 
     fn render(&self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        connection_identity_badge(&self.identity, true, cx)
+        use gpui_kit::component::ActiveTheme as _;
+        use gpui_kit::prelude::FluentBuilder as _;
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(crate::theme::spacing::sm())
+            .child(connection_identity_badge(&self.identity, true, cx))
+            .when(self.closed, |row| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Not connected"),
+                )
+            })
     }
 
     fn value(&self) -> &Self::Value {

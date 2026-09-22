@@ -13,6 +13,10 @@ mod sync_bar;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use detail::open_document_compare;
+
+use std::collections::{HashMap, HashSet};
+
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
@@ -39,13 +43,13 @@ pub struct CompareView {
     options_open: bool,
     auto_right: bool,
     metadata_requested: [Option<CompareEndpoint>; 2],
-    collections_requested: std::collections::HashSet<(Uuid, String)>,
+    collections_requested: HashSet<(Uuid, String)>,
+    /// Connections opening now, from a picker here or anywhere else in the app.
+    connecting: HashSet<Uuid>,
+    connect_errors: HashMap<Uuid, String>,
     scroll: UniformListScrollHandle,
-    detail_scroll: UniformListScrollHandle,
-    detail_rows: Vec<detail::DetailRow>,
+    diff: Option<Entity<detail::DiffTable>>,
     detail_signature: Option<(Uuid, u64, usize, usize)>,
-    expansion: detail_tree::Expansion,
-    tree_error: Option<String>,
     find_error: Option<String>,
     _subscriptions: Vec<Subscription>,
     control_subscriptions: Vec<Subscription>,
@@ -89,7 +93,7 @@ pub(super) fn note(text: impl Into<SharedString>, cx: &App) -> Div {
 }
 
 /// Lucide icons outside the toolkit's default set live in `assets/icons`.
-pub(super) fn app_icon(name: &str) -> Icon {
+pub(crate) fn app_icon(name: &str) -> Icon {
     Icon::new(IconName::File).path(format!("icons/{name}.svg"))
 }
 
@@ -102,6 +106,28 @@ pub(super) fn endpoint_label(app: &AppState, endpoint: &CompareEndpoint) -> Stri
             .unwrap_or_else(|| "Connection".into()),
         endpoint.namespace()
     )
+}
+
+/// Open one side's collection in a new tab, filtered. Does nothing once that connection closed.
+pub(super) fn open_side(
+    state: &Entity<AppState>,
+    endpoint: &CompareEndpoint,
+    filter: &mongodb::bson::Document,
+    cx: &mut App,
+) {
+    state.update(cx, |app, cx| {
+        if !endpoint.connection_id.is_some_and(|id| app.is_connected(id)) {
+            return;
+        }
+        app.select_connection(endpoint.connection_id, cx);
+        app.open_collection_in_new_tab(
+            endpoint.database.clone(),
+            endpoint.collection.clone(),
+            crate::state::relations::filter_text(filter),
+            Some(filter.clone()),
+            cx,
+        );
+    });
 }
 
 pub(super) fn relative_time(at: mongodb::bson::DateTime) -> String {
@@ -135,13 +161,25 @@ impl CompareView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         let connection_subscription = cx.subscribe(&state, |view, _, event, cx| {
-            if let crate::state::AppEvent::Connected(id)
-            | crate::state::AppEvent::Disconnected(id) = event
-            {
-                view.metadata_requested = [None, None];
-                view.collections_requested.retain(|(connection, _)| connection != id);
-                cx.notify();
+            use crate::state::AppEvent;
+            match event {
+                AppEvent::Connecting(id) => {
+                    view.connecting.insert(*id);
+                    view.connect_errors.remove(id);
+                }
+                AppEvent::ConnectionFailed { connection_id, error } => {
+                    view.connecting.remove(connection_id);
+                    view.connect_errors.insert(*connection_id, error.clone());
+                }
+                AppEvent::Connected(id) | AppEvent::Disconnected(id) => {
+                    view.connecting.remove(id);
+                    view.connect_errors.remove(id);
+                    view.metadata_requested = [None, None];
+                    view.collections_requested.retain(|(connection, _)| connection != id);
+                }
+                _ => return,
             }
+            cx.notify();
         });
         Self {
             state,
@@ -153,12 +191,11 @@ impl CompareView {
             auto_right: false,
             metadata_requested: [None, None],
             collections_requested: Default::default(),
+            connecting: Default::default(),
+            connect_errors: Default::default(),
             scroll: UniformListScrollHandle::new(),
-            detail_scroll: UniformListScrollHandle::new(),
-            detail_rows: Vec::new(),
+            diff: None,
             detail_signature: None,
-            expansion: Default::default(),
-            tree_error: None,
             find_error: None,
             _subscriptions: vec![subscription, connection_subscription],
             control_subscriptions: Vec::new(),

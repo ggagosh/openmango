@@ -115,6 +115,16 @@ pub(in crate::views::documents) fn build_document_menu(
                 }
             }),
     );
+    menu = menu.item(
+        PopupMenuItem::new("Compare 2 Documents")
+            .icon(crate::views::compare::app_icon("git-compare-arrows"))
+            .disabled(selected_count != 2)
+            .on_click({
+                let state = state.clone();
+                let session_key = session_key.clone();
+                move |_, window, cx| compare_selected(&state, &session_key, window, cx)
+            }),
+    );
 
     menu = menu
         .item(
@@ -520,6 +530,37 @@ pub(in crate::views::documents) fn find_references_for(
     let target =
         crate::state::relations::FieldRef::id_of(&session_key.database, &session_key.collection);
     AppCommands::find_references(state.clone(), target, id, cx);
+}
+
+/// Left and right follow the order on screen, and edits not yet saved are compared as shown.
+fn compare_selected(
+    state: &Entity<AppState>,
+    session_key: &SessionKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let documents: Vec<Document> = {
+        let app = state.read(cx);
+        let Some(session) = app.session(session_key) else {
+            return;
+        };
+        session
+            .data
+            .items
+            .iter()
+            .filter(|item| session.view.selected_docs.contains(&item.key))
+            .filter_map(|item| app.session_draft_or_document(session_key, &item.key))
+            .collect()
+    };
+    if let Ok(documents) = <[Document; 2]>::try_from(documents) {
+        crate::views::compare::open_document_compare(
+            state.clone(),
+            session_key.namespace(),
+            documents,
+            window,
+            cx,
+        );
+    }
 }
 
 fn resolve_document(
