@@ -1,5 +1,6 @@
 //! BSON utilities for document manipulation, formatting, and parsing.
 
+pub mod compare;
 mod formatter;
 mod key;
 mod parser;

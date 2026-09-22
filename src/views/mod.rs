@@ -1,6 +1,7 @@
 // Screen/page components
 pub mod agent_activity;
 pub mod ai;
+pub mod compare;
 pub mod databases;
 pub mod documents;
 pub(crate) mod editor_completion;
@@ -15,6 +16,7 @@ pub mod transfer;
 pub use crate::changelog::ChangelogView;
 pub use agent_activity::AgentActivityView;
 pub use ai::AiView;
+pub use compare::CompareView;
 pub use databases::DatabaseView;
 pub use documents::CollectionView;
 pub use forge::ForgeView;

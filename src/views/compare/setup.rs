@@ -1,0 +1,1009 @@
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{Input, InputEvent};
+use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_kit::component::{IconName, IndexPath};
+
+use super::*;
+use crate::components::ConnectionIdentity;
+use crate::state::compare::CompareEndpoint;
+use crate::views::transfer::ConnectionItem;
+
+pub(super) struct EndpointControls {
+    connection: Entity<SelectState<SearchableVec<ConnectionItem>>>,
+    database: Entity<SelectState<SearchableVec<SharedString>>>,
+    collection: Entity<SelectState<SearchableVec<SharedString>>>,
+    last_connections: Vec<ConnectionIdentity>,
+    last_databases: Vec<String>,
+    last_collections: Vec<String>,
+    /// The endpoint last pushed into the three pickers.
+    applied: Option<CompareEndpoint>,
+}
+
+pub(super) struct Controls {
+    sides: [EndpointControls; 2],
+    fields: Entity<InputState>,
+    ignore: Entity<InputState>,
+    filter: Entity<InputState>,
+    pub find: Entity<InputState>,
+    suggestions: Entity<SelectState<SearchableVec<SharedString>>>,
+    suggestion_fields: Vec<(String, Vec<String>)>,
+    applied_fields: Option<Vec<String>>,
+}
+
+impl CompareView {
+    pub(super) fn ensure_controls(
+        &mut self,
+        id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active == Some(id) {
+            return;
+        }
+        self.active = Some(id);
+        self.options_open = false;
+        self.control_subscriptions.clear();
+        self.metadata_requested = [None, None];
+        self.detail_signature = None;
+        self.expansion = Default::default();
+        self.tree_error = None;
+        self.find_error = None;
+        self.auto_right = false;
+        let config = self.state.read(cx).compare_tab(id).unwrap().config.clone();
+        let sides = std::array::from_fn(|side| {
+            let connection = cx.new(|cx| {
+                SelectState::new(SearchableVec::<ConnectionItem>::new(Vec::new()), None, window, cx)
+                    .searchable(true)
+            });
+            let database = cx.new(|cx| {
+                SelectState::new(SearchableVec::<SharedString>::new(Vec::new()), None, window, cx)
+                    .searchable(true)
+            });
+            let collection = cx.new(|cx| {
+                SelectState::new(SearchableVec::<SharedString>::new(Vec::new()), None, window, cx)
+                    .searchable(true)
+            });
+            self.control_subscriptions.push(cx.subscribe_in(
+                &connection,
+                window,
+                move |this, _, event, _, cx| {
+                    if let SelectEvent::Confirm(Some(connection)) = event {
+                        let database = {
+                            let app = this.state.read(cx);
+                            let left = &app.compare_tab(id).unwrap().config.sides[0];
+                            if side == 1
+                                && app
+                                    .active_connection_by_id(*connection)
+                                    .is_some_and(|c| c.databases.contains(&left.database))
+                            {
+                                left.database.clone()
+                            } else {
+                                String::new()
+                            }
+                        };
+                        this.auto_right = side == 1;
+                        this.state.update(cx, |app, cx| {
+                            app.update_compare_config(
+                                id,
+                                |config| {
+                                    config.sides[side] = CompareEndpoint {
+                                        connection_id: Some(*connection),
+                                        database: database.clone(),
+                                        collection: String::new(),
+                                    }
+                                },
+                                cx,
+                            )
+                        });
+                        if !database.is_empty() {
+                            AppCommands::load_collections(
+                                this.state.clone(),
+                                *connection,
+                                database,
+                                cx,
+                            );
+                        }
+                    }
+                },
+            ));
+            self.control_subscriptions.push(cx.subscribe_in(
+                &database,
+                window,
+                move |this, _, event, _, cx| {
+                    if let SelectEvent::Confirm(Some(database)) = event {
+                        if side == 1 {
+                            this.auto_right = false;
+                        }
+                        this.state.update(cx, |app, cx| {
+                            app.update_compare_config(
+                                id,
+                                |config| {
+                                    config.sides[side].database = database.to_string();
+                                    config.sides[side].collection.clear();
+                                },
+                                cx,
+                            )
+                        });
+                        let connection = this
+                            .state
+                            .read(cx)
+                            .compare_tab(id)
+                            .and_then(|tab| tab.config.sides[side].connection_id);
+                        if let Some(connection) = connection {
+                            AppCommands::load_collections(
+                                this.state.clone(),
+                                connection,
+                                database.to_string(),
+                                cx,
+                            );
+                        }
+                    }
+                },
+            ));
+            self.control_subscriptions.push(cx.subscribe_in(
+                &collection,
+                window,
+                move |this, _, event, _, cx| {
+                    if let SelectEvent::Confirm(Some(collection)) = event {
+                        if side == 1 {
+                            this.auto_right = false;
+                        }
+                        this.state.update(cx, |app, cx| {
+                            app.update_compare_config(
+                                id,
+                                |config| config.sides[side].collection = collection.to_string(),
+                                cx,
+                            )
+                        });
+                    }
+                },
+            ));
+            EndpointControls {
+                connection,
+                database,
+                collection,
+                last_connections: Vec::new(),
+                last_databases: Vec::new(),
+                last_collections: Vec::new(),
+                applied: None,
+            }
+        });
+        let fields = cx.new(|cx| InputState::new(window, cx).placeholder("Add field…"));
+        let ignore = cx.new(|cx| InputState::new(window, cx).placeholder("Ignore field…"));
+        let filter = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("{} — optional filter")
+                .default_value(config.filter)
+        });
+        let find = cx.new(|cx| InputState::new(window, cx).placeholder("Find key…"));
+        for (input, is_key) in [(&fields, true), (&ignore, false)] {
+            self.control_subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |this, input, event, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                        add_tokens(&this.state, id, input, is_key, window, cx);
+                    }
+                },
+            ));
+        }
+        self.control_subscriptions.push(cx.subscribe_in(
+            &filter,
+            window,
+            move |this, input, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let filter = input.read(cx).value().to_string();
+                    this.state.update(cx, |app, cx| {
+                        app.update_compare_config(id, |config| config.filter = filter, cx)
+                    });
+                }
+            },
+        ));
+        self.control_subscriptions.push(cx.subscribe_in(
+            &find,
+            window,
+            |this, input, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.find(input, window, cx);
+                }
+            },
+        ));
+        let suggestions = cx.new(|cx| {
+            SelectState::new(SearchableVec::<SharedString>::new(Vec::new()), None, window, cx)
+                .searchable(true)
+        });
+        self.control_subscriptions.push(cx.subscribe_in(
+            &suggestions,
+            window,
+            move |this, _, event, _, cx| {
+                if let SelectEvent::Confirm(Some(label)) = event
+                    && let Some(fields) = this.controls.as_ref().and_then(|c| {
+                        c.suggestion_fields
+                            .iter()
+                            .find(|(name, _)| name == label.as_ref())
+                            .map(|(_, fields)| fields.clone())
+                    })
+                {
+                    this.state.update(cx, |app, cx| {
+                        app.update_compare_config(id, |config| config.fields = fields, cx)
+                    });
+                }
+            },
+        ));
+        self.controls = Some(Controls {
+            sides,
+            fields,
+            ignore,
+            filter,
+            find,
+            suggestions,
+            suggestion_fields: Vec::new(),
+            applied_fields: None,
+        });
+        window.focus(&self.focus, cx);
+    }
+
+    pub(super) fn sync_controls(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let (config, connections, databases, collections, suggestions) = {
+            let app = self.state.read(cx);
+            let tab = app.compare_tab(id).unwrap();
+            let config = tab.config.clone();
+            let mut connections: Vec<_> = app
+                .connections
+                .iter()
+                .filter(|c| app.is_connected(c.id))
+                .map(ConnectionIdentity::from)
+                .collect();
+            connections.sort_by_key(ConnectionIdentity::display_name);
+            let databases: [Vec<String>; 2] = config.sides.each_ref().map(|e| {
+                e.connection_id
+                    .and_then(|id| app.active_connection_by_id(id))
+                    .map(|c| c.databases.clone())
+                    .unwrap_or_default()
+            });
+            let collections: [Vec<String>; 2] = config.sides.each_ref().map(|e| {
+                e.connection_id
+                    .and_then(|id| app.active_connection_by_id(id))
+                    .and_then(|c| c.collections.get(&e.database))
+                    .cloned()
+                    .unwrap_or_default()
+            });
+            let mut candidates = Vec::new();
+            for metadata in
+                tab.metadata.iter().flatten().filter(|m| config.sides.contains(&m.endpoint))
+            {
+                for index in metadata.indexes.iter().filter(|i| {
+                    i.options.as_ref().is_some_and(|o| o.unique == Some(true))
+                        || i.keys.contains_key("_id")
+                }) {
+                    let fields: Vec<_> = index.keys.keys().cloned().collect();
+                    let common = tab.metadata.iter().all(|m| {
+                        m.as_ref().is_some_and(|m| {
+                            m.indexes.iter().any(|i| {
+                                i.keys == index.keys
+                                    && i.options.as_ref().is_some_and(|o| o.unique == Some(true))
+                            })
+                        })
+                    });
+                    let label = format!(
+                        "{} · unique index{}",
+                        fields.join(", "),
+                        if common { " on both sides" } else { "" }
+                    );
+                    if !candidates.iter().any(|(_, existing)| existing == &fields) {
+                        candidates.push((label, fields));
+                    }
+                }
+            }
+            candidates.sort_by_key(|(label, _)| !label.ends_with("both sides"));
+            for side in &config.sides {
+                if let Some(connection) = side.connection_id {
+                    let key = crate::state::CollectionKey::new(
+                        connection,
+                        &side.database,
+                        &side.collection,
+                    );
+                    for field in app.forge_schema_fields(&key).unwrap_or_default() {
+                        let fields = vec![field.clone()];
+                        if !candidates.iter().any(|(_, existing)| existing == &fields) {
+                            candidates.push((field.clone(), fields));
+                        }
+                    }
+                }
+            }
+            (config, connections, databases, collections, candidates)
+        };
+        if self.auto_right
+            && config.sides[1].collection.is_empty()
+            && collections[1].contains(&config.sides[0].collection)
+        {
+            self.auto_right = false;
+            let state = self.state.clone();
+            let expected = config.sides[1].clone();
+            let collection = config.sides[0].collection.clone();
+            cx.defer(move |cx| {
+                state.update(cx, |app, cx| {
+                    if app.compare_tab(id).is_some_and(|t| t.config.sides[1] == expected) {
+                        app.update_compare_config(id, |c| c.sides[1].collection = collection, cx);
+                    }
+                })
+            });
+        }
+        let controls = self.controls.as_mut().unwrap();
+        for side in 0..2 {
+            let endpoint = &config.sides[side];
+            if let Some(connection) = endpoint.connection_id
+                && !endpoint.database.is_empty()
+                && self
+                    .state
+                    .read(cx)
+                    .active_connection_by_id(connection)
+                    .is_some_and(|c| !c.collections.contains_key(&endpoint.database))
+                && self.collections_requested.insert((connection, endpoint.database.clone()))
+            {
+                let state = self.state.clone();
+                let database = endpoint.database.clone();
+                cx.defer(move |cx| AppCommands::load_collections(state, connection, database, cx));
+            }
+            let controls = &mut controls.sides[side];
+            let mut refresh = controls.applied.as_ref() != Some(endpoint);
+            if controls.last_connections != connections {
+                let items: Vec<ConnectionItem> = connections
+                    .iter()
+                    .map(|identity| ConnectionItem {
+                        id: identity.id,
+                        name: identity.display_name().into(),
+                        identity: identity.clone(),
+                    })
+                    .collect();
+                controls.connection.update(cx, |select, cx| {
+                    select.set_items(SearchableVec::new(items), window, cx)
+                });
+                controls.last_connections = connections.clone();
+                refresh = true;
+            }
+            for (select, last, items) in [
+                (&controls.database, &mut controls.last_databases, &databases[side]),
+                (&controls.collection, &mut controls.last_collections, &collections[side]),
+            ] {
+                if last != items {
+                    select.update(cx, |select, cx| {
+                        select.set_items(
+                            SearchableVec::new(
+                                items.iter().cloned().map(SharedString::from).collect::<Vec<_>>(),
+                            ),
+                            window,
+                            cx,
+                        )
+                    });
+                    *last = items.clone();
+                    refresh = true;
+                }
+            }
+            // Push the config into the pickers only when it or their items changed. Doing it on
+            // every frame resets the highlighted row of an open picker, which kills the arrow keys.
+            if refresh {
+                controls.connection.update(cx, |select, cx| {
+                    let index = connections
+                        .iter()
+                        .position(|c| Some(c.id) == endpoint.connection_id)
+                        .map(|i| IndexPath::default().row(i));
+                    select.set_selected_index(index, window, cx);
+                });
+                for (select, items, selected) in [
+                    (&controls.database, &databases[side], &endpoint.database),
+                    (&controls.collection, &collections[side], &endpoint.collection),
+                ] {
+                    select.update(cx, |select, cx| {
+                        select.set_selected_index(
+                            items
+                                .iter()
+                                .position(|v| v == selected)
+                                .map(|i| IndexPath::default().row(i)),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                controls.applied = Some(endpoint.clone());
+            }
+            if endpoint.complete() && self.metadata_requested[side].as_ref() != Some(endpoint) {
+                self.metadata_requested[side] = Some(endpoint.clone());
+                let state = self.state.clone();
+                cx.defer(move |cx| AppCommands::load_compare_metadata(state, id, side, cx));
+            }
+        }
+        let mut refresh = controls.applied_fields.as_ref() != Some(&config.fields);
+        if controls.suggestion_fields != suggestions {
+            controls.suggestions.update(cx, |select, cx| {
+                select.set_items(
+                    SearchableVec::new(
+                        suggestions
+                            .iter()
+                            .map(|(label, _)| SharedString::from(label.clone()))
+                            .collect::<Vec<_>>(),
+                    ),
+                    window,
+                    cx,
+                )
+            });
+            controls.suggestion_fields = suggestions;
+            refresh = true;
+        }
+        if refresh {
+            let suggestion =
+                controls.suggestion_fields.iter().position(|(_, fields)| fields == &config.fields);
+            controls.suggestions.update(cx, |select, cx| {
+                select.set_selected_index(
+                    suggestion.map(|index| IndexPath::default().row(index)),
+                    window,
+                    cx,
+                );
+            });
+            controls.applied_fields = Some(config.fields.clone());
+        }
+    }
+
+    pub(super) fn render_setup(
+        &mut self,
+        id: Uuid,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let app = self.state.read(cx);
+        let tab = app.compare_tab(id).unwrap();
+        let appearance = app.settings.appearance.clone();
+        let config = tab.config.clone();
+        let running = tab.busy() || tab.sync.running;
+        let changed = tab.compared.as_ref().is_some_and(|c| c != &config);
+        let reason = app.compare_disabled_reason(&config);
+        let can_run = reason.is_none();
+        let metadata = tab.metadata.clone();
+        let controls = self.controls.as_ref().unwrap();
+        let muted = cx.theme().muted_foreground;
+
+        let mut sides = div()
+            .id("compare-pickers")
+            .debug_selector(|| "compare-pickers".into())
+            .flex()
+            .flex_wrap()
+            .gap_x(spacing::lg())
+            .gap_y(spacing::sm())
+            .w_full();
+        for (side, metadata) in metadata.iter().enumerate() {
+            let selectors = &controls.sides[side];
+            let title = side_name(side);
+            let meta = metadata.as_ref().filter(|m| m.endpoint == config.sides[side]);
+            let stats = meta.map(|m| match (m.count, m.bytes) {
+                (Some(count), Some(bytes)) => format!(
+                    "~{} documents · {}",
+                    crate::helpers::format_number(count),
+                    crate::helpers::format_bytes(bytes)
+                ),
+                _ => m.error.clone().unwrap_or_else(|| "Size unavailable".into()),
+            });
+            sides = sides.child(
+                div()
+                    .id(("compare-side", side))
+                    .debug_selector(move || format!("compare-side-{side}"))
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .flex_basis(px(320.0))
+                    .min_w(px(0.0))
+                    .max_w_full()
+                    .gap(spacing::xs())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .h(px(16.0))
+                            .child(dot(side_color(side, cx)))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(muted)
+                                    .child(title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_start()
+                            .flex_shrink_0()
+                            .gap(spacing::xs())
+                            .child(
+                                select_slot(
+                                    180.0,
+                                    Select::new(&selectors.connection)
+                                        .accessibility_label(format!("{title} connection"))
+                                        .small()
+                                        .placeholder("Open connection")
+                                        .disabled(running)
+                                        .w_full(),
+                                )
+                                .flex_grow(1.0),
+                            )
+                            .child(
+                                select_slot(
+                                    190.0,
+                                    Select::new(&selectors.database)
+                                        .accessibility_label(format!("{title} database"))
+                                        .small()
+                                        .placeholder("Database")
+                                        .disabled(running)
+                                        .w_full(),
+                                )
+                                .flex_grow(1.0),
+                            )
+                            .child(
+                                select_slot(
+                                    160.0,
+                                    Select::new(&selectors.collection)
+                                        .accessibility_label(format!("{title} collection"))
+                                        .small()
+                                        .placeholder("Collection")
+                                        .disabled(running)
+                                        .w_full(),
+                                )
+                                .flex_grow(1.0),
+                            ),
+                    )
+                    // Always present, so the header holds still when a size arrives or sides swap.
+                    .child(
+                        div()
+                            .debug_selector(move || format!("compare-size-{side}"))
+                            .h(px(16.0))
+                            .text_xs()
+                            .text_color(muted)
+                            .truncate()
+                            .child(stats.unwrap_or_default()),
+                    ),
+            );
+        }
+
+        let match_summary = format!("Match by {}", config.fields.join(" + "));
+        let mut settings_summary = if config.filter.trim().is_empty() {
+            "All documents".to_string()
+        } else {
+            "Filtered documents".to_string()
+        };
+        if !config.ignore.is_empty() {
+            settings_summary.push_str(&format!(
+                " · {} field{} ignored",
+                config.ignore.len(),
+                if config.ignore.len() == 1 { "" } else { "s" }
+            ));
+        }
+        if changed {
+            // On the summary line rather than a new row: the header must not grow on Swap.
+            settings_summary.push_str(" · Setup changed, compare again");
+        }
+        let state = self.state.clone();
+        let inputs = [controls.fields.clone(), controls.ignore.clone(), controls.filter.clone()];
+        let suggestions = controls.suggestions.clone();
+        let has_suggestions = !controls.suggestion_fields.is_empty();
+        let popover = gpui_kit::component::popover::Popover::new(SharedString::from(format!(
+            "compare-settings-{id}"
+        )))
+        .open(self.options_open)
+        .on_open_change(cx.listener(|view, open, _, cx| {
+            view.options_open = *open;
+            cx.notify();
+        }))
+        .trigger(
+            Button::new("compare-options")
+                .small()
+                .outline()
+                .label("Settings")
+                .icon(IconName::Settings2)
+                .disabled(running),
+        )
+        .content(move |_, window, cx| {
+            let content = settings_panel(
+                state.clone(),
+                id,
+                &inputs,
+                &suggestions,
+                has_suggestions,
+                window,
+                cx,
+            );
+            let popover = cx.entity();
+            let done_state = state.clone();
+            let done_inputs = inputs.clone();
+            div()
+                .debug_selector(|| "compare-settings".into())
+                .w(rems(30.0))
+                .max_w(window.viewport_size().width - px(64.0))
+                .flex()
+                .flex_col()
+                .gap(spacing::lg())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Comparison settings"),
+                        )
+                        .child(note("Applies to the next comparison.", cx)),
+                )
+                .child(
+                    content
+                        .max_h((window.viewport_size().height - px(200.0)).max(px(160.0)))
+                        .overflow_y_scrollbar(),
+                )
+                .child(div().flex().justify_end().child(
+                    Button::new("compare-settings-done").small().primary().label("Done").on_click(
+                        move |_, window, cx| {
+                            add_tokens(&done_state, id, &done_inputs[0], true, window, cx);
+                            add_tokens(&done_state, id, &done_inputs[1], false, window, cx);
+                            popover.update(cx, |popover, cx| popover.dismiss(window, cx))
+                        },
+                    ),
+                ))
+        });
+
+        let actions = div()
+            .id("compare-actions")
+            .debug_selector(|| "compare-actions".into())
+            .w_full()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_x(spacing::md())
+            .gap_y(spacing::sm())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::md())
+                    .flex_1()
+                    .flex_basis(px(280.0))
+                    .max_w_full()
+                    .min_w_0()
+                    .child(popover)
+                    .child(
+                        div()
+                            .id("compare-rule-summary")
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(620.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .child(
+                                div()
+                                    .id("compare-match-summary")
+                                    .w_full()
+                                    .truncate()
+                                    .text_sm()
+                                    .child(match_summary.clone())
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(
+                                            match_summary.clone(),
+                                        )
+                                        .build(window, cx)
+                                    }),
+                            )
+                            .child(note(settings_summary, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_shrink_0()
+                    .gap(spacing::sm())
+                    .child(
+                        Button::new("compare-swap")
+                            .ghost()
+                            .small()
+                            .icon(app_icon("arrow-left-right"))
+                            .tooltip("Swap sides")
+                            .disabled(running)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Swap what is known about each side too; otherwise the sizes
+                                // vanish and reload, and the header jumps twice.
+                                this.metadata_requested.swap(0, 1);
+                                this.state.update(cx, |app, cx| {
+                                    app.update_compare_config(
+                                        id,
+                                        |config| config.sides.swap(0, 1),
+                                        cx,
+                                    );
+                                    if let Some(tab) = app.compare_tab_mut(id) {
+                                        tab.metadata.swap(0, 1);
+                                        tab.estimated.swap(0, 1);
+                                    }
+                                })
+                            })),
+                    )
+                    .child(
+                        Button::new("compare-run")
+                            .primary()
+                            .small()
+                            // One label: a button that flips to "Cancel" for a 10 ms scan
+                            // flickers. Cancel lives next to the progress text.
+                            .label("Compare")
+                            .disabled(running || !can_run)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.options_open = false;
+                                AppCommands::run_compare(this.state.clone(), id, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(Kbd::new(run_shortcut(window))),
+            );
+
+        let mut notes: Vec<String> = Vec::new();
+        if config.sides.iter().all(|side| side.connection_id.is_none()) {
+            notes.push("Only open connections are listed. Open one from the sidebar first.".into());
+        }
+        if let Some(reason) = reason {
+            notes.push(reason);
+        }
+        if let [Some(left), Some(right)] = &metadata
+            && left.endpoint == config.sides[0]
+            && right.endpoint == config.sides[1]
+        {
+            let plan = crate::connection::ops::compare::sort_plan(
+                &config.fields,
+                &left.indexes,
+                &right.indexes,
+            );
+            let sorting = match (
+                !plan.left_covered || left.non_simple_collation,
+                !plan.right_covered || right.non_simple_collation,
+            ) {
+                (true, true) => Some("Both sides need a server sort"),
+                (true, false) => Some("Left needs a server sort"),
+                (false, true) => Some("Right needs a server sort"),
+                _ => None,
+            };
+            if let Some(sorting) = sorting {
+                notes.push(format!("{sorting} · large collections take longer to start."));
+            }
+        }
+
+        div()
+            .id("compare-setup")
+            .debug_selector(|| "compare-setup".into())
+            .w_full()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap(spacing::sm())
+            .px(spacing::lg())
+            .py(spacing::sm())
+            .bg(islands::tool_bg(&appearance, cx))
+            .border_b_1()
+            .border_color(islands::panel_border(&appearance, cx))
+            .child(sides)
+            .child(actions)
+            .children(notes.into_iter().map(|text| note(text, cx)))
+            .into_any_element()
+    }
+}
+
+fn settings_panel(
+    state: Entity<AppState>,
+    id: Uuid,
+    inputs: &[Entity<InputState>; 3],
+    suggestions: &Entity<SelectState<SearchableVec<SharedString>>>,
+    has_suggestions: bool,
+    _window: &Window,
+    cx: &App,
+) -> Stateful<Div> {
+    let app = state.read(cx);
+    let Some(tab) = app.compare_tab(id) else {
+        return div().id("compare-settings-panel").child("This comparison was closed.");
+    };
+    let config = tab.config.clone();
+    let [fields, ignore, filter] = inputs;
+    let mut matching = setting_group("Match documents by", cx);
+    if has_suggestions {
+        matching = matching.child(
+            select_slot(
+                520.0,
+                Select::new(suggestions)
+                    .small()
+                    .w_full()
+                    .placeholder("Indexed keys on these collections…")
+                    .accessibility_label("Suggested match keys"),
+            )
+            .w_full(),
+        );
+    }
+    matching = matching.child(token_editor(state.clone(), id, &config.fields, true, fields, cx));
+    matching = matching.child(note(
+        if config.fields.len() > 1 {
+            "Every key field must match."
+        } else {
+            "Pick a field that is unique in both collections. _id works when documents were copied with their ids."
+        },
+        cx,
+    ));
+    if config.fields.len() > 1 && config.fields.iter().any(|field| field == "_id") {
+        let state = state.clone();
+        matching = matching.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(spacing::sm())
+                .child(note("_id in a compound key needs identical ids on both sides.", cx))
+                .child(
+                    Button::new("compare-without-id")
+                        .ghost()
+                        .xsmall()
+                        .label("Match without _id")
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |app, cx| {
+                                app.update_compare_config(
+                                    id,
+                                    |config| config.fields.retain(|field| field != "_id"),
+                                    cx,
+                                )
+                            })
+                        }),
+                ),
+        );
+    }
+    let mut scope = setting_group("Filter", cx)
+        .on_action(|_: &gpui_kit::component::input::Enter, _, _| {})
+        .child(Input::new(filter).small().w_full().aria_label("Filter both collections"));
+    scope = match crate::bson::parse_document_from_json(&config.filter) {
+        Err(error) if !config.filter.trim().is_empty() => {
+            scope.child(div().text_xs().text_color(cx.theme().danger).child(error))
+        }
+        _ => scope.child(note("A MongoDB filter, applied to both collections.", cx)),
+    };
+    let ignoring = setting_group("Ignore fields", cx)
+        .child(token_editor(state, id, &config.ignore, false, ignore, cx))
+        .child(note(
+            if config.fields != ["_id"] {
+                "_id is ignored automatically when matching by another key."
+            } else {
+                "Left out of value comparisons, for example updatedAt."
+            },
+            cx,
+        ));
+    div()
+        .id("compare-settings-panel")
+        .debug_selector(|| "compare-settings-panel".into())
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(spacing::lg())
+        .child(matching)
+        .child(scope)
+        .child(ignoring)
+}
+
+fn setting_group(title: &'static str, cx: &App) -> Div {
+    div().w_full().flex().flex_col().gap(spacing::xs()).child(
+        div()
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(cx.theme().muted_foreground)
+            .child(title),
+    )
+}
+
+/// Chips for the current fields, then the input that adds more, on one wrapping row.
+fn token_editor(
+    state: Entity<AppState>,
+    id: Uuid,
+    fields: &[String],
+    key: bool,
+    input: &Entity<InputState>,
+    _cx: &App,
+) -> Div {
+    let input_for_add = input.clone();
+    let add_state = state.clone();
+    // Contain this input's Enter, but leave the indexed-key selector's own Enter handling intact.
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(spacing::xs())
+        .on_action(|_: &gpui_kit::component::input::Enter, _, _| {})
+        .children(fields.iter().enumerate().map(|(index, field)| {
+            let state = state.clone();
+            Button::new((if key { "match-token" } else { "ignore-token" }, index))
+                .outline()
+                .xsmall()
+                .max_w_full()
+                .min_w_0()
+                .label(field.clone())
+                .icon(IconName::Close)
+                .tooltip(format!("Remove {field}"))
+                .on_click(move |_, _, cx| {
+                    state.update(cx, |app, cx| {
+                        app.update_compare_config(
+                            id,
+                            |config| {
+                                let fields =
+                                    if key { &mut config.fields } else { &mut config.ignore };
+                                if index < fields.len() {
+                                    fields.remove(index);
+                                }
+                            },
+                            cx,
+                        )
+                    })
+                })
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(160.0))
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(Input::new(input).small().flex_1().min_w_0().aria_label(if key {
+                    "Custom match field"
+                } else {
+                    "Field to ignore"
+                }))
+                .child(
+                    Button::new(if key { "add-match" } else { "add-ignore" })
+                        .small()
+                        .outline()
+                        .label("Add")
+                        .on_click(move |_, window, cx| {
+                            add_tokens(&add_state, id, &input_for_add, key, window, cx)
+                        }),
+                ),
+        )
+}
+
+fn add_tokens(
+    state: &Entity<AppState>,
+    id: Uuid,
+    input: &Entity<InputState>,
+    key: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let value = input.read(cx).value().to_string();
+    if value.trim().is_empty() {
+        return;
+    }
+    state.update(cx, |app, cx| {
+        app.update_compare_config(
+            id,
+            |config| {
+                if key {
+                    config.add_match_fields(&value);
+                } else {
+                    for field in value.split(',').map(str::trim).filter(|field| !field.is_empty()) {
+                        if !config.ignore.iter().any(|existing| existing == field) {
+                            config.ignore.push(field.to_owned());
+                        }
+                    }
+                }
+            },
+            cx,
+        )
+    });
+    input.update(cx, |input, cx| input.set_value("", window, cx));
+}
+
+/// Select styles its trigger; the surrounding slot must size its flex item.
+fn select_slot(width: f32, select: impl IntoElement) -> Div {
+    div().w(px(width)).max_w_full().h_6().flex_shrink_0().child(select)
+}

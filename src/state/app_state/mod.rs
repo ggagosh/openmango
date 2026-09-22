@@ -1,6 +1,7 @@
 //! Global application state.
 
 mod aggregation;
+mod compare;
 mod connection;
 mod database_sessions;
 mod errors;
@@ -125,6 +126,9 @@ pub struct AppState {
     sessions: SessionStore,
     db_sessions: DatabaseSessionStore,
     transfer_tabs: HashMap<uuid::Uuid, TransferTabState>,
+    compare_tabs: HashMap<uuid::Uuid, crate::state::compare::CompareTabState>,
+    /// Saved workspace index to eager-restored Compare tab; retained until connected restore.
+    compare_restored: HashMap<usize, uuid::Uuid>,
     forge_tabs: HashMap<uuid::Uuid, ForgeTabState>,
     /// One answer each to "what points at this document?". Not persisted: a result about a
     /// document that may not exist next session is not worth restoring.
@@ -203,6 +207,11 @@ impl AppState {
         connection_manager: Arc<ConnectionManager>,
         config: ConfigManager,
     ) -> Self {
+        if let Err(error) =
+            crate::connection::ops::compare_sync::restore::sweep(&config.compare_restore_dir())
+        {
+            log::warn!("Could not clean orphaned compare undo files: {error}");
+        }
         // A malformed connection file must never be replaced with an empty list.
         let (connections, connection_load_error) = match config.load_connections() {
             Ok(connections) => (connections, None),
@@ -280,6 +289,8 @@ impl AppState {
             sessions: SessionStore::new(),
             db_sessions: DatabaseSessionStore::new(),
             transfer_tabs: HashMap::new(),
+            compare_tabs: HashMap::new(),
+            compare_restored: HashMap::new(),
             forge_tabs: HashMap::new(),
             references_tabs: HashMap::new(),
             forge_schema: HashMap::new(),
@@ -318,6 +329,7 @@ impl AppState {
             export_progress: None,
             editor_sessions: EditorSessionStore::default(),
         };
+        state.restore_compare_configs();
         // Both load failures are reported; neither file is overwritten.
         for (title, message) in [
             ("Couldn't load connections", connection_load_error),

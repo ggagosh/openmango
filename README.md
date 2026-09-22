@@ -70,7 +70,8 @@ The same requests come up again and again in MongoDB forums and feature trackers
 ### Moving data
 
 - **Export more than one collection at a time.** Export a whole database with include and exclude lists, as JSON, NDJSON, CSV, BSON, or Excel. Import JSON, NDJSON, CSV, and BSON.
-- **Copy data between environments safely.** Copy a collection or a database across connections, or sync a whole database. A sync takes a verified backup of the target first and can be reverted. Every transfer shows progress, can be cancelled, and is staged, so a failure does not replace existing data.
+- **Copy data between environments safely.** Copy a collection or a database across connections, or sync a whole database. A database sync takes a verified backup of the target first and can be reverted. Every transfer shows progress, can be cancelled, and is staged, so a failure does not replace existing data.
+- **Compare collections before changing them.** Choose two collections and a match key, filter the comparison, and inspect missing, changed, minor, and duplicate-key results side by side. Select a target and review chosen inserts, replacements, and deletes before syncing. Changes have an encrypted, in-session undo until the tab closes or you compare again. Sync and undo require MongoDB 8.0+ on the target; older servers support comparison and read-only source use. See the [implementation and limits](docs/COMPARE_SYNC_PLAN.md).
 
 ### Connections and workspace
 

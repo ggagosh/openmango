@@ -27,7 +27,7 @@
   at runtime with "there is no reactor running".
 
 ## Testing Guidelines
-- Unit-focused checks: `cargo test --bin openmango -- --test-threads=1`.
+- Unit-focused checks: `cargo test --lib -- --test-threads=1` (`--bin openmango` runs zero tests; the unit tests live in the library crate).
 - Integration suites under `tests/*_tests.rs` use Testcontainers and require Docker for full coverage.
 - Add or extend tests with behavior changes; avoid merging without green unit and relevant integration tests.
 

@@ -97,6 +97,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
                     .unwrap_or_else(|| "Connection".to_string());
                 (state.forge_tab_label(key.id), format!("{} / {}", conn_name, key.database))
             }
+            TabKey::Compare(_) => ("Compare".into(), "Compare two collections".into()),
             TabKey::References(key) => {
                 let label = state
                     .references_tab(key.id)
@@ -172,6 +173,14 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
     let can_close_tab = !state.open_tabs().is_empty() || state.preview_tab().is_some();
 
     vec![
+        ActionItem {
+            id: "cmd:compare".into(),
+            label: "Compare collections…".into(),
+            keywords: &["difference", "diff", "compare", "environments"],
+            category: ActionCategory::Command,
+            available: true,
+            ..Default::default()
+        },
         ActionItem {
             id: SharedString::from("cmd:new-connection"),
             keywords: &["add", "create", "uri"],

@@ -12,7 +12,7 @@ use super::TransferView;
 
 /// Custom SelectItem for connections (stores UUID + display name).
 #[derive(Clone, Debug)]
-pub(super) struct ConnectionItem {
+pub(crate) struct ConnectionItem {
     pub id: Uuid,
     pub name: SharedString,
     pub identity: ConnectionIdentity,

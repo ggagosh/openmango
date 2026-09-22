@@ -3,6 +3,8 @@
 
 pub mod app_state;
 pub mod commands;
+pub mod compare;
+pub mod compare_sync;
 pub mod config;
 pub mod editor_sessions;
 pub mod events;

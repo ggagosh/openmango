@@ -25,6 +25,7 @@ pub enum View {
     Documents,
     Database,
     Transfer,
+    Compare,
     Forge,
     References,
     Relations,
@@ -171,6 +172,7 @@ pub enum TabKey {
     Collection(SessionKey),
     Database(DatabaseKey),
     Transfer(TransferTabKey),
+    Compare(crate::state::compare::CompareTabKey),
     Forge(ForgeTabKey),
     References(ReferencesTabKey),
     /// The relation canvas of one database. One per database: it shows a place, so asking again

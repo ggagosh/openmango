@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Compare collections from the collection menu or command palette: choose match fields, filter both sides, inspect missing and changed documents, distinguish number-type and field-order differences, and find duplicate keys. Comparisons can be cancelled, results remain readable when a connection closes, and setup is restored across restarts
+- Selective collection sync with explicit target selection, row/category checkboxes, write review, native bulk operations, stale-document guards, cancellation between batches, and encrypted session undo. Sync and undo require MongoDB 8.0+ on the write target; older servers remain supported for comparison and as read-only sources. Undo expires when the tab closes or a new comparison starts
 - Ask AI in the documents filter: the sparkle turns the filter bar into a bar you describe the filter to, Find becomes Generate, and what you typed comes back as the filter in the same box, written from the collection's own field names, types and — for fields that hold a handful of values — examples of those values. A description that asks for an order or for particular fields fills Sort and Projection too and opens the options row to show them. Nothing runs until you press Find, Escape gives back the filter you had, and undo takes it back after that. Cmd/Ctrl+I switches the bar either way without reaching for the mouse
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened

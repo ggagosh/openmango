@@ -42,7 +42,8 @@ Audience: power users and small engineering teams
 
 - [ ] P1: Task presets for transfer operations
 - [ ] P1: Scheduler for recurring import/export/copy
-- [ ] P2: Compare & sync between collections/query results
+- [x] P2: Read-only collection comparison with custom match keys, filters, BSON differences, and document inspection
+- [x] P2: Selective sync and guarded session undo from comparison results; MongoDB 8.0+ write targets (see [plan](COMPARE_SYNC_PLAN.md) and [benchmarks](COMPARE_BENCHMARKS.md))
 - [ ] P2: Dry-run mode with impact summary before write
 
 ### Connectivity & Security

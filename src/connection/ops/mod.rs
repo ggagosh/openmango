@@ -2,6 +2,8 @@
 
 pub mod aggregation;
 pub mod bson_tools;
+pub mod compare;
+pub mod compare_sync;
 pub mod copy;
 pub mod documents;
 pub mod explain;

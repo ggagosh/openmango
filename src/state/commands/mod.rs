@@ -80,6 +80,8 @@ mod actions;
 mod aggregation;
 mod collection_meta;
 mod collections;
+pub(crate) mod compare;
+mod compare_sync;
 mod connections;
 mod databases;
 mod documents;

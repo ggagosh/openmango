@@ -622,6 +622,23 @@ pub(crate) fn build_collection_menu(
                     }
                 }),
         )
+        .item(PopupMenuItem::new("Compare with…").on_click({
+            let state = state.clone();
+            let database = database.clone();
+            let collection = collection.clone();
+            move |_, _, cx| {
+                state.update(cx, |state, cx| {
+                    state.open_compare_tab(
+                        Some(crate::state::compare::CompareEndpoint {
+                            connection_id: Some(connection_id),
+                            database: database.clone(),
+                            collection: collection.clone(),
+                        }),
+                        cx,
+                    )
+                })
+            }
+        }))
         .separator()
         .item(
             menu_item_with_shortcut("Copy", &CopyTreeItem, window)

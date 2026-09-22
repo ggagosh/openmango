@@ -16,6 +16,7 @@ pub enum WorkspaceTabKind {
     Ai,
     Transfer,
     Forge,
+    Compare,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,7 +43,7 @@ pub struct WorkspaceState {
     pub ai_panel_width: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkspaceTab {
     pub database: String,
     pub collection: String,
@@ -50,6 +51,8 @@ pub struct WorkspaceTab {
     pub kind: WorkspaceTabKind,
     #[serde(default)]
     pub transfer: Option<TransferTabState>,
+    #[serde(default)]
+    pub compare: Option<crate::state::compare::CompareConfig>,
     #[serde(default)]
     pub filter_raw: String,
     #[serde(default)]
@@ -186,6 +189,7 @@ mod tests {
             collection: String::new(),
             kind: WorkspaceTabKind::Forge,
             transfer: None,
+            compare: None,
             filter_raw: String::new(),
             filter_compiled_raw: String::new(),
             sort_raw: String::new(),

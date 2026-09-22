@@ -166,6 +166,16 @@ pub mod colors {
     }
 
     // Dirty document highlight (warning color with alpha)
+    pub fn bg_added(cx: &App) -> Hsla {
+        cx.theme().success.opacity(0.1)
+    }
+    pub fn bg_removed(cx: &App) -> Hsla {
+        cx.theme().danger.opacity(0.1)
+    }
+    pub fn bg_changed(cx: &App) -> Hsla {
+        cx.theme().warning.opacity(0.1)
+    }
+
     pub fn bg_dirty(cx: &App) -> Hsla {
         let mut c = cx.theme().warning;
         c.a = 0.1;
@@ -387,6 +397,27 @@ mod tests {
                         assert!(
                             got >= min,
                             "{theme_id}: {name} on {surface} is {got:.2}, needs {min}"
+                        );
+                    }
+                }
+                for (surface, tint) in [
+                    ("compare added", super::colors::bg_added(cx)),
+                    ("compare removed", super::colors::bg_removed(cx)),
+                    ("compare changed", super::colors::bg_changed(cx)),
+                ] {
+                    let bg = t.background.blend(tint);
+                    for (name, fg) in [
+                        ("foreground", t.foreground),
+                        ("muted", t.muted_foreground),
+                        ("string", t.green),
+                        ("number", t.blue),
+                        ("object id", t.cyan),
+                        ("date", t.magenta),
+                    ] {
+                        assert!(
+                            ratio(fg, bg) >= 4.5,
+                            "{theme_id}: {name} on {surface} is {:.2}",
+                            ratio(fg, bg)
                         );
                     }
                 }

@@ -882,7 +882,7 @@ impl Render for AppRoot {
             View::Database => key_context.push_str(" Database"),
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
-            View::Transfer => {}
+            View::Transfer | View::Compare => {}
             View::Forge => key_context.push_str(" Forge"),
             View::References => key_context.push_str(" References"),
             View::Relations => key_context.push_str(" Relations"),
@@ -1053,6 +1053,10 @@ impl Render for AppRoot {
                 if opened {
                     this.ai_view.update(cx, |view, cx| view.focus_input(window, cx));
                 }
+            }))
+            .on_action(cx.listener(|this, _: &crate::keyboard::OpenCompare, window, cx| {
+                this.state.update(cx, |state, cx| state.open_compare_tab(None, cx));
+                this.focus_current_content(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenForge, window, cx| {
                 let opened = this.state.update(cx, |state, cx| {
