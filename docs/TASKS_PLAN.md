@@ -1,0 +1,613 @@
+# Tasks and scheduling — plan
+
+Status: decisions confirmed 2026-09-23. Nothing is built yet.
+
+A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
+and see the result of every run, including runs that happen while OpenMango is closed.
+
+This replaces two lines in [features.md](features.md): "Task presets for transfer operations" and
+"Scheduler for recurring import/export/copy". It also covers "Per-operation timeline/log for
+long-running jobs" for task runs.
+
+## Decisions
+
+All twelve were confirmed on 2026-09-23. The alternative column records what was considered.
+
+| # | Decision | Chosen | Alternative |
+|---|---|---|---|
+| 1 | Build order | Tasks you run yourself first, then the in-app scheduler, then the background runner that works while OpenMango is closed, one platform per PR | Background runner in the first release |
+| 2 | Task kinds | Export, Import, Copy, Compare (report only) and Sync | Start with Export, Copy and Sync |
+| 3 | How schedules are entered | Presets: every N minutes or hours, daily, weekdays, weekly on chosen days, monthly on a day, all at a local time | Also accept cron expressions |
+| 4 | Scheduled writes to Production or protected connections | Allowed only when turned on for that task, after a confirmation, and always with the safety limit | Never allowed |
+| 5 | Safety limit | A scheduled run stops before writing when it would delete or replace more than 10% of the target, or more than 3 times the most the task changed in its last 10 successful runs. Changes under 100 documents never stop a run; inserts never count. **Run anyway** runs it once. Editable per task, applies to every scheduled write run (section 6) | 10% only |
+| 6 | Missed runs | Run once at the next chance, labelled "Catch-up" | Skip and mark as Missed |
+| 7 | Scheduled export file names | The run's date and time are added automatically, in an order that sorts by time and without colons, which Windows doesn't allow in file names (`orders-2026-09-24T0200.jsonl`). "Keep the last 30 files" is optional and off by default; schedules that run more often than daily suggest turning it on | Overwrite the same file each time |
+| 8 | Notifications | Failures and problems only, once per outage, plus one when the task works again. Success notifications can be turned on per task | Every failed run |
+| 9 | History kept | The last 100 runs per task, and nothing older than 90 days | — |
+| 10 | Where Tasks lives | Its own tab, opened from a sidebar button next to Agent Activity, with a badge for problems | Inside Agent Activity |
+| 11 | Retries | Temporary failures, such as a dropped connection, retry up to 5 times per step, with random waits that grow from at most 4 seconds to at most 1 minute. The unfinished step resumes where it stopped. A run stops retrying after 15 minutes or when its next scheduled run is due, whichever comes first | Fixed waits, or no automatic retries |
+| 12 | Preview | A **Preview** button runs a task without writing and shows what it would insert, replace and delete, and whether the safety limit would stop it. In PR 2 | Later |
+
+Technical choices this plan makes without needing a decision:
+
+- Runs happen one at a time, in a queue.
+- Run history is stored encrypted, with its key in the system keychain, like History and AI memory.
+- The background runner is the same OpenMango program started without a window, not a separate
+  helper.
+- The system scheduler holds one entry that wakes OpenMango about every 15 minutes. The schedules
+  themselves live in OpenMango.
+
+## 1. What the evidence says
+
+**DBeaver**, the closest comparable desktop database tool:
+
+- Hands schedules to the operating system: Windows Task Scheduler on Windows, cron on macOS and
+  Linux. Each run goes through DBeaver's own command line.
+- Keeps a run log per task. Double-clicking a run shows the full log with output, errors and
+  warnings. Logs are stored in the workspace.
+- Its main pitfall is credentials. Scheduled tasks fail when passwords can only be unlocked by a
+  signed-in user, so DBeaver added an "Automation (console)" mode that it describes as less
+  secure.
+
+**Studio 3T:**
+
+- **New Task** offers a list of task types. Choosing one opens that tool's tab, where the task is
+  configured and saved. This plan's "New task" works the same way.
+- The scheduler has preset recurrences, including Monthly (chosen days of the month at a time) and
+  Custom (days of the week or month, run once or repeated every N hours or minutes within the day).
+  Schedules can have a start date and an optional end date.
+- Running a Data Compare & Sync task opens a Comparison Results tab.
+- Its documentation doesn't say whether schedules run while Studio 3T is closed.
+
+**How each system handles missed runs**, from the primary documentation:
+
+- **launchd (macOS):** "Unlike cron which skips job invocations when the computer is asleep,
+  launchd will start the job the next time the computer wakes up." Several missed times become
+  one run.
+- **systemd timers (Linux):** a calendar timer missed during sleep runs once after resume.
+  `Persistent=true` also covers runs missed while the computer was off.
+- **Windows Task Scheduler:** `StartWhenAvailable` lets a missed task start as soon as possible.
+  Two defaults work against laptops: `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` are
+  both true, so a task doesn't start on battery and stops when the laptop is unplugged.
+- **cron** skips runs while the computer is asleep, which is why this plan doesn't use it.
+
+**macOS 13 and later:** Apple recommends `SMAppService` for launch agents. Every background item,
+however it was added, is listed under System Settings > General > Login Items & Extensions, where
+the user can switch it off.
+
+**The UI framework** (gpui) already has what the background runner needs:
+
+- A mode with no window (`gpui_platform::headless()`) that uses the same platform code as the
+  app, including its keychain calls.
+- System notifications on macOS, Windows and Linux (`cx.show_system_notification`), with action
+  buttons.
+
+**Retries**, from MongoDB's documentation and AWS's retry guidance:
+
+- The driver retries a supported read or write **once**, which covers a brief network drop or a
+  replica set election, "but not persistent network errors".
+- `getMore`, the call that fetches the next batch of a long read, is **not** retried. A connection
+  that drops in the middle of scanning a collection fails that scan.
+- Retrying is only safe when repeating a step has the same effect as doing it once.
+- Waits should grow exponentially up to a cap, with random jitter so many clients don't retry in
+  step. AWS's "full jitter" waits a random time between zero and the capped value.
+- Errors that won't go away, such as a wrong password, should fail at once instead of retrying.
+
+**This codebase** already has:
+
+- `TransferConfig` and `TransferOptions`, and `CompareConfig`, all serializable. Tabs already save
+  and restore them, so a task can store them as they are.
+- The Agent Activity tab (`src/views/agent_activity.rs`), which lists stored operations with
+  statuses such as Running, Failed and Interrupted, and marks runs cut short by a crash as
+  interrupted at startup (`ActionStore::reconcile_interrupted`).
+- A rule that revokes agent write access when a connection's address changes or it becomes
+  Production or protected (`apply_agent_sharing_safety`). Scheduled write approval follows the
+  same rule.
+- Error kinds (`src/error/report.rs`): Connection, Timeout, Auth, Server, Validation, Conflict and
+  Io. Driver errors are already sorted into them, which is where retry decisions start.
+- The driver's own list of retryable server codes (`mongodb-3.5.1/src/error.rs`), such as "not
+  primary", "shutting down" and "host unreachable". It isn't public, so the runner keeps its own
+  copy, with a comment naming the driver version it came from, to recheck when the driver is
+  upgraded.
+
+### 1.1 Decisions checked against general practice
+
+| # | Practice elsewhere | Result |
+|---|---|---|
+| 1 | Safety checks before automation; rclone recommends a dry run or confirmations while setting up a sync | Kept. Safety and Preview land in PR 2, before schedules |
+| 2 | Studio 3T offers Import, Export and Data Compare & Sync tasks, among others | Kept |
+| 3 | DBeaver and Studio 3T use presets; cron syntax is for developers | Kept. Cron in Later |
+| 4 | Least privilege: unattended writes only where explicitly allowed | Kept |
+| 5 | rclone stops a sync with a fatal error past `--max-delete` documents. A percentage alone lets huge collections lose millions of documents and trips on tiny ones; a fixed count trips every night on big collections that really do change a lot | Changed: 10% or an unusual jump against the task's own history, with a floor of 100 documents (section 6) |
+| 6 | launchd and systemd run one catch-up; Kubernetes CronJobs can skip a start that is too late | Changed: the catch-up is skipped when the next regular run is close (section 5.2) |
+| 7 | Sortable timestamps; Windows forbids `:` in file names | Changed: `orders-2026-09-24T0200.jsonl` |
+| 8 | Google SRE: alert on real problems, avoid alert spam, keep the rest on a dashboard | Kept: one notification per outage, the rest in Needs attention |
+| 9 | Kubernetes keeps only a few finished Jobs by default | Kept. 100 runs is small for a desktop app |
+| 10 | — | Kept |
+| 11 | AWS full jitter; Azure: finite retries, a retry budget, no stacked retry layers, fail fast on permanent errors | Kept, plus a stalled-run check and a run time limit (section 7.2) |
+
+Also adopted from this check:
+
+- **Mirror deletes last, and not at all after an error**, as rclone's default `sync` does
+  (section 6).
+- **An empty source never empties the target** (section 6).
+
+## 2. What a task is
+
+A task stores:
+
+- **Name**, chosen by the user, and **kind**: Export, Import, Copy, Compare or Sync.
+- **Settings**: the Transfer or Compare settings exactly as the tab holds them. A Sync task also
+  stores the direction, the mode (Add missing, Add and update, Mirror) and which collections are
+  included.
+- **Schedule**: manual only, or one of the presets. Paused or active.
+- **Run even when OpenMango is closed**: off by default.
+- **Safety**: the safety limit, and whether scheduled writes to Production or protected
+  connections are allowed.
+- **Notifications**: failures only, or every run.
+
+A task refers to saved connections by id. It never copies addresses or passwords. Credentials are
+read from the keychain at run time, the same way connecting works today.
+
+**Approval of scheduled writes.** When a task that writes gets a schedule, OpenMango records each
+connection's identity, the same fingerprint the sync code and Agent Activity already use. Scheduled
+runs stop with "Connection settings changed since this task was approved" when:
+
+- the connection's address, SSH or proxy settings change,
+- it becomes Production or protected,
+- it is deleted.
+
+One click on **Approve again** records the new identity. "Run now" is unaffected: it shows the
+usual review and confirmation.
+
+A read-only connection can't be the target of a writing task, as today.
+
+## 3. The user flow
+
+1. **Save a task from the tool.** Transfer and Compare get a **Save as task** button next to Run or
+   Compare. It opens a small dialog: Name, pre-filled (for example "Export orders"), Schedule
+   (Manual by default), and **Save**. For a writing task with a schedule, the dialog also shows the
+   safety settings.
+2. **Or start from Tasks.** **New task** offers Export, Import, Copy, Compare and Sync. Each one
+   opens the matching tool, with **Save task** in place of Save as task.
+3. **Run it.** **Run now** in the Tasks tab. Writing tasks show the same review and confirmation as
+   in their tool. **Preview** (decision 12) runs the task without writing and shows what it would
+   insert, replace and delete, and whether the safety limit would stop it. It's the way to check a
+   writing task before giving it a schedule.
+4. **Schedule it.** Choose a preset and a time. The next three run times are shown as you edit, for
+   example "Next: Wed 24 Sep, 02:00".
+5. **See what happened.** The task list shows each task's last result and next run. Selecting a
+   task shows its history; selecting a run shows its details.
+6. **Fix a problem.** A task that needs attention shows why, with the fix beside it: Run again,
+   Approve again, Open System Settings, or Edit.
+7. **Edit** opens the task in its tool. **Save task** updates it; **Save as new task** copies it.
+
+## 4. Screen design
+
+Rules applied from `/ui-skills`, `/better-ui` and `/emil-design-eng`:
+
+| Rule | Where it applies |
+|---|---|
+| Use the project's existing components first | The list, split view, buttons, dialogs and confirmation are the ones Compare and Agent Activity use |
+| Empty states have one clear next action | "No tasks yet" with one primary **New task** button, and a line saying tasks can also be saved from Transfer and Compare |
+| Errors appear where the action happened | A failed run shows its error in its history row and run details, not only in a notification |
+| Destructive or irreversible actions use a confirmation dialog | Deleting a task, turning on a schedule for Mirror, and allowing scheduled writes to Production |
+| One accent color per view | Only the primary button uses the accent. Results use muted text and icons |
+| A state change is never shown by color alone | Every result has an icon and a word: ✓ Succeeded, ⚠ Failed, ◐ Partly done, ⏭ Skipped, ⏸ Paused |
+| Tabular numbers for data | Counts, durations and times |
+| No animation unless it has a purpose | Nothing new animates. Selecting, running and finishing change icons and text. Rows don't reorder while a task runs |
+| Concentric radii and existing tokens | The islands theme's radii, spacing and shadows, as in Compare |
+
+### 4.1 Tasks tab
+
+```
+Tasks                                                            [+ New task ▾]
+┌───────────────────────────────┬──────────────────────────────────────────────┐
+│ ⚠ Nightly mirror              │ Nightly mirror                               │
+│   Sync · Daily 02:00          │ Sync · Mirror · prod / shop → local / shop   │
+│   Failed today 02:00          │ [Run now]  [Preview]  [Edit]  [Pause]  ···   │
+│ ✓ Orders export               │                                              │
+│   Export · Weekdays 07:30     │ ⚠ Connection settings changed since this     │
+│   Succeeded 07:30             │   task was approved.     [Approve again]     │
+│ ○ Staging check               │                                              │
+│   Compare · Manual            │ Schedule  Daily at 02:00, local time         │
+│                               │           Next: Thu 25 Sep, 02:00            │
+│                               │           ☐ Run even when OpenMango is closed│
+│                               │ Safety    Stop if more than 10% of the       │
+│                               │           target would be deleted or replaced│
+│                               │ History                                      │
+│                               │  Today 02:00      ⚠ Failed      0:04         │
+│                               │  Yesterday 02:00  ✓ Succeeded   3:12  +120 ~40 −3 │
+└───────────────────────────────┴──────────────────────────────────────────────┘
+```
+
+- **List (left):** name, kind and schedule on the second line, last result on the third. Sorted
+  by name. A **Needs attention** filter appears above the list when any task has a problem.
+- **Detail (right):** the summary line, actions, the problem banner if any, then Schedule, Safety
+  and History. Selecting a history row opens that run's details in place of the history.
+- **Run details:** start time, what started it (you, the schedule, the background runner, or a
+  catch-up), duration, result, counts, then a log per collection with warnings and errors. Buttons:
+  Copy error, Run again, and Undo for a sync run whose undo is still available.
+- **Running:** the row shows the progress line Transfer and Compare already use, and the detail
+  has Cancel.
+
+### 4.2 Schedule editor
+
+- **Repeat**: Manual, Every…, Daily, Weekly, Monthly.
+  - **Every…** takes a number and minutes or hours, from 15 minutes.
+  - **Daily** takes a time and an optional "Weekdays only".
+  - **Weekly** takes day toggles and a time. **Monthly** takes a day of the month and a time.
+- The time zone is the computer's, shown as a label ("local time, Asia/Tbilisi").
+- The next three run times update as you edit. That is the check that the schedule means what you
+  intended.
+- **Run even when OpenMango is closed** appears once the background runner exists for the platform.
+  Turning it on the first time explains that OpenMango will appear in the system's login items.
+
+### 4.3 Problems and notifications
+
+A task **needs attention** when:
+
+- its last run failed,
+- its last three runs failed, even for temporary reasons such as a server outage,
+- runs were missed and the catch-up also failed,
+- the safety limit stopped a run,
+- a run stopped as Partly done because it couldn't resume safely (section 7.3),
+- a sign-in failure paused its schedule,
+- its connection settings changed since approval, or a connection was deleted,
+- the background runner was switched off in System Settings (macOS),
+- the keyring was locked, so passwords couldn't be read (Linux, before login).
+
+The sidebar button shows a badge with the number of tasks that need attention, like the Agent
+Activity badge. A background run that fails also sends a system notification with an **Open**
+button. While the app is open, the usual in-app message is used instead.
+
+macOS asks permission the first time an app posts a notification. OpenMango asks at the moment a
+task is first set to run while OpenMango is closed, with a line saying why, rather than surprising
+the user during a run in the night.
+
+### 4.4 States
+
+| State | What shows |
+|---|---|
+| No tasks | Empty state with **New task** |
+| Loading | The list's existing loading rows |
+| Never run | "Not run yet" in place of the last result |
+| Running | Progress line, Cancel |
+| Paused | ⏸ Paused, with the schedule shown dimmed |
+| Needs attention | ⚠ and the reason, with its fix |
+
+### 4.5 Keyboard and accessibility
+
+- Arrow keys move through the list, `enter` opens the selected task in its tool, and `cmd-F` finds a
+  task by name. Delete asks for confirmation. Run now gets a binding in the keymap.
+- Each row's accessible label reads as one sentence: "Nightly mirror, Sync, daily at 02:00, last
+  run failed".
+- Rows wrap at 200% text size instead of cutting off the result.
+
+## 5. Scheduling
+
+### 5.1 Working out the next run
+
+A schedule is stored as a rule, such as "daily at 02:00", not as a list of times. The next run is
+worked out with `chrono`, which is already a dependency, in the computer's local time zone.
+
+- **Clocks going forward:** a time that doesn't exist that day, such as 02:30, runs at the first
+  valid minute after it.
+- **Clocks going back:** a time that happens twice runs once, at the first occurrence.
+- Changing the computer's time zone moves the local times with it.
+
+### 5.2 In-app scheduler
+
+- One timer for the earliest next run. Nothing runs between runs.
+- When the timer fires, OpenMango compares due times with the wall clock, which also catches runs
+  missed during sleep. The same check runs at startup.
+- A missed run runs once, labelled Catch-up (decision 6). The catch-up is skipped when the next
+  regular run is less than half an interval away. A daily 02:00 task whose computer wakes at 23:00
+  waits for 02:00 instead of running twice in three hours. This is the idea behind the "starting
+  deadline" of Kubernetes CronJobs.
+- Runs go through one queue, one at a time, like the `Forbid` policy of Kubernetes CronJobs. A task
+  that is still running when it comes due again is recorded as Skipped with the reason "still
+  running".
+- The runner opens its own connection for the run and closes it afterwards, so a task doesn't need
+  the connection to be open in the sidebar.
+
+### 5.3 Background runner
+
+The system scheduler starts `openmango --run-due-tasks` about every 15 minutes. That run starts
+without a window, runs whatever is due, writes the history, sends notifications for failures and
+exits.
+
+- **When OpenMango is open,** it holds a lock file and runs tasks itself. The background run sees the
+  lock and exits at once. Locks use `File::try_lock` from the standard library.
+- **One system entry in total,** added when the first task turns on "Run even when OpenMango is
+  closed" and removed when the last one turns it off. Editing a schedule never touches the system.
+- **Runs can start up to 15 minutes late.** That is acceptable for database tasks.
+
+Per platform:
+
+| Platform | Entry | Settings that matter |
+|---|---|---|
+| macOS | A launch agent bundled in the app and registered with `SMAppService` | Starts every 900 seconds. The app reads its status to warn when it's switched off in Login Items |
+| Windows | A Task Scheduler task, through the `planif` crate or `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
+| Linux | A systemd user timer and service | `OnCalendar=*:0/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
+
+**Passwords without a window.** The run reads them through the same keychain calls as the app:
+
+- On macOS it is the same signed app, so its keychain entries shouldn't prompt. PR 4 verifies this
+  first.
+- On Linux, the keyring stays locked until the user logs in after a restart. Those runs wait and
+  are recorded as "waiting for the keyring", not failed.
+
+## 6. Safety for unattended runs
+
+"Run now" always shows the review and confirmation its tool shows today. Scheduled runs can't ask,
+so writing tasks get these rules instead:
+
+- **Safety limit (decision 5).** It catches mistakes nobody is there to see, such as a source that
+  was emptied or half-restored, or a task pointing at the wrong database. Before writing, the run
+  counts the documents it would delete or replace on the target. Inserts never count, since they
+  destroy nothing.
+  - Sync knows the count from its comparison, per collection.
+  - Import and Copy with "Clear target first" or "Drop target first" use the target's document
+    count.
+
+  The run stops before any write when, for any collection:
+  1. the count is more than **10%** of the target collection's documents, or
+  2. the count is more than **3 times** the largest count of the task's last 10 successful runs for
+     that collection. This check starts once the task has 3 successful runs, and
+  3. in either case, the count is at least **100** documents, so small collections aren't stopped
+     by small edits.
+
+  Why both: 10% alone would let a 50-million-document collection lose 5 million documents, and a
+  fixed count would stop every night a large collection that really does change 300,000
+  documents a night. Comparing with the task's own history allows its usual volume and stops an
+  unusual jump: on that collection, an accident deleting 5 million documents is about 16 times the
+  usual and stops.
+
+  A stopped run needs attention and shows the numbers: "Would delete 5,012,344 documents from
+  orders; this task usually changes at most 310,000." **Run anyway** runs it once, with the
+  confirmation a Run now has. The three numbers can be changed per task, and Preview shows the
+  counts before a schedule is set. Runs stopped by the limit don't count as successful, so they
+  don't raise the task's usual volume.
+- **An empty source never empties the target.** A Mirror or Copy whose source collection or
+  database has no documents while the target has some stops, whatever the limit. An empty source is
+  more often the wrong database or a failed restore than an intended wipe.
+- **Mirror deletes last.** Today database sync writes inserts, replacements and deletes in the order
+  it finds them. A scheduled Mirror instead makes two passes per collection: first inserts and
+  replacements, then a second pass that only deletes, using the comparison's existing row-kind
+  filter. The delete pass is skipped when anything in the first pass failed. This follows rclone's
+  default for `sync`, which "will only delete files if there have been no errors". The cost is one
+  more read of each collection that has documents to delete.
+- **Production and protected targets (decision 4)** are refused unless the task allows them.
+  Allowing them uses a confirmation dialog that names the connection.
+- **Approval** is revoked when a connection changes, as described in section 2.
+- **Undo** stays available for sync runs as it is today. Run details link to it.
+
+## 7. Failures, retries and resuming
+
+A dropped connection, a laptop going to sleep or a replica set election in the middle of a run
+should still end in a correct target: no half-copied collection left as if it were done, and no
+duplicate documents. A failure that won't fix itself should stop at once and say why.
+
+### 7.1 What is retried
+
+| Retried | Not retried: fails at once |
+|---|---|
+| Connection dropped, reset or refused, or no server available | Wrong password or another sign-in failure |
+| Timeouts | Not authorized for the operation |
+| Server errors the driver itself treats as retryable: not primary, node recovering, shutting down, host unreachable, network timeout and the rest of its list | A document rejected by the collection's validator, or an invalid filter |
+| The SSH tunnel or proxy dropped | A duplicate key in Insert mode, except while resuming (7.3) |
+| A DNS lookup failed, for a task that has succeeded before | A DNS lookup failed for a task that has never succeeded, which is more likely a typo |
+| | Disk full, or a file missing or unreadable |
+| | The safety limit, or Cancel |
+
+Two situations wait instead of failing:
+
+- The keyring is locked (Linux, before login). The run waits for it.
+- Another program changed a target document between the comparison and the write. Sync already
+  rereads each document before writing and skips it; it counts as skipped, not failed.
+
+### 7.2 How retries work
+
+- **Per step, not per task.** A step is one collection, or one batch of an import. A failed step
+  never restarts the whole task.
+- **Fresh connection first.** Before each retry the runner opens a new connection, including a new
+  SSH tunnel if there is one, and checks it with `ping` before continuing.
+- **Waits** use full jitter: a random time between zero and the smaller of 60 seconds and
+  2 seconds × 2 to the power of the attempt number. The caps are about 4, 8, 16, 32 and 60 seconds.
+- **Limits (decision 11):** 5 attempts per step, 15 minutes of retrying per run, and never past the
+  next scheduled run of the same task.
+- **Sleep doesn't count.** Time the computer spends asleep isn't counted toward the 15 minutes.
+  After waking, the step retries at once.
+- **Cancel** works during a wait.
+- **A stalled run counts as a timeout.** A step that makes no progress for 10 minutes, no documents
+  read or written, is stopped and retried like a timeout. A driver call can wait on a half-open
+  connection longer than that.
+- **Run time limit.** A run that is still going after 24 hours stops as ⚠ Failed. The limit can be
+  changed per task. Kubernetes Jobs (`activeDeadlineSeconds`) and Windows Task Scheduler (72 hours)
+  have the same kind of limit.
+- **Retries don't multiply unchecked.** The driver already retries a single call once. Azure's
+  retry guidance warns that stacked retry layers multiply attempts. Here the worst case is the
+  driver's one retry inside each of the runner's 5 attempts, all within the 15-minute budget.
+- **Everything is logged:** "Connection dropped while copying orders (attempt 2 of 5). Waited 6 s."
+  A run that needed retries but finished shows ✓ Succeeded, with "after 2 retries" in its details.
+
+### 7.3 Resuming without repeating work
+
+Each kind saves its progress in the run's record after every confirmed step. A retry, or a run cut
+short by a crash or by quitting the app, continues from there instead of starting over.
+
+| Kind | Saved progress | How it resumes |
+|---|---|---|
+| Compare, Sync | Finished collections | Only the unfinished collection runs again: it is compared again, then whatever still differs is written. Documents written before the failure now match, so they aren't written again. |
+| Copy | Finished collections, and within a collection the last `_id` of a confirmed batch | The source is read in `_id` order from after that `_id`. The batch that was in flight is re-sent as replace by `_id`, so documents it had already written aren't duplicated. "Clear target first" and "Drop target first" aren't repeated. |
+| Export | None within a file | Exports write to a temporary file and rename it only when complete, so a failed export never leaves a partial file under the real name. A retry starts that file again. |
+| Import, JSON Lines or CSV | The line number of the last confirmed batch | Documents that have `_id`: the import continues after that line, re-sending the in-flight batch as replace by `_id`. Documents without `_id` can't be resumed safely, because the server gives every insert a new `_id` and a repeated batch would duplicate documents. The run stops as ◐ Partly done with the count imported, and needs attention. |
+| Import or export with the BSON tools | None | Export: the dump is written again. Import: resumes only when "Drop target first" is on, since the drop makes the restart clean. Otherwise the run stops as ◐ Partly done. |
+
+A run cut short by a crash or by quitting is resumed at the next chance, like a missed run, when its
+kind can resume. Otherwise it is marked Interrupted and needs attention.
+
+Reading Copy's source in `_id` order goes through the `_id` index, which can be slower on large
+collections than reading in stored order. PR 2 measures the difference.
+
+### 7.4 Long outages
+
+- A run that uses up its retries ends as ⚠ Failed, for example "Server unreachable for 15 minutes".
+  The next scheduled run tries again as usual.
+- **One notification per outage (decision 8).** The first failed run notifies. Later failures for
+  the same reason don't. The first run that succeeds afterwards sends "Nightly mirror works again".
+- **Three failed runs in a row** make the task need attention even when each failure was temporary,
+  so a long outage isn't missed.
+- **A sign-in failure pauses the schedule** until the connection is fixed or the user resumes it.
+  Repeating a wrong password every 15 minutes can lock the account on servers that lock accounts
+  after failed sign-ins.
+
+## 8. Run history
+
+Each run records:
+
+- when it started and how long it took,
+- what started it: you, the schedule, the background runner, or a catch-up,
+- its result: Succeeded, Failed, Partly done, Skipped or Cancelled,
+- counts: inserted, replaced, deleted, exported, imported, differences found,
+- a log per collection, capped at 1,000 lines per run, with warnings and errors.
+
+**Storage.** An encrypted SQLite database, `tasks.db`, with the same SQLCipher setup as History and
+its key in the system keychain. Logs never contain document contents. Server error messages can
+include values (a duplicate-key error names the key), which is why the store is encrypted.
+
+**Retention (decision 9).** The last 100 runs per task and nothing older than 90 days, trimmed
+after each run.
+
+**Crashes.** A run still marked Running at startup is marked Interrupted, the way
+`reconcile_interrupted` handles agent operations. It then resumes from its saved progress at the
+next chance, when its kind can resume (section 7.3).
+
+## 9. Performance
+
+**While idle.**
+
+- In the app: one timer, no polling.
+- With the background runner on: one short process about every 15 minutes. Target: it exits in
+  under a second when nothing is due. Measure in PR 4.
+
+**During a run.** Runs use the existing engines, which already stream:
+
+- Comparison read about 600,000 documents per second locally, with about 132 MiB peak memory, in
+  the million-document benchmark
+  ([COMPARE_BENCHMARKS.md](COMPARE_BENCHMARKS.md)).
+- Sync wrote about 14,000 replacements per second locally, including encrypted undo records.
+- Database sync writes as it compares, so memory stays flat regardless of database size.
+
+For example, a nightly Mirror of a 1,000,000-document database where 1% changed would take a few
+seconds to compare and under a second to write, locally. Remote servers will be slower; nobody has
+measured that yet. Transfer's export, import and copy speeds haven't been measured either. PR 1
+adds a measurement for each.
+
+**Effect on the open app.** Runs happen off the UI thread, as Transfer and Compare do today. The
+queue keeps two heavy runs from competing for the same network and servers.
+
+**History.** One small row per run, plus capped log lines, trimmed after each run.
+
+## 10. Fitting into the app
+
+- `TabKey::Tasks`, a single tab like Agent Activity, restored with the workspace.
+- A sidebar button next to Agent Activity, with the needs-attention badge.
+- Command palette: "Tasks", "New task…", and "Run task…", which picks a task by name.
+- **Save as task** in the Transfer and Compare tabs. **Save task** when a tab was opened from a task.
+- Agent Activity stays separate. Merging agent operations and task runs into one activity view is
+  in Later.
+
+## 11. Build order
+
+Stacked PRs, each usable on its own:
+
+1. **Tasks you run yourself.** The task model and store, Save as task in Transfer and Compare, the
+   Tasks tab with Run now, Edit and Delete, and run history with details. No schedules yet.
+2. **Safety and recovery.** The safety limit, the Production and protected opt-in, approval and its
+   revocation. Mirror deleting last, and the empty-source check. Preview. Retries with a fresh
+   connection, saved progress and resuming for each kind (section 7). This lands before any
+   schedule can write, and Run now benefits from it too.
+3. **In-app scheduler.** The schedule editor with next-run preview, the timer, catch-up, pause, the
+   needs-attention badge and notifications.
+4. **Background runner and macOS.** The mode without a window, the lock, `--run-due-tasks`, and the
+   `SMAppService` agent. Starts by checking that passwords can be read without a window.
+5. **Windows.** The Task Scheduler entry with the battery settings off.
+6. **Linux.** The systemd user timer.
+
+## 12. Tests
+
+- **Next-run rules:** every preset, month ends, and both daylight-saving changes. Needs a time-zone
+  database in tests; add `chrono-tz` as a dev-dependency.
+- **Catch-up:** a timer that fires after a long sleep runs a missed task once.
+- **Queue:** a task due while it is still running is recorded as Skipped.
+- **Safety:** the limit stops a Mirror run and an Import with "Clear target first" before any write,
+  in Docker integration tests. Unit tests for the limit's rule: the 10% check, the jump against
+  history (inactive before 3 successful runs), the 100-document floor, stopped runs not counting as
+  history, and Run anyway. An empty source never empties the target. Mirror skips its delete pass
+  after an error. A changed connection revokes approval. A Production target is refused without the
+  opt-in.
+- **Dropped connections**, in Docker integration tests: restart the MongoDB container in the middle
+  of a Copy, a Sync and an Import, and pause it long enough to cause timeouts. Each run must resume
+  and finish with exactly the expected target contents, with no duplicates and no missing
+  documents, and its log must show the retries.
+- **Retry rules:** which errors are retried, built from real driver errors; wait times stay within
+  their caps, with a fixed random seed; a run stops retrying at 15 minutes and at its next
+  scheduled run; sleep time isn't counted.
+- **Outages:** one notification for several failed runs, one when the task works again, attention
+  after three failures in a row, and a paused schedule after a sign-in failure.
+- **History:** retention trimming, and a crash in the middle of a run resuming from its saved
+  progress.
+- **UI:** save a task from Transfer and from Compare, run it, and open its run details, with the
+  gpui test harness.
+- **Background runner:** exits at once when the app holds the lock. The platform entries get a
+  manual check on each platform, since CI can't register them.
+
+## 13. Risks and things not verified
+
+- **Reading passwords without a window** is unverified on all three platforms. PR 4 starts with it.
+- **macOS approval:** how the Login Items prompt behaves for an agent registered by an unsigned
+  development build. Release builds are signed.
+- **Remote speeds** for every kind of run, and Transfer speeds even locally.
+- **Linux without systemd** (some distributions and containers) gets no background runner.
+- **Sleeping or turned-off computers** can't run anything. A missed run happens at the next chance.
+- **Copy in `_id` order** may be slower than today's copy on large collections. Not measured yet.
+- **Imports of documents without `_id`** can't resume after a dropped connection. They stop as
+  Partly done instead.
+- **The driver's retryable error list** is copied, not shared. A driver upgrade could change it
+  without the runner noticing.
+
+## 14. Later
+
+- Cron expressions for schedules that the presets can't express.
+- Start and end dates for a schedule, as Studio 3T has.
+- Tasks that run a Forge script or an aggregation and export its result.
+- Chains: run one task after another succeeds.
+- Running tasks through MCP, as proposals approved in the app like other agent writes.
+- Exporting and importing tasks as files.
+- Email or webhook notifications.
+- One activity view for task runs and agent operations.
+
+## Sources
+
+- [DBeaver: Task scheduler](https://dbeaver.com/docs/dbeaver/Task-Scheduler/)
+- [DBeaver: Troubleshooting task scheduler issues](https://dbeaver.com/docs/dbeaver/Troubleshooting-task-scheduler-issues/)
+- [Studio 3T: Tasks for MongoDB](https://studio3t.com/knowledge-base/articles/automate-schedule-mongodb-tasks/)
+- [launchd.plist(5)](https://keith.github.io/xcode-man-pages/launchd.plist.5.html), also `man launchd.plist`
+- [systemd.timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html)
+- [TaskSettings.StartWhenAvailable](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-startwhenavailable)
+- [TaskSettings.DisallowStartIfOnBatteries](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-disallowstartifonbatteries)
+- [TaskSettings.StopIfGoingOnBatteries](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-stopifgoingonbatteries)
+- [Apple: Manage login items and background tasks](https://support.apple.com/guide/deployment/manage-login-items-background-tasks-mac-depdca572563/web)
+- [SMAppService notes](https://theevilbit.github.io/posts/smappservice/)
+- [planif](https://docs.rs/planif/latest/planif/)
+- [MongoDB: Retryable Reads](https://www.mongodb.com/docs/manual/core/retryable-reads/)
+- [MongoDB: Retryable Writes](https://www.mongodb.com/docs/manual/core/retryable-writes/)
+- [AWS: Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+- [AWS: Retry with backoff pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/retry-backoff.html)
+- [Azure: Transient fault handling](https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults)
+- [Kubernetes: CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/)
+- [rclone: Usage and options](https://rclone.org/docs/) (`--max-delete`, `--delete-after`, `--dry-run`)
+- [TaskSettings.ExecutionTimeLimit](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-executiontimelimit)
+- [Google SRE: Monitoring Distributed Systems](https://sre.google/sre-book/monitoring-distributed-systems/)
