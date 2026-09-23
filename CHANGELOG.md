@@ -4,7 +4,16 @@ All notable changes to OpenMango will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Each release opens with `### Highlights`: at most five `- **Title.** One sentence.` items. The app's What's New shows them first and folds every other group behind a count.
+
 ## [Unreleased]
+
+### Highlights
+- **Compare and sync.** Compare two collections or two whole databases, see exactly what differs, and sync the changes you choose, with undo.
+- **Relations.** OpenMango learns how your collections reference each other: follow an id, see what points at a document, and view it all on one canvas.
+- **Ask AI in the filter bar.** Describe the documents you want and the filter is written for you, from the collection's own fields.
+- **An assistant that remembers.** Conversations carry over between runs, models come from a live catalogue that includes OpenRouter, and every answer shows its cost.
+- **Views, dates and UUIDs.** Save an aggregation as a view, show dates in your local time, and read UUIDs as UUIDs.
 
 ### Added
 - Compare collections from the collection menu or command palette: choose match fields, filter both sides, inspect missing and changed documents, distinguish number-type and field-order differences, and find duplicate keys. Comparisons can be cancelled, results remain readable when a connection closes, and setup is restored across restarts
@@ -58,6 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Escape cancels a drag, and the pipeline stage list, the filter builder and the tab bar scroll when a drag nears their edge
 
 ### Changed
+- What's New leads with a release's highlights, keeps every other change one click away behind a count, and renders code and lists properly. After an update it opens only when the highlights changed, so a nightly build with the same highlights no longer opens it again
 - Filters are written with spaces inside their braces, `{ _id: ObjectId("…") }`, everywhere one is shown, copied or saved
 - Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
 - When a request fails, the chat says what to do about it: which key to check, which model to pick, or that it is a rate limit that will clear

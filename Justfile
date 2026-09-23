@@ -1,6 +1,7 @@
 # OpenMango Development Commands
 
 # Development
+# SHOW_NOTES=1 just dev opens What's New with the unreleased notes; SHOW_NOTES=0.3.0 a release's.
 dev: _daily-sweep
     cargo run
 
