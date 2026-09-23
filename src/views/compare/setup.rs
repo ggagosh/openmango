@@ -756,20 +756,25 @@ impl CompareView {
                         .max_h((window.viewport_size().height - px(200.0)).max(px(160.0)))
                         .overflow_y_scrollbar(),
                 )
-                .child(div().flex().justify_end().child(
-                    Button::new("compare-settings-done").small().primary().label("Done").on_click(
-                        move |_, window, cx| {
-                            for (input, list) in [
-                                (&done_inputs[0], TokenList::Match),
-                                (&done_inputs[1], TokenList::Ignore),
-                                (&done_inputs[3], TokenList::Skip),
-                            ] {
-                                add_tokens(&done_state, id, input, list, window, cx);
-                            }
-                            popover.update(cx, |popover, cx| popover.dismiss(window, cx))
-                        },
+                .child(
+                    div().flex().justify_end().child(
+                        Button::new("compare-settings-done")
+                            .small()
+                            .primary()
+                            .icon(IconName::Check)
+                            .label("Done")
+                            .on_click(move |_, window, cx| {
+                                for (input, list) in [
+                                    (&done_inputs[0], TokenList::Match),
+                                    (&done_inputs[1], TokenList::Ignore),
+                                    (&done_inputs[3], TokenList::Skip),
+                                ] {
+                                    add_tokens(&done_state, id, input, list, window, cx);
+                                }
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx))
+                            }),
                     ),
-                ))
+                )
         });
 
         let actions = div()
@@ -854,6 +859,7 @@ impl CompareView {
                             .small()
                             // One label: a button that flips to "Cancel" for a 10 ms scan
                             // flickers. Cancel lives next to the progress text.
+                            .icon(app_icon("git-compare-arrows"))
                             .label("Compare")
                             .disabled(running || !can_run)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -875,13 +881,16 @@ impl CompareView {
         closed.dedup();
         let connect = (!closed.is_empty()).then(|| {
             let state = self.state.clone();
-            Button::new("compare-connect").outline().xsmall().label("Connect").on_click(
-                move |_, _, cx| {
+            Button::new("compare-connect")
+                .outline()
+                .xsmall()
+                .icon(app_icon("plug"))
+                .label("Connect")
+                .on_click(move |_, _, cx| {
                     for connection in &closed {
                         AppCommands::connect_in_background(state.clone(), *connection, cx);
                     }
-                },
-            )
+                })
         });
         if let [Some(left), Some(right)] = &metadata
             && !databases
@@ -960,6 +969,10 @@ impl CompareView {
                 Button::new(("compare-scope", index))
                     .ghost()
                     .small()
+                    .icon(match value {
+                        CompareScope::Collections => app_icon("table-2"),
+                        CompareScope::Databases => Icon::new(IconName::LayoutDashboard),
+                    })
                     .label(label)
                     .selected(scope == value)
                     .disabled(running)
@@ -1046,6 +1059,7 @@ fn settings_panel(
                         Button::new("compare-without-id")
                             .ghost()
                             .xsmall()
+                            .icon(app_icon("key-round"))
                             .label("Match without _id")
                             .on_click(move |_, _, cx| {
                                 state.update(cx, |app, cx| {
@@ -1190,11 +1204,16 @@ fn token_editor(
                 .items_center()
                 .gap(spacing::xs())
                 .child(Input::new(input).small().flex_1().min_w_0().aria_label(label))
-                .child(Button::new(add_id).small().outline().label("Add").on_click(
-                    move |_, window, cx| {
-                        add_tokens(&add_state, id, &input_for_add, list, window, cx)
-                    },
-                )),
+                .child(
+                    Button::new(add_id)
+                        .small()
+                        .outline()
+                        .icon(IconName::Plus)
+                        .label("Add")
+                        .on_click(move |_, window, cx| {
+                            add_tokens(&add_state, id, &input_for_add, list, window, cx)
+                        }),
+                ),
         )
 }
 

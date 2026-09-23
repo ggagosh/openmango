@@ -16,14 +16,24 @@ impl AppState {
         if tab.running || tab.sync.running {
             return Some("Wait for the current operation to finish".into());
         }
+        let databases =
+            tab.results_config().scope == crate::state::compare::CompareScope::Databases;
         let Some(target) = tab.sync.target else {
-            return Some("Choose which collection to change".into());
+            return Some(
+                if databases {
+                    "Choose which database to change"
+                } else {
+                    "Choose which collection to change"
+                }
+                .into(),
+            );
         };
+        let finished = if databases { tab.pair_elapsed.is_some() } else { tab.summary.is_some() };
         if !undo
             && (tab.sync.completed
                 || tab.compared.as_ref() != Some(&tab.config)
                 || tab.error.is_some()
-                || tab.summary.is_none())
+                || !finished)
         {
             return Some("Compare again before syncing".into());
         }
@@ -53,6 +63,13 @@ impl AppState {
         let tab = self.compare_tab(id)?;
         let config = tab.results_config();
         let endpoint = &config.sides[index];
+        if config.scope == crate::state::compare::CompareScope::Databases {
+            // Views and time-series are never offered, and the server version is checked when
+            // the sync starts.
+            return self
+                .connection_read_only(endpoint.connection_id?)
+                .then(|| "Read-only connection: writes are disabled.".into());
+        }
         let key = crate::state::SessionKey::new(
             endpoint.connection_id?,
             &endpoint.database,

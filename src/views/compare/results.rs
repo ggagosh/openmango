@@ -158,6 +158,7 @@ impl CompareView {
                                 Button::new("compare-cancel")
                                     .ghost()
                                     .small()
+                                    .icon(app_icon("circle-stop"))
                                     .label("Cancel")
                                     .on_click(move |_, _, cx| {
                                         AppCommands::cancel_compare(&state, id, cx)
@@ -261,6 +262,7 @@ impl CompareView {
                     Button::new("compare-retry")
                         .ghost()
                         .xsmall()
+                        .icon(app_icon("rotate-ccw"))
                         .label("Retry")
                         .disabled(app.compare_disabled_reason(&tab.config).is_some())
                         .on_click(move |_, _, cx| {
@@ -298,6 +300,7 @@ impl CompareView {
                             format_number(counts[side]),
                             side_name(side)
                         ))
+                        .icon(app_icon("funnel"))
                         .disabled(counts[side] == 0 || filter.is_none() || !open[side])
                         .on_click(move |_, _, cx| {
                             if let Some(filter) = &filter {

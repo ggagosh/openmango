@@ -395,15 +395,30 @@ impl CompareTabState {
 
     /// Scan one collection again, after a sync in its own tab or a failure.
     pub fn recheck_pair(&mut self, index: usize) -> Option<PairScan> {
-        if self.running || self.pairs.get(index)?.kind() != PairKind::Both {
-            return None;
+        self.recheck_pairs(&[index]).pop()
+    }
+
+    /// Scan collections again, e.g. the ones a database sync just wrote.
+    pub fn recheck_pairs(&mut self, indexes: &[usize]) -> Vec<PairScan> {
+        // A sync rechecks what it wrote when it ends.
+        if self.running || self.sync.running {
+            return Vec::new();
         }
-        let cancellation = CancellationToken::new();
-        self.pair_progress[index] = PairProgress::Waiting;
-        self.pair_tokens[index] = Some(cancellation.clone());
-        self.running = true;
-        self.cancellation = Some(CancellationToken::new());
-        Some(PairScan { index, name: self.pairs[index].name.clone(), cancellation })
+        let mut scans = Vec::new();
+        for &index in indexes {
+            if self.pairs.get(index).is_none_or(|pair| pair.kind() != PairKind::Both) {
+                continue;
+            }
+            let cancellation = CancellationToken::new();
+            self.pair_progress[index] = PairProgress::Waiting;
+            self.pair_tokens[index] = Some(cancellation.clone());
+            scans.push(PairScan { index, name: self.pairs[index].name.clone(), cancellation });
+        }
+        if !scans.is_empty() {
+            self.running = true;
+            self.cancellation = Some(CancellationToken::new());
+        }
+        scans
     }
 
     pub fn receive_pair(&mut self, message: PairMessage) {

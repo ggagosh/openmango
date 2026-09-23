@@ -46,6 +46,7 @@ Audience: power users and small engineering teams
 - [x] P2: Selective sync and guarded session undo from comparison results; MongoDB 8.0+ write targets (see [plan](COMPARE_SYNC_PLAN.md) and [benchmarks](COMPARE_BENCHMARKS.md))
 - [x] P2: Compare two documents picked in a collection view
 - [x] P2: Compare two databases collection by collection, with index differences and copying of one-sided collections ([plan](COMPARE_DATABASE_PLAN.md))
+- [x] P2: Sync two databases by collection: add missing, add and update, or mirror, with one undo for the run
 - [ ] P2: Dry-run mode with impact summary before write
 
 ### Connectivity & Security

@@ -76,6 +76,7 @@ async fn row_cap_keeps_counting_and_ids_are_absent_on_the_missing_side() {
         stored: 0,
         stored_bytes: 0,
         limit: 1,
+        kinds: None,
         truncated: false,
         last_progress: Instant::now(),
     };
@@ -99,6 +100,22 @@ async fn row_cap_keeps_counting_and_ids_are_absent_on_the_missing_side() {
     assert_eq!(new_rows[0].id_on(Side::Right, true), None);
     assert_ne!(new_rows[0].left_hash, 0);
     assert_eq!(new_rows[0].right_hash, 0);
+
+    // Rows of other kinds are counted but not kept, so they never use up the limit.
+    reporter.kinds = Some(vec![DiffKind::OnlyRight]);
+    reporter.truncated = false;
+    reporter.stored = 0;
+    let document = raw(doc! {"_id": 4});
+    let group = Group {
+        key: extract_key(&document, &["_id".into()]).unwrap(),
+        document: Some(document),
+        count: 1,
+    };
+    reporter.record(Some(&group), None, &IgnoreSet::default(), true).unwrap();
+    reporter.record(None, Some(&group), &IgnoreSet::default(), true).unwrap();
+    assert_eq!((reporter.counts.only_left, reporter.counts.only_right), (4, 1));
+    assert_eq!(reporter.rows.iter().map(|row| row.kind).collect::<Vec<_>>(), [DiffKind::OnlyRight]);
+    assert!(!reporter.truncated);
 }
 
 #[test]

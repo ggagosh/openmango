@@ -122,6 +122,8 @@ pub struct CompareOptions {
     pub ignore: IgnoreSet,
     /// Can be lowered by consumers; never exceeds MAX_ROWS.
     pub row_limit: usize,
+    /// Rows kept, by kind; None keeps every kind. Counts always cover every kind.
+    pub row_kinds: Option<Vec<DiffKind>>,
 }
 
 impl Default for CompareOptions {
@@ -131,6 +133,7 @@ impl Default for CompareOptions {
             filter: Document::new(),
             ignore: IgnoreSet::default(),
             row_limit: MAX_ROWS,
+            row_kinds: None,
         }
     }
 }
@@ -476,6 +479,7 @@ struct Reporter<'a> {
     stored: usize,
     stored_bytes: usize,
     limit: usize,
+    kinds: Option<Vec<DiffKind>>,
     truncated: bool,
     last_progress: Instant,
 }
@@ -545,6 +549,9 @@ impl Reporter<'_> {
             DiffKind::Different => self.counts.different += 1,
             DiffKind::Minor => self.counts.minor += 1,
             DiffKind::MultipleMatches => self.counts.multiple_matches += 1,
+        }
+        if self.kinds.as_ref().is_some_and(|kinds| !kinds.contains(&kind)) {
+            return Ok(());
         }
         // ponytail: cap retained rows and key/id bytes; spill to SQLite if larger result sets matter.
         let size = group.key.as_bytes().len() + paths.len() + std::mem::size_of::<DiffRow>();
@@ -671,6 +678,7 @@ pub async fn compare_collections_async(
         stored: 0,
         stored_bytes: 0,
         limit: options.row_limit.min(MAX_ROWS),
+        kinds: options.row_kinds.clone(),
         truncated: false,
         last_progress: Instant::now(),
     };

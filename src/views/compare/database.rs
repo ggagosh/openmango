@@ -12,15 +12,20 @@ use gpui_kit::component::tooltip::Tooltip;
 use super::detail::{comparison_row, diff_heading, field_column};
 use super::*;
 use crate::components::ErrorCallout;
+use crate::components::tri_checkbox::tri_checkbox;
 use crate::connection::ops::compare::CompareSummary;
 use crate::connection::ops::compare_database::{CollectionKind, PairKind, SideCollection};
 use crate::error::ErrorReport;
 use crate::helpers::{format_bytes, format_number};
 use crate::state::compare::{CompareTabState, PAIR_SEGMENTS, PairProgress, PairStatus};
+use crate::state::compare_sync::PairSyncResult;
+use gpui_kit::base::CheckboxState;
 
 const COUNT_WIDTH: f32 = 80.0;
 const RESULT_WIDTH: f32 = 160.0;
 const MARKER_WIDTH: f32 = 12.0;
+/// The sync tick box; the heading keeps the same space so the columns stay aligned.
+const SYNC_BOX_WIDTH: f32 = 24.0;
 
 fn status_label(status: PairStatus) -> &'static str {
     match status {
@@ -87,6 +92,21 @@ fn percent(read: u64, pair: &crate::connection::ops::compare_database::Collectio
 
 /// What a row says after its name.
 fn row_result(tab: &CompareTabState, index: usize) -> String {
+    let undoing = tab.sync.undoing;
+    match tab.sync.pairs.get(&index) {
+        Some(PairSyncResult::Running(summary)) => {
+            return format!(
+                "{} · {} {}",
+                if undoing { "Undoing" } else { "Syncing" },
+                format_number(summary.written as u64),
+                if undoing { "restored" } else { "written" }
+            );
+        }
+        Some(PairSyncResult::Failed(_)) => {
+            return if undoing { "Undo failed" } else { "Sync failed" }.into();
+        }
+        _ => {}
+    }
     let result = documents_result(tab, index);
     if tab.pairs[index].index_difference().is_some() {
         format!("{result} · indexes differ")
@@ -123,13 +143,89 @@ fn count_text(tab: &CompareTabState, index: usize, side: usize) -> String {
 }
 
 /// Connection and database; the setup may still hold a collection from the other scope.
-fn database_label(app: &AppState, endpoint: &CompareEndpoint) -> String {
+pub(super) fn database_label(app: &AppState, endpoint: &CompareEndpoint) -> String {
     endpoint_label(app, &CompareEndpoint { collection: String::new(), ..endpoint.clone() })
 }
 
 /// Marker, name, two counts and the result: the heading and every row share these widths.
 fn pair_columns() -> Div {
     div().size_full().min_w_0().px(spacing::sm()).flex().items_center().gap(spacing::sm())
+}
+
+/// The sync's own marker for a collection it wrote, in place of the status dot.
+fn sync_marker(result: &PairSyncResult, cx: &App) -> AnyElement {
+    match result {
+        PairSyncResult::Running(_) => Spinner::new().xsmall().into_any_element(),
+        PairSyncResult::Done(summary) if summary.failed + summary.uncertain == 0 => {
+            Icon::new(IconName::Check).xsmall().text_color(cx.theme().success).into_any_element()
+        }
+        PairSyncResult::Done(_) => Icon::new(IconName::TriangleAlert)
+            .xsmall()
+            .text_color(cx.theme().warning)
+            .into_any_element(),
+        PairSyncResult::Failed(_) => Icon::new(IconName::TriangleAlert)
+            .xsmall()
+            .text_color(cx.theme().danger)
+            .into_any_element(),
+    }
+}
+
+/// The detail's line about the sync: what it wrote to this collection, or what it would.
+fn sync_line(tab: &CompareTabState, index: usize, cx: &App) -> Option<AnyElement> {
+    let undoing = tab.sync.undoing;
+    if let Some(result) = tab.sync.pairs.get(&index) {
+        let (text, color) = match result {
+            PairSyncResult::Failed(error) => (
+                format!("{}: {error}", if undoing { "Undo failed" } else { "Sync failed" }),
+                cx.theme().danger,
+            ),
+            PairSyncResult::Running(summary) | PairSyncResult::Done(summary) => {
+                let running = matches!(result, PairSyncResult::Running(_));
+                let mut parts = Vec::new();
+                for (count, word) in if undoing {
+                    vec![(summary.written, "restored")]
+                } else {
+                    vec![
+                        (summary.inserted, "inserted"),
+                        (summary.replaced, "replaced"),
+                        (summary.deleted, "deleted"),
+                    ]
+                }
+                .into_iter()
+                .chain([
+                    (summary.skipped, "skipped"),
+                    (summary.failed, "failed"),
+                    (summary.uncertain, "uncertain"),
+                ]) {
+                    if count > 0 {
+                        parts.push(format!("{} {word}", format_number(count as u64)));
+                    }
+                }
+                let verb = match (undoing, running) {
+                    (false, true) => "Syncing",
+                    (false, false) => "Synced",
+                    (true, true) => "Undoing",
+                    (true, false) => "Undone",
+                };
+                let parts =
+                    if parts.is_empty() { "nothing written".into() } else { parts.join(" · ") };
+                (format!("{verb}: {parts}"), cx.theme().foreground)
+            }
+        };
+        return Some(div().text_sm().text_color(color).child(text).into_any_element());
+    }
+    if tab.sync.target.is_none() || tab.sync.running || tab.sync.completed {
+        return None;
+    }
+    let candidate = tab.sync_candidates().into_iter().find(|c| c.index == index)?;
+    let included = !tab.sync.excluded.contains(&index);
+    let writes = super::sync_bar::writes_text(candidate.writes, tab.sync.mode, candidate.create);
+    let text = match (included, candidate.create) {
+        (true, true) => format!("In this sync: created, then {writes}"),
+        (true, false) => format!("In this sync: {writes}"),
+        (false, _) => format!("Left out of this sync, which would {writes}"),
+    };
+    Some(note(text, cx).into_any_element())
 }
 
 fn count_cell(content: impl IntoElement) -> Div {
@@ -237,15 +333,21 @@ impl CompareView {
                     Button::new("compare-skip-current")
                         .ghost()
                         .small()
+                        .icon(app_icon("skip-forward"))
                         .label(format!("Skip {name}"))
                         .on_click(move |_, _, cx| {
                             AppCommands::skip_database_pair(&skip_state, id, index, cx)
                         })
                 }))
                 .child(
-                    Button::new("compare-cancel").ghost().small().label("Cancel").on_click(
-                        move |_, _, cx| AppCommands::cancel_compare(&cancel_state, id, cx),
-                    ),
+                    Button::new("compare-cancel")
+                        .ghost()
+                        .small()
+                        .icon(app_icon("circle-stop"))
+                        .label("Cancel")
+                        .on_click(move |_, _, cx| {
+                            AppCommands::cancel_compare(&cancel_state, id, cx)
+                        }),
                 )
                 .into_any_element()
         } else {
@@ -331,6 +433,7 @@ impl CompareView {
                     Button::new("compare-retry")
                         .ghost()
                         .xsmall()
+                        .icon(app_icon("rotate-ccw"))
                         .label("Retry")
                         .disabled(app.compare_disabled_reason(&tab.config).is_some())
                         .on_click(move |_, _, cx| AppCommands::run_compare(retry.clone(), id, cx)),
@@ -344,6 +447,8 @@ impl CompareView {
         let tab = self.state.read(cx).compare_tab(id).unwrap();
         let count = tab.visible_pairs().len();
         let muted = cx.theme().muted_foreground;
+        // Tick boxes while choosing what to sync; once it runs, rows show its outcome instead.
+        let selectable = tab.sync.target.is_some() && !tab.sync.running && !tab.sync.completed;
         let mut panel =
             div().flex().flex_col().size_full().min_w_0().min_h_0().overflow_hidden().child(
                 div().px(spacing::sm()).pt(spacing::sm()).pb(spacing::xs()).child(
@@ -378,6 +483,9 @@ impl CompareView {
                 .text_color(muted)
                 .child(
                     pair_columns()
+                        .when(selectable, |row| {
+                            row.child(div().w(px(SYNC_BOX_WIDTH)).flex_shrink_0())
+                        })
                         .child(div().w(px(MARKER_WIDTH)).flex_shrink_0())
                         .child(div().flex_1().min_w_0().child("Collection"))
                         .child(side_heading(0))
@@ -445,6 +553,8 @@ impl CompareView {
                         let Some(tab) = app.compare_tab(id) else {
                             return Vec::new();
                         };
+                        let candidates: Vec<usize> =
+                            tab.sync_candidates().iter().map(|c| c.index).collect();
                         range
                             .filter_map(|position| {
                                 let index = *tab.visible_pairs().get(position)?;
@@ -459,7 +569,15 @@ impl CompareView {
                                     counts[1].replace('—', "none")
                                 );
                                 let state = state.clone();
+                                let toggle_state = state.clone();
                                 let focus = view.focus.clone();
+                                let include = format!("Include {name} in the sync");
+                                let candidate = candidates.contains(&index);
+                                let checked = !tab.sync.excluded.contains(&index);
+                                let marker = match tab.sync.pairs.get(&index) {
+                                    Some(result) => sync_marker(result, cx),
+                                    None => status_marker(status, cx).into_any_element(),
+                                };
                                 Some(
                                     div()
                                         .id(("compare-pair", index))
@@ -480,13 +598,47 @@ impl CompareView {
                                                 })
                                                 .hover(|row| row.bg(hover))
                                                 .cursor_pointer()
+                                                .when(selectable, |row| {
+                                                    row.child(
+                                                        div()
+                                                            .w(px(SYNC_BOX_WIDTH))
+                                                            .flex_shrink_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .when(candidate, |cell| {
+                                                                cell.child(
+                                                                    tri_checkbox(
+                                                                        ("sync-pair", index),
+                                                                        if checked {
+                                                                            CheckboxState::Checked
+                                                                        } else {
+                                                                            CheckboxState::Unchecked
+                                                                        },
+                                                                        "",
+                                                                        false,
+                                                                        cx,
+                                                                    )
+                                                                    .accessibility_label(include)
+                                                                    .on_change(move |_, _, _, cx| {
+                                                                        cx.stop_propagation();
+                                                                        toggle_state.update(cx, |app, cx| {
+                                                                            if let Some(tab) = app.compare_tab_mut(id) {
+                                                                                tab.sync.toggle_pair(index);
+                                                                            }
+                                                                            cx.notify();
+                                                                        });
+                                                                    }),
+                                                                )
+                                                            }),
+                                                    )
+                                                })
                                                 .child(
                                                     div()
                                                         .w(px(MARKER_WIDTH))
                                                         .flex_shrink_0()
                                                         .flex()
                                                         .justify_center()
-                                                        .child(status_marker(status, cx)),
+                                                        .child(marker),
                                                 )
                                                 .child(
                                                     div()
@@ -595,9 +747,14 @@ impl CompareView {
             )
             .when(pending && tab.running, |header| {
                 header.child(
-                    Button::new("compare-skip-pair").ghost().small().label("Skip").on_click(
-                        move |_, _, cx| AppCommands::skip_database_pair(&skip_state, id, index, cx),
-                    ),
+                    Button::new("compare-skip-pair")
+                        .ghost()
+                        .small()
+                        .icon(app_icon("skip-forward"))
+                        .label("Skip")
+                        .on_click(move |_, _, cx| {
+                            AppCommands::skip_database_pair(&skip_state, id, index, cx)
+                        }),
                 )
             })
             .when(both && !pending, |header| {
@@ -605,8 +762,9 @@ impl CompareView {
                     Button::new("compare-recheck-pair")
                         .ghost()
                         .small()
+                        .icon(app_icon("rotate-cw"))
                         .label("Recheck")
-                        .disabled(tab.running || !connected)
+                        .disabled(tab.running || tab.sync.running || !connected)
                         .on_click(move |_, _, cx| {
                             AppCommands::recheck_database_pair(recheck_state.clone(), id, index, cx)
                         }),
@@ -616,6 +774,7 @@ impl CompareView {
                 PairKind::LeftOnly | PairKind::RightOnly => Button::new("compare-copy-pair")
                     .outline()
                     .small()
+                    .icon(app_icon("copy-plus"))
                     .label(if pair.kind() == PairKind::LeftOnly {
                         "Copy to Right…"
                     } else {
@@ -627,6 +786,7 @@ impl CompareView {
                 _ => Button::new("compare-open-pair")
                     .outline()
                     .small()
+                    .icon(app_icon("git-compare-arrows"))
                     .label("Open comparison")
                     .disabled(!both || !connected)
                     .on_click(move |_, _, cx| open_pair(&open_state, id, index, cx)),
@@ -667,6 +827,9 @@ impl CompareView {
 
         let mut body =
             div().flex().flex_col().gap(spacing::xs()).px(spacing::md()).py(spacing::md());
+        if let Some(line) = sync_line(tab, index, cx) {
+            body = body.child(line);
+        }
         if let PairProgress::Done(summary) = &progress {
             let c = summary.counts;
             for (count, label, color) in [
@@ -770,6 +933,7 @@ impl CompareView {
                     Button::new("compare-pair-retry")
                         .ghost()
                         .xsmall()
+                        .icon(app_icon("rotate-ccw"))
                         .label("Retry")
                         .disabled(tab.running || !connected)
                         .on_click(move |_, _, cx| {

@@ -149,6 +149,7 @@ pub(crate) fn open_document_compare(
             .footer(
                 DialogFooter::new().child(
                     Button::new("document-compare-close")
+                        .icon(IconName::Close)
                         .label("Close")
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 ),
@@ -338,6 +339,7 @@ impl CompareView {
                         Button::new("compare-open")
                             .ghost()
                             .small()
+                            .icon(app_icon("square-arrow-out-up-right"))
                             .label("Open in…")
                             .dropdown_caret(true)
                             .disabled(!enabled)
@@ -355,6 +357,7 @@ impl CompareView {
                                     .ok();
                                     menu = menu.item(
                                         PopupMenuItem::new(label)
+                                            .icon(app_icon("square-arrow-out-up-right"))
                                             .disabled(filter.is_none())
                                             .on_click(move |_, _, cx| {
                                                 if let Some(filter) = &filter {

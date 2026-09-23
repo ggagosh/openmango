@@ -429,3 +429,152 @@ async fn compare_sync_bulk_benchmark() {
     println!("undo 100,000 replacements: {:?}", started.elapsed());
     assert_eq!(sides[1].count_documents(doc! {"value":"target"}).await.unwrap(), 100_000);
 }
+
+mod database {
+    use super::*;
+    use openmango::bson::compare::IgnoreSet;
+    use openmango::connection::ops::compare_database::{
+        DatabaseSync, PairSync, PairSyncMessage, SyncMode, sync_pairs_async, undo_pairs_async,
+    };
+
+    type Logs = Vec<(usize, String, Arc<RestoreHandle>)>;
+
+    /// Runs a database sync from `source` into `target`, returning each collection's summary
+    /// and undo log.
+    async fn run(
+        client: &Client,
+        mode: SyncMode,
+        pairs: &[PairSync],
+        pass_rows: usize,
+        directory: &std::path::Path,
+    ) -> (Vec<SyncSummary>, Logs) {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let (result, messages) = tokio::join!(
+            sync_pairs_async(
+                DatabaseSync {
+                    clients: [client.clone(), client.clone()],
+                    databases: ["source".into(), "target".into()],
+                    target: Side::Right,
+                    mode,
+                    pairs: pairs.to_vec(),
+                    ignore: IgnoreSet::default(),
+                    restore_dir: directory.to_path_buf(),
+                    pass_rows,
+                },
+                CancellationToken::new(),
+                sender,
+            ),
+            receiver.collect::<Vec<_>>()
+        );
+        result.unwrap();
+        let (mut summaries, mut logs) = (Vec::new(), Vec::new());
+        for message in messages {
+            match message {
+                PairSyncMessage::Started(index, restore) => {
+                    logs.push((index, pairs[index].name.clone(), restore))
+                }
+                PairSyncMessage::Done(_, summary) => summaries.push(summary),
+                PairSyncMessage::Failed(index, error) => panic!("{}: {error}", pairs[index].name),
+                PairSyncMessage::Progress(..) => {}
+            }
+        }
+        (summaries, logs)
+    }
+
+    async fn undo_all(client: &Client, logs: Logs) {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let ((), messages) = tokio::join!(
+            undo_pairs_async(
+                client.clone(),
+                "target".into(),
+                logs,
+                CancellationToken::new(),
+                sender
+            ),
+            receiver.collect::<Vec<_>>()
+        );
+        for message in messages {
+            if let PairSyncMessage::Failed(_, error) = message {
+                panic!("{error}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn modes_write_only_their_kinds_create_missing_collections_and_undo() {
+        let (_container, client) = server("8.2.3").await;
+        let [source, target] = ["source", "target"].map(|name| client.database(name));
+        let orders = [source.collection::<Document>("orders"), target.collection("orders")];
+        orders[0].insert_many((1..=30).map(|id| doc! {"_id": id, "status": "paid"})).await.unwrap();
+        orders[1]
+            .insert_many((3..=35).map(|id| {
+                doc! {"_id": id, "status": if id % 10 == 0 { "refunded" } else { "paid" }}
+            }))
+            .await
+            .unwrap();
+        // Same value, other number type: minor, so no mode writes it.
+        let prices = [source.collection::<Document>("prices"), target.collection("prices")];
+        prices[0].insert_one(doc! {"_id": 1, "price": 5i32}).await.unwrap();
+        prices[1].insert_one(doc! {"_id": 1, "price": 5.0f64}).await.unwrap();
+        let audit = source.collection::<Document>("audit");
+        audit.insert_many((1..=7).map(|id| doc! {"_id": id, "action": id})).await.unwrap();
+        audit
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! {"action": 1})
+                    .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let pairs = [
+            PairSync { index: 0, name: "orders".into(), create: false },
+            PairSync { index: 1, name: "prices".into(), create: false },
+            PairSync { index: 2, name: "audit".into(), create: true },
+        ];
+        let originals = [raw_documents(&orders[1]).await, raw_documents(&prices[1]).await];
+        let directory = tempfile::tempdir().unwrap();
+
+        // One row per pass: every collection is read again until nothing is left to write.
+        let (summaries, logs) =
+            run(&client, SyncMode::AddMissing, &pairs, 1, directory.path()).await;
+        let written: Vec<_> =
+            summaries.iter().map(|s| (s.inserted, s.replaced, s.deleted)).collect();
+        assert_eq!(written, [(2, 0, 0), (0, 0, 0), (7, 0, 0)]);
+        assert_eq!(orders[1].count_documents(doc! {}).await.unwrap(), 35);
+        assert_eq!(orders[1].count_documents(doc! {"status": "refunded"}).await.unwrap(), 3);
+        let copied = target.collection::<Document>("audit");
+        assert_eq!(raw_documents(&copied).await, raw_documents(&audit).await);
+        let unique = copied
+            .list_indexes()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .any(|index| {
+                index.keys == doc! {"action": 1}
+                    && index.options.and_then(|o| o.unique) == Some(true)
+            });
+        assert!(unique, "the created collection carries the source's indexes");
+
+        undo_all(&client, logs).await;
+        assert_eq!(raw_documents(&orders[1]).await, originals[0]);
+        assert_eq!(copied.count_documents(doc! {}).await.unwrap(), 0);
+
+        // Mirror makes the target match, except for minor differences; the emptied audit
+        // collection already exists and is filled again.
+        let (summaries, logs) =
+            run(&client, SyncMode::Mirror, &pairs, 250_000, directory.path()).await;
+        let written: Vec<_> =
+            summaries.iter().map(|s| (s.inserted, s.replaced, s.deleted)).collect();
+        assert_eq!(written, [(2, 3, 5), (0, 0, 0), (7, 0, 0)]);
+        assert_eq!(raw_documents(&orders[1]).await, raw_documents(&orders[0]).await);
+        assert_eq!(raw_documents(&prices[1]).await, originals[1]);
+        assert_eq!(raw_documents(&copied).await, raw_documents(&audit).await);
+
+        undo_all(&client, logs).await;
+        assert_eq!(raw_documents(&orders[1]).await, originals[0]);
+    }
+}

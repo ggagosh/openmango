@@ -1,20 +1,30 @@
-//! Pairs the collections of two databases by name. Read-only; call on the connection runtime.
+//! Pairs the collections of two databases by name and compares them, then syncs them on
+//! request. Call on the connection runtime.
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::{StreamExt, TryStreamExt};
-use mongodb::bson::{Bson, Document, RawDocumentBuf};
+use mongodb::bson::{Bson, Document, RawDocumentBuf, doc};
+use mongodb::error::ErrorKind;
 use mongodb::results::CollectionType;
-use mongodb::{Client, IndexModel};
+use mongodb::{Client, Collection, IndexModel};
 
 use crate::bson::compare::IgnoreSet;
 use crate::connection::CancellationToken;
 use crate::connection::ops::compare::{
-    CompareCounts, CompareMessage, CompareOptions, CompareSummary, compare_collections_async,
+    CompareCounts, CompareMessage, CompareOptions, CompareSummary, DiffKind, DiffRow, Side,
+    compare_collections_async,
+};
+use crate::connection::ops::compare_sync::restore::RestoreHandle;
+use crate::connection::ops::compare_sync::{
+    SyncItem, SyncProgress, SyncSummary, operation_for, supports_sync, sync_collections_async,
+    undo_sync_async,
 };
 use crate::connection::ops::stats::{collection_stats_async, storage_count_and_size};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::is_system_collection;
 
 /// Sizes are read a few collections at a time, so a large database does not flood the server.
@@ -202,6 +212,7 @@ pub async fn compare_pairs_async(
             filter: Document::new(),
             ignore: ignore.clone(),
             row_limit: 0,
+            row_kinds: None,
         };
         let (progress, mut messages) = futures::channel::mpsc::unbounded();
         let forward = async {
@@ -240,6 +251,294 @@ pub fn pair_collections(
         a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.name.cmp(&b.name))
     });
     pairs
+}
+
+/// What a database sync writes into the target. It never drops collections, never writes to
+/// views or time-series collections, and leaves minor differences as they are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SyncMode {
+    /// Insert the documents the target lacks. Existing documents are left alone.
+    #[default]
+    AddMissing,
+    /// Also replace the documents that differ.
+    AddAndUpdate,
+    /// Also delete the documents only the target has.
+    Mirror,
+}
+
+impl SyncMode {
+    pub const ALL: [Self; 3] = [Self::AddMissing, Self::AddAndUpdate, Self::Mirror];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AddMissing => "Add missing",
+            Self::AddAndUpdate => "Add and update",
+            Self::Mirror => "Mirror",
+        }
+    }
+
+    /// The difference kinds this mode writes when `target` receives the changes.
+    pub fn kinds(self, target: Side) -> Vec<DiffKind> {
+        let (missing, extra) = match target {
+            Side::Right => (DiffKind::OnlyLeft, DiffKind::OnlyRight),
+            Side::Left => (DiffKind::OnlyRight, DiffKind::OnlyLeft),
+        };
+        match self {
+            Self::AddMissing => vec![missing],
+            Self::AddAndUpdate => vec![missing, DiffKind::Different],
+            Self::Mirror => vec![missing, DiffKind::Different, extra],
+        }
+    }
+
+    /// Inserts, replacements and deletes this mode makes, from a finished scan's counts.
+    pub fn writes(self, counts: &CompareCounts, target: Side) -> [u64; 3] {
+        let (missing, extra) = match target {
+            Side::Right => (counts.only_left, counts.only_right),
+            Side::Left => (counts.only_right, counts.only_left),
+        };
+        match self {
+            Self::AddMissing => [missing, 0, 0],
+            Self::AddAndUpdate => [missing, counts.different, 0],
+            Self::Mirror => [missing, counts.different, extra],
+        }
+    }
+}
+
+/// One collection to sync: its index in the listing, and whether the target lacks it.
+#[derive(Clone, Debug)]
+pub struct PairSync {
+    pub index: usize,
+    pub name: String,
+    pub create: bool,
+}
+
+pub enum PairSyncMessage {
+    /// The collection's undo log, sent before its first write.
+    Started(usize, Arc<RestoreHandle>),
+    Progress(usize, SyncSummary),
+    Done(usize, SyncSummary),
+    Failed(usize, String),
+}
+
+/// A database sync: `pairs` from the other side into `target`, matched by `_id`.
+pub struct DatabaseSync {
+    pub clients: [Client; 2],
+    pub databases: [String; 2],
+    pub target: Side,
+    pub mode: SyncMode,
+    pub pairs: Vec<PairSync>,
+    pub ignore: IgnoreSet,
+    pub restore_dir: PathBuf,
+    /// Differences written per read of a collection: `MAX_ROWS`, lower in tests.
+    pub pass_rows: usize,
+}
+
+/// Runs a database sync one collection at a time. Each collection is scanned for the kinds the
+/// mode writes, then written through the guarded sync with its own undo log. A collection the
+/// target lacks is first created like the source's.
+pub async fn sync_pairs_async(
+    sync: DatabaseSync,
+    cancellation: CancellationToken,
+    sender: UnboundedSender<PairSyncMessage>,
+) -> Result<()> {
+    let DatabaseSync { clients, databases, target, mode, pairs, ignore, restore_dir, pass_rows } =
+        sync;
+    let destination = if target == Side::Left { 0 } else { 1 };
+    if !supports_sync(&clients[destination]).await? {
+        return Err(Error::Parse(
+            "Sync and undo require MongoDB 8.0 or newer on the target. Older servers support comparison only.".into(),
+        ));
+    }
+    for pair in pairs {
+        if cancellation.is_cancelled() || sender.is_closed() {
+            break;
+        }
+        let [left, right] = [0, 1].map(|side| {
+            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&pair.name)
+        });
+        let run =
+            SyncPass { target, mode, ignore: &ignore, pass_rows, cancellation: &cancellation };
+        let result = run.pair(&pair, [left, right], &restore_dir, &sender).await;
+        let _ = sender.unbounded_send(match result {
+            Ok(summary) => PairSyncMessage::Done(pair.index, summary),
+            Err(error) => PairSyncMessage::Failed(pair.index, error.to_string()),
+        });
+    }
+    Ok(())
+}
+
+struct SyncPass<'a> {
+    target: Side,
+    mode: SyncMode,
+    ignore: &'a IgnoreSet,
+    pass_rows: usize,
+    cancellation: &'a CancellationToken,
+}
+
+impl SyncPass<'_> {
+    async fn pair(
+        &self,
+        pair: &PairSync,
+        sides: [Collection<RawDocumentBuf>; 2],
+        restore_dir: &Path,
+        sender: &UnboundedSender<PairSyncMessage>,
+    ) -> Result<SyncSummary> {
+        let (source, destination) = if self.target == Side::Left { (1, 0) } else { (0, 1) };
+        if pair.create {
+            create_like(&sides[source], &sides[destination]).await?;
+        }
+        let directory = restore_dir.to_path_buf();
+        let restore = Arc::new(
+            tokio::task::spawn_blocking(move || RestoreHandle::create(&directory))
+                .await
+                .map_err(|e| Error::Parse(e.to_string()))??,
+        );
+        let _ = sender.unbounded_send(PairSyncMessage::Started(pair.index, restore.clone()));
+        let mut total = SyncSummary::default();
+        // ponytail: a pass holds `pass_rows` differences, then the collection is read again for
+        // the rest; millions of differences mean several reads. Stream rows into the sync if slow.
+        loop {
+            let options = CompareOptions {
+                fields: vec!["_id".into()],
+                filter: Document::new(),
+                ignore: self.ignore.clone(),
+                row_limit: self.pass_rows,
+                row_kinds: Some(self.mode.kinds(self.target)),
+            };
+            let (rows_sender, messages) = futures::channel::mpsc::unbounded();
+            let (scan, rows) = tokio::join!(
+                compare_collections_async(
+                    sides[0].clone(),
+                    sides[1].clone(),
+                    options,
+                    self.cancellation.clone(),
+                    rows_sender
+                ),
+                collect_rows(messages)
+            );
+            let scan = scan?;
+            if scan.cancelled || rows.is_empty() {
+                total.cancelled |= scan.cancelled;
+                break;
+            }
+            let items = rows
+                .into_iter()
+                .enumerate()
+                .filter_map(|(row_index, row)| {
+                    Some(SyncItem {
+                        row_index,
+                        operation: operation_for(row.kind, self.target)?,
+                        row,
+                    })
+                })
+                .collect();
+            let (progress, mut updates) = futures::channel::mpsc::unbounded::<SyncProgress>();
+            let base = total.clone();
+            let forward = async {
+                while let Some(update) = updates.next().await {
+                    let mut running = base.clone();
+                    running.absorb(&update.summary);
+                    let _ = sender.unbounded_send(PairSyncMessage::Progress(pair.index, running));
+                }
+            };
+            let (pass, ()) = tokio::join!(
+                sync_collections_async(
+                    sides.clone(),
+                    self.target,
+                    vec!["_id".into()],
+                    items,
+                    restore.clone(),
+                    self.cancellation.clone(),
+                    progress
+                ),
+                forward
+            );
+            let pass = pass?;
+            total.absorb(&pass);
+            // A pass that wrote nothing would find the same rows again.
+            if !scan.truncated || pass.cancelled || pass.uncertain > 0 || pass.written == 0 {
+                break;
+            }
+        }
+        Ok(total)
+    }
+}
+
+async fn collect_rows(mut messages: UnboundedReceiver<CompareMessage>) -> Vec<DiffRow> {
+    let mut rows = Vec::new();
+    while let Some(message) = messages.next().await {
+        if let CompareMessage::Progress { new_rows, .. } = message {
+            rows.extend(new_rows);
+        }
+    }
+    rows
+}
+
+/// Creates `target` with the options and indexes of `source`. A collection created in the
+/// meantime is used as it is.
+async fn create_like(
+    source: &Collection<RawDocumentBuf>,
+    target: &Collection<RawDocumentBuf>,
+) -> Result<()> {
+    let spec = source
+        .client()
+        .database(&source.namespace().db)
+        .list_collections()
+        .filter(doc! {"name": source.name()})
+        .await?
+        .try_next()
+        .await?
+        .ok_or_else(|| Error::Parse(format!("{} no longer exists", source.namespace())))?;
+    let database = target.client().database(&target.namespace().db);
+    match database.create_collection(target.name()).with_options(spec.options).await {
+        Ok(()) => {}
+        // NamespaceExists
+        Err(error) if matches!(*error.kind, ErrorKind::Command(ref e) if e.code == 48) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let indexes: Vec<IndexModel> = source
+        .list_indexes()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .filter(|index| index.options.as_ref().and_then(|o| o.name.as_deref()) != Some("_id_"))
+        .collect();
+    if !indexes.is_empty() {
+        target.create_indexes(indexes).await?;
+    }
+    Ok(())
+}
+
+/// Undoes a database sync one collection at a time, each from its own undo log.
+pub async fn undo_pairs_async(
+    client: Client,
+    database: String,
+    logs: Vec<(usize, String, Arc<RestoreHandle>)>,
+    cancellation: CancellationToken,
+    sender: UnboundedSender<PairSyncMessage>,
+) {
+    for (index, name, restore) in logs {
+        if cancellation.is_cancelled() || sender.is_closed() {
+            break;
+        }
+        let _ = sender.unbounded_send(PairSyncMessage::Started(index, restore.clone()));
+        let (progress, mut updates) = futures::channel::mpsc::unbounded::<SyncProgress>();
+        let forward = async {
+            while let Some(update) = updates.next().await {
+                let _ = sender.unbounded_send(PairSyncMessage::Progress(index, update.summary));
+            }
+        };
+        let collection = client.database(&database).collection::<RawDocumentBuf>(&name);
+        let (result, ()) = tokio::join!(
+            undo_sync_async(collection, restore, cancellation.clone(), progress),
+            forward
+        );
+        let _ = sender.unbounded_send(match result {
+            Ok(summary) => PairSyncMessage::Done(index, summary),
+            Err(error) => PairSyncMessage::Failed(index, error.to_string()),
+        });
+    }
 }
 
 #[cfg(test)]

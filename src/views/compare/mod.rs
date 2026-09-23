@@ -416,8 +416,7 @@ impl Render for CompareView {
         } else {
             self.render_empty(id, window, cx)
         };
-        let sync_bar =
-            if databases { div().into_any_element() } else { self.render_sync_bar(id, cx) };
+        let sync_bar = self.render_sync_bar(id, cx);
         div()
             .id("compare-view")
             .debug_selector(|| "compare-view".into())

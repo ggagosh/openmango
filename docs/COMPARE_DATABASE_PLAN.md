@@ -25,8 +25,11 @@ collection hands it to the collection comparison that already exists, with sync 
    results. After a sync there, **Recheck** reruns that one collection in the database tab.
 6. **Views and time-series collections are listed but not compared,** with the reason. `system.*`
    collections are not listed.
-7. **No database-level sync.** A collection that exists on one side only hands off to Transfer,
-   prefilled, to copy it across.
+7. **Database sync by collection and mode, not by document** (revised 2026-09-23, PR 4; the first
+   version shipped without it). Nobody reviews 200,000 documents one by one. Navicat's pattern,
+   per collection with insert, update and delete counts, fits better, so the sync bar offers
+   three modes: **Add missing**, **Add and update** and **Mirror**. Copy to… through Transfer
+   stays for a one-off copy of a single collection.
 8. **Counts only.** The database run stores no documents or difference rows.
 
 ## Implementation status — 2026-09-23
@@ -49,6 +52,34 @@ collation), not by its name. The detail lists indexes found on one side only, th
 adds "indexes differ", and the status line counts such collections. A collection on one side only
 offers **Copy to Right…** (or Left), also on `enter`, which opens Transfer with both sides filled
 in for review. Validators remain under Later.
+
+**PR 4, database sync: built.** The collection scope's sync bar now serves the database scope:
+**Sync to** Left or Right, then **Write** one of three modes, then a tick box on each collection
+the mode can write, all ticked. "Review and sync N collections" asks once, with totals, and
+counts each collection as one write against a Production connection.
+
+| Mode | Writes into the target |
+| --- | --- |
+| Add missing | Inserts documents it lacks. Existing documents are left alone |
+| Add and update | Also replaces documents that differ. Nothing is deleted |
+| Mirror | Also deletes documents only the target has |
+
+- **Never touched in any mode:** collections on the target only (never dropped), views and
+  time-series collections, minor differences (number type, field order), and collections under
+  Skip collections.
+- **A collection the target lacks** is created with the source's options and indexes, then
+  filled through the same sync. Its insert count is the source's estimate, shown with `~`.
+- **Engine:** `sync_pairs_async` in `compare_database.rs`, one collection at a time. Each is scanned
+  for the kinds the mode writes (`CompareOptions::row_kinds`), then written by the existing guarded
+  sync, which rereads each document and skips it if it changed since the scan. A collection with
+  more than 250,000 such differences is written in passes, reading it again for the rest.
+- **One Undo for the run:** each collection has its own encrypted undo log; Undo restores them
+  one by one. Collections the sync created stay, empty. As in the collection scope, undo lasts
+  until the tab closes or the databases are compared again.
+- **After a sync or undo,** the collections it wrote are rechecked, so their rows show what they
+  hold now. The row marker shows the outcome, and the detail says what was written.
+- The target needs MongoDB 8.0 or newer, as in the collection scope; the source can be older.
+  Saved sync tasks and schedules wait for Tasks.
 
 ---
 

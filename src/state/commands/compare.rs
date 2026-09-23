@@ -235,7 +235,7 @@ impl AppCommands {
     }
 
     /// Pass two, and Recheck: the content scan of `scans`, one collection at a time.
-    fn scan_database_pairs(
+    pub(super) fn scan_database_pairs(
         state: Entity<AppState>,
         id: Uuid,
         run: u64,

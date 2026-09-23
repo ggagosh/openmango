@@ -92,6 +92,19 @@ pub struct SyncSummary {
 }
 
 impl SyncSummary {
+    /// Adds another run's totals, e.g. the next pass over the same collection.
+    pub fn absorb(&mut self, other: &SyncSummary) {
+        self.processed += other.processed;
+        self.written += other.written;
+        self.skipped += other.skipped;
+        self.failed += other.failed;
+        self.uncertain += other.uncertain;
+        self.inserted += other.inserted;
+        self.replaced += other.replaced;
+        self.deleted += other.deleted;
+        self.cancelled |= other.cancelled;
+    }
+
     fn record(&mut self, operation: Operation, outcome: &RowOutcome) {
         self.processed += 1;
         match outcome {

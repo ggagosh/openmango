@@ -1112,3 +1112,158 @@ fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
     draw(cx);
     assert!(state.update(cx, |state, _| state.compare_tab(id).unwrap().pair_tokens[1].is_none()));
 }
+
+/// orders differs (3 changed, 2 left only, 5 right only); audit exists on the left only.
+fn synced_database_tab(skip: &[&str]) -> CompareTabState {
+    use crate::connection::ops::compare::{CompareCounts, CompareSummary};
+    use crate::connection::ops::compare_database::PairMessage;
+    let mut config = database_config([uuid::Uuid::new_v4(); 2]);
+    config.skip = skip.iter().map(|name| name.to_string()).collect();
+    let mut tab = CompareTabState::new(config);
+    tab.begin();
+    tab.receive_pairs(Ok(listing()));
+    tab.receive_pair(PairMessage::Started(1));
+    tab.receive_pair(PairMessage::Done(
+        1,
+        CompareSummary {
+            counts: CompareCounts {
+                identical: 10,
+                different: 3,
+                only_left: 2,
+                only_right: 5,
+                ..Default::default()
+            },
+            skipped: None,
+            truncated: false,
+            cancelled: false,
+            elapsed: Default::default(),
+        },
+    ));
+    tab.finish_scan();
+    tab
+}
+
+#[test]
+fn database_sync_offers_what_each_mode_writes_and_rechecks_created_collections() {
+    use crate::connection::ops::compare::Side;
+    use crate::connection::ops::compare_database::{PairSyncMessage, SyncMode};
+    use crate::connection::ops::compare_sync::{SyncSummary, restore::RestoreHandle};
+    use crate::state::compare_sync::{DatabaseSyncPlan, SyncCandidate};
+    let mut tab = synced_database_tab(&[]);
+    assert!(tab.sync_candidates().is_empty(), "nothing is offered before a target");
+    tab.sync.set_target(Side::Right);
+    // Views and the target's own collections are never offered.
+    let candidate = |index, create, writes| SyncCandidate { index, create, writes };
+    assert_eq!(
+        tab.sync_candidates(),
+        [candidate(0, true, [10, 0, 0]), candidate(1, false, [2, 0, 0])]
+    );
+    tab.sync.set_mode(SyncMode::Mirror);
+    assert_eq!(tab.sync_candidates()[1].writes, [2, 3, 5]);
+    // Syncing into the left: the right-only collection is created, audit is left alone.
+    tab.sync.clear_target();
+    tab.sync.set_target(Side::Left);
+    assert_eq!(
+        tab.sync_candidates(),
+        [candidate(1, false, [5, 3, 2]), candidate(3, true, [10, 0, 0])]
+    );
+
+    tab.sync.clear_target();
+    tab.sync.set_target(Side::Right);
+    tab.sync.toggle_pair(1);
+    let plan = DatabaseSyncPlan::from_tab(&tab).unwrap();
+    assert_eq!(
+        plan.pairs.iter().map(|p| (p.name.as_str(), p.create)).collect::<Vec<_>>(),
+        [("audit", true)]
+    );
+    assert!(plan.estimated);
+    assert!(plan.matches(&tab));
+    tab.sync.toggle_pair(1);
+    assert!(!plan.matches(&tab), "changing the selection voids a reviewed plan");
+
+    // The created collection now exists on both sides, so the sync can recheck it.
+    let directory = tempfile::tempdir().unwrap();
+    let log = Arc::new(RestoreHandle::create(directory.path()).unwrap());
+    tab.sync.running = true;
+    tab.receive_pair_sync(PairSyncMessage::Started(0, log));
+    tab.receive_pair_sync(PairSyncMessage::Done(
+        0,
+        SyncSummary { inserted: 10, written: 10, ..Default::default() },
+    ));
+    assert_eq!(tab.sync.logs.len(), 1);
+    assert_eq!(tab.pair_sync_totals().written, 10);
+    assert!(tab.recheck_pairs(&[0]).is_empty(), "nothing is rechecked while the sync runs");
+    tab.sync.running = false;
+    assert_eq!(tab.recheck_pairs(&[0]).len(), 1);
+
+    let tab = synced_database_tab(&["audit"]);
+    let mut tab = tab;
+    tab.sync.set_target(Side::Right);
+    assert_eq!(
+        tab.sync_candidates(),
+        [candidate(1, false, [2, 0, 0])],
+        "Skip collections is respected"
+    );
+}
+
+#[gpui_kit::test]
+fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
+    use crate::connection::ops::compare::Side;
+    use crate::connection::ops::compare_database::SyncMode;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply_design_tokens(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let state = cx.new(|_| {
+        AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        )
+    });
+    let id = state.update(cx, |state, cx| {
+        state.open_compare_tab(None, cx);
+        let id = state.active_compare_tab_id().unwrap();
+        let tab = state.compare_tab_mut(id).unwrap();
+        *tab = synced_database_tab(&[]);
+        tab.sync.set_target(Side::Right);
+        id
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        Root::new(view, window, cx).bordered(false)
+    });
+    cx.simulate_resize(size(px(1200.0), px(900.0)));
+    draw(cx);
+    draw(cx);
+    let find = |cx: &mut VisualTestContext, id: gpui_kit::ElementId| {
+        cx.update(|window, _| gpui_kit::base::test_support::snapshots(window))
+            .into_iter()
+            .find(|node| node.path().last() == Some(&id))
+    };
+    // Only what the sync can write gets a box: the view and the target's own collection do not.
+    for (index, expected) in [(0usize, true), (1, true), (2, false), (3, false)] {
+        assert_eq!(find(cx, ("sync-pair", index).into()).is_some(), expected, "row {index}");
+    }
+    let orders = find(cx, ("sync-pair", 1usize).into()).unwrap();
+    cx.simulate_click(orders.bounds().center(), Default::default());
+    draw(cx);
+    state.read_with(cx, |state, _| {
+        let tab = state.compare_tab(id).unwrap();
+        assert!(tab.sync.excluded.contains(&1));
+        assert_eq!(tab.sync_selected().len(), 1);
+    });
+    let mirror = find(cx, ("sync-mode", 2usize).into()).expect("mode radios");
+    cx.simulate_click(mirror.bounds().center(), Default::default());
+    draw(cx);
+    state.read_with(cx, |state, _| {
+        let tab = state.compare_tab(id).unwrap();
+        assert_eq!(tab.sync.mode, SyncMode::Mirror);
+        assert!(tab.sync.excluded.is_empty(), "a new mode starts from every collection");
+    });
+    assert!(cx.debug_bounds("compare-sync-totals").is_some());
+    for width in [700.0, 430.0] {
+        cx.simulate_resize(size(px(width), px(1000.0)));
+        draw(cx);
+    }
+}
