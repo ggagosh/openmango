@@ -211,7 +211,7 @@ impl CompareView {
             let names = config.sides.each_ref().map(|side| endpoint_label(app, side));
             bar = bar.child(note(
                 format!(
-                    "These results compared {} with {} · Match by {} · {}{}",
+                    "These results compared {} with {} · Match by {} · {}{}{}",
                     names[0],
                     names[1],
                     config.fields.join(", "),
@@ -224,7 +224,8 @@ impl CompareView {
                         String::new()
                     } else {
                         format!(" · Ignoring {}", config.ignore.join(", "))
-                    }
+                    },
+                    if config.ignore_array_order { " · Array order ignored" } else { "" }
                 ),
                 cx,
             ));

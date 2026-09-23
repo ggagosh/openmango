@@ -577,6 +577,11 @@ fn render_row(
                 Some(PathSegment::Index(i)) => format!("[{i}]"),
                 None => "Document".into(),
             };
+            let name = if *kind == Some(ChangeKind::ArrayOrder) {
+                format!("{name} · item order")
+            } else {
+                name
+            };
             let field = indent(path.len().saturating_sub(1));
             let field = if *container {
                 let path = path.clone();

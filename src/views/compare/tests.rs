@@ -514,6 +514,37 @@ fn details_keep_ignored_ids_visible_and_fold_unchanged_fields() {
 }
 
 #[test]
+fn reordered_arrays_are_one_row_only_when_ignored() {
+    use crate::bson::compare::ChangeKind;
+    let pair = CompareDetail {
+        documents: [
+            vec![doc! {"_id": 1, "tags": ["a", "b"]}],
+            vec![doc! {"_id": 1, "tags": ["b", "a"]}],
+        ],
+        changed_since_scan: false,
+    };
+    let mut config = CompareConfig::default();
+    let rows = detail_rows(&pair, &config, &Default::default()).unwrap();
+    // Order counts: the array expands and each moved item is its own change.
+    assert!(matches!(rows[0], DetailRow::Field { kind: None, container: true, .. }));
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row, DetailRow::Field { kind: Some(ChangeKind::Value), .. }))
+    );
+    config.ignore_array_order = true;
+    let rows = detail_rows(&pair, &config, &Default::default()).unwrap();
+    assert!(matches!(
+        rows[0],
+        DetailRow::Field { kind: Some(ChangeKind::ArrayOrder), container: false, .. }
+    ));
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, DetailRow::Field { kind: Some(ChangeKind::Value), .. }))
+    );
+}
+
+#[test]
 fn compare_config_roundtrips_without_results_and_drop_cancels_work() {
     let config = CompareConfig {
         sides: [

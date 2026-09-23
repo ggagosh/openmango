@@ -251,7 +251,7 @@ impl AppCommands {
                 Some((
                     [left, right],
                     config.sides.each_ref().map(|side| side.database.clone()),
-                    crate::bson::compare::IgnoreSet::new(&config.ignore),
+                    config.ignore_set(),
                     app.connection_manager().runtime_handle(),
                 ))
             })

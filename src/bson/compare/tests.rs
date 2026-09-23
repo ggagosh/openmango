@@ -190,3 +190,35 @@ fn summaries_saturate_and_keep_only_three_paths() {
         }
     );
 }
+
+#[test]
+fn array_order_is_minor_only_when_ignored() {
+    let left = doc! { "tags": ["a", "b", { "x": 1 }], "n": [[1, 2], [3]] };
+    let reordered = doc! { "tags": [{ "x": 1 }, "a", "b"], "n": [[3], [1, 2]] };
+    let off = IgnoreSet::default();
+    let on = IgnoreSet::default().ignoring_array_order(true);
+    assert!(matches!(compare(left.clone(), reordered.clone(), &off), Verdict::Different { .. }));
+    assert_eq!(
+        compare(left.clone(), reordered.clone(), &on),
+        Verdict::Minor(MinorFlags::ARRAY_ORDER)
+    );
+    // One change per reordered array, at the array itself; nothing inside it is listed.
+    let changes = field_changes(&left, &reordered, &on).unwrap();
+    assert_eq!(changes.len(), 2);
+    assert!(
+        changes
+            .iter()
+            .all(|change| change.kind == ChangeKind::ArrayOrder && change.path.len() == 1)
+    );
+    // Different items, a different count, or a duplicate stay different.
+    for right in [
+        doc! { "tags": ["a", "c", { "x": 1 }], "n": [[1, 2], [3]] },
+        doc! { "tags": ["a", "b"], "n": [[1, 2], [3]] },
+        doc! { "tags": ["a", "a", "b", { "x": 1 }], "n": [[1, 2], [3]] },
+    ] {
+        assert!(matches!(compare(left.clone(), right, &on), Verdict::Different { .. }));
+    }
+    // ponytail ceiling: a moved item that also changed number type is a real difference.
+    let typed = doc! { "tags": [{ "x": 1.0 }, "a", "b"], "n": [[1, 2], [3]] };
+    assert!(matches!(compare(left, typed, &on), Verdict::Different { .. }));
+}

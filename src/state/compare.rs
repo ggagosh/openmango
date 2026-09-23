@@ -59,6 +59,8 @@ pub struct CompareConfig {
     pub ignore: Vec<String>,
     /// Database scope: collections left out of the content scan.
     pub skip: Vec<String>,
+    /// Arrays with the same items in another order count as minor.
+    pub ignore_array_order: bool,
 }
 
 impl Default for CompareConfig {
@@ -70,6 +72,7 @@ impl Default for CompareConfig {
             filter: String::new(),
             ignore: Vec::new(),
             skip: Vec::new(),
+            ignore_array_order: false,
         }
     }
 }
@@ -89,9 +92,14 @@ impl CompareConfig {
         }
     }
 
+    /// The one place comparison rules are built; database scope always matches by _id.
     pub fn ignore_set(&self) -> IgnoreSet {
-        let ignore = IgnoreSet::new(&self.ignore);
-        if self.fields == ["_id"] { ignore } else { ignore.ignoring_id() }
+        let ignore = IgnoreSet::new(&self.ignore).ignoring_array_order(self.ignore_array_order);
+        if self.scope == CompareScope::Databases || self.fields == ["_id"] {
+            ignore
+        } else {
+            ignore.ignoring_id()
+        }
     }
 }
 

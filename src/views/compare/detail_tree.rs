@@ -138,16 +138,19 @@ impl Tree<'_> {
 
     fn field(&mut self, path: Vec<PathSegment>) {
         let values = self.documents.map(|d| get_bson_at_path(d, &path));
-        let container = matches!(
-            values,
-            [Some(Bson::Document(_)), Some(Bson::Document(_))]
-                | [Some(Bson::Array(_)), Some(Bson::Array(_))]
-                | [Some(Bson::Document(_) | Bson::Array(_)), None]
-                | [None, Some(Bson::Document(_) | Bson::Array(_))]
-        );
+        let kind = self.kinds.get(&path).copied();
+        // A reordered array is one minor change; its items are equal, so there is nothing to expand.
+        let container = kind != Some(ChangeKind::ArrayOrder)
+            && matches!(
+                values,
+                [Some(Bson::Document(_)), Some(Bson::Document(_))]
+                    | [Some(Bson::Array(_)), Some(Bson::Array(_))]
+                    | [Some(Bson::Document(_) | Bson::Array(_)), None]
+                    | [None, Some(Bson::Document(_) | Bson::Array(_))]
+            );
         let expanded = container && !self.expansion.collapsed.contains(&path);
         self.rows.push(DetailRow::Field {
-            kind: self.kinds.get(&path).copied(),
+            kind,
             path: path.clone(),
             informational: false,
             container,

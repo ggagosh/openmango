@@ -1083,6 +1083,30 @@ fn settings_panel(
         }
         _ => scope.child(note("A MongoDB filter, applied to both collections.", cx)),
     };
+    let array_order = {
+        use gpui_kit::base::CheckboxState;
+        let state = state.clone();
+        crate::components::tri_checkbox::tri_checkbox(
+            "compare-array-order",
+            if config.ignore_array_order {
+                CheckboxState::Checked
+            } else {
+                CheckboxState::Unchecked
+            },
+            "Ignore array order",
+            false,
+            cx,
+        )
+        .on_change(move |value, _, _, cx| {
+            state.update(cx, |app, cx| {
+                app.update_compare_config(
+                    id,
+                    |config| config.ignore_array_order = value == CheckboxState::Checked,
+                    cx,
+                )
+            })
+        })
+    };
     let ignoring = setting_group("Ignore fields", cx)
         .child(token_editor(state.clone(), id, &config.ignore, TokenList::Ignore, ignore))
         .child(note(
@@ -1092,7 +1116,9 @@ fn settings_panel(
                 "Left out of value comparisons, for example updatedAt."
             },
             cx,
-        ));
+        ))
+        .child(array_order)
+        .child(note("The same items in another order count as a minor difference.", cx));
     div()
         .id("compare-settings-panel")
         .debug_selector(|| "compare-settings-panel".into())

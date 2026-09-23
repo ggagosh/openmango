@@ -3,28 +3,41 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use mongodb::bson::{Bson, Document, RawBsonRef, RawDocument, RawDocumentBuf};
+use mongodb::bson::{Bson, Document, RawArray, RawBsonRef, RawDocument, RawDocumentBuf};
 
 use super::PathSegment;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct IgnoreSet(Vec<Vec<String>>);
+pub struct IgnoreSet {
+    paths: Vec<Vec<String>>,
+    /// Arrays holding the same items in another order are a minor difference.
+    array_order: bool,
+}
 
 impl IgnoreSet {
     pub fn new(paths: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        Self(
-            paths.into_iter().map(|s| s.as_ref().split('.').map(str::to_owned).collect()).collect(),
-        )
+        Self {
+            paths: paths
+                .into_iter()
+                .map(|s| s.as_ref().split('.').map(str::to_owned).collect())
+                .collect(),
+            array_order: false,
+        }
     }
 
     pub fn ignoring_id(mut self) -> Self {
-        self.0.push(vec!["_id".into()]);
+        self.paths.push(vec!["_id".into()]);
+        self
+    }
+
+    pub fn ignoring_array_order(mut self, ignore: bool) -> Self {
+        self.array_order = ignore;
         self
     }
 
     fn contains(&self, path: &[Segment<'_>]) -> bool {
-        self.0.iter().any(|ignored| {
+        self.paths.iter().any(|ignored| {
             ignored.len() == path.len()
                 && ignored.iter().zip(path).all(|(a, b)| match b {
                     Segment::Key(b) => a == b,
@@ -40,6 +53,7 @@ pub struct MinorFlags(u8);
 impl MinorFlags {
     pub const FIELD_ORDER: Self = Self(1);
     pub const NUMBER_TYPE: Self = Self(2);
+    pub const ARRAY_ORDER: Self = Self(4);
 
     pub fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 == flag.0
@@ -58,6 +72,7 @@ pub enum ChangeKind {
     Value,
     FieldOrder,
     NumberType,
+    ArrayOrder,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -362,6 +377,10 @@ fn walk_value<'a>(
             if a.as_bytes() == b.as_bytes() {
                 return Ok(());
             }
+            if ignore.array_order && same_items(a, b)? {
+                visit(path, left, right, ChangeKind::ArrayOrder);
+                return Ok(());
+            }
             let mut a = a.into_iter();
             let mut b = b.into_iter();
             let mut index = 0;
@@ -390,6 +409,22 @@ fn walk_value<'a>(
     Ok(())
 }
 
+/// ponytail: items compare byte for byte, so an item that moved and also changed number type or
+/// field order makes the arrays different; compare items with the walker if that matters.
+fn same_items(a: &RawArray, b: &RawArray) -> Result<bool> {
+    let items = |array: &RawArray| -> Result<Vec<Vec<u8>>> {
+        let mut items = Vec::new();
+        for value in array {
+            let mut item = RawDocumentBuf::new();
+            item.append_ref("", value.map_err(invalid_bson)?);
+            items.push(item.into_bytes());
+        }
+        items.sort_unstable();
+        Ok(items)
+    };
+    Ok(items(a)? == items(b)?)
+}
+
 /// Parsing errors fail the comparison. Byte-identical documents bypass parsing entirely.
 pub fn compare_raw(left: &RawDocument, right: &RawDocument, ignore: &IgnoreSet) -> Result<Verdict> {
     if left.as_bytes() == right.as_bytes() {
@@ -401,6 +436,7 @@ pub fn compare_raw(left: &RawDocument, right: &RawDocument, ignore: &IgnoreSet) 
     walk_document(left, right, &mut Vec::new(), ignore, &mut |path, _, _, kind| match kind {
         ChangeKind::FieldOrder => flags.0 |= MinorFlags::FIELD_ORDER.0,
         ChangeKind::NumberType => flags.0 |= MinorFlags::NUMBER_TYPE.0,
+        ChangeKind::ArrayOrder => flags.0 |= MinorFlags::ARRAY_ORDER.0,
         ChangeKind::Value => {
             changed = changed.saturating_add(1);
             if paths.len() < 3 {
