@@ -450,7 +450,13 @@ impl CompareView {
         let summary = if databases { &totals } else { &sync.summary };
         let title = format!(
             "{} {}",
-            if sync.undoing { "Undo" } else { "Sync" },
+            if sync.undoing {
+                "Undo"
+            } else if sync.field_copies {
+                "Copy"
+            } else {
+                "Sync"
+            },
             if summary.cancelled {
                 "cancelled"
             } else if sync.running {
@@ -530,7 +536,7 @@ impl CompareView {
                         .small()
                         .outline()
                         .icon(IconName::Undo2)
-                        .label("Undo sync")
+                        .label(if sync.field_copies { "Undo copies" } else { "Undo sync" })
                         .disabled(app.compare_sync_disabled_reason(id, true).is_some())
                         .on_click(move |_, window, cx| {
                             if databases {

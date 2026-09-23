@@ -123,6 +123,7 @@ fn compare_detail_columns_align_with_headers_for_one_sided_documents(cx: &mut Te
         tab.detail = Some(Arc::new(CompareDetail {
             documents: [vec![doc! {"_id":1,"logId":"record-1", "message":"long value ".repeat(120), "nested":{"value":123}, "deep":deep}], Vec::new()],
             changed_since_scan: false,
+            hashes: [0; 2],
         }));
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -487,6 +488,7 @@ fn compare_setup_wraps_and_tab_switches_preserve_setup(cx: &mut TestAppContext) 
                 vec![doc! {"_id":2, "sku":"A", "price":2, "same":true}],
             ],
             changed_since_scan: true,
+            hashes: [0; 2],
         }));
         cx.notify();
     });
@@ -503,6 +505,7 @@ fn details_keep_ignored_ids_visible_and_fold_unchanged_fields() {
             vec![doc! {"_id": 2, "sku": "x", "nested": {"price": 2}, "same": true}],
         ],
         changed_since_scan: false,
+        hashes: [0; 2],
     };
     let config = CompareConfig { fields: vec!["sku".into()], ..Default::default() };
     let mut expansion = super::detail_tree::Expansion::default();
@@ -522,6 +525,7 @@ fn reordered_arrays_are_one_row_only_when_ignored() {
             vec![doc! {"_id": 1, "tags": ["b", "a"]}],
         ],
         changed_since_scan: false,
+        hashes: [0; 2],
     };
     let mut config = CompareConfig::default();
     let rows = detail_rows(&pair, &config, &Default::default()).unwrap();
@@ -735,6 +739,7 @@ fn two_picked_documents_open_side_by_side_with_id_as_information(cx: &mut TestAp
     let pair = CompareDetail {
         documents: documents.clone().map(|document| vec![document]),
         changed_since_scan: false,
+        hashes: [0; 2],
     };
     let config = CompareConfig { fields: Vec::new(), ..Default::default() };
     let rows = detail_rows(&pair, &config, &Default::default()).unwrap();
@@ -1331,4 +1336,120 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         cx.simulate_resize(size(px(width), px(1000.0)));
         draw(cx);
     }
+}
+
+#[gpui_kit::test]
+fn field_copy_rules_follow_keys_documents_and_sync_state(cx: &mut TestAppContext) {
+    use crate::bson::PathSegment::{Index, Key};
+    use crate::connection::ops::compare::{CompareSummary, DiffKind, DiffRow, Side};
+    use crate::models::{ActiveConnection, SavedConnection};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply_design_tokens(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let client = runtime.block_on(async {
+        mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
+    });
+    let state = cx.new(|_| {
+        let mut state = AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        );
+        state.connections = vec![saved.clone()];
+        state.insert_active_connection(
+            saved.id,
+            ActiveConnection {
+                config: saved.clone(),
+                client,
+                databases: vec!["shop".into()],
+                collections: Default::default(),
+                collection_details: Default::default(),
+                runtime_meta: Default::default(),
+            },
+        );
+        state
+    });
+    let id = state.update(cx, |state, cx| {
+        state.open_compare_tab(None, cx);
+        let id = state.active_compare_tab_id().unwrap();
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.config.sides = ["orders", "orders_copy"].map(|collection| CompareEndpoint {
+            connection_id: Some(saved.id),
+            database: "shop".into(),
+            collection: collection.into(),
+        });
+        tab.config.fields = vec!["sku".into()];
+        state.begin_compare(id).unwrap();
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.running = false;
+        tab.compared = Some(tab.config.clone());
+        tab.summary = Some(CompareSummary {
+            counts: Default::default(),
+            skipped: Some([0, 0]),
+            truncated: false,
+            cancelled: false,
+            elapsed: Default::default(),
+        });
+        tab.rows.push(DiffRow {
+            key: "A".into(),
+            left_id: Some(1.into()),
+            right_id: Some(2.into()),
+            kind: DiffKind::Different,
+            changed: 3,
+            paths: "price".into(),
+            left_hash: 1,
+            right_hash: 2,
+            left_count: 1,
+            right_count: 1,
+        });
+        tab.segments[0].push(0);
+        tab.segments[3].push(0);
+        tab.selected = Some(0);
+        tab.detail_row = Some(0);
+        tab.detail = Some(Arc::new(CompareDetail {
+            documents: [
+                vec![doc! {"_id":1, "sku":"A", "price":1, "same":true, "meta":{"a":1}, "tags":["x","y"]}],
+                vec![doc! {"_id":2, "sku":"A", "price":2, "same":true, "tags":["x"]}],
+            ],
+            changed_since_scan: false,
+            hashes: [1, 2],
+        }));
+        id
+    });
+    let reason = |cx: &mut TestAppContext, path: Vec<crate::bson::PathSegment>, target| {
+        state.read_with(cx, |state, _| state.compare_field_copy_disabled_reason(id, &path, target))
+    };
+    assert_eq!(reason(cx, vec![Key("price".into())], Side::Right), None);
+    assert_eq!(reason(cx, vec![Key("price".into())], Side::Left), None);
+    assert_eq!(reason(cx, vec![Key("meta".into())], Side::Right), None, "a whole object");
+    assert_eq!(reason(cx, vec![Key("meta".into())], Side::Left), None, "removes it");
+    for (path, expected) in [
+        (vec![Key("_id".into())], "_id is never copied"),
+        (vec![Key("sku".into())], "Match fields are not copied"),
+        (vec![Key("same".into())], "Already the same"),
+        (vec![Key("meta".into()), Key("a".into())], "copy the parent instead"),
+        (vec![Key("tags".into()), Index(1)], "Copy the whole array instead"),
+    ] {
+        let reason = reason(cx, path, Side::Right).unwrap();
+        assert!(reason.contains(expected), "{reason}");
+    }
+    // Picking rows to sync and copying single fields do not mix.
+    state.update(cx, |state, _| state.compare_tab_mut(id).unwrap().sync.set_target(Side::Right));
+    assert!(reason(cx, vec![Key("price".into())], Side::Right).unwrap().contains("Leave sync"));
+    // After copies into Right, more copies go there; the other way waits for Undo.
+    state.update(cx, |state, _| state.compare_tab_mut(id).unwrap().sync.completed = true);
+    assert_eq!(reason(cx, vec![Key("price".into())], Side::Right), None);
+    assert!(reason(cx, vec![Key("price".into())], Side::Left).unwrap().contains("Undo"));
+
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        Root::new(view, window, cx).bordered(false)
+    });
+    cx.simulate_resize(size(px(1200.0), px(900.0)));
+    draw(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("compare-detail-body").is_some());
 }

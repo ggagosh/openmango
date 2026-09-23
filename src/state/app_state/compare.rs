@@ -55,6 +55,63 @@ impl AppState {
             return Some("Compare again before syncing".into());
         }
         let index = if target == crate::connection::ops::compare::Side::Left { 0 } else { 1 };
+        self.compare_write_disabled_reason(id, index, undo)
+    }
+
+    /// A field copy of `path` from the other side into `target`, in the selected difference.
+    pub fn compare_field_copy_disabled_reason(
+        &self,
+        id: Uuid,
+        path: &[crate::bson::PathSegment],
+        target: crate::connection::ops::compare::Side,
+    ) -> Option<String> {
+        use crate::connection::ops::compare::{DiffKind, Side};
+        let Some(tab) = self.compare_tab(id) else {
+            return Some("This comparison is closed".into());
+        };
+        if tab.running || tab.sync.running {
+            return Some("Wait for the current operation to finish".into());
+        }
+        if tab.compared.as_ref() != Some(&tab.config)
+            || tab.error.is_some()
+            || tab.summary.is_none()
+            || tab.results_config().scope != crate::state::compare::CompareScope::Collections
+        {
+            return Some("Compare again before copying".into());
+        }
+        match (tab.sync.target, tab.sync.completed) {
+            (Some(current), true) if current != target => {
+                return Some("Undo, or compare again, before copying the other way".into());
+            }
+            (Some(_), false) => return Some("Leave sync to copy single fields".into()),
+            _ => {}
+        }
+        let Some(row) = tab.selected.and_then(|selected| tab.rows.get(selected)) else {
+            return Some("Select a difference".into());
+        };
+        let Some(detail) = tab.detail.as_ref().filter(|_| tab.detail_row == tab.selected) else {
+            return Some("Wait for both documents to load".into());
+        };
+        if !matches!(row.kind, DiffKind::Different | DiffKind::Minor)
+            || detail.documents.iter().any(|documents| documents.len() != 1)
+        {
+            return Some("Both documents must exist".into());
+        }
+        let index = if target == Side::Left { 0 } else { 1 };
+        if let Some(reason) = crate::connection::ops::compare_sync::field_copy_check(
+            &detail.documents[1 - index][0],
+            &detail.documents[index][0],
+            path,
+            &tab.results_config().fields,
+        ) {
+            return Some(reason.into());
+        }
+        self.compare_write_disabled_reason(id, index, false)
+    }
+
+    /// Both sides still reachable with the settings the comparison saw, and the target writable.
+    fn compare_write_disabled_reason(&self, id: Uuid, index: usize, undo: bool) -> Option<String> {
+        let tab = self.compare_tab(id)?;
         let config = tab.results_config();
         for (i, side) in config.sides.iter().enumerate() {
             if undo && i != index {

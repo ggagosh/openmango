@@ -46,6 +46,8 @@ pub struct CompareSyncState {
     pub running: bool,
     pub undoing: bool,
     pub completed: bool,
+    /// The finished writes are single-field copies, not a sync.
+    pub field_copies: bool,
     pub cancellation: Option<CancellationToken>,
     pub restore: Option<Arc<RestoreHandle>>,
     pub summary: SyncSummary,
@@ -370,6 +372,7 @@ impl SyncPlan {
                     row_index,
                     row: row.clone(),
                     operation,
+                    field: None,
                 })
             })
             .collect::<Vec<_>>();

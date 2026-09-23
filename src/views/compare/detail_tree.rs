@@ -30,16 +30,7 @@ pub(super) enum DetailRow {
 }
 
 pub(super) fn label(path: &[PathSegment]) -> String {
-    if path.is_empty() {
-        return "Document".into();
-    }
-    path.iter()
-        .map(|s| match s {
-            PathSegment::Key(key) => key.clone(),
-            PathSegment::Index(i) => i.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(".")
+    if path.is_empty() { "Document".into() } else { crate::bson::dotted_path(path) }
 }
 
 pub(super) fn detail_rows(

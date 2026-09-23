@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::{Dialog, DialogFooter};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::tooltip::Tooltip;
@@ -14,7 +14,7 @@ use super::detail_tree::{Expansion, label};
 use super::*;
 use crate::bson::compare::ChangeKind;
 use crate::bson::{PathSegment, bson_value_preview, get_bson_at_path};
-use crate::connection::ops::compare::DiffKind;
+use crate::connection::ops::compare::{DiffKind, Side};
 use crate::connection::ops::compare_sync::RowOutcome;
 use crate::state::AppearanceSettings;
 use crate::state::compare::{CompareConfig, CompareDetail};
@@ -29,13 +29,20 @@ pub(crate) struct DiffTable {
     expansion: Expansion,
     pub(super) error: Option<String>,
     scroll: UniformListScrollHandle,
+    /// The compare tab this pair belongs to; fields can be copied only there.
+    copy: Option<(Entity<AppState>, Uuid)>,
 }
 
 impl DiffTable {
-    pub(super) fn new(pair: Arc<CompareDetail>, config: CompareConfig) -> Self {
+    pub(super) fn new(
+        pair: Arc<CompareDetail>,
+        config: CompareConfig,
+        copy: Option<(Entity<AppState>, Uuid)>,
+    ) -> Self {
         let mut table = Self {
             pair,
             config,
+            copy,
             rows: Vec::new(),
             expansion: Default::default(),
             error: None,
@@ -78,7 +85,14 @@ impl Render for DiffTable {
                         range
                             .filter_map(|index| {
                                 let row = table.rows.get(index)?;
-                                Some(render_row(index, row, &table.pair, &table.expansion, cx))
+                                Some(render_row(
+                                    index,
+                                    row,
+                                    &table.pair,
+                                    &table.expansion,
+                                    table.copy.as_ref(),
+                                    cx,
+                                ))
                             })
                             .collect()
                     }),
@@ -117,8 +131,9 @@ pub(crate) fn open_document_compare(
     let pair = Arc::new(CompareDetail {
         documents: documents.map(|document| vec![document]),
         changed_since_scan: false,
+        hashes: [0; 2],
     });
-    let table = cx.new(|_| DiffTable::new(pair.clone(), config));
+    let table = cx.new(|_| DiffTable::new(pair.clone(), config, None));
     window.open_dialog(cx, move |dialog: Dialog, window, cx| {
         let appearance = state.read(cx).settings.appearance.clone();
         dialog
@@ -255,7 +270,10 @@ impl CompareView {
             .and_then(|pair| loaded_row.map(|row| (id, tab.run, row, Arc::as_ptr(pair) as usize)));
         if self.detail_signature != signature {
             self.detail_signature = signature;
-            self.diff = detail.clone().map(|pair| cx.new(|_| DiffTable::new(pair, config.clone())));
+            let copy = Some((self.state.clone(), id));
+            self.diff = detail
+                .clone()
+                .map(|pair| cx.new(|_| DiffTable::new(pair, config.clone(), copy.clone())));
         }
         let mut panel = div()
             .size_full()
@@ -483,6 +501,7 @@ fn render_row(
     row: &DetailRow,
     pair: &Arc<CompareDetail>,
     expansion: &Expansion,
+    copy: Option<&(Entity<AppState>, Uuid)>,
     cx: &Context<DiffTable>,
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
@@ -622,19 +641,131 @@ fn render_row(
                         }),
                 )
             };
-            base.child(
-                field_column()
-                    .debug_selector(move || format!("compare-field-{index}"))
-                    .flex()
-                    .items_center()
-                    .child(field),
-            )
-            .children((0..2).map(|side| {
-                value_cell(index * 2 + side, pair.clone(), path.clone(), *kind, *informational, cx)
-            }))
-            .into_any_element()
+            // Reasons per side the field could be copied into: [Left, Right].
+            let copy = copy.filter(|_| !*informational).map(|(state, id)| {
+                let app = state.read(cx);
+                let reasons = [Side::Left, Side::Right]
+                    .map(|target| app.compare_field_copy_disabled_reason(*id, path, target));
+                (state.clone(), *id, reasons)
+            });
+            let buttons = (0..2).map(|side| {
+                let (state, id, reasons) = copy.clone()?;
+                reasons[1 - side].is_none().then(|| {
+                    let target = if side == 0 { Side::Right } else { Side::Left };
+                    let removes = source_lacks(pair, target, path);
+                    copy_button(index, side, removes, state, id, path.clone())
+                })
+            });
+            let row = base
+                .group("compare-row")
+                .child(
+                    field_column()
+                        .debug_selector(move || format!("compare-field-{index}"))
+                        .flex()
+                        .items_center()
+                        .child(field),
+                )
+                .children(buttons.enumerate().map(|(side, button)| {
+                    value_cell(
+                        index * 2 + side,
+                        pair.clone(),
+                        path.clone(),
+                        *kind,
+                        *informational,
+                        button,
+                        cx,
+                    )
+                }));
+            match copy {
+                Some((state, id, _)) => {
+                    let (path, pair) = (path.clone(), pair.clone());
+                    row.context_menu(move |mut menu, _, cx| {
+                        for target in [Side::Right, Side::Left] {
+                            let reason = state
+                                .read(cx)
+                                .compare_field_copy_disabled_reason(id, &path, target);
+                            let (state, path) = (state.clone(), path.clone());
+                            menu = menu.item(
+                                PopupMenuItem::new(copy_label(
+                                    target,
+                                    source_lacks(&pair, target, &path),
+                                ))
+                                .icon(copy_icon(target))
+                                .disabled(reason.is_some())
+                                .on_click(move |_, window, cx| {
+                                    AppCommands::copy_compare_field(
+                                        state.clone(),
+                                        id,
+                                        path.clone(),
+                                        target,
+                                        window,
+                                        cx,
+                                    )
+                                }),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element()
+                }
+                None => row.into_any_element(),
+            }
         }
     }
+}
+
+/// A source without the field removes it from the target.
+fn copy_label(target: Side, removes: bool) -> &'static str {
+    match (target, removes) {
+        (Side::Right, false) => "Copy to Right",
+        (Side::Left, false) => "Copy to Left",
+        (Side::Right, true) => "Remove from Right",
+        (Side::Left, true) => "Remove from Left",
+    }
+}
+
+fn source_lacks(pair: &CompareDetail, target: Side, path: &[PathSegment]) -> bool {
+    let source = if target == Side::Right { 0 } else { 1 };
+    pair.documents[source].first().is_none_or(|document| get_bson_at_path(document, path).is_none())
+}
+
+fn copy_icon(target: Side) -> IconName {
+    if target == Side::Right { IconName::ArrowRight } else { IconName::ArrowLeft }
+}
+
+/// Copies this side's value into the other side; shown on row hover, like reference arrows.
+fn copy_button(
+    index: usize,
+    side: usize,
+    removes: bool,
+    state: Entity<AppState>,
+    id: Uuid,
+    path: Vec<PathSegment>,
+) -> AnyElement {
+    let target = if side == 0 { Side::Right } else { Side::Left };
+    div()
+        .flex_none()
+        .ml_auto()
+        .invisible()
+        .group_hover("compare-row", |style| style.visible())
+        .child(
+            Button::new(("compare-copy", index * 2 + side))
+                .ghost()
+                .xsmall()
+                .icon(copy_icon(target))
+                .tooltip(copy_label(target, removes))
+                .on_click(move |_, window, cx| {
+                    AppCommands::copy_compare_field(
+                        state.clone(),
+                        id,
+                        path.clone(),
+                        target,
+                        window,
+                        cx,
+                    )
+                }),
+        )
+        .into_any_element()
 }
 
 fn value_cell(
@@ -643,6 +774,7 @@ fn value_cell(
     path: Vec<PathSegment>,
     kind: Option<ChangeKind>,
     informational: bool,
+    copy: Option<AnyElement>,
     cx: &App,
 ) -> AnyElement {
     let side = id % 2;
@@ -692,18 +824,19 @@ fn value_cell(
         // The other document has this field; say so instead of leaving an ambiguous blank.
         cell = cell.child(div().text_color(muted).child("—"));
     }
-    cell.when(value.is_some(), |cell| {
-        cell.tooltip(move |window, cx| {
-            let value = pair.documents[side]
-                .first()
-                .and_then(|document| get_bson_at_path(document, &path))
-                .unwrap();
-            if crate::bson::has_value_details(value) {
-                value_details_tooltip(value, window, cx)
-            } else {
-                Tooltip::new(bson_value_preview(value, 8_192)).build(window, cx)
-            }
+    cell.children(copy)
+        .when(value.is_some(), |cell| {
+            cell.tooltip(move |window, cx| {
+                let value = pair.documents[side]
+                    .first()
+                    .and_then(|document| get_bson_at_path(document, &path))
+                    .unwrap();
+                if crate::bson::has_value_details(value) {
+                    value_details_tooltip(value, window, cx)
+                } else {
+                    Tooltip::new(bson_value_preview(value, 8_192)).build(window, cx)
+                }
+            })
         })
-    })
-    .into_any_element()
+        .into_any_element()
 }

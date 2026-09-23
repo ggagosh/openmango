@@ -20,6 +20,7 @@ use mongodb::{
 use sha2::{Digest, Sha256};
 
 use super::compare::{DiffKind, DiffRow, Side, compare_keys, extract_key};
+use crate::bson::{PathSegment, get_bson_at_path, remove_bson_at_path, set_bson_at_path};
 use crate::connection::CancellationToken;
 use crate::error::{Error, Result};
 use restore::{RestoreHandle, UndoRecord};
@@ -57,6 +58,8 @@ pub struct SyncItem {
     pub row_index: usize,
     pub row: DiffRow,
     pub operation: Operation,
+    /// A field copy: a Replace that writes the target with only this path taken from the source.
+    pub field: Option<Vec<PathSegment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -360,6 +363,74 @@ fn replacement(source: &RawDocument, target_id: &Bson) -> Result<RawDocumentBuf>
     Ok(result)
 }
 
+/// The target as it is, with one path set to the source's value, or removed if the source lacks it.
+pub fn field_copy(
+    source: &RawDocument,
+    target: &RawDocument,
+    path: &[PathSegment],
+) -> Result<RawDocumentBuf> {
+    let source: Document = source.try_into().map_err(bson_error)?;
+    let mut target = faithful_document(target)?;
+    let copied = match get_bson_at_path(&source, path) {
+        Some(value) => set_bson_at_path(&mut target, path, value.clone()),
+        None => remove_bson_at_path(&mut target, path),
+    };
+    if !copied {
+        return Err(Error::Parse(
+            "The target lacks this field's parent or array item; copy the parent instead".into(),
+        ));
+    }
+    RawDocumentBuf::from_document(&target).map_err(bson_error)
+}
+
+/// Why this path of two loaded documents cannot be copied into `target`, without cloning either.
+pub fn field_copy_check(
+    source: &Document,
+    target: &Document,
+    path: &[PathSegment],
+    fields: &[String],
+) -> Option<&'static str> {
+    if let Some(reason) = field_copy_refusal(path, fields) {
+        return Some(reason);
+    }
+    let value = get_bson_at_path(source, path);
+    if value == get_bson_at_path(target, path) {
+        return Some("Already the same on both sides");
+    }
+    let (last, parent) = path.split_last()?;
+    // None is the document itself, which always exists.
+    let parent = (!parent.is_empty()).then(|| get_bson_at_path(target, parent));
+    match (last, parent) {
+        (PathSegment::Key(_), None | Some(Some(Bson::Document(_)))) => None,
+        (PathSegment::Key(_), _) => {
+            Some("The target lacks this field's parent; copy the parent instead")
+        }
+        (PathSegment::Index(index), Some(Some(Bson::Array(items))))
+            if *index < items.len() && value.is_some() =>
+        {
+            None
+        }
+        (PathSegment::Index(_), _) => Some("Copy the whole array instead"),
+    }
+}
+
+/// Why a path cannot be copied on its own: it would change how documents are matched.
+pub fn field_copy_refusal(path: &[PathSegment], fields: &[String]) -> Option<&'static str> {
+    let label = crate::bson::dotted_path(path);
+    let touches = |field: &str| {
+        label == field
+            || label.starts_with(&format!("{field}."))
+            || field.starts_with(&format!("{label}."))
+    };
+    if path.is_empty() || touches("_id") {
+        Some("_id is never copied")
+    } else if fields.iter().any(|field| touches(field)) {
+        Some("Match fields are not copied; they decide which documents pair up")
+    } else {
+        None
+    }
+}
+
 struct Prepared {
     row: usize,
     operation: Operation,
@@ -410,6 +481,17 @@ fn prepare_item(
         };
         let after = if item.operation == Operation::Delete {
             None
+        } else if let Some(path) = &item.field {
+            Some(field_copy(
+                source
+                    .document
+                    .as_ref()
+                    .ok_or_else(|| Error::Parse("Source document disappeared".into()))?,
+                before
+                    .as_ref()
+                    .ok_or_else(|| Error::Parse("Target document disappeared".into()))?,
+                path,
+            )?)
         } else {
             Some(replacement(
                 source
@@ -599,6 +681,14 @@ pub async fn sync_collections_async(
     for item in &items {
         if operation_for(item.row.kind, target) != Some(item.operation) {
             return Err(Error::Parse("Sync plan does not match its comparison rows".into()));
+        }
+        if let Some(path) = &item.field {
+            if item.operation != Operation::Replace {
+                return Err(Error::Parse("Only a document on both sides can take a field".into()));
+            }
+            if let Some(reason) = field_copy_refusal(path, &fields) {
+                return Err(Error::Parse(reason.into()));
+            }
         }
     }
     let sides = sides.each_ref().map(primary);

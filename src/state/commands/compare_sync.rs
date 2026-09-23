@@ -24,25 +24,32 @@ use crate::state::{AppEvent, AppState, SessionKey};
 
 enum Work {
     Sync(SyncPlan),
-    Undo { run: u64, config: CompareConfig, target: Side, restore: Arc<RestoreHandle> },
+    /// One path of the selected difference, guarded by the documents on screen.
+    Field(SyncPlan),
+    Undo {
+        run: u64,
+        config: CompareConfig,
+        target: Side,
+        restore: Arc<RestoreHandle>,
+    },
 }
 
 impl Work {
     fn config(&self) -> &CompareConfig {
         match self {
-            Self::Sync(p) => &p.config,
+            Self::Sync(p) | Self::Field(p) => &p.config,
             Self::Undo { config, .. } => config,
         }
     }
     fn target(&self) -> Side {
         match self {
-            Self::Sync(p) => p.target,
+            Self::Sync(p) | Self::Field(p) => p.target,
             Self::Undo { target, .. } => *target,
         }
     }
     fn run(&self) -> u64 {
         match self {
-            Self::Sync(p) => p.run,
+            Self::Sync(p) | Self::Field(p) => p.run,
             Self::Undo { run, .. } => *run,
         }
     }
@@ -55,6 +62,21 @@ impl Work {
         };
         match self {
             Self::Sync(plan) => plan.matches(tab),
+            Self::Field(plan) => {
+                let item = &plan.items[0];
+                plan.run == tab.run
+                    && tab.selected == Some(item.row_index)
+                    && tab.detail.as_ref().is_some_and(|detail| {
+                        detail.hashes == [item.row.left_hash, item.row.right_hash]
+                    })
+                    && app
+                        .compare_field_copy_disabled_reason(
+                            id,
+                            item.field.as_deref().unwrap_or_default(),
+                            plan.target,
+                        )
+                        .is_none()
+            }
             Self::Undo { run, config, target, restore } => {
                 *run == tab.run
                     && config == tab.results_config()
@@ -175,7 +197,7 @@ impl AppCommands {
             app.connection_by_id(connection_id).map(|c| c.name.as_str()).unwrap_or("Connection");
         let target_label = format!("{name} · {}", endpoint.namespace());
         let message = match &work {
-            Work::Sync(plan) => {
+            Work::Sync(plan) | Work::Field(plan) => {
                 let count = |op| plan.items.iter().filter(|item| item.operation == op).count();
                 format!(
                     "Insert {}, replace {}, delete {} in {target_label}.\n\nChanged documents and ambiguous keys are skipped. Replacements keep the target _id. Undo is available until this tab closes or you compare again.{}",
@@ -202,8 +224,12 @@ impl AppCommands {
                 target_label,
                 if undo { "Undo sync" } else { "Sync collections" },
                 Some(WriteConfirmation {
-                    title: if undo { "Undo this sync?" } else { "Sync selected differences?" }
-                        .into(),
+                    title: match (undo, tab.sync.field_copies) {
+                        (true, true) => "Undo these field copies?",
+                        (true, false) => "Undo this sync?",
+                        _ => "Sync selected differences?",
+                    }
+                    .into(),
                     message,
                     confirm_label: if undo { "Undo sync" } else { "Sync selected" }.into(),
                     destructive: true,
@@ -223,6 +249,64 @@ impl AppCommands {
                 }
                 if let Some(reason) = app.compare_sync_disabled_reason(id, work.undo()) {
                     report(&state, id, reason, cx);
+                    return;
+                }
+                Self::apply_compare_sync(state.clone(), id, work, cx);
+            },
+        );
+    }
+
+    /// Copy one field of the selected difference into `target`. It writes at once, like an edit;
+    /// production connections still confirm, and Undo covers every copy since the comparison.
+    pub fn copy_compare_field(
+        state: Entity<AppState>,
+        id: Uuid,
+        path: Vec<crate::bson::PathSegment>,
+        target: Side,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let app = state.read(cx);
+        if let Some(reason) = app.compare_field_copy_disabled_reason(id, &path, target) {
+            report(&state, id, reason, cx);
+            return;
+        }
+        let tab = app.compare_tab(id).unwrap();
+        let (Some(row_index), Some(detail)) = (tab.selected, tab.detail.as_ref()) else {
+            return;
+        };
+        let mut row = tab.rows[row_index].clone();
+        [row.left_hash, row.right_hash] = detail.hashes;
+        (row.left_count, row.right_count) = (1, 1);
+        let config = tab.results_config().clone();
+        let index = if target == Side::Left { 0 } else { 1 };
+        let endpoint = &config.sides[index];
+        let Some(connection_id) = endpoint.connection_id else {
+            return;
+        };
+        let name =
+            app.connection_by_id(connection_id).map(|c| c.name.as_str()).unwrap_or("Connection");
+        let target_label = format!("{name} · {}", endpoint.namespace());
+        let work = Work::Field(SyncPlan {
+            run: tab.run,
+            revision: tab.sync.revision,
+            config: config.clone(),
+            target,
+            items: vec![crate::connection::ops::compare_sync::SyncItem {
+                row_index,
+                row,
+                operation: Operation::Replace,
+                field: Some(path),
+            }],
+        });
+        request_connection_write(
+            state.clone(),
+            WriteRequest::new(connection_id, target_label, "Copy field", None),
+            window,
+            cx,
+            move |_, cx| {
+                if !work.matches(state.read(cx), id) {
+                    report(&state, id, "The documents changed. Copy the field again.".into(), cx);
                     return;
                 }
                 Self::apply_compare_sync(state.clone(), id, work, cx);
@@ -257,14 +341,23 @@ impl AppCommands {
         let directory = app.compare_restore_dir();
         let run = work.run();
         let undo = work.undo();
+        let field = matches!(work, Work::Field(_));
+        // Field copies after a finished sync or copy add to its undo log and its totals.
+        let (existing, base) = app
+            .compare_tab(id)
+            .filter(|tab| field && tab.sync.completed && !tab.sync.undoing)
+            .and_then(|tab| Some((tab.sync.restore.clone()?, tab.sync.summary.clone())))
+            .map_or((None, SyncSummary::default()), |(restore, base)| (Some(restore), base));
         let cancellation = CancellationToken::new();
         state.update(cx, |app, cx| {
             let tab = app.compare_tab_mut(id).unwrap();
+            tab.sync.field_copies = field && (existing.is_none() || tab.sync.field_copies);
+            tab.sync.target = Some(work.target());
             tab.sync.running = true;
             tab.sync.completed = true;
             tab.sync.undoing = undo;
             tab.sync.error = None;
-            tab.sync.summary = SyncSummary::default();
+            tab.sync.summary = base.clone();
             tab.sync.cancellation = Some(cancellation.clone());
             tab.detail_cache.clear();
             tab.detail_generation = tab.detail_generation.wrapping_add(1);
@@ -279,12 +372,15 @@ impl AppCommands {
                     .collection(&config.sides[i].collection)
             });
             match work {
-                Work::Sync(plan) => {
-                    let restore = Arc::new(
-                        tokio::task::spawn_blocking(move || RestoreHandle::create(&directory))
-                            .await
-                            .map_err(|e| Error::Parse(e.to_string()))??,
-                    );
+                Work::Sync(plan) | Work::Field(plan) => {
+                    let restore = match existing {
+                        Some(restore) => restore,
+                        None => Arc::new(
+                            tokio::task::spawn_blocking(move || RestoreHandle::create(&directory))
+                                .await
+                                .map_err(|e| Error::Parse(e.to_string()))??,
+                        ),
+                    };
                     let _ = restore_sender.send(restore.clone());
                     sync_collections_async(
                         sides,
@@ -303,6 +399,11 @@ impl AppCommands {
                 }
             }
         });
+        let with_base = move |summary: SyncSummary| {
+            let mut total = base.clone();
+            total.absorb(&summary);
+            total
+        };
         cx.spawn(async move |cx| {
             if let Ok(restore) = restore_receiver.await {
                 cx.update(|cx| {
@@ -318,7 +419,7 @@ impl AppCommands {
                 cx.update(|cx| {
                     state.update(cx, |app, cx| {
                         if let Some(tab) = app.compare_tab_mut(id).filter(|t| t.run == run) {
-                            tab.sync.summary = progress.summary;
+                            tab.sync.summary = with_base(progress.summary);
                             tab.sync.outcomes.extend(progress.outcomes);
                         }
                         cx.notify();
@@ -335,7 +436,7 @@ impl AppCommands {
                         tab.sync.running = false;
                         tab.sync.cancellation = None;
                         match result {
-                            Ok(summary) => tab.sync.summary = summary,
+                            Ok(summary) => tab.sync.summary = with_base(summary),
                             Err(error) => tab.sync.error = Some(error.to_string()),
                         }
                     }

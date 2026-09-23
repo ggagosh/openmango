@@ -58,7 +58,12 @@ async fn plan(
         })
         .enumerate()
         .filter_map(|(row_index, row)| {
-            operation_for(row.kind, target).map(|operation| SyncItem { row_index, row, operation })
+            operation_for(row.kind, target).map(|operation| SyncItem {
+                row_index,
+                row,
+                operation,
+                field: None,
+            })
         })
         .collect()
 }
@@ -577,4 +582,81 @@ mod database {
         undo_all(&client, logs).await;
         assert_eq!(raw_documents(&orders[1]).await, originals[0]);
     }
+}
+
+/// Field copies are guarded replaces of one path. Several copies to one document share an undo
+/// log, and undo walks it newest first back to the original bytes.
+#[tokio::test]
+async fn field_copies_write_one_path_and_undo_in_reverse() {
+    use openmango::bson::PathSegment::{Index, Key};
+    use openmango::connection::ops::compare_sync::{field_copy_refusal, raw_hash};
+    let (_container, client) = server("8.2.3").await;
+    let db = client.database("field_copy");
+    let sides = [db.collection::<Document>("left"), db.collection::<Document>("right")];
+    sides[0]
+        .insert_one(doc! {"_id":1,"price":10,"nested":{"x":1,"y":2},"tags":["a","b"]})
+        .await
+        .unwrap();
+    sides[1]
+        .insert_one(doc! {"_id":1,"price":12,"nested":{"x":1,"y":3},"tags":["a","c"],"extra":true})
+        .await
+        .unwrap();
+    let original = raw_documents(&sides[1]).await;
+    let row = plan(&sides, &["_id"], doc! {}, Side::Right).await.remove(0).row;
+    let directory = tempfile::tempdir().unwrap();
+    let restore = Arc::new(RestoreHandle::create(directory.path()).unwrap());
+    let raw = |side: usize| sides[side].clone_with_type::<RawDocumentBuf>();
+    let copy = |path: Vec<openmango::bson::PathSegment>| {
+        let (restore, raw, sides, mut row) = (restore.clone(), raw, &sides, row.clone());
+        async move {
+            // The UI guards against the documents it shows, which earlier copies changed.
+            let current = raw(1).find_one(doc! {"_id":1}).await.unwrap().unwrap();
+            row.right_hash = raw_hash(&current);
+            let item =
+                SyncItem { row_index: 0, row, operation: Operation::Replace, field: Some(path) };
+            sync(sides, &["_id"], Side::Right, vec![item], restore).await
+        }
+    };
+    for path in [
+        vec![Key("price".into())],
+        vec![Key("extra".into())],
+        vec![Key("nested".into()), Key("y".into())],
+        vec![Key("tags".into()), Index(1)],
+    ] {
+        assert_eq!(copy(path).await.written, 1);
+    }
+    let right = sides[1].find_one(doc! {"_id":1}).await.unwrap().unwrap();
+    assert_eq!(right, doc! {"_id":1,"price":10,"nested":{"x":1,"y":2},"tags":["a","b"]});
+    // Array items are never removed alone (later items would shift), nor added past the end.
+    assert_eq!(copy(vec![Key("tags".into()), Index(5)]).await.failed, 1);
+    sides[0].update_one(doc! {"_id":1}, doc! {"$push":{"tags":"z"}}).await.unwrap();
+    let left_now = raw(0).find_one(doc! {"_id":1}).await.unwrap().unwrap();
+    let mut stale = row.clone();
+    stale.left_hash = raw_hash(&left_now);
+    stale.right_hash = raw_hash(&raw(1).find_one(doc! {"_id":1}).await.unwrap().unwrap());
+    let item = SyncItem {
+        row_index: 0,
+        row: stale.clone(),
+        operation: Operation::Replace,
+        field: Some(vec![Key("tags".into()), Index(2)]),
+    };
+    assert_eq!(sync(&sides, &["_id"], Side::Right, vec![item], restore.clone()).await.failed, 1);
+    // A target changed since it was shown is skipped, not overwritten.
+    sides[1].update_one(doc! {"_id":1}, doc! {"$set":{"price":99}}).await.unwrap();
+    let item = SyncItem {
+        row_index: 0,
+        row: stale,
+        operation: Operation::Replace,
+        field: Some(vec![Key("nested".into())]),
+    };
+    assert_eq!(sync(&sides, &["_id"], Side::Right, vec![item], restore.clone()).await.skipped, 1);
+    sides[1].update_one(doc! {"_id":1}, doc! {"$set":{"price":10}}).await.unwrap();
+    assert_eq!(restore.pending(), 4);
+    assert_eq!(undo(&sides[1], restore.clone()).await.written, 4);
+    assert_eq!(raw_documents(&sides[1]).await, original);
+    // _id and match fields never travel alone.
+    assert!(field_copy_refusal(&[Key("_id".into())], &["_id".into()]).is_some());
+    assert!(field_copy_refusal(&[Key("sku".into()), Key("a".into())], &["sku".into()]).is_some());
+    assert!(field_copy_refusal(&[Key("sku".into())], &["sku.a".into()]).is_some());
+    assert!(field_copy_refusal(&[Key("price".into())], &["sku".into()]).is_none());
 }

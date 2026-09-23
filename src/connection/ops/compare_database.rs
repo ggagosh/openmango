@@ -428,6 +428,7 @@ impl SyncPass<'_> {
                     Some(SyncItem {
                         row_index,
                         operation: operation_for(row.kind, self.target)?,
+                        field: None,
                         row,
                     })
                 })

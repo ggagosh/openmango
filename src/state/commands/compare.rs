@@ -566,13 +566,14 @@ impl AppCommands {
                                 Document::try_from(&*d).map_err(|e| Error::Parse(e.to_string()))
                             })
                             .collect::<crate::error::Result<Vec<_>>>()?;
-                        Ok::<_, Error>((documents, stale))
+                        Ok::<_, Error>((documents, stale, hash))
                     }
                 };
                 let (left, right) = tokio::try_join!(fetch(0), fetch(1))?;
                 Ok::<_, Error>(CompareDetail {
                     documents: [left.0, right.0],
                     changed_since_scan: left.1 || right.1,
+                    hashes: [left.2, right.2],
                 })
             });
             let result =

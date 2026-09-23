@@ -175,6 +175,8 @@ pub struct CompareMetadata {
 pub struct CompareDetail {
     pub documents: [Vec<Document>; 2],
     pub changed_since_scan: bool,
+    /// Raw hashes of the first document per side, as fetched; field copies are guarded by them.
+    pub hashes: [u64; 2],
 }
 
 pub struct CompareTabState {

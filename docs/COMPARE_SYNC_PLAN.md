@@ -857,11 +857,11 @@ variant that holds both cursors and compares `cursor.current()` borrows with no 
 Shipped since: comparing two documents picked in a collection view, links from the skipped
 count that open those documents, connecting a saved connection from the pickers, and whole-database
 compare with index differences and sync by collection (`docs/COMPARE_DATABASE_PLAN.md`), and
-Ignore array order, which counts reordered arrays as minor.
+Ignore array order, which counts reordered arrays as minor, and single-field copy in the document
+diff: a guarded replace of the target with one path taken from the source, sharing the sync's undo.
 
 - Undo that survives a restart (decision 5 is "for now"): needs a persisted key, so it belongs with
   the keychain-backed History key, and a list of past syncs to undo from.
-- Per-field copy in the document diff (Studio 3T's differentiator): a `$set`/`$unset` on one path.
 - Export the difference list as CSV (1 vote).
 - Saved comparisons, then scheduling, once tasks exist (`docs/features.md:43-44`).
 - Compare validators (indexes are compared in database scope).
