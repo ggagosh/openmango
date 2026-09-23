@@ -598,6 +598,8 @@ fn compare_pickers_take_arrow_keys_and_enter(cx: &mut TestAppContext) {
     let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
     let connection = saved.id;
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    // A live client: the view's metadata loads finish on its Tokio runtime, off the test thread.
+    cx.executor().allow_parking();
     let client = runtime.block_on(async {
         mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
     });
@@ -801,6 +803,8 @@ fn a_closed_connection_picked_in_compare_opens_in_place(cx: &mut TestAppContext)
     let local = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
     let remote = SavedConnection::new("Remote".into(), "mongodb://localhost:27018".into());
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    // Live clients: the view's metadata loads finish on their Tokio runtime, off the test thread.
+    cx.executor().allow_parking();
     let client = || {
         runtime.block_on(async {
             mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
@@ -1259,6 +1263,8 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    // A live client: the view's metadata loads finish on its Tokio runtime, off the test thread.
+    cx.executor().allow_parking();
     let client = runtime.block_on(async {
         mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
     });
@@ -1350,6 +1356,8 @@ fn field_copy_rules_follow_keys_documents_and_sync_state(cx: &mut TestAppContext
     let directory = tempfile::tempdir().unwrap();
     let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    // A live client: the view's metadata loads finish on its Tokio runtime, off the test thread.
+    cx.executor().allow_parking();
     let client = runtime.block_on(async {
         mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
     });

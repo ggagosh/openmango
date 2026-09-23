@@ -79,7 +79,7 @@ The same requests come up again and again in MongoDB forums and feature trackers
 - **Make production hard to mistake.** Give a connection a colour and an environment, and its tabs carry that colour. Make it read-only, or require confirmation before any write to production.
 - **Get your session back.** Tabs, connections, and unsaved work are restored when you reopen the app.
 - **Stay on the keyboard.** The command palette (Cmd/Ctrl+K) reaches every command, database, and collection. Every shortcut can be remapped, and there are 15 themes.
-- **Work with a coding agent.** A built-in MCP server gives agents 25 tools on the connections you choose to share, with per-client grants, approval for writes, and an audit log.
+- **Work with a coding agent.** A built-in MCP server gives agents 27 tools on the connections you choose to share, with per-client grants, approval for writes, and an audit log.
 
 ### Not there yet
 

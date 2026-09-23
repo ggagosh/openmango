@@ -133,6 +133,18 @@ pub enum PairStatus {
     Failed,
 }
 
+/// A finished collection scan's verdict, shared by the database view and the MCP tool.
+pub fn summary_status(summary: &CompareSummary) -> PairStatus {
+    let c = summary.counts;
+    if c.different + c.only_left + c.only_right > 0 {
+        PairStatus::Different
+    } else if c.minor > 0 {
+        PairStatus::Minor
+    } else {
+        PairStatus::Identical
+    }
+}
+
 /// Segments: All, left only, right only, different, minor, identical, not compared.
 pub const PAIR_SEGMENTS: usize = 7;
 
@@ -496,16 +508,7 @@ impl CompareTabState {
             PairKind::Both => match &self.pair_progress[index] {
                 PairProgress::Unscheduled | PairProgress::Waiting => PairStatus::Waiting,
                 PairProgress::Scanning(_) => PairStatus::Scanning,
-                PairProgress::Done(summary) => {
-                    let c = summary.counts;
-                    if c.different + c.only_left + c.only_right > 0 {
-                        PairStatus::Different
-                    } else if c.minor > 0 {
-                        PairStatus::Minor
-                    } else {
-                        PairStatus::Identical
-                    }
-                }
+                PairProgress::Done(summary) => summary_status(summary),
                 PairProgress::Skipped => PairStatus::Skipped,
                 PairProgress::Cancelled => PairStatus::Cancelled,
                 PairProgress::Failed(_) => PairStatus::Failed,

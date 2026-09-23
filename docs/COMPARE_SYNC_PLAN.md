@@ -859,6 +859,7 @@ count that open those documents, connecting a saved connection from the pickers,
 compare with index differences and sync by collection (`docs/COMPARE_DATABASE_PLAN.md`), and
 Ignore array order, which counts reordered arrays as minor, and single-field copy in the document
 diff: a guarded replace of the target with one path taken from the source, sharing the sync's undo.
+Read-only MCP compare tools also shipped, running as MCP tasks for clients that support them.
 
 - Undo that survives a restart (decision 5 is "for now"): needs a persisted key, so it belongs with
   the keychain-backed History key, and a list of past syncs to undo from.
@@ -866,4 +867,3 @@ diff: a guarded replace of the target with one path taken from the source, shari
 - Saved comparisons, then scheduling, once tasks exist (`docs/features.md:43-44`).
 - Compare validators (indexes are compared in database scope).
 - A server-side hashing fast path for slow links, if `$hash` proves safe.
-- An MCP tool for compare, read-only first.
