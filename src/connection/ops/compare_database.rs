@@ -176,7 +176,7 @@ pub enum PairMessage {
     Progress(usize, CompareCounts),
     /// `cancelled` in the summary means the collection was skipped or the run cancelled.
     Done(usize, CompareSummary),
-    Failed(usize, String),
+    Failed(usize, crate::error::Failure),
 }
 
 /// One collection to scan: its index in the listing, its name, and the token that skips it.
@@ -228,7 +228,7 @@ pub async fn compare_pairs_async(
         );
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairMessage::Done(index, summary),
-            Err(error) => PairMessage::Failed(index, error.to_string()),
+            Err(error) => PairMessage::Failed(index, error.into()),
         });
     }
 }
@@ -317,7 +317,7 @@ pub enum PairSyncMessage {
     Started(usize, Arc<RestoreHandle>),
     Progress(usize, SyncSummary),
     Done(usize, SyncSummary),
-    Failed(usize, String),
+    Failed(usize, crate::error::Failure),
 }
 
 /// A database sync: `pairs` from the other side into `target`, matched by `_id`.
@@ -383,7 +383,7 @@ pub async fn sync_pairs_async(
         let result = run.pair(&pair, [left, right], &restore_dir, &sender).await;
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairSyncMessage::Done(pair.index, summary),
-            Err(error) => PairSyncMessage::Failed(pair.index, error.to_string()),
+            Err(error) => PairSyncMessage::Failed(pair.index, error.into()),
         });
     }
     Ok(())
@@ -559,7 +559,7 @@ pub async fn undo_pairs_async(
         );
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairSyncMessage::Done(index, summary),
-            Err(error) => PairSyncMessage::Failed(index, error.to_string()),
+            Err(error) => PairSyncMessage::Failed(index, error.into()),
         });
     }
 }

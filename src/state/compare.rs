@@ -471,7 +471,7 @@ impl CompareTabState {
                 self.pair_current = None;
             }
             PairMessage::Failed(index, error) => {
-                self.pair_progress[index] = PairProgress::Failed(error);
+                self.pair_progress[index] = PairProgress::Failed(error.message);
                 self.pair_tokens[index] = None;
                 self.pair_current = None;
             }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use gpui_kit::{AnyWindowHandle, App, AppContext as _, Entity, Task, Window};
+use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp, Entity, Task, Window};
 use mongodb::bson::Document;
 use uuid::Uuid;
 
@@ -38,6 +38,10 @@ use crate::tasks::model::{LogLevel, Run, RunTrigger, Task as SavedTask, TaskSpec
 use crate::tasks::safety::{self, Planned, StopReason};
 
 use super::AppCommands;
+use super::task_run::{
+    self, Reconnect, RunConnections, Watch, open_connections, retry_once, run_steps,
+};
+use crate::error::Failure;
 
 /// How a transfer run through a hidden Transfer tab ended.
 enum TransferOutcome {
@@ -118,8 +122,8 @@ impl AppCommands {
         }
     }
 
-    /// Runs the task now. Closed connections are opened first. A task that writes works out
-    /// what it would change, then asks before writing.
+    /// Runs the task now. A task that writes works out what it would change, then asks before
+    /// writing.
     pub fn run_task(state: Entity<AppState>, task_id: Uuid, window: &mut Window, cx: &mut App) {
         Self::launch(state, task_id, Launch::Run, window, cx);
     }
@@ -154,8 +158,14 @@ impl AppCommands {
             );
             return;
         }
-        let closed: Vec<Uuid> =
-            connections.into_iter().filter(|id| !app.is_connected(*id)).collect();
+        // Transfers run through the Transfer tab's code, which uses the sidebar's connections.
+        // Everything else opens connections of its own.
+        let closed: Vec<Uuid> = match task.spec {
+            TaskSpec::Transfer { .. } => {
+                connections.into_iter().filter(|id| !app.is_connected(*id)).collect()
+            }
+            _ => Vec::new(),
+        };
         let window = window.window_handle();
         if closed.is_empty() {
             Self::start_task(state, task, launch, window, cx);
@@ -657,170 +667,412 @@ impl AppCommands {
         config: CompareConfig,
         cx: &mut App,
     ) {
-        let app = state.read(cx);
-        let clients = config
-            .sides
-            .each_ref()
-            .map(|side| side.connection_id.and_then(|id| app.active_connection_client(id)));
-        let [Some(left), Some(right)] = clients else {
-            Self::fail_before_start(
-                &state,
-                &task,
-                Launch::Run,
-                "Both connections must be open.",
-                cx,
-            );
+        let Some(reconnect) = Self::reconnect_for(&state, &task, cx) else {
+            let reason = "A connection this task uses no longer exists.";
+            Self::fail_before_start(&state, &task, Launch::Run, reason, cx);
             return;
         };
-        let runtime = app.connection_manager().runtime_handle();
-        let timeout = Duration::from_millis(app.settings.interactive_query_timeout_ms.max(100));
+        let timeout = Self::listing_timeout(&state, cx);
         let task_id = task.id;
         let (_, cancellation) = Self::begin_task_run(&state, &task, RunTrigger::Manual, cx);
-
-        match config.scope {
+        let filter = match config.scope {
+            CompareScope::Databases => Document::new(),
+            CompareScope::Collections if config.filter.trim().is_empty() => Document::new(),
             CompareScope::Collections => {
-                let filter = if config.filter.trim().is_empty() {
-                    Document::new()
-                } else {
-                    match crate::bson::parse_document_from_json(&config.filter) {
-                        Ok(filter) => filter,
-                        Err(error) => {
-                            Self::update_task_run(&state, task_id, Some(false), cx, |run| {
-                                run.error = Some(format!("The filter isn't valid JSON: {error}"));
-                            });
-                            return;
-                        }
+                match crate::bson::parse_document_from_json(&config.filter) {
+                    Ok(filter) => filter,
+                    Err(error) => {
+                        let error = format!("The filter isn't valid JSON: {error}");
+                        return Self::fail_run(&state, task_id, error, cx);
                     }
-                };
-                let name = config.sides[0].collection.clone();
-                let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-                let collections = [0, 1].map(|i| {
-                    [left.clone(), right.clone()][i]
-                        .database(&config.sides[i].database)
-                        .collection(&config.sides[i].collection)
-                });
-                let options = CompareOptions {
-                    fields: config.fields.clone(),
-                    filter,
-                    ignore: config.ignore_set(),
-                    row_limit: 0,
-                    row_kinds: None,
-                };
-                let [left, right] = collections;
-                let work = runtime.spawn(compare_collections_async(
-                    left,
-                    right,
-                    options,
-                    cancellation,
-                    sender,
-                ));
-                cx.spawn(async move |cx| {
-                    while let Some(message) = receiver.next().await {
-                        if let CompareMessage::Progress { counts, .. } = message {
-                            cx.update(|cx| {
-                                Self::update_task_run(&state, task_id, None, cx, |run| {
-                                    run.collection_mut(&name).differences = Some(counts);
-                                })
-                            });
-                        }
-                    }
-                    let result = work.await;
-                    cx.update(|cx| {
-                        let cancelled = matches!(&result, Ok(Ok(summary)) if summary.cancelled);
-                        Self::update_task_run(&state, task_id, Some(cancelled), cx, |run| {
-                            let entry = run.collection_mut(&name);
-                            match result {
-                                Ok(Ok(summary)) => entry.differences = Some(summary.counts),
-                                Ok(Err(error)) => entry.error = Some(error.to_string()),
-                                Err(error) => {
-                                    entry.error = Some(format!("The comparison stopped: {error}"))
-                                }
-                            }
-                        });
-                    });
-                })
-                .detach();
+                }
             }
-            CompareScope::Databases => {
-                let databases = config.sides.each_ref().map(|side| side.database.clone());
-                let skip = config.skip.clone();
-                let ignore = config.ignore_set();
-                cx.spawn(async move |cx| {
-                    let listed = runtime
-                        .spawn({
-                            let (left, right, databases) = (left.clone(), right.clone(), databases.clone());
-                            async move {
-                                let (l, r) = tokio::join!(
-                                    list_side(&left, &databases[0], timeout),
-                                    list_side(&right, &databases[1], timeout)
-                                );
-                                Ok::<_, crate::error::Error>(pair_collections(l?, r?))
-                            }
-                        })
-                        .await;
-                    let pairs = match listed {
-                        Ok(Ok(pairs)) => pairs,
-                        Ok(Err(error)) => return cx.update(|cx| Self::fail_run(&state, task_id, error.to_string(), cx)),
-                        Err(error) => return cx.update(|cx| Self::fail_run(&state, task_id, error.to_string(), cx)),
-                    };
-                    let mut scans = Vec::new();
-                    cx.update(|cx| {
-                        Self::update_task_run(&state, task_id, None, cx, |run| {
-                            for pair in &pairs {
-                                let note = if skip.contains(&pair.name) {
-                                    Some("Listed under Skip collections")
-                                } else {
-                                    pair_note(pair)
-                                };
-                                let entry = run.collection_mut(&pair.name);
-                                match note {
-                                    Some(note) => entry.note = Some(note.into()),
-                                    None => scans.push(PairScan {
-                                        index: scans.len(),
-                                        name: pair.name.clone(),
-                                        cancellation: cancellation.clone(),
-                                    }),
-                                }
-                            }
-                        })
-                    });
-                    let names: Vec<String> = scans.iter().map(|scan| scan.name.clone()).collect();
-                    let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-                    let work = runtime.spawn(compare_pairs_async([left, right], databases, scans, ignore, sender));
-                    while let Some(message) = receiver.next().await {
+        };
+        cx.spawn(async move |cx| {
+            let mut watch = Watch::new(cancellation);
+            let log = Self::run_log(&state, task_id);
+            let mut connections = match open_connections(cx, &mut watch, &reconnect, log).await {
+                Ok(connections) => connections,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
+            };
+            let error = match config.scope {
+                CompareScope::Collections => {
+                    Self::compare_collection(
+                        cx,
+                        &state,
+                        task_id,
+                        &config,
+                        filter,
+                        &reconnect,
+                        &mut connections,
+                        &mut watch,
+                    )
+                    .await
+                }
+                CompareScope::Databases => {
+                    Self::compare_database(
+                        cx,
+                        &state,
+                        task_id,
+                        &config,
+                        timeout,
+                        &reconnect,
+                        &mut connections,
+                        &mut watch,
+                    )
+                    .await
+                }
+            };
+            Self::end_run(cx, &state, task_id, &watch, error);
+        })
+        .detach();
+    }
+
+    /// The saved connections the task uses, to open the run's own connections to.
+    fn reconnect_for(state: &Entity<AppState>, task: &SavedTask, cx: &App) -> Option<Reconnect> {
+        let app = state.read(cx);
+        let saved = task
+            .spec
+            .connections()
+            .iter()
+            .map(|id| app.connection_by_id(*id).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(Reconnect { manager: app.connection_manager(), saved })
+    }
+
+    fn listing_timeout(state: &Entity<AppState>, cx: &App) -> Duration {
+        Duration::from_millis(state.read(cx).settings.interactive_query_timeout_ms.max(100))
+    }
+
+    /// Writes a line into the run's log, from inside a running task.
+    fn run_log(
+        state: &Entity<AppState>,
+        task_id: Uuid,
+    ) -> impl FnMut(&mut AsyncApp, String) + use<> {
+        let state = state.clone();
+        move |cx, message| {
+            cx.update(|cx| {
+                Self::update_task_run(&state, task_id, None, cx, |run| {
+                    run.log(LogLevel::Warning, message)
+                })
+            })
+        }
+    }
+
+    /// Ends the run: cancelled, past its time limit, failed with `error`, or done.
+    fn end_run(
+        cx: &mut AsyncApp,
+        state: &Entity<AppState>,
+        task_id: Uuid,
+        watch: &Watch,
+        error: Option<Failure>,
+    ) {
+        let cancelled = watch.run.is_cancelled();
+        let expired = watch.expired;
+        cx.update(|cx| {
+            Self::update_task_run(state, task_id, Some(cancelled), cx, |run| {
+                if expired {
+                    run.error = Some(format!(
+                        "Stopped after {} hours, the longest a run may take.",
+                        task_run::RUN_LIMIT.as_secs() / 3600
+                    ));
+                } else if let Some(error) = error {
+                    run.log(LogLevel::Error, error.message.clone());
+                    run.error = Some(error.message);
+                }
+            })
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn compare_collection(
+        cx: &mut AsyncApp,
+        state: &Entity<AppState>,
+        task_id: Uuid,
+        config: &CompareConfig,
+        filter: Document,
+        reconnect: &Reconnect,
+        connections: &mut RunConnections,
+        watch: &mut Watch,
+    ) -> Option<Failure> {
+        let runtime = reconnect.manager.runtime_handle();
+        let name = config.sides[0].collection.clone();
+        let options = CompareOptions {
+            fields: config.fields.clone(),
+            filter,
+            ignore: config.ignore_set(),
+            row_limit: 0,
+            row_kinds: None,
+        };
+        let mut tries = 1;
+        loop {
+            let clients = config
+                .sides
+                .each_ref()
+                .map(|side| side.connection_id.and_then(|id| connections.client(id)));
+            let [Some(left), Some(right)] = clients else {
+                return Some(Failure {
+                    message: "The run's connections closed.".into(),
+                    transient: false,
+                });
+            };
+            let sides = [(&left, 0), (&right, 1)].map(|(client, i)| {
+                client.database(&config.sides[i].database).collection(&config.sides[i].collection)
+            });
+            let [left, right] = sides;
+            let token = CancellationToken::new();
+            let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+            let work = runtime.spawn(compare_collections_async(
+                left,
+                right,
+                options.clone(),
+                token.clone(),
+                sender,
+            ));
+            watch
+                .drain(cx, &token, &mut receiver, task_run::STALL, |cx, message| {
+                    if let CompareMessage::Progress { counts, .. } = message {
                         cx.update(|cx| {
-                            Self::update_task_run(&state, task_id, None, cx, |run| match message {
-                                PairMessage::Progress(i, counts) => {
-                                    run.collection_mut(&names[i]).differences = Some(counts)
-                                }
-                                PairMessage::Done(i, summary) => {
-                                    let entry = run.collection_mut(&names[i]);
-                                    entry.differences = Some(summary.counts);
-                                    if summary.cancelled {
-                                        entry.note = Some("Cancelled".into());
-                                    }
-                                }
-                                PairMessage::Failed(i, error) => {
-                                    run.collection_mut(&names[i]).error = Some(error)
-                                }
-                                PairMessage::Started(_) => {}
+                            Self::update_task_run(state, task_id, None, cx, |run| {
+                                run.collection_mut(&name).differences = Some(counts);
                             })
                         });
                     }
-                    let _ = work.await;
-                    cx.update(|cx| {
-                        let cancelled = state
-                            .read(cx)
-                            .tasks
-                            .active
-                            .get(&task_id)
-                            .is_some_and(|active| matches!(&active.stop, RunStop::Token(token) if token.is_cancelled()));
-                        Self::update_task_run(&state, task_id, Some(cancelled), cx, |_| {});
-                    });
                 })
-                .detach();
+                .await;
+            let failure = match work.await {
+                Ok(Ok(summary)) if !summary.cancelled => {
+                    cx.update(|cx| {
+                        Self::update_task_run(state, task_id, None, cx, |run| {
+                            run.collection_mut(&name).differences = Some(summary.counts);
+                        })
+                    });
+                    return None;
+                }
+                Ok(Ok(_)) if watch.over() => return None,
+                Ok(Ok(_)) => Failure {
+                    message: format!("No progress for {} minutes", task_run::STALL.as_secs() / 60),
+                    transient: true,
+                },
+                Ok(Err(error)) => Failure::from(error),
+                Err(error) => Failure {
+                    message: format!("The comparison stopped: {error}"),
+                    transient: false,
+                },
+            };
+            if !failure.transient
+                || tries == task_run::ATTEMPTS
+                || watch.over()
+                || !watch.may_retry()
+            {
+                return Some(failure);
             }
+            let wait = task_run::backoff(tries);
+            Self::run_log(state, task_id)(
+                cx,
+                format!(
+                    "{failure}. Trying again (attempt {} of {}) after {} s.",
+                    tries + 1,
+                    task_run::ATTEMPTS,
+                    wait.as_secs()
+                ),
+            );
+            task_run::pause(cx, wait, &watch.run).await;
+            if let Ok(fresh) = reconnect.open(cx).await {
+                *connections = fresh;
+            }
+            tries += 1;
         }
+    }
+
+    /// Lists both databases, each side on its own connection.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_pairs(
+        cx: &mut AsyncApp,
+        state: &Entity<AppState>,
+        task_id: Uuid,
+        config: &CompareConfig,
+        timeout: Duration,
+        reconnect: &Reconnect,
+        connections: &mut RunConnections,
+        watch: &mut Watch,
+    ) -> Result<Vec<CollectionPair>, Failure> {
+        let runtime = reconnect.manager.runtime_handle();
+        let ids = config.sides.each_ref().map(|side| side.connection_id);
+        let databases = config.sides.each_ref().map(|side| side.database.clone());
+        retry_once(
+            cx,
+            watch,
+            reconnect,
+            connections,
+            Self::run_log(state, task_id),
+            |connections| {
+                let clients = ids.map(|id| id.and_then(|id| connections.client(id)));
+                let databases = databases.clone();
+                let work = runtime.spawn(async move {
+                    let [Some(left), Some(right)] = clients else {
+                        return Err(Failure {
+                            message: "The run's connections closed.".into(),
+                            transient: false,
+                        });
+                    };
+                    let (l, r) = tokio::join!(
+                        list_side(&left, &databases[0], timeout),
+                        list_side(&right, &databases[1], timeout)
+                    );
+                    Ok(pair_collections(l.map_err(Failure::from)?, r.map_err(Failure::from)?))
+                });
+                async move {
+                    work.await.unwrap_or_else(|error| {
+                        Err(Failure {
+                            message: format!("Listing stopped: {error}"),
+                            transient: false,
+                        })
+                    })
+                }
+            },
+        )
+        .await
+    }
+
+    /// Compares `names` pair by pair on the run's connections, retrying what fails for a reason
+    /// that can pass. `on` sees every message.
+    #[allow(clippy::too_many_arguments)]
+    async fn compare_pairs(
+        cx: &mut AsyncApp,
+        state: &Entity<AppState>,
+        task_id: Uuid,
+        config: &CompareConfig,
+        names: &[(usize, String)],
+        reconnect: &Reconnect,
+        connections: &mut RunConnections,
+        watch: &mut Watch,
+        on: impl FnMut(&mut AsyncApp, PairMessage),
+    ) -> task_run::Finished<crate::connection::ops::compare::CompareSummary> {
+        let runtime = reconnect.manager.runtime_handle();
+        let ids = config.sides.each_ref().map(|side| side.connection_id);
+        let databases = config.sides.each_ref().map(|side| side.database.clone());
+        let ignore = config.ignore_set();
+        let pending = names.iter().map(|(index, _)| *index).collect();
+        run_steps(
+            cx,
+            watch,
+            reconnect,
+            connections,
+            pending,
+            Self::run_log(state, task_id),
+            |connections, pending, token| {
+                let clients = ids.map(|id| id.and_then(|id| connections.client(id)));
+                let scans: Vec<PairScan> = names
+                    .iter()
+                    .filter(|(index, _)| pending.contains(index))
+                    .map(|(index, name)| PairScan {
+                        index: *index,
+                        name: name.clone(),
+                        cancellation: token.clone(),
+                    })
+                    .collect();
+                let (sender, receiver) = futures::channel::mpsc::unbounded();
+                let (databases, ignore) = (databases.clone(), ignore.clone());
+                let work = runtime.spawn(async move {
+                    let [Some(left), Some(right)] = clients else {
+                        return Err(Failure {
+                            message: "The run's connections closed.".into(),
+                            transient: false,
+                        });
+                    };
+                    compare_pairs_async([left, right], databases, scans, ignore, sender).await;
+                    Ok(())
+                });
+                (receiver, async move {
+                    work.await.unwrap_or_else(|error| {
+                        Err(Failure {
+                            message: format!("The comparison stopped: {error}"),
+                            transient: false,
+                        })
+                    })
+                })
+            },
+            on,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn compare_database(
+        cx: &mut AsyncApp,
+        state: &Entity<AppState>,
+        task_id: Uuid,
+        config: &CompareConfig,
+        timeout: Duration,
+        reconnect: &Reconnect,
+        connections: &mut RunConnections,
+        watch: &mut Watch,
+    ) -> Option<Failure> {
+        let pairs = match Self::list_pairs(
+            cx,
+            state,
+            task_id,
+            config,
+            timeout,
+            reconnect,
+            connections,
+            watch,
+        )
+        .await
+        {
+            Ok(pairs) => pairs,
+            Err(failure) => return Some(failure),
+        };
+        let mut names = Vec::new();
+        cx.update(|cx| {
+            Self::update_task_run(state, task_id, None, cx, |run| {
+                for pair in &pairs {
+                    let note = if config.skip.contains(&pair.name) {
+                        Some("Listed under Skip collections")
+                    } else {
+                        pair_note(pair)
+                    };
+                    let entry = run.collection_mut(&pair.name);
+                    match note {
+                        Some(note) => entry.note = Some(note.into()),
+                        None => names.push((names.len(), pair.name.clone())),
+                    }
+                }
+            })
+        });
+        let lookup = names.clone();
+        let finished = Self::compare_pairs(
+            cx,
+            state,
+            task_id,
+            config,
+            &names,
+            reconnect,
+            connections,
+            watch,
+            |cx, message| {
+                if let PairMessage::Progress(index, counts) = message {
+                    cx.update(|cx| {
+                        Self::update_task_run(state, task_id, None, cx, |run| {
+                            run.collection_mut(&lookup[index].1).differences = Some(counts)
+                        })
+                    });
+                }
+            },
+        )
+        .await;
+        cx.update(|cx| {
+            Self::update_task_run(state, task_id, None, cx, |run| {
+                for (index, summary) in &finished.done {
+                    run.collection_mut(&names[*index].1).differences = Some(summary.counts);
+                }
+                for (index, failure) in &finished.failed {
+                    run.collection_mut(&names[*index].1).error = Some(failure.message.clone());
+                }
+            })
+        });
+        finished.error
     }
 
     fn fail_run(state: &Entity<AppState>, task_id: Uuid, error: String, cx: &mut App) {
@@ -840,45 +1092,37 @@ impl AppCommands {
         window: AnyWindowHandle,
         cx: &mut App,
     ) {
-        let app = state.read(cx);
-        let clients = sync
-            .config
-            .sides
-            .each_ref()
-            .map(|side| side.connection_id.and_then(|id| app.active_connection_client(id)));
-        let [Some(left), Some(right)] = clients else {
-            Self::fail_before_start(&state, &task, launch, "Both connections must be open.", cx);
+        let Some(reconnect) = Self::reconnect_for(&state, &task, cx) else {
+            let reason = "A connection this task uses no longer exists.";
+            Self::fail_before_start(&state, &task, launch, reason, cx);
             return;
         };
-        let runtime = app.connection_manager().runtime_handle();
-        let timeout = Duration::from_millis(app.settings.interactive_query_timeout_ms.max(100));
-        let databases = sync.config.sides.each_ref().map(|side| side.database.clone());
-        let ignore = sync.config.ignore_set();
+        let timeout = Self::listing_timeout(&state, cx);
         let task_id = task.id;
         let (_, cancellation) = Self::begin_task_run(&state, &task, launch.trigger(), cx);
         let (target, source) = (side_index(sync.target), 1 - side_index(sync.target));
 
         cx.spawn(async move |cx| {
-            let listed = runtime
-                .spawn({
-                    let (left, right, databases) = (left.clone(), right.clone(), databases.clone());
-                    async move {
-                        let (l, r) = tokio::join!(
-                            list_side(&left, &databases[0], timeout),
-                            list_side(&right, &databases[1], timeout)
-                        );
-                        Ok::<_, crate::error::Error>(pair_collections(l?, r?))
-                    }
-                })
-                .await;
-            let pairs = match listed {
-                Ok(Ok(pairs)) => pairs,
-                Ok(Err(error)) => {
-                    return cx.update(|cx| Self::fail_run(&state, task_id, error.to_string(), cx));
-                }
-                Err(error) => {
-                    return cx.update(|cx| Self::fail_run(&state, task_id, error.to_string(), cx));
-                }
+            let mut watch = Watch::new(cancellation.clone());
+            let log = Self::run_log(&state, task_id);
+            let mut connections = match open_connections(cx, &mut watch, &reconnect, log).await {
+                Ok(connections) => connections,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
+            };
+            let pairs = match Self::list_pairs(
+                cx,
+                &state,
+                task_id,
+                &sync.config,
+                timeout,
+                &reconnect,
+                &mut connections,
+                &mut watch,
+            )
+            .await
+            {
+                Ok(pairs) => pairs,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
             };
             let (plan, notes) = sync_plan(&pairs, sync.target, &sync.excluded, &sync.config.skip);
             cx.update(|cx| {
@@ -893,52 +1137,47 @@ impl AppCommands {
             });
 
             // Compare what exists on both sides; a collection the target lacks is all inserts.
-            let names: Vec<String> = plan.iter().map(|pair| pair.name.clone()).collect();
-            let scans: Vec<PairScan> = plan
+            let compared: Vec<(usize, String)> = plan
                 .iter()
                 .filter(|pair| !pair.create)
-                .map(|pair| PairScan {
-                    index: pair.index,
-                    name: pair.name.clone(),
-                    cancellation: cancellation.clone(),
-                })
+                .map(|pair| (pair.index, pair.name.clone()))
                 .collect();
-            let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-            let work = runtime.spawn(compare_pairs_async(
-                [left.clone(), right.clone()],
-                databases.clone(),
-                scans,
-                ignore,
-                sender,
-            ));
-            let mut counts = std::collections::HashMap::new();
-            let mut failures = Vec::new();
-            while let Some(message) = receiver.next().await {
-                match message {
-                    PairMessage::Done(i, summary) => {
-                        counts.insert(i, summary.counts);
-                    }
-                    PairMessage::Failed(i, error) => failures.push((i, error)),
-                    PairMessage::Started(_) | PairMessage::Progress(..) => {}
-                }
-            }
-            let _ = work.await;
-            cx.update(|cx| {
-                let cancelled = cancellation.is_cancelled();
-                if cancelled || !failures.is_empty() {
-                    Self::update_task_run(&state, task_id, Some(cancelled), cx, |run| {
-                        for (i, error) in failures {
-                            run.collection_mut(&names[i]).error = Some(error);
+            let finished = Self::compare_pairs(
+                cx,
+                &state,
+                task_id,
+                &sync.config,
+                &compared,
+                &reconnect,
+                &mut connections,
+                &mut watch,
+                |_, _| {},
+            )
+            .await;
+            drop(connections);
+            if watch.over() || finished.error.is_some() || !finished.failed.is_empty() {
+                let failed: Vec<(String, String)> = finished
+                    .failed
+                    .iter()
+                    .map(|(index, failure)| (plan[*index].name.clone(), failure.message.clone()))
+                    .collect();
+                cx.update(|cx| {
+                    Self::update_task_run(&state, task_id, None, cx, |run| {
+                        for (name, error) in failed {
+                            run.collection_mut(&name).error = Some(error);
                         }
-                    });
-                    return;
-                }
+                    })
+                });
+                return Self::end_run(cx, &state, task_id, &watch, finished.error);
+            }
+            cx.update(|cx| {
                 let planned: Vec<Planned> = plan
                     .iter()
                     .map(|pair| {
-                        let Some(counts) = counts.get(&pair.index) else {
-                            let sides = pairs.iter().find(|p| p.name == pair.name);
-                            let inserts = sides
+                        let Some(summary) = finished.done.get(&pair.index) else {
+                            let inserts = pairs
+                                .iter()
+                                .find(|p| p.name == pair.name)
                                 .and_then(|p| p.sides[source].as_ref())
                                 .and_then(|side| side.estimated)
                                 .unwrap_or(0);
@@ -948,6 +1187,7 @@ impl AppCommands {
                                 ..Default::default()
                             };
                         };
+                        let counts = &summary.counts;
                         let [inserts, replaces, deletes] = sync.mode.writes(counts, sync.target);
                         let read = [counts.left_read, counts.right_read];
                         Planned {
@@ -1057,8 +1297,10 @@ impl AppCommands {
         });
     }
 
-    /// Writes the sync. A Mirror writes inserts and replacements first and deletes last, and
-    /// skips the deletes when anything before them failed.
+    /// Writes the sync on the run's own connections. A Mirror writes inserts and replacements
+    /// first and deletes last, and skips the deletes when anything before them failed. A
+    /// collection that fails for a reason that can pass is tried again: the sync compares it
+    /// again and writes only what still differs.
     fn write_sync(
         state: Entity<AppState>,
         task_id: Uuid,
@@ -1067,23 +1309,23 @@ impl AppCommands {
         cancellation: CancellationToken,
         cx: &mut App,
     ) {
-        let app = state.read(cx);
-        let clients = sync
-            .config
-            .sides
-            .each_ref()
-            .map(|side| side.connection_id.and_then(|id| app.active_connection_client(id)));
-        let [Some(left), Some(right)] = clients else {
-            Self::fail_run(&state, task_id, "Both connections must be open.".into(), cx);
+        let Some(task) = state.read(cx).task(task_id).cloned() else {
             return;
         };
-        let runtime = app.connection_manager().runtime_handle();
+        let Some(reconnect) = Self::reconnect_for(&state, &task, cx) else {
+            return Self::fail_run(
+                &state,
+                task_id,
+                "A connection this task uses no longer exists.".into(),
+                cx,
+            );
+        };
+        let app = state.read(cx);
         let restore_dir = app.compare_restore_dir();
-        let databases = sync.config.sides.each_ref().map(|side| side.database.clone());
         let target = side_index(sync.target);
-        let (Some(connection_id), database) =
-            (sync.config.sides[target].connection_id, databases[target].clone())
-        else {
+        let ids = sync.config.sides.each_ref().map(|side| side.connection_id);
+        let databases = sync.config.sides.each_ref().map(|side| side.database.clone());
+        let (Some(connection_id), database) = (ids[target], databases[target].clone()) else {
             return;
         };
         let run_id = app.tasks.active.get(&task_id).map(|active| active.run_id);
@@ -1096,114 +1338,143 @@ impl AppCommands {
         state.update(cx, |app, _| {
             app.tasks.undo.remove(&task_id);
         });
-
         // Numbered from 0 again: each pass offsets the numbers by the count, so every undo record
         // and message names its collection and pass.
         let plan: Vec<PairSync> =
             plan.into_iter().enumerate().map(|(index, pair)| PairSync { index, ..pair }).collect();
+
         cx.spawn(async move |cx| {
+            let runtime = reconnect.manager.runtime_handle();
+            let mut watch = Watch::new(cancellation);
+            let log = Self::run_log(&state, task_id);
+            let mut connections = match open_connections(cx, &mut watch, &reconnect, log).await {
+                Ok(connections) => connections,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
+            };
             let count = plan.len();
             let name_of = |index: usize| plan[index % count].name.clone();
             let mut written: std::collections::HashMap<usize, SyncSummary> = Default::default();
             let mut logs = Vec::new();
-            let mut stopped = None;
+            let mut error = None;
             for (pass, (mode, deletes_only)) in passes.into_iter().enumerate() {
-                if pass > 0 {
-                    let failed = stopped.is_some()
-                        || cancellation.is_cancelled()
-                        || written
-                            .values()
-                            .any(|summary| summary.failed > 0 || summary.uncertain > 0);
-                    if failed {
+                let pending: Vec<usize> = (0..count).map(|i| pass * count + i).collect();
+                let finished = run_steps(
+                    cx,
+                    &mut watch,
+                    &reconnect,
+                    &mut connections,
+                    pending,
+                    Self::run_log(&state, task_id),
+                    |connections, pending, token| {
+                        let clients = ids.map(|id| id.and_then(|id| connections.client(id)));
+                        let pairs = pending
+                            .iter()
+                            .map(|index| {
+                                let pair = &plan[index % count];
+                                PairSync {
+                                    index: *index,
+                                    name: pair.name.clone(),
+                                    create: pair.create && pass == 0,
+                                }
+                            })
+                            .collect();
+                        let (sender, receiver) = futures::channel::mpsc::unbounded();
+                        let request =
+                            (databases.clone(), sync.config.ignore_set(), restore_dir.clone());
+                        let work = runtime.spawn(async move {
+                            let [Some(left), Some(right)] = clients else {
+                                return Err(Failure {
+                                    message: "The run's connections closed.".into(),
+                                    transient: false,
+                                });
+                            };
+                            let (databases, ignore, restore_dir) = request;
+                            sync_pairs_async(
+                                DatabaseSync {
+                                    clients: [left, right],
+                                    databases,
+                                    target: sync.target,
+                                    mode,
+                                    pairs,
+                                    ignore,
+                                    restore_dir,
+                                    pass_rows: MAX_ROWS,
+                                    deletes_only,
+                                },
+                                token,
+                                sender,
+                            )
+                            .await
+                            .map_err(Failure::from)
+                        });
+                        (receiver, async move {
+                            work.await.unwrap_or_else(|error| {
+                                Err(Failure {
+                                    message: format!("The sync stopped: {error}"),
+                                    transient: false,
+                                })
+                            })
+                        })
+                    },
+                    |cx, message| {
+                        match message {
+                            PairSyncMessage::Started(index, restore) => {
+                                logs.push((index, name_of(index), restore))
+                            }
+                            PairSyncMessage::Progress(index, summary)
+                            | PairSyncMessage::Done(index, summary) => {
+                                written.insert(index, summary);
+                            }
+                            PairSyncMessage::Failed(..) => {}
+                        }
+                        let totals = totals_by_name(&written, &name_of);
                         cx.update(|cx| {
                             Self::update_task_run(&state, task_id, None, cx, |run| {
-                                run.log(
-                                    LogLevel::Warning,
-                                    "Deletes were skipped because something before them failed.",
-                                );
+                                for (name, summary) in totals {
+                                    run.collection_mut(&name).writes = Some(summary);
+                                }
                             })
                         });
-                        break;
-                    }
-                }
-                let pairs = plan
-                    .iter()
-                    .map(|pair| PairSync {
-                        index: pass * count + pair.index,
-                        name: pair.name.clone(),
-                        create: pair.create && pass == 0,
-                    })
-                    .collect();
-                let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-                let work = runtime.spawn(sync_pairs_async(
-                    DatabaseSync {
-                        clients: [left.clone(), right.clone()],
-                        databases: databases.clone(),
-                        target: sync.target,
-                        mode,
-                        pairs,
-                        ignore: sync.config.ignore_set(),
-                        restore_dir: restore_dir.clone(),
-                        pass_rows: MAX_ROWS,
-                        deletes_only,
                     },
-                    cancellation.clone(),
-                    sender,
-                ));
-                while let Some(message) = receiver.next().await {
-                    let failure = match message {
-                        PairSyncMessage::Started(index, restore) => {
-                            logs.push((index, name_of(index), restore));
-                            None
+                )
+                .await;
+                let failed: Vec<(String, String)> = finished
+                    .failed
+                    .iter()
+                    .map(|(index, failure)| (name_of(*index), failure.message.clone()))
+                    .collect();
+                let broken = !failed.is_empty() || finished.error.is_some() || watch.over();
+                cx.update(|cx| {
+                    Self::update_task_run(&state, task_id, None, cx, |run| {
+                        for (name, message) in failed {
+                            run.collection_mut(&name).error = Some(message);
                         }
-                        PairSyncMessage::Progress(index, summary)
-                        | PairSyncMessage::Done(index, summary) => {
-                            written.insert(index, summary);
-                            None
-                        }
-                        PairSyncMessage::Failed(index, error) => Some((index, error)),
-                    };
-                    let totals = totals_by_name(&written, &name_of);
-                    cx.update(|cx| {
-                        Self::update_task_run(&state, task_id, None, cx, |run| {
-                            for (name, summary) in totals {
-                                run.collection_mut(&name).writes = Some(summary);
-                            }
-                            if let Some((index, error)) = failure {
-                                run.collection_mut(&name_of(index)).error = Some(error);
-                            }
-                        })
-                    });
-                }
-                match work.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => stopped = Some(error.to_string()),
-                    Err(error) => stopped = Some(format!("The sync stopped: {error}")),
-                }
-                if stopped.is_some() {
+                    })
+                });
+                error = finished.error;
+                if broken {
+                    if pass == 0 && deletes_only_follows(sync.mode) && !watch.over() {
+                        Self::run_log(&state, task_id)(
+                            cx,
+                            "Deletes were skipped because something before them failed.".into(),
+                        );
+                    }
                     break;
                 }
             }
-            cx.update(|cx| {
-                if let Some(run_id) = run_id
-                    && !logs.is_empty()
-                {
+            drop(connections);
+            if let Some(run_id) = run_id
+                && !logs.is_empty()
+            {
+                cx.update(|cx| {
                     state.update(cx, |app, _| {
                         app.tasks
                             .undo
                             .insert(task_id, UndoLog { run_id, connection_id, database, logs });
-                    });
-                }
-                Self::update_task_run(
-                    &state,
-                    task_id,
-                    Some(cancellation.is_cancelled()),
-                    cx,
-                    |run| {
-                        run.error = stopped;
-                    },
-                );
-            });
+                    })
+                });
+            }
+            Self::end_run(cx, &state, task_id, &watch, error);
         })
         .detach();
     }
@@ -1263,12 +1534,11 @@ impl AppCommands {
     }
 
     fn write_undo(state: Entity<AppState>, task: SavedTask, undo: UndoLog, cx: &mut App) {
-        let app = state.read(cx);
-        let Some(client) = app.active_connection_client(undo.connection_id) else {
-            Self::fail_before_start(&state, &task, Launch::Run, "The connection must be open.", cx);
+        let Some(reconnect) = Self::reconnect_for(&state, &task, cx) else {
+            let reason = "A connection this task uses no longer exists.";
+            Self::fail_before_start(&state, &task, Launch::Run, reason, cx);
             return;
         };
-        let runtime = app.connection_manager().runtime_handle();
         let task_id = task.id;
         state.update(cx, |app, _| {
             app.tasks.undo.remove(&task_id);
@@ -1276,54 +1546,104 @@ impl AppCommands {
         let (_, cancellation) = Self::begin_task_run(&state, &task, RunTrigger::Undo, cx);
         let names: std::collections::HashMap<usize, String> =
             undo.logs.iter().map(|(index, name, _)| (*index, name.clone())).collect();
-        // The last pass first: a Mirror's deletes are undone before its inserts and replacements.
-        let mut logs = undo.logs;
-        logs.reverse();
-        let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-        let work = runtime.spawn(undo_pairs_async(
-            client,
-            undo.database,
-            logs,
-            cancellation.clone(),
-            sender,
-        ));
         cx.spawn(async move |cx| {
+            let runtime = reconnect.manager.runtime_handle();
+            let mut watch = Watch::new(cancellation);
+            let log = Self::run_log(&state, task_id);
+            let mut connections = match open_connections(cx, &mut watch, &reconnect, log).await {
+                Ok(connections) => connections,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
+            };
             let name_of = |index: usize| names.get(&index).cloned().unwrap_or_default();
             let mut restored: std::collections::HashMap<usize, SyncSummary> = Default::default();
-            while let Some(message) = receiver.next().await {
-                let failure = match message {
-                    PairSyncMessage::Progress(index, summary)
-                    | PairSyncMessage::Done(index, summary) => {
-                        restored.insert(index, summary);
-                        None
-                    }
-                    PairSyncMessage::Failed(index, error) => Some((index, error)),
-                    PairSyncMessage::Started(..) => None,
-                };
-                let totals = totals_by_name(&restored, &name_of);
-                cx.update(|cx| {
-                    Self::update_task_run(&state, task_id, None, cx, |run| {
-                        for (name, summary) in totals {
-                            run.collection_mut(&name).writes = Some(summary);
-                        }
-                        if let Some((index, error)) = failure {
-                            run.collection_mut(&name_of(index)).error = Some(error);
-                        }
+            // The last pass first: a Mirror's deletes are undone before its inserts and replacements.
+            let mut logs = undo.logs.clone();
+            logs.reverse();
+            let pending = logs.iter().map(|(index, ..)| *index).collect();
+            let finished = run_steps(
+                cx,
+                &mut watch,
+                &reconnect,
+                &mut connections,
+                pending,
+                Self::run_log(&state, task_id),
+                |connections, pending, token| {
+                    let client = connections.client(undo.connection_id);
+                    let logs: Vec<_> = logs
+                        .iter()
+                        .filter(|(index, ..)| pending.contains(index))
+                        .cloned()
+                        .collect();
+                    let database = undo.database.clone();
+                    let (sender, receiver) = futures::channel::mpsc::unbounded();
+                    let work = runtime.spawn(async move {
+                        let Some(client) = client else {
+                            return Err(Failure {
+                                message: "The run's connection closed.".into(),
+                                transient: false,
+                            });
+                        };
+                        undo_pairs_async(client, database, logs, token, sender).await;
+                        Ok(())
+                    });
+                    (receiver, async move {
+                        work.await.unwrap_or_else(|error| {
+                            Err(Failure {
+                                message: format!("The undo stopped: {error}"),
+                                transient: false,
+                            })
+                        })
                     })
-                });
-            }
-            let _ = work.await;
+                },
+                |cx, message| {
+                    if let PairSyncMessage::Progress(index, summary)
+                    | PairSyncMessage::Done(index, summary) = message
+                    {
+                        restored.insert(index, summary);
+                    }
+                    let totals = totals_by_name(&restored, &name_of);
+                    cx.update(|cx| {
+                        Self::update_task_run(&state, task_id, None, cx, |run| {
+                            for (name, summary) in totals {
+                                run.collection_mut(&name).writes = Some(summary);
+                            }
+                        })
+                    });
+                },
+            )
+            .await;
+            let failed: Vec<(String, String)> = finished
+                .failed
+                .iter()
+                .map(|(index, failure)| (name_of(*index), failure.message.clone()))
+                .collect();
             cx.update(|cx| {
-                Self::update_task_run(
-                    &state,
-                    task_id,
-                    Some(cancellation.is_cancelled()),
-                    cx,
-                    |_| {},
-                )
+                Self::update_task_run(&state, task_id, None, cx, |run| {
+                    for (name, message) in failed {
+                        run.collection_mut(&name).error = Some(message);
+                    }
+                })
             });
+            Self::end_run(cx, &state, task_id, &watch, finished.error);
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct Self_;
+
+#[cfg(test)]
+impl Self_ {
+    pub(crate) fn start_compare_run_for_test(
+        state: &Entity<AppState>,
+        task: &SavedTask,
+        cx: &mut App,
+    ) {
+        let TaskSpec::Compare { config } = task.spec.clone() else {
+            panic!("a compare task");
+        };
+        AppCommands::start_compare_run(state.clone(), task.clone(), config, cx);
     }
 }
 
@@ -1384,6 +1704,11 @@ fn confirmation(
         confirm_label: "Run anyway".into(),
         destructive: true,
     }
+}
+
+/// Whether a sync in `mode` has a deletes pass after its first.
+fn deletes_only_follows(mode: SyncMode) -> bool {
+    mode == SyncMode::Mirror
 }
 
 /// Adds up what each pass wrote, per collection.
@@ -1943,6 +2268,132 @@ mod tests {
         assert_eq!(read(doc! {}, "shop_backup", "orders"), 3);
         assert!(state.read_with(cx, |app, _| app.tasks.active.is_empty()));
         // The container stops through Tokio, so it is dropped inside a runtime.
+        docker.block_on(async move { drop(container) });
+    }
+
+    /// A server error that can pass is retried and the run succeeds; one that can't fails at
+    /// once. The server's own `failCommand` test hook makes the errors.
+    #[gpui_kit::test]
+    #[ignore = "starts a MongoDB 8 container: cargo test --lib task_runs_retry -- --ignored"]
+    fn task_runs_retry_transient_failures_only(cx: &mut gpui_kit::TestAppContext) {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use mongodb::bson::doc;
+        use testcontainers::{ImageExt as _, runners::AsyncRunner as _};
+
+        use crate::connection::ConnectionManager;
+        use crate::models::SavedConnection;
+        use crate::state::ConfigManager;
+        use crate::state::compare::CompareEndpoint;
+        use crate::tasks::model::{RunStatus, Task as SavedTask};
+        use crate::tasks::store::RunStore;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::apply_design_tokens(cx);
+        });
+        cx.executor().allow_parking();
+        let docker = tokio::runtime::Runtime::new().unwrap();
+        let container = docker
+            .block_on(
+                testcontainers_modules::mongo::Mongo::default()
+                    .with_tag("8.0")
+                    .with_cmd(["--setParameter", "enableTestCommands=1"])
+                    .start(),
+            )
+            .unwrap();
+        let uri = docker.block_on(async {
+            format!(
+                "mongodb://{}:{}",
+                container.get_host().await.unwrap(),
+                container.get_host_port_ipv4(27017).await.unwrap()
+            )
+        });
+        let manager = Arc::new(ConnectionManager::new());
+        let admin = manager.runtime_handle().block_on(async {
+            let client = mongodb::Client::with_uri_str(&uri).await.unwrap();
+            client
+                .database("shop")
+                .collection("orders")
+                .insert_many([doc! {"_id": 1}, doc! {"_id": 2}])
+                .await
+                .unwrap();
+            client
+                .database("shop_copy")
+                .collection("orders")
+                .insert_one(doc! {"_id": 1})
+                .await
+                .unwrap();
+            client
+        });
+        let fail = |code: i32, times: i32| {
+            manager.runtime_handle().block_on(async {
+                admin
+                    .database("admin")
+                    .run_command(doc! {
+                        "configureFailPoint": "failCommand",
+                        "mode": {"times": times},
+                        "data": {"failCommands": ["find"], "errorCode": code},
+                    })
+                    .await
+                    .unwrap();
+            })
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let saved = SavedConnection::new("Test".into(), uri.clone());
+        let state = cx.new(|_| {
+            let mut state = AppState::with_config(
+                manager.clone(),
+                ConfigManager::with_config_dir(directory.path().into()),
+            );
+            state.connections = vec![saved.clone()];
+            state.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            state
+        });
+        let mut config = CompareConfig { scope: CompareScope::Databases, ..Default::default() };
+        config.sides = ["shop", "shop_copy"].map(|database| CompareEndpoint {
+            connection_id: Some(saved.id),
+            database: database.into(),
+            collection: String::new(),
+        });
+        let task = SavedTask::new("Compare shop".into(), TaskSpec::Compare { config });
+        state.update(cx, |app, _| app.upsert_task(task.clone()).unwrap());
+        let run = |cx: &mut gpui_kit::TestAppContext| -> Run {
+            cx.update(|cx| Self_::start_compare_run_for_test(&state, &task, cx));
+            let deadline = Instant::now() + Duration::from_secs(120);
+            loop {
+                cx.run_until_parked();
+                let run = state.read_with(cx, |app, _| app.task_runs(task.id).first().cloned());
+                if let Some(run) = run.clone().filter(|run| run.status != RunStatus::Running) {
+                    return run;
+                }
+                assert!(Instant::now() < deadline, "the run didn't finish: {run:?}");
+                // Waits between retries run on the executor's clock.
+                cx.executor().advance_clock(Duration::from_secs(1));
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+
+        // "Network timeout" three times on the scan: the driver retries once, then the run
+        // tries again.
+        fail(89, 3);
+        let done = run(cx);
+        assert_eq!(done.status, RunStatus::Succeeded, "{done:?}");
+        let orders = done.collections.iter().find(|c| c.name == "orders").unwrap();
+        assert_eq!(orders.differences.unwrap().only_left, 1);
+        assert!(
+            done.log.iter().any(|line| line.message.contains("Trying")),
+            "the retry is logged: {:?}",
+            done.log
+        );
+
+        // "Not authorized" won't pass, so the run fails at once without retrying.
+        fail(13, 1);
+        let failed = run(cx);
+        assert_eq!(failed.status, RunStatus::Failed, "{failed:?}");
+        assert!(!failed.log.iter().any(|line| line.message.contains("Trying")));
         docker.block_on(async move { drop(container) });
     }
 }

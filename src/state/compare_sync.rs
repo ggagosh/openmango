@@ -270,7 +270,7 @@ impl CompareTabState {
                 self.sync.pair_current = None;
             }
             PairSyncMessage::Failed(index, error) => {
-                self.sync.pairs.insert(index, PairSyncResult::Failed(error));
+                self.sync.pairs.insert(index, PairSyncResult::Failed(error.message));
                 self.sync.pair_current = None;
             }
         }

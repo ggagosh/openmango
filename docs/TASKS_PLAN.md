@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself) and PR 2a (safety) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety) and PR 2b (recovery for Compare and Sync) are built; see Implementation status.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -79,6 +79,27 @@ private connection per run, the stalled-run check, the run time limit, Transfer 
   task runs again. It is recorded as an Undo run.
 - **Not yet:** editing the three numbers per task comes with the schedule editor in PR 3; until
   then every task uses 10%, 3 times and 100.
+
+**PR 2b, recovery for Compare and Sync — built.** PR 2's recovery half was split again: 2b covers
+the engines tasks call directly, 2c covers transfers.
+
+- **Own connections.** Compare, Sync and Undo runs open connections of their own, each SSH tunnel
+  keyed by a fresh id, and close them when the run ends. They never open or disturb the sidebar's.
+  Transfers still use the sidebar's until 2c.
+- **Which failures are retried** follows section 7.1, decided where the error happens
+  (`Error::is_transient`) and carried in the engines' messages as `Failure`. A DNS failure always
+  counts as one that can pass; telling a typo from an outage by the task's history is left out.
+- **Retries** follow section 7.2: per collection, with a fresh connection, full-jitter waits,
+  5 attempts, a 15-minute budget, logged in the run. Sync is safe to repeat because it compares
+  again and rereads each document before writing.
+- **A stalled step** (no progress for 10 minutes) is stopped and retried; **a run past 24 hours**
+  stops as failed. Both numbers are fixed until the schedule editor in PR 3.
+- **Tests:** the server's `failCommand` hook makes a network timeout three times in a row; the
+  driver retries once, the run retries after that, and the run succeeds. A "not authorized" error
+  fails at once.
+
+**PR 2c, recovery for transfers — next.** Their own connections, retries, and resuming Copy and
+Import from where they stopped (section 7.3).
 
 ## 1. What the evidence says
 
