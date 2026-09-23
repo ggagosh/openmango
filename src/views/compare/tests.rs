@@ -1115,12 +1115,18 @@ fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
 
 /// orders differs (3 changed, 2 left only, 5 right only); audit exists on the left only.
 fn synced_database_tab(skip: &[&str]) -> CompareTabState {
-    use crate::connection::ops::compare::{CompareCounts, CompareSummary};
-    use crate::connection::ops::compare_database::PairMessage;
     let mut config = database_config([uuid::Uuid::new_v4(); 2]);
     config.skip = skip.iter().map(|name| name.to_string()).collect();
     let mut tab = CompareTabState::new(config);
     tab.begin();
+    scan_listing(&mut tab);
+    tab
+}
+
+/// The listing and its content scan, for a run already begun.
+fn scan_listing(tab: &mut CompareTabState) {
+    use crate::connection::ops::compare::{CompareCounts, CompareSummary};
+    use crate::connection::ops::compare_database::PairMessage;
     tab.receive_pairs(Ok(listing()));
     tab.receive_pair(PairMessage::Started(1));
     tab.receive_pair(PairMessage::Done(
@@ -1140,7 +1146,6 @@ fn synced_database_tab(skip: &[&str]) -> CompareTabState {
         },
     ));
     tab.finish_scan();
-    tab
 }
 
 #[test]
@@ -1214,20 +1219,49 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         gpui_kit::init(cx);
         crate::theme::apply_design_tokens(cx);
     });
+    use crate::models::{ActiveConnection, SavedConnection};
     let directory = tempfile::tempdir().unwrap();
+    let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let client = runtime.block_on(async {
+        mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
+    });
     let state = cx.new(|_| {
-        AppState::with_config(
+        let mut state = AppState::with_config(
             Arc::new(crate::connection::ConnectionManager::new()),
             ConfigManager::with_config_dir(directory.path().into()),
-        )
+        );
+        state.connections = vec![saved.clone()];
+        state.insert_active_connection(
+            saved.id,
+            ActiveConnection {
+                config: saved.clone(),
+                client,
+                databases: vec!["shop".into()],
+                collections: Default::default(),
+                collection_details: Default::default(),
+                runtime_meta: Default::default(),
+            },
+        );
+        state
     });
     let id = state.update(cx, |state, cx| {
         state.open_compare_tab(None, cx);
         let id = state.active_compare_tab_id().unwrap();
+        state.compare_tab_mut(id).unwrap().config = database_config([saved.id; 2]);
+        // As the Compare button does, so the connections' settings are captured for writing.
+        state.begin_compare(id).unwrap();
         let tab = state.compare_tab_mut(id).unwrap();
-        *tab = synced_database_tab(&[]);
+        scan_listing(tab);
         tab.sync.set_target(Side::Right);
         id
+    });
+    state.read_with(cx, |state, _| {
+        assert_eq!(
+            state.compare_sync_disabled_reason(id, false),
+            None,
+            "Review and sync is enabled"
+        );
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));

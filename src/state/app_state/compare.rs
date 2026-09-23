@@ -11,6 +11,23 @@ impl AppState {
         self.config.compare_restore_dir()
     }
 
+    /// Starts a run in either scope. Sync and undo later refuse to write if either connection's
+    /// settings changed since, so they are captured here.
+    pub fn begin_compare(
+        &mut self,
+        id: Uuid,
+    ) -> Option<(u64, crate::connection::CancellationToken)> {
+        let identities = self.compare_tab(id)?.config.sides.each_ref().map(|side| {
+            side.connection_id
+                .and_then(|connection| self.connection_by_id(connection))
+                .map(crate::models::ConnectionWriteIdentity::from)
+        });
+        let tab = self.compare_tab_mut(id)?;
+        let token = tab.begin();
+        tab.connection_identities = identities;
+        Some((tab.run, token))
+    }
+
     pub fn compare_sync_disabled_reason(&self, id: Uuid, undo: bool) -> Option<String> {
         let tab = self.compare_tab(id)?;
         if tab.running || tab.sync.running {

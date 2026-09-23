@@ -62,18 +62,10 @@ impl AppCommands {
             }
         };
         let (run, cancellation) = state.update(cx, |app, cx| {
-            let identities = config.sides.each_ref().map(|side| {
-                side.connection_id
-                    .and_then(|id| app.connection_by_id(id))
-                    .map(crate::models::ConnectionWriteIdentity::from)
-            });
-            let tab = app.compare_tab_mut(id).unwrap();
-            let token = tab.begin();
-            tab.connection_identities = identities;
-            let run = tab.run;
+            let started = app.begin_compare(id).unwrap();
             cx.emit(AppEvent::CompareChanged { compare_id: id });
             cx.notify();
-            (run, token)
+            started
         });
         Self::mark_compare_slow(state.clone(), id, run, cx);
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
@@ -169,10 +161,9 @@ impl AppCommands {
             )
         };
         let run = state.update(cx, |app, cx| {
-            let tab = app.compare_tab_mut(id).unwrap();
-            tab.begin();
+            let (run, _) = app.begin_compare(id).unwrap();
             cx.notify();
-            tab.run
+            run
         });
         Self::mark_compare_slow(state.clone(), id, run, cx);
         let task = runtime.spawn(async move {
