@@ -378,6 +378,7 @@ impl AppState {
                 super::types::TabKey::Relations(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Compare(_) => false,
                 super::types::TabKey::AgentActivity
+                | super::types::TabKey::Tasks
                 | super::types::TabKey::Connections
                 | super::types::TabKey::Settings
                 | super::types::TabKey::Changelog => false,

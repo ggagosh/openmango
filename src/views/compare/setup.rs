@@ -829,6 +829,14 @@ impl CompareView {
                     .items_center()
                     .flex_shrink_0()
                     .gap(spacing::sm())
+                    .child(crate::views::tasks::save_task_controls(
+                        self.state.clone(),
+                        crate::state::TabKey::Compare(crate::state::compare::CompareTabKey {
+                            id,
+                            connection_id: None,
+                        }),
+                        cx,
+                    ))
                     .child(
                         Button::new("compare-swap")
                             .ghost()

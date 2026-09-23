@@ -13,6 +13,7 @@ mod selection;
 mod sessions;
 mod status;
 mod tabs;
+mod tasks;
 mod transfer;
 mod types;
 mod unsaved;
@@ -31,6 +32,7 @@ pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text, stages_from_pipeline};
 pub(crate) use sessions::SessionStore;
+pub use tasks::{ActiveRun, RunStop, TasksState};
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
     CollectionProgress, CollectionStats, CollectionSubview, CollectionTransferStatus,
@@ -41,8 +43,8 @@ pub use types::{
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
     InsertMode, NavHistory, ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField,
     SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
-    TabKey, TargetWriteMode, TransferFormat, TransferMode, TransferScope, TransferTabKey,
-    TransferTabState, View,
+    TabKey, TargetWriteMode, TransferConfig, TransferFormat, TransferMode, TransferOptions,
+    TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 
@@ -138,6 +140,7 @@ pub struct AppState {
     collection_meta: HashMap<CollectionKey, CollectionMetaCache>,
     collection_meta_inflight: HashSet<CollectionKey>,
     pub ai_chat: AiChatState,
+    pub tasks: TasksState,
 
     // View state
     pub current_view: View,
@@ -248,6 +251,15 @@ impl AppState {
             }
         };
         let query_library_persistence_blocked = query_library_load_error.is_some();
+        let (tasks, tasks_load_error) = match config.load_tasks() {
+            Ok(tasks) => (tasks, None),
+            Err(error) => {
+                let message =
+                    format!("Tasks could not be loaded. The original file was preserved: {error}");
+                log::error!("{message}");
+                (Vec::new(), Some(message))
+            }
+        };
         let (relations, relations_load_error) = match config.load_relations() {
             Ok(model) => (RelationGraph::from_model(model), None),
             Err(error) => {
@@ -298,6 +310,7 @@ impl AppState {
             collection_meta: HashMap::new(),
             collection_meta_inflight: HashSet::new(),
             ai_chat: AiChatState::default(),
+            tasks: TasksState { tasks, load_error: tasks_load_error.clone(), ..Default::default() },
             current_view: View::Welcome,
             connection_manager_request: ConnectionManagerRequest::default(),
             status_message: None,
@@ -330,10 +343,11 @@ impl AppState {
             editor_sessions: EditorSessionStore::default(),
         };
         state.restore_compare_configs();
-        // Both load failures are reported; neither file is overwritten.
+        // Load failures are reported; none of the files is overwritten.
         for (title, message) in [
             ("Couldn't load connections", connection_load_error),
             ("Couldn't load the query library", query_library_load_error),
+            ("Couldn't load tasks", tasks_load_error),
         ] {
             if let Some(message) = message {
                 state.report_sticky_error(crate::error::ErrorReport::new(title, message));

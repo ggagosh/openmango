@@ -78,6 +78,7 @@ impl Render for Sidebar {
 
         let state = self.state.clone();
         let state_for_add = state.clone();
+        let state_for_tasks = state.clone();
         let state_for_empty = state.clone();
         let has_saved_connections = !self.cached_connections.is_empty();
         let state_for_activity = state.clone();
@@ -222,6 +223,16 @@ impl Render for Sidebar {
                                     .tooltip("New connection")
                                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                                         Sidebar::open_add_dialog(state_for_add.clone(), window, cx);
+                                    }),
+                            )
+                            .child(
+                                Button::new("tasks-btn")
+                                    .icon(crate::views::compare::app_icon("list-checks").xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Tasks")
+                                    .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                        state_for_tasks.update(cx, |state, cx| state.open_tasks_tab(cx));
                                     }),
                             )
                             .child(

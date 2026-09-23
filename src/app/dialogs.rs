@@ -505,3 +505,98 @@ pub(crate) fn open_new_view_dialog(
             })
     });
 }
+
+/// Saves the tab as a new task. The tab is then linked to it, so its next save updates it.
+pub(crate) fn open_save_task_dialog(
+    state: Entity<AppState>,
+    tab: crate::state::TabKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let spec = match &tab {
+        crate::state::TabKey::Transfer(key) => state.read(cx).transfer_task_spec(key.id),
+        crate::state::TabKey::Compare(key) => state.read(cx).compare_task_spec(key.id),
+        _ => None,
+    };
+    let Some(spec) = spec else {
+        return;
+    };
+    let kind = spec.kind().label();
+    let name_state = cx.new(|cx| {
+        InputState::new(window, cx).placeholder("Task name").default_value(spec.default_name())
+    });
+    let run = cx.new(|_| DialogRun::default());
+    window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
+        let save = {
+            let (state, tab, name_state, run) =
+                (state.clone(), tab.clone(), name_state.clone(), run.clone());
+            move |window: &mut Window, cx: &mut App| {
+                let name = name_state.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                // Read the tab again: it may have changed while the dialog was open.
+                let spec = match &tab {
+                    crate::state::TabKey::Transfer(key) => {
+                        state.read(cx).transfer_task_spec(key.id)
+                    }
+                    crate::state::TabKey::Compare(key) => state.read(cx).compare_task_spec(key.id),
+                    _ => None,
+                };
+                let Some(spec) = spec else {
+                    return;
+                };
+                let task = crate::tasks::model::Task::new(name, spec);
+                let id = task.id;
+                match AppCommands::save_task(&state, task, cx) {
+                    Ok(()) => {
+                        state.update(cx, |app, cx| {
+                            app.link_tab_to_task(&tab, id);
+                            cx.notify();
+                        });
+                        window.close_dialog(cx);
+                    }
+                    Err(error) => run.update(cx, |run, cx| {
+                        run.error = Some(ErrorReport::new("Couldn't save the task", error));
+                        cx.notify();
+                    }),
+                }
+            }
+        };
+        let save_on_enter = save.clone();
+        dialog
+            .title(format!("Save {} as a task", kind.to_lowercase()))
+            .min_w(px(420.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::md())
+                    .p(spacing::md())
+                    .child(
+                        div()
+                            .on_action(move |_: &gpui_kit::component::input::Enter, window, cx| {
+                                save_on_enter(window, cx)
+                            })
+                            .child(FormField::new("Name", &name_state).render(cx)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(
+                                gpui_kit::component::ActiveTheme::theme(cx).muted_foreground,
+                            )
+                            .child("Run it again from Tasks, with the settings this tab has now."),
+                    )
+                    .children(run_error("save-task-error", &run, &state, cx)),
+            )
+            .footer(gpui_kit::component::dialog::DialogFooter::new().children(vec![
+                cancel_button("cancel-save-task"),
+                Button::new("save-task")
+                    .primary()
+                    .label("Save task")
+                    .on_click(move |_, window, cx| save(window, cx))
+                    .into_any_element(),
+            ]))
+    });
+}

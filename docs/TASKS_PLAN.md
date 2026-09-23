@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. Nothing is built yet.
+Status: decisions confirmed 2026-09-23. PR 1, tasks you run yourself, is built; see Implementation status.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -36,6 +36,29 @@ Technical choices this plan makes without needing a decision:
   helper.
 - The system scheduler holds one entry that wakes OpenMango about every 15 minutes. The schedules
   themselves live in OpenMango.
+
+## Implementation status
+
+**PR 1, tasks you run yourself — built.** Save as task in Transfer and Compare, the Tasks tab with
+Run now, Edit, Delete and Cancel, and run history with details per collection and a log.
+
+Where PR 1 differs from the plan, and why:
+
+- **Runs use the sidebar's connections.** A run opens the connections it needs if they are closed,
+  as Compare's pickers do, rather than a private connection per run. Transfers run through a
+  Transfer tab state that no tab shows, so every export, import and copy path, and its production
+  confirmation, is the Transfer tab's own. A private connection per run comes with the retries in
+  PR 2, which need a fresh connection anyway.
+- **Every task that writes asks before it runs**, in the dialog that also confirms Production
+  writes. A Sync task lists both databases first, so the question names how many collections it
+  writes.
+- **A Sync task stores the collections it leaves out**, not the ones it writes. The Compare tab only
+  offers collections that differed at the time, so a saved list would miss collections that were
+  identical that day and ones added later.
+- **The Tasks tab isn't restored with the workspace**, like Agent Activity. It is one click away in
+  the sidebar.
+- **Not yet:** Undo from a sync run's details, and the Transfer speed measurements. Both move to
+  PR 2.
 
 ## 1. What the evidence says
 

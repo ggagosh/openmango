@@ -369,6 +369,51 @@ impl AppRoot {
         .detach();
     }
 
+    /// Open the encrypted record of task runs. Without a keychain entry, runs are kept for this
+    /// session only rather than written unprotected.
+    fn open_task_runs(state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let key_read = KeyStore::read_task_runs_key(cx);
+        let path = state.read(cx).config.task_runs_path();
+        let state = state.clone();
+        cx.spawn(async move |_view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let key = match key_read.await {
+                Ok(Some(key)) => <[u8; 32]>::try_from(key).ok(),
+                Ok(None) => {
+                    let key: [u8; 32] = rand::random();
+                    let write = cx.update(|cx| KeyStore::write_task_runs_key(cx, &key));
+                    write.await.is_ok().then_some(key)
+                }
+                Err(error) => {
+                    log::error!("The task run history key could not be read: {error}");
+                    None
+                }
+            };
+            use crate::tasks::store::RunStore;
+            let opened = match key {
+                Some(key) => RunStore::open(path, key).map(|store| (store, None)),
+                None => Err(anyhow::anyhow!("no keychain entry")),
+            };
+            let (store, note) = match opened {
+                Ok(opened) => opened,
+                Err(error) => {
+                    log::warn!("Task runs are kept for this session only: {error:#}");
+                    let Ok(store) = RunStore::in_memory() else {
+                        return;
+                    };
+                    let note = "Run history can't be saved on this computer, so it's kept until OpenMango closes.";
+                    (store, Some(note.to_string()))
+                }
+            };
+            cx.update(|cx| {
+                state.update(cx, |state, cx| {
+                    state.attach_task_runs(store, note);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     fn start_history(state: Entity<AppState>, cx: &mut Context<Self>) {
         let key_read = KeyStore::read_history_key(cx);
         let path = state.read(cx).config.history_path();
@@ -445,6 +490,7 @@ impl AppRoot {
 
         Self::hydrate_connection_secrets(state.clone(), cx);
         Self::open_ai_memory(&state, cx);
+        Self::open_task_runs(&state, cx);
         Self::start_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;
         let mcp_access_signature = Self::mcp_access_signature(state.read(cx));
@@ -887,6 +933,7 @@ impl Render for AppRoot {
             View::References => key_context.push_str(" References"),
             View::Relations => key_context.push_str(" Relations"),
             View::AgentActivity => key_context.push_str(" AgentActivity"),
+            View::Tasks => {}
             View::Connections => key_context.push_str(" Connections"),
             View::Welcome => key_context.push_str(" Welcome"),
             View::Settings => key_context.push_str(" Settings"),

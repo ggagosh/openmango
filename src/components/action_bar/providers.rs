@@ -117,6 +117,7 @@ pub fn tab_actions(state: &AppState) -> Vec<ActionItem> {
             TabKey::AgentActivity => {
                 ("Agent Activity".to_string(), "Approvals and operations".to_string())
             }
+            TabKey::Tasks => ("Tasks".to_string(), "Saved runs and their history".to_string()),
             TabKey::Connections => {
                 ("Connections".to_string(), "Manage MongoDB connections".to_string())
             }
@@ -177,6 +178,14 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             id: "cmd:compare".into(),
             label: "Compare collections…".into(),
             keywords: &["difference", "diff", "compare", "environments"],
+            category: ActionCategory::Command,
+            available: true,
+            ..Default::default()
+        },
+        ActionItem {
+            id: "cmd:tasks".into(),
+            label: "Tasks".into(),
+            keywords: &["task", "tasks", "saved", "run again", "history", "job", "schedule"],
             category: ActionCategory::Command,
             available: true,
             ..Default::default()

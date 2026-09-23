@@ -30,6 +30,7 @@ pub enum View {
     References,
     Relations,
     AgentActivity,
+    Tasks,
     Connections,
     Settings,
     Changelog,
@@ -179,6 +180,7 @@ pub enum TabKey {
     /// returns to the tab that is already open.
     Relations(DatabaseKey),
     AgentActivity,
+    Tasks,
     Connections,
     Settings,
     Changelog,
@@ -534,6 +536,10 @@ pub struct TransferTabState {
     /// Preview state (not serialized)
     #[serde(skip)]
     pub preview: TransferPreview,
+
+    /// The task this tab was opened to edit, if any: saving writes back to that task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Uuid>,
 }
 
 impl TransferTabState {

@@ -96,6 +96,7 @@ pub use documents::save_as::ExportProgress;
 pub(crate) use schema::{SCHEMA_SAMPLE_SIZE, build_schema_analysis};
 pub use schema::{schema_to_compass, schema_to_json_schema, schema_to_summary};
 mod stats;
+mod tasks;
 mod transfer;
 mod updater;
 

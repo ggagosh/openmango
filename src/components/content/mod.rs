@@ -32,6 +32,7 @@ pub struct ContentArea {
     references_view: Option<Entity<ReferencesView>>,
     relations_view: Option<Entity<RelationsView>>,
     agent_activity_view: Option<Entity<AgentActivityView>>,
+    tasks_view: Option<Entity<crate::views::TasksView>>,
     connection_manager_view: Option<Entity<ConnectionManagerView>>,
     connection_manager_request_generation: u64,
     welcome_connecting: Option<uuid::Uuid>,
@@ -232,6 +233,7 @@ impl ContentArea {
             relations_view: None,
             compare_view: None,
             agent_activity_view,
+            tasks_view: None,
             connection_manager_view: None,
             connection_manager_request_generation: 0,
             welcome_connecting: None,
@@ -287,6 +289,10 @@ impl ContentArea {
             self.agent_activity_view =
                 Some(cx.new(|cx| AgentActivityView::new(self.state.clone(), cx)));
         }
+        if view == View::Tasks && self.tasks_view.is_none() {
+            self.tasks_view =
+                Some(cx.new(|cx| crate::views::TasksView::new(self.state.clone(), cx)));
+        }
         if should_settings && self.settings_view.is_none() {
             self.settings_view = Some(cx.new(|cx| SettingsView::new(self.state.clone(), cx)));
         }
@@ -333,6 +339,14 @@ impl ContentArea {
             self.ensure_views(View::Compare, cx);
             if let Some(view) = &self.compare_view {
                 view.update(cx, |view, cx| view.focus(window, cx));
+            }
+            return true;
+        }
+        if self.state.read(cx).current_view == View::Tasks {
+            self.ensure_views(View::Tasks, cx);
+            if let Some(view) = &self.tasks_view {
+                let handle = view.read(cx).focus_handle().clone();
+                window.focus(&handle, cx);
             }
             return true;
         }
@@ -413,6 +427,7 @@ impl Render for ContentArea {
                 references_view: self.references_view.as_ref(),
                 relations_view: self.relations_view.as_ref(),
                 agent_activity_view: self.agent_activity_view.as_ref(),
+                tasks_view: self.tasks_view.as_ref(),
                 connection_manager_view: self.connection_manager_view.as_ref(),
                 settings_view: self.settings_view.as_ref(),
                 changelog_view: self.changelog_view.as_ref(),

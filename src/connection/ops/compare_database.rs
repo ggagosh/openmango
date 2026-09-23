@@ -255,7 +255,7 @@ pub fn pair_collections(
 
 /// What a database sync writes into the target. It never drops collections, never writes to
 /// views or time-series collections, and leaves minor differences as they are.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SyncMode {
     /// Insert the documents the target lacks. Existing documents are left alone.
     #[default]

@@ -56,6 +56,11 @@ impl ConfigManager {
         self.config_dir.join("ai-memory.sqlite3")
     }
 
+    /// Task runs, encrypted: their logs can quote server errors that contain document values.
+    pub fn task_runs_path(&self) -> PathBuf {
+        self.config_dir.join("task-runs.sqlite3")
+    }
+
     pub(crate) fn history_path(&self) -> PathBuf {
         self.config_dir.join("history").join("history.sqlite3")
     }
@@ -107,6 +112,7 @@ impl ConfigManager {
     const QUERY_LIBRARY_FILE: &'static str = "query_library.json";
     const WORKSPACE_FILE: &'static str = "workspace.json";
     const RELATIONS_FILE: &'static str = "relations.json";
+    const TASKS_FILE: &'static str = "tasks.json";
 
     /// Load saved connections from disk
     pub fn load_connections(&self) -> Result<Vec<SavedConnection>> {
@@ -126,6 +132,14 @@ impl ConfigManager {
     // =========================================================================
     // Query Library
     // =========================================================================
+
+    pub fn load_tasks(&self) -> Result<Vec<crate::tasks::model::Task>> {
+        Ok(self.load_json(Self::TASKS_FILE)?.unwrap_or_default())
+    }
+
+    pub fn save_tasks(&self, tasks: &[crate::tasks::model::Task]) -> Result<()> {
+        self.save_json(Self::TASKS_FILE, &tasks)
+    }
 
     pub fn load_query_library(&self) -> Result<QueryLibrary> {
         Ok(self.load_json(Self::QUERY_LIBRARY_FILE)?.unwrap_or_default())

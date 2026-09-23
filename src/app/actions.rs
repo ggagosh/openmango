@@ -298,6 +298,12 @@ impl AppRoot {
                     });
                 }
             }
+            "cmd:tasks" => {
+                state.update(cx, |state, cx| state.open_tasks_tab(cx));
+                content_area.update(cx, |content, cx| {
+                    content.focus_current_view(window, cx);
+                });
+            }
             "cmd:compare" => {
                 state.update(cx, |state, cx| state.open_compare_tab(None, cx));
                 content_area.update(cx, |content, cx| {
@@ -542,6 +548,7 @@ impl AppRoot {
             | View::References
             | View::Relations
             | View::AgentActivity
+            | View::Tasks
             | View::Connections
             | View::Settings
             | View::Changelog => {}

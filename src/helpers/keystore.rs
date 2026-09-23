@@ -23,6 +23,8 @@ const HISTORY_KEY_URL: &str = "com.openmango.history.key";
 const HISTORY_KEY_USER: &str = "history";
 const MEMORY_KEY_URL: &str = "com.openmango.ai-memory.key";
 const MEMORY_KEY_USER: &str = "ai-memory";
+const TASK_RUNS_KEY_URL: &str = "com.openmango.task-runs.key";
+const TASK_RUNS_KEY_USER: &str = "task-runs";
 
 pub struct KeyStore;
 
@@ -49,6 +51,20 @@ impl KeyStore {
         let task = cx.read_credentials(MEMORY_KEY_URL);
         cx.spawn(async move |_cx| match task.await {
             Ok(Some((user, key))) if user == MEMORY_KEY_USER => Ok(Some(key)),
+            Ok(_) => Ok(None),
+            Err(error) if credential_was_missing(&error) => Ok(None),
+            Err(error) => Err(error),
+        })
+    }
+
+    pub fn write_task_runs_key(cx: &App, key: &[u8; 32]) -> Task<Result<()>> {
+        cx.write_credentials(TASK_RUNS_KEY_URL, TASK_RUNS_KEY_USER, key)
+    }
+
+    pub fn read_task_runs_key(cx: &App) -> Task<Result<Option<Vec<u8>>>> {
+        let task = cx.read_credentials(TASK_RUNS_KEY_URL);
+        cx.spawn(async move |_cx| match task.await {
+            Ok(Some((user, key))) if user == TASK_RUNS_KEY_USER => Ok(Some(key)),
             Ok(_) => Ok(None),
             Err(error) if credential_was_missing(&error) => Ok(None),
             Err(error) => Err(error),
