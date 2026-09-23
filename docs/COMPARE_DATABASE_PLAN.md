@@ -43,6 +43,13 @@ the "no `_id` matched" note (moved here from PR 3), and Skip collections in Sett
 from the design below: rows do not leave All while a run lasts. Counts are live, but the lists are
 rebuilt when the run ends or the segment changes, so nothing moves under the pointer.
 
+**PR 3, details: built.** Pass one also reads each collection's indexes. An index is described
+by its keys and the options that change what it does (unique, sparse, hidden, TTL, partial filter,
+collation), not by its name. The detail lists indexes found on one side only, the row's result
+adds "indexes differ", and the status line counts such collections. A collection on one side only
+offers **Copy to Right…** (or Left), also on `enter`, which opens Transfer with both sides filled
+in for review. Validators remain under Later.
+
 ---
 
 ## 1. What the evidence says

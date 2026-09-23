@@ -172,6 +172,41 @@ impl AppState {
         Some(self.open_compare_tab_with(config, cx))
     }
 
+    /// A collection on one side only, in a Transfer tab that copies it to the other side. The
+    /// tab opens for review; nothing is written until it runs.
+    pub fn open_pair_copy(&mut self, id: Uuid, pair: usize, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.compare_tab(id) else {
+            return false;
+        };
+        let Some(pair) = tab.pairs.get(pair) else {
+            return false;
+        };
+        let from = match pair.kind() {
+            crate::connection::ops::compare_database::PairKind::LeftOnly => 0,
+            crate::connection::ops::compare_database::PairKind::RightOnly => 1,
+            _ => return false,
+        };
+        let (source, target) =
+            (&tab.results_config().sides[from], &tab.results_config().sides[1 - from]);
+        let (Some(source_connection), Some(target_connection)) =
+            (source.connection_id, target.connection_id)
+        else {
+            return false;
+        };
+        let (name, source_database, target_database) =
+            (pair.name.clone(), source.database.clone(), target.database.clone());
+        self.open_transfer_tab_for_paste(
+            source_connection,
+            source_database,
+            Some(name),
+            Some(target_connection),
+            Some(target_database),
+            crate::state::TransferScope::Collection,
+            cx,
+        );
+        true
+    }
+
     pub fn update_compare_config(
         &mut self,
         id: Uuid,

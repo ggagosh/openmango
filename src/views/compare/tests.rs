@@ -860,7 +860,8 @@ fn listing() -> Vec<crate::connection::ops::compare_database::CollectionPair> {
     use crate::connection::ops::compare_database::{
         CollectionKind::*, CollectionPair, SideCollection,
     };
-    let side = |kind| Some(SideCollection { kind, estimated: Some(10), bytes: Some(100) });
+    let side =
+        |kind| Some(SideCollection { kind, estimated: Some(10), bytes: Some(100), indexes: None });
     vec![
         CollectionPair { name: "audit".into(), sides: [side(Collection), None] },
         CollectionPair { name: "orders".into(), sides: [side(Collection), side(Collection)] },
@@ -1019,6 +1020,20 @@ fn a_collection_opened_from_a_database_comparison_keeps_both_sides_and_ignored_f
         );
         assert_eq!(config.ignore, ["updatedAt"]);
         assert_eq!(config.fields, ["_id"], "every collection of a database is matched by _id");
+
+        // A collection on one side only is copied through Transfer, which opens for review.
+        assert!(!state.open_pair_copy(id, 1, cx), "a collection on both sides is compared instead");
+        assert!(state.open_pair_copy(id, 0, cx));
+        let transfer = state.active_transfer_tab_id().and_then(|tab| state.transfer_tab(tab));
+        let config = &transfer.expect("a Transfer tab").config;
+        assert_eq!(
+            (config.source_connection_id, config.source_collection.as_str()),
+            (Some(connections[0]), "audit")
+        );
+        assert_eq!(
+            (config.destination_connection_id, config.destination_collection.as_str()),
+            (Some(connections[1]), "audit")
+        );
     });
 }
 
@@ -1068,7 +1083,7 @@ fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(selected(cx), Some(0));
 
-    // A collection on one side only has nothing to open.
+    // With both connections closed, enter opens nothing, not even Transfer for this one.
     let tabs = state.update(cx, |state, _| state.open_tabs().len());
     cx.simulate_keystrokes("enter");
     draw(cx);

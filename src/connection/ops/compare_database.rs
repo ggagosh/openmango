@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::{StreamExt, TryStreamExt};
-use mongodb::Client;
-use mongodb::bson::{Document, RawDocumentBuf};
+use mongodb::bson::{Bson, Document, RawDocumentBuf};
 use mongodb::results::CollectionType;
+use mongodb::{Client, IndexModel};
 
 use crate::bson::compare::IgnoreSet;
 use crate::connection::CancellationToken;
@@ -33,6 +33,8 @@ pub struct SideCollection {
     /// From metadata: approximate after an unclean shutdown, and counts orphans when sharded.
     pub estimated: Option<u64>,
     pub bytes: Option<u64>,
+    /// Each index described by what it does, not its name; sorted. None when unreadable.
+    pub indexes: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +63,50 @@ impl CollectionPair {
             _ => PairKind::LeftOnly,
         }
     }
+
+    /// Indexes found on one side only, left then right. None when both match or one is unknown.
+    pub fn index_difference(&self) -> Option<[Vec<String>; 2]> {
+        let [Some(left), Some(right)] = &self.sides else {
+            return None;
+        };
+        let (left, right) = (left.indexes.as_ref()?, right.indexes.as_ref()?);
+        let only = |a: &[String], b: &[String]| {
+            a.iter().filter(|index| !b.contains(index)).cloned().collect::<Vec<_>>()
+        };
+        let difference = [only(left, right), only(right, left)];
+        difference.iter().any(|side| !side.is_empty()).then_some(difference)
+    }
+}
+
+/// An index as its keys and the options that change what it does, e.g. `{ sku: 1 } unique`.
+/// Names are left out: two sides may name the same index differently.
+pub fn describe_index(index: &IndexModel) -> String {
+    let value = |value: &Bson| value.clone().into_relaxed_extjson().to_string();
+    let keys: Vec<_> =
+        index.keys.iter().map(|(key, order)| format!("{key}: {}", value(order))).collect();
+    let mut text = format!("{{ {} }}", keys.join(", "));
+    let Some(options) = &index.options else {
+        return text;
+    };
+    if options.unique == Some(true) {
+        text.push_str(" unique");
+    }
+    if options.sparse == Some(true) {
+        text.push_str(" sparse");
+    }
+    if options.hidden == Some(true) {
+        text.push_str(" hidden");
+    }
+    if let Some(ttl) = options.expire_after {
+        text.push_str(&format!(" expires after {} s", ttl.as_secs()));
+    }
+    if let Some(filter) = &options.partial_filter_expression {
+        text.push_str(&format!(" where {}", value(&Bson::Document(filter.clone()))));
+    }
+    if let Some(collation) = &options.collation {
+        text.push_str(&format!(" collation {}", collation.locale));
+    }
+    text
 }
 
 /// One database's collections without `system.*`, with metadata sizes where readable.
@@ -89,14 +135,25 @@ pub async fn list_side(
     // Sizes are optional: an account without collStats still gets the pairing.
     Ok(futures::stream::iter(named)
         .map(|(name, kind)| async move {
-            let (estimated, bytes) = if kind == CollectionKind::Collection {
-                collection_stats_async(client, database, &name, timeout)
-                    .await
-                    .map_or((None, None), |stats| storage_count_and_size(&stats))
-            } else {
-                (None, None)
-            };
-            (name, SideCollection { kind, estimated, bytes })
+            if kind != CollectionKind::Collection {
+                return (
+                    name,
+                    SideCollection { kind, estimated: None, bytes: None, indexes: None },
+                );
+            }
+            let collection = client.database(database).collection::<Document>(&name);
+            let (stats, indexes) =
+                tokio::join!(collection_stats_async(client, database, &name, timeout), async {
+                    collection.list_indexes().max_time(timeout).await?.try_collect::<Vec<_>>().await
+                },);
+            let (estimated, bytes) =
+                stats.map_or((None, None), |stats| storage_count_and_size(&stats));
+            let indexes = indexes.ok().map(|indexes| {
+                let mut indexes: Vec<_> = indexes.iter().map(describe_index).collect();
+                indexes.sort();
+                indexes
+            });
+            (name, SideCollection { kind, estimated, bytes, indexes })
         })
         .buffered(STATS_CONCURRENCY)
         .collect()
@@ -190,7 +247,41 @@ mod tests {
     use super::*;
 
     fn side(kind: CollectionKind) -> SideCollection {
-        SideCollection { kind, estimated: Some(1), bytes: Some(1) }
+        SideCollection { kind, estimated: Some(1), bytes: Some(1), indexes: None }
+    }
+
+    #[test]
+    fn indexes_are_compared_by_what_they_do_not_by_name() {
+        use mongodb::bson::doc;
+        use mongodb::options::IndexOptions;
+        let index = |keys, options| IndexModel::builder().keys(keys).options(options).build();
+        let unique = index(
+            doc! {"sku": 1},
+            Some(IndexOptions::builder().unique(true).name("sku_unique".to_string()).build()),
+        );
+        assert_eq!(describe_index(&unique), "{ sku: 1 } unique");
+        let ttl = index(
+            doc! {"at": 1},
+            Some(IndexOptions::builder().expire_after(Duration::from_secs(60)).build()),
+        );
+        assert_eq!(describe_index(&ttl), "{ at: 1 } expires after 60 s");
+        assert_eq!(describe_index(&index(doc! {"body": "text"}, None)), r#"{ body: "text" }"#);
+
+        let with = |indexes: &[&str]| SideCollection {
+            indexes: Some(indexes.iter().map(|index| index.to_string()).collect()),
+            ..side(CollectionKind::Collection)
+        };
+        let pair = |left, right| CollectionPair {
+            name: "orders".into(),
+            sides: [Some(left), Some(right)],
+        };
+        let id = "{ _id: 1 }";
+        assert_eq!(pair(with(&[id]), with(&[id])).index_difference(), None);
+        assert_eq!(
+            pair(with(&[id, "{ sku: 1 } unique"]), with(&[id, "{ sku: 1 }"])).index_difference(),
+            Some([vec!["{ sku: 1 } unique".to_string()], vec!["{ sku: 1 }".to_string()]])
+        );
+        assert_eq!(pair(side(CollectionKind::Collection), with(&[id])).index_difference(), None);
     }
 
     #[test]

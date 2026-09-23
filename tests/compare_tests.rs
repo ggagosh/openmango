@@ -459,6 +459,46 @@ async fn database_listing_pairs_collections_by_name_with_kinds_and_sizes() {
     let orders = pairs[2].sides.each_ref().map(|side| side.clone().unwrap());
     assert_eq!(orders.each_ref().map(|side| side.estimated), [Some(2), Some(1)]);
     assert!(orders.iter().all(|side| side.bytes.is_some_and(|bytes| bytes > 0)));
+    assert_eq!(pairs[2].index_difference(), None, "both sides have only _id");
+}
+
+#[tokio::test]
+async fn database_listing_reports_indexes_found_on_one_side_only() {
+    use openmango::connection::ops::compare_database::{list_side, pair_collections};
+    let mongo = MongoTestContainer::start().await;
+    let left = mongo.database("index_left");
+    let right = mongo.database("index_right");
+    for database in [&left, &right] {
+        database
+            .collection::<Document>("orders")
+            .insert_one(doc! {"_id": 1, "sku": "a"})
+            .await
+            .unwrap();
+    }
+    left.collection::<Document>("orders")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! {"sku": 1})
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+        .unwrap();
+    right
+        .collection::<Document>("orders")
+        .create_index(IndexModel::builder().keys(doc! {"sku": 1}).build())
+        .await
+        .unwrap();
+    let timeout = std::time::Duration::from_secs(10);
+    let pairs = pair_collections(
+        list_side(&mongo.client, left.name(), timeout).await.unwrap(),
+        list_side(&mongo.client, right.name(), timeout).await.unwrap(),
+    );
+    assert_eq!(
+        pairs[0].index_difference(),
+        Some([vec!["{ sku: 1 } unique".to_string()], vec!["{ sku: 1 }".to_string()]]),
+        "the same keys with a different option are different indexes"
+    );
 }
 
 #[tokio::test]

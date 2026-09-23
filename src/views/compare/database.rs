@@ -87,6 +87,15 @@ fn percent(read: u64, pair: &crate::connection::ops::compare_database::Collectio
 
 /// What a row says after its name.
 fn row_result(tab: &CompareTabState, index: usize) -> String {
+    let result = documents_result(tab, index);
+    if tab.pairs[index].index_difference().is_some() {
+        format!("{result} · indexes differ")
+    } else {
+        result
+    }
+}
+
+fn documents_result(tab: &CompareTabState, index: usize) -> String {
     let status = tab.pair_status(index);
     match &tab.pair_progress[index] {
         PairProgress::Scanning(counts) => {
@@ -198,67 +207,72 @@ impl CompareView {
             .count();
         let (read, estimate) = tab.pair_scan_reads();
         let scanning = tab.busy() && !tab.pairs.is_empty();
-        let status: AnyElement =
-            if tab.busy() && tab.pairs.is_empty() {
-                note("Listing collections…", cx).into_any_element()
-            } else if scanning {
-                let elapsed = tab.started.map_or(0.0, |started| started.elapsed().as_secs_f64());
-                let rate = if elapsed > 0.0 { (read as f64 / elapsed) as u64 } else { 0 };
-                let current = tab.pair_current.map(|index| (index, tab.pairs[index].name.clone()));
-                let mut text = format!(
-                    "{} of {} collections · {} read · {}/s",
-                    format_number(settled as u64),
-                    format_number(both.len() as u64),
-                    format_number(read),
-                    format_number(rate)
-                );
-                if let Some((_, name)) = &current {
-                    text = format!("Comparing {name} · {text}");
-                }
-                let skip_state = self.state.clone();
-                let cancel_state = self.state.clone();
-                div()
-                    .id("compare-status")
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .min_w_0()
-                    .child(div().min_w_0().truncate().text_xs().text_color(muted).child(text))
-                    // Skip sits beside the name it skips, so its effect is plain.
-                    .children(current.map(|(index, name)| {
-                        Button::new("compare-skip-current")
-                            .ghost()
-                            .small()
-                            .label(format!("Skip {name}"))
-                            .on_click(move |_, _, cx| {
-                                AppCommands::skip_database_pair(&skip_state, id, index, cx)
-                            })
-                    }))
-                    .child(Button::new("compare-cancel").ghost().small().label("Cancel").on_click(
+        let status: AnyElement = if tab.busy() && tab.pairs.is_empty() {
+            note("Listing collections…", cx).into_any_element()
+        } else if scanning {
+            let elapsed = tab.started.map_or(0.0, |started| started.elapsed().as_secs_f64());
+            let rate = if elapsed > 0.0 { (read as f64 / elapsed) as u64 } else { 0 };
+            let current = tab.pair_current.map(|index| (index, tab.pairs[index].name.clone()));
+            let mut text = format!(
+                "{} of {} collections · {} read · {}/s",
+                format_number(settled as u64),
+                format_number(both.len() as u64),
+                format_number(read),
+                format_number(rate)
+            );
+            if let Some((_, name)) = &current {
+                text = format!("Comparing {name} · {text}");
+            }
+            let skip_state = self.state.clone();
+            let cancel_state = self.state.clone();
+            div()
+                .id("compare-status")
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .min_w_0()
+                .child(div().min_w_0().truncate().text_xs().text_color(muted).child(text))
+                // Skip sits beside the name it skips, so its effect is plain.
+                .children(current.map(|(index, name)| {
+                    Button::new("compare-skip-current")
+                        .ghost()
+                        .small()
+                        .label(format!("Skip {name}"))
+                        .on_click(move |_, _, cx| {
+                            AppCommands::skip_database_pair(&skip_state, id, index, cx)
+                        })
+                }))
+                .child(
+                    Button::new("compare-cancel").ghost().small().label("Cancel").on_click(
                         move |_, _, cx| AppCommands::cancel_compare(&cancel_state, id, cx),
-                    ))
-                    .into_any_element()
-            } else {
-                let mut parts = Vec::new();
-                if tab.pair_elapsed.is_some() {
-                    parts.push(format!("{} identical", format_number(counts[5] as u64)));
-                }
-                if counts[6] > 0 {
-                    parts.push(format!("{} not compared", format_number(counts[6] as u64)));
-                }
-                if let Some(elapsed) = tab.pair_elapsed {
-                    parts.push(format_elapsed(elapsed));
-                }
-                if let Some(at) = tab.compared_at {
-                    parts.push(relative_time(at));
-                }
-                div()
-                    .id("compare-status")
-                    .text_xs()
-                    .text_color(muted)
-                    .child(parts.join(" · "))
-                    .into_any_element()
-            };
+                    ),
+                )
+                .into_any_element()
+        } else {
+            let mut parts = Vec::new();
+            if tab.pair_elapsed.is_some() {
+                parts.push(format!("{} identical", format_number(counts[5] as u64)));
+            }
+            if counts[6] > 0 {
+                parts.push(format!("{} not compared", format_number(counts[6] as u64)));
+            }
+            let indexes = tab.pairs.iter().filter(|pair| pair.index_difference().is_some()).count();
+            if indexes > 0 {
+                parts.push(format!("{} with different indexes", format_number(indexes as u64)));
+            }
+            if let Some(elapsed) = tab.pair_elapsed {
+                parts.push(format_elapsed(elapsed));
+            }
+            if let Some(at) = tab.compared_at {
+                parts.push(relative_time(at));
+            }
+            div()
+                .id("compare-status")
+                .text_xs()
+                .text_color(muted)
+                .child(parts.join(" · "))
+                .into_any_element()
+        };
         let mut bar = div()
             .relative()
             .flex()
@@ -598,14 +612,25 @@ impl CompareView {
                         }),
                 )
             })
-            .child(
-                Button::new("compare-open-pair")
+            .child(match pair.kind() {
+                PairKind::LeftOnly | PairKind::RightOnly => Button::new("compare-copy-pair")
+                    .outline()
+                    .small()
+                    .label(if pair.kind() == PairKind::LeftOnly {
+                        "Copy to Right…"
+                    } else {
+                        "Copy to Left…"
+                    })
+                    .tooltip("Opens Transfer to review the copy. Nothing is written until it runs.")
+                    .disabled(!connected)
+                    .on_click(move |_, _, cx| open_pair(&open_state, id, index, cx)),
+                _ => Button::new("compare-open-pair")
                     .outline()
                     .small()
                     .label("Open comparison")
                     .disabled(!both || !connected)
                     .on_click(move |_, _, cx| open_pair(&open_state, id, index, cx)),
-            )
+            })
             .child(gpui_kit::component::kbd::Kbd::new(Keystroke::parse("enter").unwrap()));
         let absent = pair.sides.each_ref().map(|side| side.is_none().then_some("Missing"));
         let fact = |label: &'static str, values: [String; 2]| {
@@ -634,6 +659,11 @@ impl CompareView {
             text => text,
         });
         let sizes = per_side(&|side| side.bytes.map(format_bytes).unwrap_or_default());
+        let index_counts = per_side(&|side| match (&side.indexes, side.kind) {
+            (Some(indexes), _) => format_number(indexes.len() as u64),
+            (None, CollectionKind::Collection) => "Unknown".into(),
+            (None, _) => String::new(),
+        });
 
         let mut body =
             div().flex().flex_col().gap(spacing::xs()).px(spacing::md()).py(spacing::md());
@@ -696,6 +726,33 @@ impl CompareView {
             }
             _ => None,
         };
+        if let Some(difference) = pair.index_difference() {
+            for (side, indexes) in difference.into_iter().enumerate() {
+                if indexes.is_empty() {
+                    continue;
+                }
+                body = body
+                    .child(
+                        div()
+                            .pt(spacing::xs())
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(dot(side_color(side, cx)))
+                            .child(format!(
+                                "Indexes on the {} only",
+                                side_name(side).to_lowercase()
+                            )),
+                    )
+                    .children(
+                        indexes
+                            .into_iter()
+                            .map(|index| div().pl(px(10.0)).text_xs().truncate().child(index)),
+                    );
+            }
+        }
         body = body.children(message.map(|message| note(message, cx)));
         if both && !matches!(progress, PairProgress::Done(_)) {
             body = body.child(note("Counts are estimates from metadata.", cx));
@@ -738,20 +795,29 @@ impl CompareView {
             .child(fact("Kind", kinds))
             .child(fact("Documents", documents))
             .child(fact("Size", sizes))
+            .child(fact("Indexes", index_counts))
             .child(div().flex_1().min_h_0().child(body.overflow_y_scrollbar()))
             .into_any_element()
     }
 }
 
-/// Opens the collection in its own Compare tab and runs it there.
+/// The row's main action, also on `enter`: open the collection in its own Compare tab and run
+/// it there, or, for a collection on one side only, open Transfer to copy it across.
 pub(super) fn open_pair(state: &Entity<AppState>, id: Uuid, index: usize, cx: &mut App) {
     let opened = state.update(cx, |app, cx| {
         let tab = app.compare_tab(id)?;
-        let pair = tab.pairs.get(index)?;
-        if pair.kind() != PairKind::Both || !connected(app, tab) {
+        let kind = tab.pairs.get(index)?.kind();
+        if !connected(app, tab) {
             return None;
         }
-        app.open_pair_comparison(id, index, cx)
+        match kind {
+            PairKind::Both => app.open_pair_comparison(id, index, cx),
+            PairKind::LeftOnly | PairKind::RightOnly => {
+                app.open_pair_copy(id, index, cx);
+                None
+            }
+            PairKind::NotComparable(_) => None,
+        }
     });
     if let Some(opened) = opened {
         AppCommands::run_compare(state.clone(), opened, cx);
