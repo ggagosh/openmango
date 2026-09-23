@@ -182,6 +182,14 @@ pub fn command_actions(state: &AppState, window: &Window) -> Vec<ActionItem> {
             ..Default::default()
         },
         ActionItem {
+            id: "cmd:compare-databases".into(),
+            label: "Compare databases…".into(),
+            keywords: &["difference", "diff", "compare", "environments", "schema"],
+            category: ActionCategory::Command,
+            available: true,
+            ..Default::default()
+        },
+        ActionItem {
             id: SharedString::from("cmd:new-connection"),
             keywords: &["add", "create", "uri"],
             label: SharedString::from("New connection"),

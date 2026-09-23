@@ -15,11 +15,20 @@ use crate::connection::ops::compare::{
     CompareMessage, CompareOptions, DiffKind, DiffRow, Side, compare_collections_async,
 };
 use crate::error::{Error, ErrorReport};
-use crate::state::compare::{CompareConfig, CompareDetail, CompareEndpoint, CompareMetadata};
+use crate::state::compare::{
+    CompareConfig, CompareDetail, CompareEndpoint, CompareMetadata, CompareScope,
+};
 use crate::state::{AppEvent, AppState};
 
 impl AppCommands {
     pub fn run_compare(state: Entity<AppState>, id: Uuid, cx: &mut App) {
+        if state
+            .read(cx)
+            .compare_tab(id)
+            .is_some_and(|tab| tab.config.scope == CompareScope::Databases)
+        {
+            return Self::run_database_compare(state, id, cx);
+        }
         let (config, runtime, clients) = {
             let app = state.read(cx);
             let Some(tab) = app.compare_tab(id) else {
@@ -66,21 +75,7 @@ impl AppCommands {
             cx.notify();
             (run, token)
         });
-        let slow_state = state.clone();
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(Duration::from_millis(150)).await;
-            cx.update(|cx| {
-                slow_state.update(cx, |app, cx| {
-                    if let Some(tab) =
-                        app.compare_tab_mut(id).filter(|tab| tab.run == run && tab.running)
-                    {
-                        tab.slow = true;
-                        cx.notify();
-                    }
-                })
-            });
-        })
-        .detach();
+        Self::mark_compare_slow(state.clone(), id, run, cx);
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
         let task = runtime.spawn(async move {
             let collections = [0, 1].map(|i| {
@@ -145,6 +140,92 @@ impl AppCommands {
         .detach();
     }
 
+    /// Pass one: every collection of both databases, paired by name, with metadata sizes.
+    pub fn run_database_compare(state: Entity<AppState>, id: Uuid, cx: &mut App) {
+        let (config, runtime, clients, timeout) = {
+            let app = state.read(cx);
+            let Some(tab) = app.compare_tab(id).filter(|tab| !tab.running) else {
+                return;
+            };
+            let config = tab.config.clone();
+            if let Some(reason) = app.compare_disabled_reason(&config) {
+                state.update(cx, |app, cx| {
+                    if let Some(tab) = app.compare_tab_mut(id) {
+                        tab.error = Some(reason);
+                    }
+                    cx.notify();
+                });
+                return;
+            }
+            let clients = config
+                .sides
+                .each_ref()
+                .map(|side| app.active_connection_client(side.connection_id.unwrap()).unwrap());
+            (
+                config,
+                app.connection_manager().runtime_handle(),
+                clients,
+                Duration::from_millis(app.settings.interactive_query_timeout_ms.max(100)),
+            )
+        };
+        let run = state.update(cx, |app, cx| {
+            let tab = app.compare_tab_mut(id).unwrap();
+            tab.begin();
+            cx.notify();
+            tab.run
+        });
+        Self::mark_compare_slow(state.clone(), id, run, cx);
+        let task = runtime.spawn(async move {
+            use crate::connection::ops::compare_database::{list_side, pair_collections};
+            let [left, right] = &config.sides;
+            let (left, right) = tokio::try_join!(
+                list_side(&clients[0], &left.database, timeout),
+                list_side(&clients[1], &right.database, timeout)
+            )?;
+            Ok::<_, Error>(pair_collections(left, right))
+        });
+        cx.spawn(async move |cx| {
+            let result =
+                task.await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
+            cx.update(|cx| {
+                state.update(cx, |app, cx| {
+                    let Some(tab) = app.compare_tab_mut(id).filter(|tab| tab.run == run) else {
+                        return;
+                    };
+                    let error = result.as_ref().err().cloned();
+                    tab.receive_pairs(result);
+                    if let Some(error) = error {
+                        app.report_compare_error(
+                            id,
+                            ErrorReport::from_message("Couldn't compare databases", &error),
+                        );
+                    }
+                    cx.emit(AppEvent::CompareChanged { compare_id: id });
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// Show a run as busy only once it has lasted 150 ms, so a fast one does not flicker.
+    fn mark_compare_slow(state: Entity<AppState>, id: Uuid, run: u64, cx: &mut App) {
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            cx.update(|cx| {
+                state.update(cx, |app, cx| {
+                    if let Some(tab) =
+                        app.compare_tab_mut(id).filter(|tab| tab.run == run && tab.running)
+                    {
+                        tab.slow = true;
+                        cx.notify();
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
     pub fn cancel_compare(state: &Entity<AppState>, id: Uuid, cx: &App) {
         if let Some(token) =
             state.read(cx).compare_tab(id).and_then(|tab| tab.cancellation.as_ref())
@@ -156,13 +237,17 @@ impl AppCommands {
     pub fn load_compare_metadata(state: Entity<AppState>, id: Uuid, side: usize, cx: &mut App) {
         let (endpoint, client, runtime, timeout) = {
             let app = state.read(cx);
-            let Some(endpoint) = app
-                .compare_tab(id)
-                .map(|tab| tab.config.sides[side].clone())
-                .filter(CompareEndpoint::complete)
-            else {
+            let Some(tab) = app.compare_tab(id) else {
                 return;
             };
+            let scope = tab.config.scope;
+            let endpoint = tab.config.sides[side].clone();
+            if !endpoint.ready(scope) {
+                return;
+            }
+            if scope == CompareScope::Databases {
+                return Self::load_database_metadata(state.clone(), id, side, endpoint, cx);
+            }
             let Some(client) = app.active_connection_client(endpoint.connection_id.unwrap()) else {
                 return;
             };
@@ -212,17 +297,9 @@ impl AppCommands {
                     timeout,
                 )
                 .await
-                    && let Ok(storage) = stats.get_document("storageStats")
                 {
-                    let number = |name| {
-                        storage
-                            .get_i64(name)
-                            .ok()
-                            .or_else(|| storage.get_i32(name).ok().map(i64::from))
-                            .and_then(|n| u64::try_from(n).ok())
-                    };
-                    metadata.count = number("count");
-                    metadata.bytes = number("size");
+                    (metadata.count, metadata.bytes) =
+                        crate::connection::ops::stats::storage_count_and_size(&stats);
                 }
             }
             Ok::<_, Error>(metadata)
@@ -243,6 +320,60 @@ impl AppCommands {
                         ..Default::default()
                     }));
                     cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// The line under a database picker: collections, estimated documents and data size.
+    fn load_database_metadata(
+        state: Entity<AppState>,
+        id: Uuid,
+        side: usize,
+        endpoint: CompareEndpoint,
+        cx: &mut App,
+    ) {
+        let Some((client, runtime)) = ({
+            let app = state.read(cx);
+            endpoint
+                .connection_id
+                .and_then(|id| app.active_connection_client(id))
+                .map(|client| (client, app.connection_manager().runtime_handle()))
+        }) else {
+            return;
+        };
+        let database = endpoint.database.clone();
+        let task = runtime.spawn(async move {
+            client.database(&database).run_command(doc! {"dbStats": 1}).await
+        });
+        cx.spawn(async move |cx| {
+            let stats = task.await.ok().and_then(Result::ok);
+            let number = |name: &str| {
+                let value = stats.as_ref()?.get(name)?;
+                let value = match value {
+                    mongodb::bson::Bson::Int32(n) => i64::from(*n),
+                    mongodb::bson::Bson::Int64(n) => *n,
+                    mongodb::bson::Bson::Double(n) => *n as i64,
+                    _ => return None,
+                };
+                u64::try_from(value).ok()
+            };
+            let metadata = CompareMetadata {
+                endpoint: endpoint.clone(),
+                count: number("objects"),
+                bytes: number("dataSize"),
+                error: stats.is_none().then(|| "Size unavailable".into()),
+                ..Default::default()
+            };
+            cx.update(|cx| {
+                state.update(cx, |app, cx| {
+                    if let Some(tab) =
+                        app.compare_tab_mut(id).filter(|tab| tab.config.sides[side] == endpoint)
+                    {
+                        tab.metadata[side] = Some(metadata);
+                        cx.notify();
+                    }
                 })
             });
         })

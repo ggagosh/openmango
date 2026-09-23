@@ -1,7 +1,9 @@
 use gpui_kit::Context;
 use uuid::Uuid;
 
-use crate::state::compare::{CompareConfig, CompareEndpoint, CompareTabKey, CompareTabState};
+use crate::state::compare::{
+    CompareConfig, CompareEndpoint, CompareScope, CompareTabKey, CompareTabState,
+};
 use crate::state::{ActiveTab, AppEvent, AppState, TabKey, View};
 
 impl AppState {
@@ -111,27 +113,63 @@ impl AppState {
     }
 
     pub fn open_compare_tab(&mut self, prefill: Option<CompareEndpoint>, cx: &mut Context<Self>) {
-        let left = prefill.unwrap_or_else(|| CompareEndpoint {
+        self.open_scoped_compare_tab(CompareScope::Collections, prefill, cx);
+    }
+
+    /// A new Compare tab with the left side filled from `prefill`, or from the selection.
+    pub fn open_scoped_compare_tab(
+        &mut self,
+        scope: CompareScope,
+        prefill: Option<CompareEndpoint>,
+        cx: &mut Context<Self>,
+    ) -> Uuid {
+        let mut left = prefill.unwrap_or_else(|| CompareEndpoint {
             connection_id: self.selected_connection_id(),
             database: self.selected_database_name().unwrap_or_default(),
             collection: self.selected_collection().map(str::to_owned).unwrap_or_default(),
         });
-        let id = Uuid::new_v4();
-        self.tabs
-            .open
-            .push(TabKey::Compare(CompareTabKey { id, connection_id: left.connection_id }));
-        self.compare_tabs.insert(
-            id,
-            CompareTabState::new(CompareConfig {
+        if scope == CompareScope::Databases {
+            left.collection.clear();
+        }
+        self.open_compare_tab_with(
+            CompareConfig {
+                scope,
                 sides: [left, CompareEndpoint::default()],
                 ..Default::default()
-            }),
-        );
+            },
+            cx,
+        )
+    }
+
+    pub fn open_compare_tab_with(&mut self, config: CompareConfig, cx: &mut Context<Self>) -> Uuid {
+        let id = Uuid::new_v4();
+        self.tabs.open.push(TabKey::Compare(CompareTabKey {
+            id,
+            connection_id: config.sides[0].connection_id,
+        }));
+        self.compare_tabs.insert(id, CompareTabState::new(config));
         self.tabs.active = ActiveTab::Index(self.tabs.open.len() - 1);
         self.current_view = View::Compare;
         self.update_workspace_from_state_debounced();
         cx.emit(AppEvent::ViewChanged);
         cx.notify();
+        id
+    }
+
+    /// A collection from a database comparison, in a Compare tab of its own.
+    pub fn open_pair_comparison(
+        &mut self,
+        id: Uuid,
+        pair: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Uuid> {
+        let tab = self.compare_tab(id)?;
+        let config = tab.results_config();
+        let name = tab.pairs.get(pair)?.name.clone();
+        let sides =
+            config.sides.clone().map(|side| CompareEndpoint { collection: name.clone(), ..side });
+        let config = CompareConfig { sides, ignore: config.ignore.clone(), ..Default::default() };
+        Some(self.open_compare_tab_with(config, cx))
     }
 
     pub fn update_compare_config(
@@ -164,6 +202,24 @@ impl AppState {
     }
 
     pub fn compare_disabled_reason(&self, config: &CompareConfig) -> Option<String> {
+        if config.scope == CompareScope::Databases {
+            for (side, endpoint) in ["Left", "Right"].into_iter().zip(&config.sides) {
+                if !endpoint.ready(config.scope) {
+                    return Some(format!(
+                        "Choose a connection and database on the {}",
+                        side.to_lowercase()
+                    ));
+                }
+                if !endpoint.connection_id.is_some_and(|id| self.is_connected(id)) {
+                    return Some(format!("{side} connection is closed. Reconnect to compare."));
+                }
+            }
+            let [left, right] = &config.sides;
+            if left.connection_id == right.connection_id && left.database == right.database {
+                return Some("Choose two different databases".into());
+            }
+            return None;
+        }
         if let Err(error) = (crate::connection::ops::compare::CompareOptions {
             fields: config.fields.clone(),
             ..Default::default()

@@ -304,6 +304,18 @@ impl AppRoot {
                     content.focus_current_view(window, cx);
                 });
             }
+            "cmd:compare-databases" => {
+                state.update(cx, |state, cx| {
+                    state.open_scoped_compare_tab(
+                        crate::state::compare::CompareScope::Databases,
+                        None,
+                        cx,
+                    )
+                });
+                content_area.update(cx, |content, cx| {
+                    content.focus_current_view(window, cx);
+                });
+            }
             "cmd:transfer-import" => {
                 if Self::open_transfer_from_current(state, TransferMode::Import, cx) {
                     content_area.update(cx, |content, cx| {

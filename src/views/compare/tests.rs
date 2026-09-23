@@ -855,3 +855,158 @@ fn a_closed_connection_picked_in_compare_opens_in_place(cx: &mut TestAppContext)
     pick_right_connection(&["enter"], cx);
     assert_eq!(right(cx).database, "shop");
 }
+
+fn listing() -> Vec<crate::connection::ops::compare_database::CollectionPair> {
+    use crate::connection::ops::compare_database::{
+        CollectionKind::*, CollectionPair, SideCollection,
+    };
+    let side = |kind| Some(SideCollection { kind, estimated: Some(10), bytes: Some(100) });
+    vec![
+        CollectionPair { name: "audit".into(), sides: [side(Collection), None] },
+        CollectionPair { name: "orders".into(), sides: [side(Collection), side(Collection)] },
+        CollectionPair { name: "recent".into(), sides: [side(View), side(Collection)] },
+        CollectionPair { name: "zones".into(), sides: [None, side(Collection)] },
+    ]
+}
+
+fn database_config(connections: [uuid::Uuid; 2]) -> CompareConfig {
+    use crate::state::compare::CompareScope;
+    CompareConfig {
+        scope: CompareScope::Databases,
+        sides: connections.map(|connection| CompareEndpoint {
+            connection_id: Some(connection),
+            database: "shop".into(),
+            collection: String::new(),
+        }),
+        fields: vec!["sku".into()],
+        ignore: vec!["updatedAt".into()],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn database_scope_loads_old_setups_and_segments_the_listing() {
+    use crate::state::compare::CompareScope;
+    let old: CompareConfig = serde_json::from_str(r#"{"fields":["sku"]}"#).unwrap();
+    assert_eq!(old.scope, CompareScope::Collections, "saved tabs from before load unchanged");
+    let config = database_config([uuid::Uuid::new_v4(); 2]);
+    let back: CompareConfig =
+        serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+    assert_eq!(back, config);
+
+    let mut tab = CompareTabState::new(config);
+    tab.begin();
+    tab.receive_pairs(Ok(listing()));
+    assert!(!tab.running);
+    // All, left only, right only, in both, not compared.
+    assert_eq!(tab.pair_segments.each_ref().map(Vec::len), [4, 1, 1, 1, 1]);
+    assert_eq!(tab.find_pair("ORD"), Some(1));
+    assert_eq!(tab.find_pair("missing"), None);
+    // A second run keeps the listing on screen until its own result arrives.
+    tab.begin();
+    assert_eq!(tab.pairs.len(), 4);
+    tab.receive_pairs(Err("listCollections refused".into()));
+    assert!(tab.pairs.is_empty());
+    assert_eq!(tab.error.as_deref(), Some("listCollections refused"));
+}
+
+#[gpui_kit::test]
+fn a_collection_opened_from_a_database_comparison_keeps_both_sides_and_ignored_fields(
+    cx: &mut TestAppContext,
+) {
+    use crate::state::compare::CompareScope;
+    let directory = tempfile::tempdir().unwrap();
+    let state = cx.new(|_| {
+        AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        )
+    });
+    let connections = [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()];
+    state.update(cx, |state, cx| {
+        let mut unfinished = database_config(connections);
+        unfinished.sides[0].database.clear();
+        assert_eq!(
+            state.compare_disabled_reason(&unfinished).as_deref(),
+            Some("Choose a connection and database on the left")
+        );
+        assert_eq!(
+            state.compare_disabled_reason(&database_config(connections)).as_deref(),
+            Some("Left connection is closed. Reconnect to compare.")
+        );
+
+        let id = state.open_compare_tab_with(database_config(connections), cx);
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.begin();
+        tab.receive_pairs(Ok(listing()));
+        let opened = state.open_pair_comparison(id, 1, cx).unwrap();
+        assert_eq!(state.active_compare_tab_id(), Some(opened));
+        let config = &state.compare_tab(opened).unwrap().config;
+        assert_eq!(config.scope, CompareScope::Collections);
+        assert_eq!(
+            config.sides.each_ref().map(|side| (side.connection_id, side.collection.as_str())),
+            [(Some(connections[0]), "orders"), (Some(connections[1]), "orders")]
+        );
+        assert_eq!(config.ignore, ["updatedAt"]);
+        assert_eq!(config.fields, ["_id"], "every collection of a database is matched by _id");
+    });
+}
+
+#[gpui_kit::test]
+fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply_design_tokens(cx);
+        crate::keyboard::bind_keymap(cx, &Default::default());
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let state = cx.new(|_| {
+        AppState::with_config(
+            Arc::new(crate::connection::ConnectionManager::new()),
+            ConfigManager::with_config_dir(directory.path().into()),
+        )
+    });
+    let id = state.update(cx, |state, cx| {
+        let id = state.open_compare_tab_with(database_config([uuid::Uuid::new_v4(); 2]), cx);
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.begin();
+        tab.receive_pairs(Ok(listing()));
+        id
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+        Root::new(view, window, cx).bordered(false)
+    });
+    cx.simulate_resize(size(px(1400.0), px(900.0)));
+    draw(cx);
+    draw(cx);
+    let selected = |cx: &mut VisualTestContext| {
+        state.update(cx, |state, _| state.compare_tab(id).unwrap().pair_selected)
+    };
+    assert!(cx.debug_bounds("compare-pair-heading").is_some());
+    assert!(cx.debug_bounds("compare-pair-detail").is_none(), "nothing is selected yet");
+
+    let row = cx.debug_bounds("compare-pair-0").expect("the first collection row");
+    cx.simulate_click(row.center(), gpui_kit::Modifiers::default());
+    draw(cx);
+    assert_eq!(selected(cx), Some(0));
+    assert!(cx.debug_bounds("compare-pair-detail").is_some());
+    cx.simulate_keystrokes("down");
+    draw(cx);
+    assert_eq!(selected(cx), Some(1));
+    cx.simulate_keystrokes("up");
+    draw(cx);
+    assert_eq!(selected(cx), Some(0));
+
+    // A collection on one side only has nothing to open.
+    let tabs = state.update(cx, |state, _| state.open_tabs().len());
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(state.update(cx, |state, _| state.open_tabs().len()), tabs);
+
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("zon");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(selected(cx), Some(3), "Find jumps to a collection by part of its name");
+}

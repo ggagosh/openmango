@@ -13,6 +13,16 @@ use crate::connection::CancellationToken;
 use crate::connection::ops::compare::{
     CompareCounts, CompareMessage, CompareSummary, DiffKind, DiffRow, SortPlan,
 };
+use crate::connection::ops::compare_database::{CollectionPair, PairKind};
+
+/// What a Compare tab pairs: two collections, or every collection of two databases.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareScope {
+    #[default]
+    Collections,
+    Databases,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompareEndpoint {
@@ -25,6 +35,13 @@ impl CompareEndpoint {
     pub fn complete(&self) -> bool {
         self.connection_id.is_some() && !self.database.is_empty() && !self.collection.is_empty()
     }
+    /// Everything the scope needs: a database scope ignores the collection.
+    pub fn ready(&self, scope: CompareScope) -> bool {
+        match scope {
+            CompareScope::Collections => self.complete(),
+            CompareScope::Databases => self.connection_id.is_some() && !self.database.is_empty(),
+        }
+    }
     pub fn namespace(&self) -> String {
         format!("{}.{}", self.database, self.collection)
     }
@@ -33,6 +50,7 @@ impl CompareEndpoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompareConfig {
+    pub scope: CompareScope,
     pub sides: [CompareEndpoint; 2],
     pub fields: Vec<String>,
     pub filter: String,
@@ -42,6 +60,7 @@ pub struct CompareConfig {
 impl Default for CompareConfig {
     fn default() -> Self {
         Self {
+            scope: CompareScope::Collections,
             sides: Default::default(),
             fields: vec!["_id".into()],
             filter: String::new(),
@@ -128,6 +147,12 @@ pub struct CompareTabState {
     pub detail_error: Option<String>,
     pub detail_generation: u64,
     pub detail_cache: std::collections::HashMap<usize, Arc<CompareDetail>>,
+    /// Database scope: every collection name on either side, alphabetical.
+    pub pairs: Vec<CollectionPair>,
+    /// All, left only, right only, in both, not compared.
+    pub pair_segments: [Vec<usize>; 5],
+    pub pair_segment: usize,
+    pub pair_selected: Option<usize>,
 }
 
 impl Default for CompareTabState {
@@ -176,6 +201,10 @@ impl CompareTabState {
             detail_error: None,
             detail_generation: 0,
             detail_cache: Default::default(),
+            pairs: Vec::new(),
+            pair_segments: Default::default(),
+            pair_segment: 0,
+            pair_selected: None,
         }
     }
 
@@ -228,6 +257,41 @@ impl CompareTabState {
         self.detail_error = None;
         self.detail_generation = self.detail_generation.wrapping_add(1);
         self.detail_cache.clear();
+        self.pairs.clear();
+        self.pair_segments = Default::default();
+        self.pair_selected = None;
+    }
+
+    /// The database listing arrived: it replaces whatever the previous run showed.
+    pub fn receive_pairs(&mut self, result: Result<Vec<CollectionPair>, String>) {
+        if self.pending_reset {
+            self.reset_results();
+        }
+        self.running = false;
+        self.cancellation = None;
+        match result {
+            Ok(pairs) => {
+                for (index, pair) in pairs.iter().enumerate() {
+                    self.pair_segments[0].push(index);
+                    self.pair_segments[pair_segment_for(pair.kind())].push(index);
+                }
+                self.pairs = pairs;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn visible_pairs(&self) -> &[usize] {
+        &self.pair_segments[self.pair_segment]
+    }
+
+    /// The first collection whose name contains the text, ignoring case.
+    pub fn find_pair(&self, text: &str) -> Option<usize> {
+        let text = text.trim().to_lowercase();
+        if text.is_empty() {
+            return None;
+        }
+        self.pairs.iter().position(|pair| pair.name.to_lowercase().contains(&text))
     }
 
     pub fn receive(&mut self, message: CompareMessage) {
@@ -305,6 +369,15 @@ impl CompareTabState {
             }
         }
         self.rows.iter().position(|row| matches(&row.key, text))
+    }
+}
+
+pub fn pair_segment_for(kind: PairKind) -> usize {
+    match kind {
+        PairKind::LeftOnly => 1,
+        PairKind::RightOnly => 2,
+        PairKind::Both => 3,
+        PairKind::NotComparable(_) => 4,
     }
 }
 

@@ -5,6 +5,7 @@
 //! its picker and every row that exists on that side only. Changed values use the warning tint.
 //! The same dot appears wherever a kind or a side is named, so the legend is always on screen.
 
+mod database;
 mod detail;
 mod detail_tree;
 mod results;
@@ -30,7 +31,7 @@ use crate::connection::ops::compare::DiffKind;
 use crate::keyboard::{
     CancelCompare, CompareNext, ComparePrevious, FindInCompare, FocusCompareDetail, RunCompare,
 };
-use crate::state::compare::CompareEndpoint;
+use crate::state::compare::{CompareEndpoint, CompareScope};
 use crate::state::{AppCommands, AppState};
 use crate::theme::{borders, islands, spacing};
 
@@ -104,7 +105,11 @@ pub(super) fn endpoint_label(app: &AppState, endpoint: &CompareEndpoint) -> Stri
             .connection_id
             .and_then(|id| app.connection_name(id))
             .unwrap_or_else(|| "Connection".into()),
-        endpoint.namespace()
+        if endpoint.collection.is_empty() {
+            endpoint.database.clone()
+        } else {
+            endpoint.namespace()
+        }
     )
 }
 
@@ -210,6 +215,30 @@ impl CompareView {
         let Some(id) = self.active else {
             return;
         };
+        if self.database_results(id, cx) {
+            let target = {
+                let Some(tab) = self.state.read(cx).compare_tab(id) else {
+                    return;
+                };
+                let visible = tab.visible_pairs();
+                if visible.is_empty() {
+                    return;
+                }
+                let at = tab.pair_selected.and_then(|pair| visible.iter().position(|i| *i == pair));
+                let next =
+                    at.map_or(0, |at| at.saturating_add_signed(delta).min(visible.len() - 1));
+                (next, visible[next])
+            };
+            self.scroll.scroll_to_item(target.0, ScrollStrategy::Nearest);
+            self.state.update(cx, |app, cx| {
+                if let Some(tab) = app.compare_tab_mut(id) {
+                    tab.pair_selected = Some(target.1);
+                }
+                cx.notify();
+            });
+            window.focus(&self.focus, cx);
+            return;
+        }
         let target = {
             let app = self.state.read(cx);
             let Some(tab) = app.compare_tab(id) else {
@@ -233,6 +262,25 @@ impl CompareView {
             return;
         };
         let text = input.read(cx).value().to_string();
+        if self.database_results(id, cx) {
+            let found = self.state.read(cx).compare_tab(id).and_then(|tab| tab.find_pair(&text));
+            self.find_error = found.is_none().then(|| "No collection by that name".into());
+            if let Some(index) = found {
+                let position = self.state.update(cx, |app, cx| {
+                    let tab = app.compare_tab_mut(id).unwrap();
+                    if !tab.visible_pairs().contains(&index) {
+                        tab.pair_segment = 0;
+                    }
+                    tab.pair_selected = Some(index);
+                    cx.notify();
+                    tab.visible_pairs().iter().position(|i| *i == index).unwrap()
+                });
+                self.scroll.scroll_to_item(position, ScrollStrategy::Nearest);
+                window.focus(&self.focus, cx);
+            }
+            cx.notify();
+            return;
+        }
         let found = self.state.read(cx).compare_tab(id).and_then(|tab| tab.find_key(&text));
         self.find_error =
             if found.is_none() { Some("Not among the differences".into()) } else { None };
@@ -253,9 +301,29 @@ impl CompareView {
         cx.notify();
     }
 
+    /// Whether the results on screen came from a database comparison.
+    fn database_results(&self, id: Uuid, cx: &App) -> bool {
+        self.state
+            .read(cx)
+            .compare_tab(id)
+            .is_some_and(|tab| tab.results_config().scope == CompareScope::Databases)
+    }
+
     /// Before the first run the tab explains itself instead of showing empty panes.
-    fn render_empty(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn render_empty(&self, id: Uuid, window: &Window, cx: &Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
+        let databases = self.database_results(id, cx);
+        let (title, text) = if databases {
+            (
+                "Compare two databases",
+                "Choose a connection and database on each side. Collections are paired by name, and you can open any of them to compare its documents.",
+            )
+        } else {
+            (
+                "Compare two collections",
+                "Choose a connection, database and collection on each side. Differences stream in while the scan runs; afterwards you can sync either way.",
+            )
+        };
         div()
             .debug_selector(|| "compare-empty".into())
             .flex_1()
@@ -267,15 +335,8 @@ impl CompareView {
             .gap(spacing::sm())
             .p(spacing::lg())
             .child(app_icon("git-compare-arrows").size(px(28.0)).text_color(muted))
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Compare two collections"))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_center()
-                    .max_w(px(400.0))
-                    .child("Choose a connection, database and collection on each side. Differences stream in while the scan runs; afterwards you can sync either way."),
-            )
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+            .child(div().text_xs().text_color(muted).text_center().max_w(px(400.0)).child(text))
             .child(
                 div()
                     .flex()
@@ -308,10 +369,27 @@ impl Render for CompareView {
             )
         };
         let header = self.render_setup(id, window, cx);
+        let databases = self.database_results(id, cx);
         let body = if has_results {
-            let summary = self.render_summary(id, cx);
-            let list = self.render_results(id, cx);
-            let detail = self.render_detail(id, cx);
+            let (summary, list, detail) = if databases {
+                (
+                    self.render_database_summary(id, cx),
+                    self.render_database_list(id, cx),
+                    self.render_database_detail(id, cx),
+                )
+            } else {
+                (
+                    self.render_summary(id, cx),
+                    self.render_results(id, cx),
+                    self.render_detail(id, cx),
+                )
+            };
+            // The collection list carries two counts and a result, so it starts wider.
+            let (split, size) = if databases {
+                ("compare-database-split", 560.0)
+            } else {
+                ("compare-split", 320.0)
+            };
             div()
                 .flex_1()
                 .min_h_0()
@@ -322,10 +400,10 @@ impl Render for CompareView {
                 .child(summary)
                 .child(
                     div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
-                        h_resizable("compare-split")
+                        h_resizable(split)
                             .child(
                                 resizable_panel()
-                                    .size(px(320.0))
+                                    .size(px(size))
                                     .size_range(px(120.0)..px(650.0))
                                     .child(list),
                             )
@@ -336,9 +414,10 @@ impl Render for CompareView {
                 )
                 .into_any_element()
         } else {
-            self.render_empty(window, cx)
+            self.render_empty(id, window, cx)
         };
-        let sync_bar = self.render_sync_bar(id, cx);
+        let sync_bar =
+            if databases { div().into_any_element() } else { self.render_sync_bar(id, cx) };
         div()
             .id("compare-view")
             .debug_selector(|| "compare-view".into())
@@ -366,8 +445,17 @@ impl Render for CompareView {
             .on_action(cx.listener(|this, _: &ComparePrevious, window, cx| {
                 this.move_selection(-1, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &FocusCompareDetail, window, cx| {
-                window.focus(&this.detail_focus, cx)
+            .on_action(cx.listener(move |this, _: &FocusCompareDetail, window, cx| {
+                // In the database scope the detail has nothing to focus; enter opens the row.
+                if this.database_results(id, cx) {
+                    if let Some(index) =
+                        this.state.read(cx).compare_tab(id).and_then(|tab| tab.pair_selected)
+                    {
+                        database::open_pair(&this.state, id, index, cx);
+                    }
+                } else {
+                    window.focus(&this.detail_focus, cx)
+                }
             }))
             .on_action(cx.listener(|this, _: &FindInCompare, window, cx| {
                 if let Some(controls) = &this.controls {

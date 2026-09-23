@@ -142,7 +142,7 @@ pub(crate) fn open_document_compare(
                             .border_color(islands::panel_border(&appearance, cx))
                             .rounded(borders::radius_sm())
                             .overflow_hidden()
-                            .child(diff_heading(&pair, names.clone(), &appearance, cx))
+                            .child(diff_heading(names.clone(), [None, None], &appearance, cx))
                             .child(table.clone()),
                     ),
             )
@@ -156,10 +156,11 @@ pub(crate) fn open_document_compare(
     });
 }
 
-/// Column titles for a pair. They share the rows' columns, even when a side is absent.
-fn diff_heading(
-    pair: &CompareDetail,
+/// Column titles for a pair. They share the rows' columns, even when a side is absent; `absent`
+/// names what that side lacks.
+pub(super) fn diff_heading(
     names: [String; 2],
+    absent: [Option<&'static str>; 2],
     appearance: &AppearanceSettings,
     cx: &App,
 ) -> Div {
@@ -179,7 +180,7 @@ fn diff_heading(
                 .child(div().text_xs().text_color(muted).child("Field")),
         );
     for (side, name) in names.into_iter().enumerate() {
-        let missing = pair.documents[side].is_empty();
+        let missing = absent[side];
         heading = heading.child(
             h_flex()
                 .debug_selector(move || format!("compare-heading-{side}"))
@@ -208,8 +209,8 @@ fn diff_heading(
                         .child(name.clone())
                         .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx)),
                 )
-                .when(missing, |column| {
-                    column.child(Tag::secondary().xsmall().child("No document"))
+                .when_some(missing, |column, missing| {
+                    column.child(Tag::secondary().xsmall().child(missing))
                 }),
         );
     }
@@ -444,18 +445,22 @@ impl CompareView {
         }
 
         panel
-            .child(diff_heading(&detail, names, &appearance, cx))
+            .child(diff_heading(names, absent_documents(&detail), &appearance, cx))
             .children(self.diff.clone())
             .into_any_element()
     }
 }
 
+fn absent_documents(pair: &CompareDetail) -> [Option<&'static str>; 2] {
+    pair.documents.each_ref().map(|documents| documents.is_empty().then_some("No document"))
+}
+
 /// The header and every virtual row share these columns, even when a side is absent.
-fn comparison_row() -> Div {
+pub(super) fn comparison_row() -> Div {
     div().w_full().min_w_0().flex().gap(spacing::sm()).px(spacing::sm())
 }
 
-fn field_column() -> Div {
+pub(super) fn field_column() -> Div {
     div().w(relative(0.24)).max_w(px(240.0)).flex_shrink_0().min_w_0().overflow_hidden()
 }
 

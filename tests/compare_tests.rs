@@ -409,3 +409,54 @@ async fn compare_million_document_benchmark() {
         );
     }
 }
+
+#[tokio::test]
+async fn database_listing_pairs_collections_by_name_with_kinds_and_sizes() {
+    use openmango::connection::ops::compare_database::{
+        CollectionKind, PairKind, list_side, pair_collections,
+    };
+    let mongo = MongoTestContainer::start().await;
+    let left = mongo.database("compare_db_left");
+    let right = mongo.database("compare_db_right");
+    left.collection::<Document>("orders")
+        .insert_many([doc! {"_id": 1}, doc! {"_id": 2}])
+        .await
+        .unwrap();
+    right.collection::<Document>("orders").insert_one(doc! {"_id": 1}).await.unwrap();
+    left.collection::<Document>("audit").insert_one(doc! {"_id": 1}).await.unwrap();
+    for database in [&left, &right] {
+        database
+            .create_collection("metrics")
+            .timeseries(
+                mongodb::options::TimeseriesOptions::builder().time_field("at".to_string()).build(),
+            )
+            .await
+            .unwrap();
+    }
+    // A view adds `system.views`, and time-series adds `system.buckets.*`: neither may be listed.
+    left.create_collection("recent")
+        .view_on("orders".to_string())
+        .pipeline(Vec::new())
+        .await
+        .unwrap();
+    right.collection::<Document>("recent").insert_one(doc! {"_id": 1}).await.unwrap();
+
+    let timeout = std::time::Duration::from_secs(10);
+    let left = list_side(&mongo.client, left.name(), timeout).await.unwrap();
+    let right = list_side(&mongo.client, right.name(), timeout).await.unwrap();
+    assert!(left.iter().chain(&right).all(|(name, _)| !name.starts_with("system.")));
+    let pairs = pair_collections(left, right);
+    let kinds: Vec<_> = pairs.iter().map(|pair| (pair.name.as_str(), pair.kind())).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("audit", PairKind::LeftOnly),
+            ("metrics", PairKind::NotComparable(CollectionKind::Timeseries)),
+            ("orders", PairKind::Both),
+            ("recent", PairKind::NotComparable(CollectionKind::View)),
+        ]
+    );
+    let orders = pairs[2].sides.each_ref().map(|side| side.clone().unwrap());
+    assert_eq!(orders.each_ref().map(|side| side.estimated), [Some(2), Some(1)]);
+    assert!(orders.iter().all(|side| side.bytes.is_some_and(|bytes| bytes > 0)));
+}

@@ -7,7 +7,7 @@ use gpui_kit::component::{IconName, IndexPath};
 
 use super::*;
 use crate::components::ConnectionIdentity;
-use crate::state::compare::CompareEndpoint;
+use crate::state::compare::{CompareEndpoint, CompareScope};
 use crate::views::transfer::ConnectionItem;
 
 pub(super) struct EndpointControls {
@@ -31,6 +31,8 @@ pub(super) struct Controls {
     suggestions: Entity<SelectState<SearchableVec<SharedString>>>,
     suggestion_fields: Vec<(String, Vec<String>)>,
     applied_fields: Option<Vec<String>>,
+    /// The scope the Find placeholder was last set for.
+    find_scope: Option<CompareScope>,
 }
 
 impl CompareView {
@@ -254,6 +256,7 @@ impl CompareView {
             suggestions,
             suggestion_fields: Vec::new(),
             applied_fields: None,
+            find_scope: None,
         });
         window.focus(&self.focus, cx);
     }
@@ -360,7 +363,19 @@ impl CompareView {
                 })
             });
         }
+        let results_scope =
+            self.state.read(cx).compare_tab(id).map_or(config.scope, |t| t.results_config().scope);
         let controls = self.controls.as_mut().unwrap();
+        if controls.find_scope != Some(results_scope) {
+            controls.find.update(cx, |input, cx| {
+                let placeholder = match results_scope {
+                    CompareScope::Collections => "Find key…",
+                    CompareScope::Databases => "Find collection…",
+                };
+                input.set_placeholder(placeholder, window, cx)
+            });
+            controls.find_scope = Some(results_scope);
+        }
         for side in 0..2 {
             let endpoint = &config.sides[side];
             if let Some(connection) = endpoint.connection_id
@@ -439,7 +454,9 @@ impl CompareView {
                 }
                 controls.applied = Some(endpoint.clone());
             }
-            if endpoint.complete() && self.metadata_requested[side].as_ref() != Some(endpoint) {
+            if endpoint.ready(config.scope)
+                && self.metadata_requested[side].as_ref() != Some(endpoint)
+            {
                 self.metadata_requested[side] = Some(endpoint.clone());
                 let state = self.state.clone();
                 cx.defer(move |cx| AppCommands::load_compare_metadata(state, id, side, cx));
@@ -506,13 +523,38 @@ impl CompareView {
             let selectors = &controls.sides[side];
             let title = side_name(side);
             let meta = metadata.as_ref().filter(|m| m.endpoint == config.sides[side]);
-            let stats = meta.map(|m| match (m.count, m.bytes) {
-                (Some(count), Some(bytes)) => format!(
-                    "~{} documents · {}",
-                    crate::helpers::format_number(count),
-                    crate::helpers::format_bytes(bytes)
-                ),
-                _ => m.error.clone().unwrap_or_else(|| "Size unavailable".into()),
+            let stats = meta.map(|m| {
+                let size = match (m.count, m.bytes) {
+                    (Some(count), Some(bytes)) => Some(format!(
+                        "~{} documents · {}",
+                        crate::helpers::format_number(count),
+                        crate::helpers::format_bytes(bytes)
+                    )),
+                    _ => None,
+                };
+                let collections = (config.scope == CompareScope::Databases)
+                    .then(|| {
+                        let endpoint = &config.sides[side];
+                        let connection = app.active_connection_by_id(endpoint.connection_id?)?;
+                        let names = connection.collections.get(&endpoint.database)?;
+                        Some(
+                            names
+                                .iter()
+                                .filter(|n| !crate::models::is_system_collection(n))
+                                .count(),
+                        )
+                    })
+                    .flatten();
+                match (collections, size) {
+                    (Some(n), Some(size)) => {
+                        format!("{} collections · {size}", crate::helpers::format_number(n as u64))
+                    }
+                    (Some(n), None) => {
+                        format!("{} collections", crate::helpers::format_number(n as u64))
+                    }
+                    (None, Some(size)) => size,
+                    (None, None) => m.error.clone().unwrap_or_else(|| "Size unavailable".into()),
+                }
             });
             let connection = config.sides[side].connection_id;
             let (line, failed) = match connection {
@@ -580,18 +622,20 @@ impl CompareView {
                                 )
                                 .flex_grow(1.0),
                             )
-                            .child(
-                                select_slot(
-                                    160.0,
-                                    Select::new(&selectors.collection)
-                                        .accessibility_label(format!("{title} collection"))
-                                        .small()
-                                        .placeholder("Collection")
-                                        .disabled(running)
-                                        .w_full(),
+                            .when(config.scope == CompareScope::Collections, |pickers| {
+                                pickers.child(
+                                    select_slot(
+                                        160.0,
+                                        Select::new(&selectors.collection)
+                                            .accessibility_label(format!("{title} collection"))
+                                            .small()
+                                            .placeholder("Collection")
+                                            .disabled(running)
+                                            .w_full(),
+                                    )
+                                    .flex_grow(1.0),
                                 )
-                                .flex_grow(1.0),
-                            ),
+                            }),
                     )
                     // Always present, so the header holds still when a size arrives or sides swap.
                     .child(
@@ -613,8 +657,15 @@ impl CompareView {
             );
         }
 
-        let match_summary = format!("Match by {}", config.fields.join(" + "));
-        let mut settings_summary = if config.filter.trim().is_empty() {
+        let databases = config.scope == CompareScope::Databases;
+        let match_summary = if databases {
+            "Match by _id in every collection".to_string()
+        } else {
+            format!("Match by {}", config.fields.join(" + "))
+        };
+        let mut settings_summary = if databases {
+            "All collections".to_string()
+        } else if config.filter.trim().is_empty() {
             "All documents".to_string()
         } else {
             "Filtered documents".to_string()
@@ -811,6 +862,7 @@ impl CompareView {
             )
         });
         if let [Some(left), Some(right)] = &metadata
+            && !databases
             && left.endpoint == config.sides[0]
             && right.endpoint == config.sides[1]
         {
@@ -846,6 +898,7 @@ impl CompareView {
             .bg(islands::tool_bg(&appearance, cx))
             .border_b_1()
             .border_color(islands::panel_border(&appearance, cx))
+            .child(self.scope_switch(id, config.scope, running, cx))
             .child(sides)
             .child(actions)
             .when_some(reason, |setup, reason| {
@@ -864,6 +917,49 @@ impl CompareView {
     }
 }
 
+impl CompareView {
+    /// Collections or databases. Switching keeps both connections and databases.
+    fn scope_switch(
+        &self,
+        id: Uuid,
+        scope: CompareScope,
+        running: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use gpui_kit::component::Selectable as _;
+        use gpui_kit::component::button::ButtonGroup;
+        let mut group = ButtonGroup::new("compare-scope").small();
+        for (index, (value, label)) in
+            [(CompareScope::Collections, "Collections"), (CompareScope::Databases, "Databases")]
+                .into_iter()
+                .enumerate()
+        {
+            group = group.child(
+                Button::new(("compare-scope", index))
+                    .ghost()
+                    .small()
+                    .label(label)
+                    .selected(scope == value)
+                    .disabled(running)
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if scope == value {
+                            return;
+                        }
+                        // Sizes differ by scope: a collection's, or a whole database's.
+                        view.metadata_requested = [None, None];
+                        view.state.update(cx, |app, cx| {
+                            if let Some(tab) = app.compare_tab_mut(id) {
+                                tab.metadata = Default::default();
+                            }
+                            app.update_compare_config(id, |config| config.scope = value, cx)
+                        })
+                    })),
+            );
+        }
+        div().flex().child(group).into_any_element()
+    }
+}
+
 fn settings_panel(
     state: Entity<AppState>,
     id: Uuid,
@@ -879,54 +975,63 @@ fn settings_panel(
     };
     let config = tab.config.clone();
     let [fields, ignore, filter] = inputs;
+    let databases = config.scope == CompareScope::Databases;
     let mut matching = setting_group("Match documents by", cx);
-    if has_suggestions {
-        matching = matching.child(
-            select_slot(
-                520.0,
-                Select::new(suggestions)
-                    .small()
-                    .w_full()
-                    .placeholder("Indexed keys on these collections…")
-                    .accessibility_label("Suggested match keys"),
-            )
-            .w_full(),
-        );
-    }
-    matching = matching.child(token_editor(state.clone(), id, &config.fields, true, fields, cx));
-    matching = matching.child(note(
-        if config.fields.len() > 1 {
-            "Every key field must match."
-        } else {
-            "Pick a field that is unique in both collections. _id works when documents were copied with their ids."
-        },
-        cx,
-    ));
-    if config.fields.len() > 1 && config.fields.iter().any(|field| field == "_id") {
-        let state = state.clone();
-        matching = matching.child(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(spacing::sm())
-                .child(note("_id in a compound key needs identical ids on both sides.", cx))
-                .child(
-                    Button::new("compare-without-id")
-                        .ghost()
-                        .xsmall()
-                        .label("Match without _id")
-                        .on_click(move |_, _, cx| {
-                            state.update(cx, |app, cx| {
-                                app.update_compare_config(
-                                    id,
-                                    |config| config.fields.retain(|field| field != "_id"),
-                                    cx,
-                                )
-                            })
-                        }),
-                ),
-        );
+    if databases {
+        matching = matching.child(note(
+            "Every collection is matched by _id. Open one to match it by another field.",
+            cx,
+        ));
+    } else {
+        if has_suggestions {
+            matching = matching.child(
+                select_slot(
+                    520.0,
+                    Select::new(suggestions)
+                        .small()
+                        .w_full()
+                        .placeholder("Indexed keys on these collections…")
+                        .accessibility_label("Suggested match keys"),
+                )
+                .w_full(),
+            );
+        }
+        matching =
+            matching.child(token_editor(state.clone(), id, &config.fields, true, fields, cx));
+        matching = matching.child(note(
+            if config.fields.len() > 1 {
+                "Every key field must match."
+            } else {
+                "Pick a field that is unique in both collections. _id works when documents were copied with their ids."
+            },
+            cx,
+        ));
+        if config.fields.len() > 1 && config.fields.iter().any(|field| field == "_id") {
+            let state = state.clone();
+            matching = matching.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(note("_id in a compound key needs identical ids on both sides.", cx))
+                    .child(
+                        Button::new("compare-without-id")
+                            .ghost()
+                            .xsmall()
+                            .label("Match without _id")
+                            .on_click(move |_, _, cx| {
+                                state.update(cx, |app, cx| {
+                                    app.update_compare_config(
+                                        id,
+                                        |config| config.fields.retain(|field| field != "_id"),
+                                        cx,
+                                    )
+                                })
+                            }),
+                    ),
+            );
+        }
     }
     let mut scope = setting_group("Filter", cx)
         .on_action(|_: &gpui_kit::component::input::Enter, _, _| {})
@@ -940,7 +1045,7 @@ fn settings_panel(
     let ignoring = setting_group("Ignore fields", cx)
         .child(token_editor(state, id, &config.ignore, false, ignore, cx))
         .child(note(
-            if config.fields != ["_id"] {
+            if !databases && config.fields != ["_id"] {
                 "_id is ignored automatically when matching by another key."
             } else {
                 "Left out of value comparisons, for example updatedAt."
@@ -955,7 +1060,7 @@ fn settings_panel(
         .flex_col()
         .gap(spacing::lg())
         .child(matching)
-        .child(scope)
+        .when(!databases, |panel| panel.child(scope))
         .child(ignoring)
 }
 
