@@ -22,6 +22,9 @@ pub struct TasksState {
     /// Tasks getting ready to run: opening connections, or listing collections to sync.
     pub starting: HashSet<Uuid>,
     pub store: Option<RunStore>,
+    /// Each task's last sync run, while it can still be undone: until the app closes or the task
+    /// runs again.
+    pub undo: HashMap<Uuid, UndoLog>,
     /// Said once in the Tasks tab when runs can't be kept after the app closes.
     pub store_note: Option<String>,
 }
@@ -33,6 +36,19 @@ pub struct ActiveRun {
     /// Transfers run through a Transfer tab state that isn't shown; its runtime holds progress.
     pub transfer_id: Option<Uuid>,
     pub(crate) _events: Option<Subscription>,
+}
+
+/// What undoing a sync run needs: its undo records, one per collection and pass.
+#[derive(Clone)]
+pub struct UndoLog {
+    pub run_id: Uuid,
+    pub connection_id: Uuid,
+    pub database: String,
+    pub logs: Vec<(
+        usize,
+        String,
+        std::sync::Arc<crate::connection::ops::compare_sync::restore::RestoreHandle>,
+    )>,
 }
 
 pub enum RunStop {

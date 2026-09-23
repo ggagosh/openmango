@@ -465,6 +465,7 @@ mod database {
                     ignore: IgnoreSet::default(),
                     restore_dir: directory.to_path_buf(),
                     pass_rows,
+                    deletes_only: false,
                 },
                 CancellationToken::new(),
                 sender,

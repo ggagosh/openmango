@@ -16,7 +16,7 @@ use crate::helpers::format_number;
 use crate::keyboard::{EditSelectedTask, TaskNext, TaskPrevious};
 use crate::state::compare::CompareScope;
 use crate::state::{AppCommands, AppState, TabKey, TransferMode};
-use crate::tasks::model::{LogLevel, Run, RunStatus, Task, TaskKind};
+use crate::tasks::model::{LogLevel, Run, RunStatus, RunTrigger, Task, TaskKind};
 use crate::theme::{islands, spacing};
 use crate::views::compare::app_icon;
 
@@ -128,6 +128,19 @@ fn run_summary(kind: TaskKind, run: &Run) -> String {
     {
         return error.lines().next().unwrap_or_default().to_string();
     }
+    match run.trigger {
+        RunTrigger::Preview => {
+            if !run.stops.is_empty() {
+                return "Preview: the safety limit would stop it".into();
+            }
+            return format!("Preview: would {}", planned_summary(run));
+        }
+        RunTrigger::Undo => {
+            let restored = run.writes().written as u64;
+            return format!("Undo: {} put back", plural(restored, "document", "documents"));
+        }
+        RunTrigger::Manual => {}
+    }
     match kind {
         TaskKind::Export | TaskKind::Import | TaskKind::Copy => {
             plural(run.documents(), "document", "documents")
@@ -162,6 +175,20 @@ fn run_summary(kind: TaskKind, run: &Run) -> String {
     }
 }
 
+/// "insert 20, replace 10 and delete 3", from what a run worked out before writing.
+fn planned_summary(run: &Run) -> String {
+    let [inserts, replaces, deletes] =
+        run.collections.iter().filter_map(|c| c.planned).fold([0; 3], |total, planned| {
+            [total[0] + planned[0], total[1] + planned[1], total[2] + planned[2]]
+        });
+    format!(
+        "insert {}, replace {} and delete {}",
+        format_number(inserts),
+        format_number(replaces),
+        format_number(deletes)
+    )
+}
+
 /// What one collection's line in the run details says.
 fn collection_summary(kind: TaskKind, run: &crate::tasks::model::CollectionRun) -> String {
     if let Some(error) = &run.error {
@@ -169,6 +196,17 @@ fn collection_summary(kind: TaskKind, run: &crate::tasks::model::CollectionRun) 
     }
     if let Some(note) = &run.note {
         return note.clone();
+    }
+    if run.writes.is_none()
+        && run.documents == 0
+        && let Some([inserts, replaces, deletes]) = run.planned
+    {
+        return format!(
+            "Would insert {}, replace {} and delete {}",
+            format_number(inserts),
+            format_number(replaces),
+            format_number(deletes)
+        );
     }
     let single = Run {
         collections: vec![run.clone()],
@@ -422,10 +460,31 @@ impl TasksView {
                     move |_, window, cx| AppCommands::run_task(state.clone(), id, window, cx)
                 })
         };
+        let previewable = matches!(
+            task.spec.kind(),
+            TaskKind::Sync | TaskKind::Copy | TaskKind::Import | TaskKind::Export
+        );
         let actions = div()
             .flex()
             .gap(spacing::xs())
             .child(run_button)
+            .when(previewable, |actions| {
+                actions.child(
+                    Button::new("task-preview")
+                        .icon(Icon::new(IconName::Eye).xsmall())
+                        .label("Preview")
+                        .small()
+                        .ghost()
+                        .tooltip("Work out what a run would change, without writing")
+                        .disabled(running || starting)
+                        .on_click({
+                            let state = state.clone();
+                            move |_, window, cx| {
+                                AppCommands::preview_task(state.clone(), id, window, cx)
+                            }
+                        }),
+                )
+            })
             .child(
                 Button::new("task-edit")
                     .icon(app_icon("pencil").xsmall())
@@ -575,7 +634,8 @@ impl TasksView {
     fn render_run(&self, task: &Task, run: &Run, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let kind = task.spec.kind();
-        let mut facts = vec![format!("Started {}", when(run.started_at)), "Run now".to_string()];
+        let mut facts =
+            vec![format!("Started {}", when(run.started_at)), run.trigger.label().to_string()];
         facts.extend(duration(run));
         let mut body = div()
             .id("task-run-detail")
@@ -617,6 +677,75 @@ impl TasksView {
                     ),
             )
             .child(div().text_xs().text_color(muted).child(facts.join(" · ")));
+
+        if !run.stops.is_empty() {
+            let heading = if run.trigger == RunTrigger::Preview {
+                "The safety limit would stop this run"
+            } else {
+                "The safety limit stopped this run"
+            };
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::xs())
+                    .p(spacing::sm())
+                    .rounded(crate::theme::borders::radius_md())
+                    .bg(cx.theme().warning.opacity(0.1))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::xs())
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(
+                                Icon::new(IconName::TriangleAlert)
+                                    .xsmall()
+                                    .text_color(cx.theme().warning),
+                            )
+                            .child(heading),
+                    )
+                    .children(run.stops.iter().map(|stop| div().text_sm().child(stop.clone())))
+                    .when(run.trigger == RunTrigger::Preview, |block| {
+                        block.child(div().text_xs().text_color(muted).child(
+                            "Run now still runs it, after asking: the question explains why and \
+                             its answer is Run anyway.",
+                        ))
+                    }),
+            );
+        }
+
+        let undoable = {
+            let app = self.state.read(cx);
+            !app.task_is_running(task.id)
+                && app.tasks.undo.get(&task.id).is_some_and(|undo| undo.run_id == run.id)
+        };
+        if undoable {
+            let state = self.state.clone();
+            let task_id = task.id;
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::sm())
+                    .child(
+                        Button::new("task-undo-run")
+                            .icon(app_icon("rotate-ccw").xsmall())
+                            .label("Undo this run")
+                            .small()
+                            .on_click(move |_, window, cx| {
+                                AppCommands::undo_task_run(state.clone(), task_id, window, cx)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("Available until OpenMango closes or this task runs again."),
+                    ),
+            );
+        }
 
         if let Some(error) = run.error.clone() {
             body = body.child(

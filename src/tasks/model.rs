@@ -19,6 +19,8 @@ pub struct Task {
     pub id: Uuid,
     pub name: String,
     pub spec: TaskSpec,
+    #[serde(default)]
+    pub safety: super::safety::SafetyLimit,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -31,6 +33,7 @@ impl Task {
             id: Uuid::new_v4(),
             name,
             spec,
+            safety: Default::default(),
             created_at: now,
             updated_at: now,
         }
@@ -204,6 +207,20 @@ fn compare_sides(config: &CompareConfig) -> [String; 2] {
 pub enum RunTrigger {
     /// Run now, from the Tasks tab.
     Manual,
+    /// Works out what a run would change, and writes nothing.
+    Preview,
+    /// Reverts the task's last sync run.
+    Undo,
+}
+
+impl RunTrigger {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Manual => "Run now",
+            Self::Preview => "Preview",
+            Self::Undo => "Undo",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,6 +273,8 @@ pub struct CollectionRun {
     pub documents: u64,
     pub differences: Option<CompareCounts>,
     pub writes: Option<SyncSummary>,
+    /// What the run worked out it would insert, replace and delete, before writing.
+    pub planned: Option<[u64; 3]>,
     /// Why the collection was left alone, e.g. "Exists only on the left".
     pub note: Option<String>,
     pub error: Option<String>,
@@ -272,6 +291,9 @@ pub struct Run {
     pub collections: Vec<CollectionRun>,
     /// Why the run as a whole failed, when it failed before or outside any one collection.
     pub error: Option<String>,
+    /// Why the safety limit stopped, or would stop, this run.
+    #[serde(default)]
+    pub stops: Vec<String>,
     pub log: Vec<LogLine>,
     pub log_dropped: u64,
 }
@@ -287,6 +309,7 @@ impl Run {
             finished_at: None,
             collections: Vec::new(),
             error: None,
+            stops: Vec::new(),
             log: Vec::new(),
             log_dropped: 0,
         }

@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1, tasks you run yourself, is built; see Implementation status.
+Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself) and PR 2a (safety) are built; see Implementation status.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -59,6 +59,26 @@ Where PR 1 differs from the plan, and why:
   the sidebar.
 - **Not yet:** Undo from a sync run's details, and the Transfer speed measurements. Both move to
   PR 2.
+
+**PR 2a, safety — built.** PR 2 was split: 2a is safety, 2b is recovery (retries, resuming, a
+private connection per run, the stalled-run check, the run time limit, Transfer measurements).
+
+- **Run now previews first** for a Sync, and for an Import or Copy that clears or drops its target:
+  the run is recorded at once, works out what it would insert, replace and delete, applies the
+  safety limit, then asks. The question gives the counts; when the limit would stop the run it
+  says why and its answer is Run anyway. Closing the question ends the run as not confirmed.
+  Scheduled runs (PR 3) will stop instead of asking.
+- **Preview** does the same and stops there, recorded as a Preview run.
+- **The safety limit** is `src/tasks/safety.rs`, as decided. For an Import or Copy that clears or
+  drops its target, replacing the whole target is the point, so only the jump and empty-source
+  rules apply to it.
+- **An empty source** is one more stop reason, so Run anyway can let it through.
+- **Mirror deletes last:** inserts and replacements first, then a pass that only deletes, skipped
+  when anything before it failed. This applies to every Mirror a task runs.
+- **Undo this run** in a sync run's details, for the task's last sync, until the app closes or the
+  task runs again. It is recorded as an Undo run.
+- **Not yet:** editing the three numbers per task comes with the schedule editor in PR 3; until
+  then every task uses 10%, 3 times and 100.
 
 ## 1. What the evidence says
 
@@ -392,9 +412,10 @@ so writing tasks get these rules instead:
   confirmation a Run now has. The three numbers can be changed per task, and Preview shows the
   counts before a schedule is set. Runs stopped by the limit don't count as successful, so they
   don't raise the task's usual volume.
-- **An empty source never empties the target.** A Mirror or Copy whose source collection or
-  database has no documents while the target has some stops, whatever the limit. An empty source is
-  more often the wrong database or a failed restore than an intended wipe.
+- **An empty source never empties the target unasked.** A Mirror, Import or Copy whose source has
+  no documents while the target has some stops, whatever the limit, even below the 100-document
+  floor. An empty source is more often the wrong database or a failed restore than an intended
+  wipe. Run anyway lets it through when the wipe is intended.
 - **Mirror deletes last.** Today database sync writes inserts, replacements and deletes in the order
   it finds them. A scheduled Mirror instead makes two passes per collection: first inserts and
   replacements, then a second pass that only deletes, using the comparison's existing row-kind

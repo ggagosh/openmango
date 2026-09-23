@@ -331,6 +331,9 @@ pub struct DatabaseSync {
     pub restore_dir: PathBuf,
     /// Differences written per read of a collection: `MAX_ROWS`, lower in tests.
     pub pass_rows: usize,
+    /// Write only the deletes the mode makes. A Mirror run as Add and update, then as this,
+    /// deletes only after everything else is written.
+    pub deletes_only: bool,
 }
 
 /// Runs a database sync one collection at a time. Each collection is scanned for the kinds the
@@ -341,8 +344,22 @@ pub async fn sync_pairs_async(
     cancellation: CancellationToken,
     sender: UnboundedSender<PairSyncMessage>,
 ) -> Result<()> {
-    let DatabaseSync { clients, databases, target, mode, pairs, ignore, restore_dir, pass_rows } =
-        sync;
+    let DatabaseSync {
+        clients,
+        databases,
+        target,
+        mode,
+        pairs,
+        ignore,
+        restore_dir,
+        pass_rows,
+        deletes_only,
+    } = sync;
+    let mut kinds = mode.kinds(target);
+    if deletes_only {
+        let extra = if target == Side::Right { DiffKind::OnlyRight } else { DiffKind::OnlyLeft };
+        kinds.retain(|kind| *kind == extra);
+    }
     let destination = if target == Side::Left { 0 } else { 1 };
     if !supports_sync(&clients[destination]).await? {
         return Err(Error::Parse(
@@ -356,8 +373,13 @@ pub async fn sync_pairs_async(
         let [left, right] = [0, 1].map(|side| {
             clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&pair.name)
         });
-        let run =
-            SyncPass { target, mode, ignore: &ignore, pass_rows, cancellation: &cancellation };
+        let run = SyncPass {
+            target,
+            kinds: kinds.clone(),
+            ignore: &ignore,
+            pass_rows,
+            cancellation: &cancellation,
+        };
         let result = run.pair(&pair, [left, right], &restore_dir, &sender).await;
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairSyncMessage::Done(pair.index, summary),
@@ -369,7 +391,7 @@ pub async fn sync_pairs_async(
 
 struct SyncPass<'a> {
     target: Side,
-    mode: SyncMode,
+    kinds: Vec<DiffKind>,
     ignore: &'a IgnoreSet,
     pass_rows: usize,
     cancellation: &'a CancellationToken,
@@ -403,7 +425,7 @@ impl SyncPass<'_> {
                 filter: Document::new(),
                 ignore: self.ignore.clone(),
                 row_limit: self.pass_rows,
-                row_kinds: Some(self.mode.kinds(self.target)),
+                row_kinds: Some(self.kinds.clone()),
             };
             let (rows_sender, messages) = futures::channel::mpsc::unbounded();
             let (scan, rows) = tokio::join!(
