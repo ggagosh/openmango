@@ -1,0 +1,450 @@
+use gpui_kit::Context;
+use uuid::Uuid;
+
+use crate::state::compare::{
+    CompareConfig, CompareEndpoint, CompareScope, CompareTabKey, CompareTabState,
+};
+use crate::state::{ActiveTab, AppEvent, AppState, TabKey, View};
+
+impl AppState {
+    pub(crate) fn compare_restore_dir(&self) -> std::path::PathBuf {
+        self.config.compare_restore_dir()
+    }
+
+    /// Starts a run in either scope. Sync and undo later refuse to write if either connection's
+    /// settings changed since, so they are captured here.
+    pub fn begin_compare(
+        &mut self,
+        id: Uuid,
+    ) -> Option<(u64, crate::connection::CancellationToken)> {
+        let identities = self.compare_tab(id)?.config.sides.each_ref().map(|side| {
+            side.connection_id
+                .and_then(|connection| self.connection_by_id(connection))
+                .map(crate::models::ConnectionWriteIdentity::from)
+        });
+        let tab = self.compare_tab_mut(id)?;
+        let token = tab.begin();
+        tab.connection_identities = identities;
+        Some((tab.run, token))
+    }
+
+    pub fn compare_sync_disabled_reason(&self, id: Uuid, undo: bool) -> Option<String> {
+        let tab = self.compare_tab(id)?;
+        if tab.running || tab.sync.running {
+            return Some("Wait for the current operation to finish".into());
+        }
+        let databases =
+            tab.results_config().scope == crate::state::compare::CompareScope::Databases;
+        let Some(target) = tab.sync.target else {
+            return Some(
+                if databases {
+                    "Choose which database to change"
+                } else {
+                    "Choose which collection to change"
+                }
+                .into(),
+            );
+        };
+        let finished = if databases { tab.pair_elapsed.is_some() } else { tab.summary.is_some() };
+        if !undo
+            && (tab.sync.completed
+                || tab.compared.as_ref() != Some(&tab.config)
+                || tab.error.is_some()
+                || !finished)
+        {
+            return Some("Compare again before syncing".into());
+        }
+        let index = if target == crate::connection::ops::compare::Side::Left { 0 } else { 1 };
+        self.compare_write_disabled_reason(id, index, undo)
+    }
+
+    /// A field copy of `path` from the other side into `target`, in the selected difference.
+    pub fn compare_field_copy_disabled_reason(
+        &self,
+        id: Uuid,
+        path: &[crate::bson::PathSegment],
+        target: crate::connection::ops::compare::Side,
+    ) -> Option<String> {
+        use crate::connection::ops::compare::{DiffKind, Side};
+        let Some(tab) = self.compare_tab(id) else {
+            return Some("This comparison is closed".into());
+        };
+        if tab.running || tab.sync.running {
+            return Some("Wait for the current operation to finish".into());
+        }
+        if tab.compared.as_ref() != Some(&tab.config)
+            || tab.error.is_some()
+            || tab.summary.is_none()
+            || tab.results_config().scope != crate::state::compare::CompareScope::Collections
+        {
+            return Some("Compare again before copying".into());
+        }
+        match (tab.sync.target, tab.sync.completed) {
+            (Some(current), true) if current != target => {
+                return Some("Undo, or compare again, before copying the other way".into());
+            }
+            (Some(_), false) => return Some("Leave sync to copy single fields".into()),
+            _ => {}
+        }
+        let Some(row) = tab.selected.and_then(|selected| tab.rows.get(selected)) else {
+            return Some("Select a difference".into());
+        };
+        let Some(detail) = tab.detail.as_ref().filter(|_| tab.detail_row == tab.selected) else {
+            return Some("Wait for both documents to load".into());
+        };
+        if !matches!(row.kind, DiffKind::Different | DiffKind::Minor)
+            || detail.documents.iter().any(|documents| documents.len() != 1)
+        {
+            return Some("Both documents must exist".into());
+        }
+        let index = if target == Side::Left { 0 } else { 1 };
+        if let Some(reason) = crate::connection::ops::compare_sync::field_copy_check(
+            &detail.documents[1 - index][0],
+            &detail.documents[index][0],
+            path,
+            &tab.results_config().fields,
+        ) {
+            return Some(reason.into());
+        }
+        self.compare_write_disabled_reason(id, index, false)
+    }
+
+    /// Both sides still reachable with the settings the comparison saw, and the target writable.
+    fn compare_write_disabled_reason(&self, id: Uuid, index: usize, undo: bool) -> Option<String> {
+        let tab = self.compare_tab(id)?;
+        let config = tab.results_config();
+        for (i, side) in config.sides.iter().enumerate() {
+            if undo && i != index {
+                continue;
+            }
+            let Some(connection_id) = side.connection_id else {
+                return Some("Connection is missing".into());
+            };
+            if !self.is_connected(connection_id) || self.connection_needs_reconnect(connection_id) {
+                return Some("Reconnect the collection before writing".into());
+            }
+            if tab.connection_identities[i].as_ref().is_none_or(|snapshot| {
+                self.connection_by_id(connection_id)
+                    .is_none_or(|connection| !snapshot.matches(connection))
+            }) {
+                return Some("Connection settings changed since this comparison. Restore those settings to undo, or compare again before syncing.".into());
+            }
+        }
+        self.compare_sync_target_disabled_reason(id, index)
+    }
+
+    pub fn compare_sync_target_disabled_reason(&self, id: Uuid, index: usize) -> Option<String> {
+        let tab = self.compare_tab(id)?;
+        let config = tab.results_config();
+        let endpoint = &config.sides[index];
+        if config.scope == crate::state::compare::CompareScope::Databases {
+            // Views and time-series are never offered, and the server version is checked when
+            // the sync starts.
+            return self
+                .connection_read_only(endpoint.connection_id?)
+                .then(|| "Read-only connection: writes are disabled.".into());
+        }
+        let key = crate::state::SessionKey::new(
+            endpoint.connection_id?,
+            &endpoint.database,
+            &endpoint.collection,
+        );
+        if let Some(reason) = self.session_read_only_reason(&key) {
+            return Some(reason);
+        }
+        if let Some(metadata) = &tab.metadata[index]
+            && metadata.endpoint == *endpoint
+        {
+            if metadata.timeseries {
+                return Some("Time-series collections cannot be sync targets".into());
+            }
+            if metadata.supports_sync == Some(false) {
+                return Some("Sync and undo require MongoDB 8.0+ on the target. Older servers support comparison only.".into());
+            }
+        }
+        None
+    }
+    pub(super) fn restore_compare_configs(&mut self) {
+        for (index, saved) in self.workspace.open_tabs.iter().enumerate() {
+            if saved.kind != crate::state::WorkspaceTabKind::Compare {
+                continue;
+            }
+            let config = saved.compare.clone().unwrap_or_default();
+            let id = Uuid::new_v4();
+            self.compare_restored.insert(index, id);
+            self.tabs.open.push(TabKey::Compare(CompareTabKey {
+                id,
+                connection_id: config.sides[0].connection_id,
+            }));
+            self.compare_tabs.insert(id, CompareTabState::new(config));
+            if self.workspace.active_tab == Some(index)
+                || matches!(self.tabs.active, ActiveTab::None)
+            {
+                self.tabs.active = ActiveTab::Index(self.tabs.open.len() - 1);
+                self.current_view = View::Compare;
+            }
+        }
+    }
+
+    pub fn compare_tab(&self, id: Uuid) -> Option<&CompareTabState> {
+        self.compare_tabs.get(&id)
+    }
+    pub fn compare_tab_mut(&mut self, id: Uuid) -> Option<&mut CompareTabState> {
+        self.compare_tabs.get_mut(&id)
+    }
+
+    pub fn active_compare_tab_id(&self) -> Option<Uuid> {
+        let ActiveTab::Index(index) = self.active_tab() else {
+            return None;
+        };
+        match self.open_tabs().get(index) {
+            Some(TabKey::Compare(key)) => Some(key.id),
+            _ => None,
+        }
+    }
+
+    pub fn open_compare_tab(&mut self, prefill: Option<CompareEndpoint>, cx: &mut Context<Self>) {
+        self.open_scoped_compare_tab(CompareScope::Collections, prefill, cx);
+    }
+
+    /// A new Compare tab with the left side filled from `prefill`, or from the selection.
+    pub fn open_scoped_compare_tab(
+        &mut self,
+        scope: CompareScope,
+        prefill: Option<CompareEndpoint>,
+        cx: &mut Context<Self>,
+    ) -> Uuid {
+        let mut left = prefill.unwrap_or_else(|| CompareEndpoint {
+            connection_id: self.selected_connection_id(),
+            database: self.selected_database_name().unwrap_or_default(),
+            collection: self.selected_collection().map(str::to_owned).unwrap_or_default(),
+        });
+        if scope == CompareScope::Databases {
+            left.collection.clear();
+        }
+        self.open_compare_tab_with(
+            CompareConfig {
+                scope,
+                sides: [left, CompareEndpoint::default()],
+                ..Default::default()
+            },
+            cx,
+        )
+    }
+
+    pub fn open_compare_tab_with(&mut self, config: CompareConfig, cx: &mut Context<Self>) -> Uuid {
+        let id = Uuid::new_v4();
+        self.tabs.open.push(TabKey::Compare(CompareTabKey {
+            id,
+            connection_id: config.sides[0].connection_id,
+        }));
+        self.compare_tabs.insert(id, CompareTabState::new(config));
+        self.tabs.active = ActiveTab::Index(self.tabs.open.len() - 1);
+        self.current_view = View::Compare;
+        self.update_workspace_from_state_debounced();
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
+        id
+    }
+
+    /// A collection from a database comparison, in a Compare tab of its own.
+    pub fn open_pair_comparison(
+        &mut self,
+        id: Uuid,
+        pair: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Uuid> {
+        let tab = self.compare_tab(id)?;
+        let config = tab.results_config();
+        let name = tab.pairs.get(pair)?.name.clone();
+        let sides =
+            config.sides.clone().map(|side| CompareEndpoint { collection: name.clone(), ..side });
+        let config = CompareConfig { sides, ignore: config.ignore.clone(), ..Default::default() };
+        Some(self.open_compare_tab_with(config, cx))
+    }
+
+    /// A collection on one side only, in a Transfer tab that copies it to the other side. The
+    /// tab opens for review; nothing is written until it runs.
+    pub fn open_pair_copy(&mut self, id: Uuid, pair: usize, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.compare_tab(id) else {
+            return false;
+        };
+        let Some(pair) = tab.pairs.get(pair) else {
+            return false;
+        };
+        let from = match pair.kind() {
+            crate::connection::ops::compare_database::PairKind::LeftOnly => 0,
+            crate::connection::ops::compare_database::PairKind::RightOnly => 1,
+            _ => return false,
+        };
+        let (source, target) =
+            (&tab.results_config().sides[from], &tab.results_config().sides[1 - from]);
+        let (Some(source_connection), Some(target_connection)) =
+            (source.connection_id, target.connection_id)
+        else {
+            return false;
+        };
+        let (name, source_database, target_database) =
+            (pair.name.clone(), source.database.clone(), target.database.clone());
+        self.open_transfer_tab_for_paste(
+            source_connection,
+            source_database,
+            Some(name),
+            Some(target_connection),
+            Some(target_database),
+            crate::state::TransferScope::Collection,
+            cx,
+        );
+        true
+    }
+
+    pub fn update_compare_config(
+        &mut self,
+        id: Uuid,
+        edit: impl FnOnce(&mut CompareConfig),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.compare_tabs.get_mut(&id) else {
+            return;
+        };
+        if tab.sync.running {
+            return;
+        }
+        edit(&mut tab.config);
+        if tab.config.fields.is_empty() {
+            tab.config.fields.push("_id".into());
+        }
+        let connection_id = tab.config.sides[0].connection_id;
+        if let Some(TabKey::Compare(key)) = self
+            .tabs
+            .open
+            .iter_mut()
+            .find(|key| matches!(key, TabKey::Compare(key) if key.id == id))
+        {
+            key.connection_id = connection_id;
+        }
+        self.update_workspace_from_state_debounced();
+        cx.notify();
+    }
+
+    pub fn compare_disabled_reason(&self, config: &CompareConfig) -> Option<String> {
+        if config.scope == CompareScope::Databases {
+            for (side, endpoint) in ["Left", "Right"].into_iter().zip(&config.sides) {
+                if !endpoint.ready(config.scope) {
+                    return Some(format!(
+                        "Choose a connection and database on the {}",
+                        side.to_lowercase()
+                    ));
+                }
+                if !endpoint.connection_id.is_some_and(|id| self.is_connected(id)) {
+                    return Some(format!("{side} connection is closed. Reconnect to compare."));
+                }
+            }
+            let [left, right] = &config.sides;
+            if left.connection_id == right.connection_id && left.database == right.database {
+                return Some("Choose two different databases".into());
+            }
+            return None;
+        }
+        if let Err(error) = (crate::connection::ops::compare::CompareOptions {
+            fields: config.fields.clone(),
+            ..Default::default()
+        })
+        .validate()
+        {
+            return Some(error.to_string());
+        }
+        for (side, endpoint) in ["Left", "Right"].into_iter().zip(&config.sides) {
+            if !endpoint.complete() {
+                return Some(format!(
+                    "Choose a connection, database, and collection on the {}",
+                    side.to_lowercase()
+                ));
+            }
+            let id = endpoint.connection_id?;
+            if !self.is_connected(id) {
+                return Some(format!(
+                    "{side} connection is closed. Reconnect to compare or fetch documents."
+                ));
+            }
+            let session =
+                crate::state::SessionKey::new(id, &endpoint.database, &endpoint.collection);
+            if matches!(
+                self.collection_detail(&session),
+                Some(crate::models::CollectionDetail::Timeseries)
+            ) {
+                return Some(format!(
+                    "{side} is a time-series collection, which cannot be compared yet"
+                ));
+            }
+        }
+        if config.sides[0] == config.sides[1] {
+            return Some("Choose two different collections".into());
+        }
+        if !config.filter.trim().is_empty()
+            && let Err(error) = crate::bson::parse_document_from_json(&config.filter)
+        {
+            return Some(format!("Filter: {error}"));
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{ConfigManager, WorkspaceState, WorkspaceTab, WorkspaceTabKind};
+    use std::sync::Arc;
+
+    fn saved_state(connection: Option<Uuid>) -> (tempfile::TempDir, AppState) {
+        let directory = tempfile::tempdir().unwrap();
+        let config = ConfigManager::with_config_dir(directory.path().into());
+        config
+            .save_workspace(&WorkspaceState {
+                last_connection_id: connection,
+                active_tab: Some(0),
+                open_tabs: vec![WorkspaceTab {
+                    kind: WorkspaceTabKind::Compare,
+                    compare: Some(CompareConfig {
+                        fields: vec!["sku".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        (
+            directory,
+            AppState::with_config(Arc::new(crate::connection::ConnectionManager::new()), config),
+        )
+    }
+
+    #[test]
+    fn compare_restores_offline_and_connected_restore_reuses_live_state() {
+        let (_directory, state) = saved_state(None);
+        let id = state.active_compare_tab_id().unwrap();
+        assert_eq!(state.current_view, View::Compare);
+        assert_eq!(state.compare_tab(id).unwrap().config.fields, ["sku"]);
+        assert!(state.compare_tab(id).unwrap().rows.is_empty());
+        let connection = Uuid::new_v4();
+        let (_directory, mut state) = saved_state(Some(connection));
+        let id = state.active_compare_tab_id().unwrap();
+        state.compare_tab_mut(id).unwrap().config.filter = "{active:true}".into();
+        state.restore_tabs_from_workspace(connection, &[]);
+        assert_eq!(state.open_tabs().len(), 1);
+        assert!(matches!(&state.open_tabs()[0], TabKey::Compare(key) if key.id == id));
+        assert_eq!(state.compare_tab(id).unwrap().config.filter, "{active:true}");
+    }
+
+    #[test]
+    fn closing_an_eager_restored_compare_does_not_resurrect_it_after_connect() {
+        let connection = Uuid::new_v4();
+        let (_directory, mut state) = saved_state(Some(connection));
+        let id = state.active_compare_tab_id().unwrap();
+        state.compare_tabs.remove(&id);
+        state.tabs.open.clear();
+        state.restore_tabs_from_workspace(connection, &[]);
+        assert!(state.open_tabs().is_empty());
+    }
+}

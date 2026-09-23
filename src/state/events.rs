@@ -143,6 +143,9 @@ pub enum AppEvent {
     },
 
     // Transfer events
+    CompareChanged {
+        compare_id: Uuid,
+    },
     TransferPreviewLoaded {
         transfer_id: Uuid,
     },

@@ -4,9 +4,29 @@ All notable changes to OpenMango will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Each release opens with `### Highlights`: at most five `- **Title.** One sentence.` items. The app's What's New shows them first and folds every other group behind a count.
+
 ## [Unreleased]
 
+### Highlights
+- **Compare and sync.** Compare two collections or two whole databases, see exactly what differs, and sync the changes you choose, with undo.
+- **Relations.** OpenMango learns how your collections reference each other: follow an id, see what points at a document, and view it all on one canvas.
+- **Ask AI in the filter bar.** Describe the documents you want and the filter is written for you, from the collection's own fields.
+- **An assistant that remembers.** Conversations carry over between runs, models come from a live catalogue that includes OpenRouter, and every answer shows its cost.
+- **Views, dates and UUIDs.** Save an aggregation as a view, show dates in your local time, and read UUIDs as UUIDs.
+
 ### Added
+- Compare collections from the collection menu or command palette: choose match fields, filter both sides, inspect missing and changed documents, distinguish number-type and field-order differences, and find duplicate keys. Comparisons can be cancelled, results remain readable when a connection closes, and setup is restored across restarts
+- Selective collection sync with explicit target selection, row/category checkboxes, write review, native bulk operations, stale-document guards, cancellation between batches, and encrypted session undo. Sync and undo require MongoDB 8.0+ on the write target; older servers remain supported for comparison and as read-only sources. Undo expires when the tab closes or a new comparison starts
+- Compare 2 Documents in the document menu: select two documents in a collection and see them field by field in the same view the collection comparison uses, with unsaved edits compared as shown
+- The comparison's count of documents skipped for lacking the match key opens those documents on either side, filtered exactly as the scan skipped them
+- Compare's connection pickers list every saved connection. Picking a closed one opens it without leaving the tab, shows progress and any error under the picker, and a restored comparison offers Connect for connections that are closed
+- Compare two databases: "Compare with…" on a database, or "Compare databases…" in the command palette, pairs every collection by name and compares their documents one collection at a time, smallest first. Each collection says whether it is identical, which documents differ and by how many, or why it was not compared. Identical collections are hidden by default, any collection can be skipped or rechecked, large ones can be left out in Settings, and any collection opens in its own comparison to sync. Indexes that exist on one side only are listed, and a collection that exists on one side only opens in Transfer to copy it across
+- Database sync: after comparing two databases, sync into either side with Add missing, Add and update or Mirror. Each collection the mode can write is ticked with its counts, a collection the target lacks is created with its indexes, and one Undo covers the whole run. Collections only on the target, views, time-series and minor differences are never touched
+- Compare and sync actions have icons, including "Compare with…" in the sidebar menus
+- Ignore array order in compare Settings: arrays holding the same items in another order count as a minor difference, shown as one "item order" row in the document diff
+- Copy a single field in the compare document diff: hover a changed field and press the arrow, or right-click it, to copy that value to the other side, or remove it there if this side lacks it. It writes at once (Production connections still confirm), only if the target is unchanged since it was shown, and Undo copies reverts every copy since the comparison. _id and match fields are never copied alone
+- MCP compare tools: `openmango_compare_collections` and `openmango_compare_databases` run the Compare tab's read-only comparison for agents, with counts, the first differences and index differences. Clients that support the MCP tasks extension get a task they can poll and cancel, running up to 10 minutes; others get an answer within 30 seconds, partial if the scan did not finish
 - Ask AI in the documents filter: the sparkle turns the filter bar into a bar you describe the filter to, Find becomes Generate, and what you typed comes back as the filter in the same box, written from the collection's own field names, types and — for fields that hold a handful of values — examples of those values. A description that asks for an order or for particular fields fills Sort and Projection too and opens the options row to show them. Nothing runs until you press Find, Escape gives back the filter you had, and undo takes it back after that. Cmd/Ctrl+I switches the bar either way without reaching for the mouse
 - Connection switcher on the sidebar's Connections header and on Cmd/Ctrl+Shift+K, listing open connections first and saved ones by most recent use
 - Recent connections on the welcome screen, one click each, with progress shown on the one being opened
@@ -47,6 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Escape cancels a drag, and the pipeline stage list, the filter builder and the tab bar scroll when a drag nears their edge
 
 ### Changed
+- What's New leads with a release's highlights, keeps every other change one click away behind a count, and renders code and lists properly. After an update it opens only when the highlights changed, so a nightly build with the same highlights no longer opens it again
 - Filters are written with spaces inside their braces, `{ _id: ObjectId("…") }`, everywhere one is shown, copied or saved
 - Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
 - When a request fails, the chat says what to do about it: which key to check, which model to pick, or that it is a rate limit that will clear

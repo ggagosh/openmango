@@ -19,6 +19,7 @@ impl AppState {
             (Some(conn_id), TabKey::Database(key)) => key.connection_id == conn_id,
             (Some(conn_id), TabKey::Transfer(key)) => key.connection_id == Some(conn_id),
             (Some(conn_id), TabKey::Forge(key)) => key.connection_id == conn_id,
+            (_, TabKey::Compare(_)) => true,
             // A references tab holds an answer about one document, which may not be there next
             // session. Restoring it would mean re-running the queries to say the same thing.
             (_, TabKey::References(_)) => false,
@@ -88,7 +89,7 @@ impl AppState {
         // Which restored tab each saved tab became, so the saved active index still points at
         // the right tab when the same collection was open in two of them.
         let mut restored_index: Vec<Option<usize>> = Vec::with_capacity(workspace_tabs.len());
-        for tab in &workspace_tabs {
+        for (saved_index, tab) in workspace_tabs.iter().enumerate() {
             let before = restored_tabs.len();
             match tab.kind {
                 WorkspaceTabKind::Collection => {
@@ -144,6 +145,29 @@ impl AppState {
                     self.transfer_tabs.insert(id, transfer_state);
                     restored_tabs.push(TabKey::Transfer(key));
                 }
+                WorkspaceTabKind::Compare => {
+                    if let Some(id) = self.compare_restored.get(&saved_index) {
+                        // A closed eager-restored tab stays closed; edits and running scans survive.
+                        if let Some(tab) = self.compare_tabs.get(id) {
+                            restored_tabs.push(TabKey::Compare(
+                                crate::state::compare::CompareTabKey {
+                                    id: *id,
+                                    connection_id: tab.config.sides[0].connection_id,
+                                },
+                            ));
+                        }
+                    } else {
+                        let config = tab.compare.clone().unwrap_or_default();
+                        let id = Uuid::new_v4();
+                        let key = crate::state::compare::CompareTabKey {
+                            id,
+                            connection_id: config.sides[0].connection_id,
+                        };
+                        self.compare_tabs
+                            .insert(id, crate::state::compare::CompareTabState::new(config));
+                        restored_tabs.push(TabKey::Compare(key));
+                    }
+                }
                 WorkspaceTabKind::Forge => {
                     if databases.contains(&tab.database) {
                         let id = Uuid::new_v4();
@@ -189,6 +213,12 @@ impl AppState {
             }
         }
 
+        for tab in &self.tabs.open {
+            if matches!(tab, TabKey::Compare(_)) && !restored_tabs.contains(tab) {
+                restored_tabs.push(tab.clone());
+            }
+        }
+        self.compare_restored.clear();
         self.tabs.open = restored_tabs.clone();
         self.tabs.preview = None;
         self.tabs.dirty.clear();
@@ -303,6 +333,7 @@ impl AppState {
                     collection: key.collection.clone(),
                     kind: WorkspaceTabKind::Collection,
                     transfer: None,
+                    compare: None,
                     filter_raw,
                     filter_compiled_raw,
                     sort_raw,
@@ -324,6 +355,7 @@ impl AppState {
                 collection: String::new(),
                 kind: WorkspaceTabKind::Database,
                 transfer: None,
+                compare: None,
                 filter_raw: String::new(),
                 filter_compiled_raw: String::new(),
                 sort_raw: String::new(),
@@ -346,6 +378,7 @@ impl AppState {
                     collection: transfer.config.source_collection.clone(),
                     kind: WorkspaceTabKind::Transfer,
                     transfer: Some(transfer),
+                    compare: None,
                     filter_raw: String::new(),
                     filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
@@ -362,6 +395,11 @@ impl AppState {
                     table_hidden_columns: HashSet::new(),
                 }
             }
+            TabKey::Compare(key) => WorkspaceTab {
+                kind: WorkspaceTabKind::Compare,
+                compare: self.compare_tabs.get(&key.id).map(|tab| tab.config.clone()),
+                ..Default::default()
+            },
             TabKey::Forge(key) => {
                 let content = self
                     .forge_tabs
@@ -373,6 +411,7 @@ impl AppState {
                     collection: String::new(),
                     kind: WorkspaceTabKind::Forge,
                     transfer: None,
+                    compare: None,
                     filter_raw: String::new(),
                     filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
@@ -401,6 +440,7 @@ impl AppState {
                     collection: String::new(),
                     kind: WorkspaceTabKind::Database, // Placeholder, won't be saved
                     transfer: None,
+                    compare: None,
                     filter_raw: String::new(),
                     filter_compiled_raw: String::new(),
                     sort_raw: String::new(),
@@ -457,6 +497,7 @@ impl AppState {
                     self.workspace.selected_database = Some(key.database.clone());
                     self.workspace.selected_collection = None;
                 }
+                TabKey::Compare(_) => {}
                 TabKey::AgentActivity
                 | TabKey::Connections
                 | TabKey::Settings
@@ -598,6 +639,7 @@ mod tests {
             collection: "col".to_string(),
             kind: WorkspaceTabKind::Collection,
             transfer: None,
+            compare: None,
             filter_raw: "status:active".to_string(),
             filter_compiled_raw: "{status: \"active\"}".to_string(),
             sort_raw: String::new(),
@@ -672,6 +714,7 @@ mod tests {
             collection: "col".to_string(),
             kind: WorkspaceTabKind::Ai,
             transfer: None,
+            compare: None,
             filter_raw: String::new(),
             filter_compiled_raw: String::new(),
             sort_raw: String::new(),

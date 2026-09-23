@@ -110,6 +110,39 @@ pub fn set_bson_at_path(doc: &mut Document, path: &[PathSegment], new_value: Bso
     false
 }
 
+/// `a.0.b`, the way MongoDB writes a path.
+pub fn dotted_path(path: &[PathSegment]) -> String {
+    path.iter()
+        .map(|segment| match segment {
+            PathSegment::Key(key) => key.clone(),
+            PathSegment::Index(index) => index.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Remove a document field at the given path. Array items are never removed: that would shift
+/// every item after them. Returns true if a field was removed.
+pub fn remove_bson_at_path(doc: &mut Document, path: &[PathSegment]) -> bool {
+    match path {
+        [PathSegment::Key(key)] => doc.remove(key).is_some(),
+        [PathSegment::Key(key), rest @ ..] => {
+            doc.get_mut(key).is_some_and(|value| remove_bson_in_value(value, rest))
+        }
+        _ => false,
+    }
+}
+
+fn remove_bson_in_value(value: &mut Bson, path: &[PathSegment]) -> bool {
+    match (value, path) {
+        (Bson::Document(doc), _) => remove_bson_at_path(doc, path),
+        (Bson::Array(arr), [PathSegment::Index(index), rest @ ..]) if !rest.is_empty() => {
+            arr.get_mut(*index).is_some_and(|value| remove_bson_in_value(value, rest))
+        }
+        _ => false,
+    }
+}
+
 fn set_bson_in_value(value: &mut Bson, path: &[PathSegment], new_value: Bson) -> bool {
     if path.is_empty() {
         *value = new_value;

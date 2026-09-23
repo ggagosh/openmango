@@ -98,8 +98,19 @@ Read tools remain bounded and require only explicit sharing plus a connected cli
 - `openmango_explain_query`
 - `openmango_get_relations`: which fields reference which collections, in a compact line-per-collection text rather than JSON, about a thirteenth of the tokens
 - `openmango_join_path`: the chain of references between two collections and its `$lookup` stages
+- `openmango_compare_collections`: the Compare tab's collection comparison: counts by kind and the first differences (at most 200) with their changed paths
+- `openmango_compare_databases`: the database comparison by `_id`, per collection, with index differences; identical collections are counted, not listed
 
 Database-derived values are untrusted content. Read aggregation rejects write stages and JavaScript recursively. Responses use canonical Extended JSON where BSON fidelity matters and never include transport or secret material.
+
+## Long reads as MCP tasks
+
+The server advertises the MCP tasks extension (SEP-2663). A client that declares it gets a task from the compare tools instead of a blocked call, polls it with `tasks/get`, and can stop it with `tasks/cancel`. Without the extension the same tools answer directly and stop after 30 seconds with partial counts and `complete: false`; as tasks they run up to 10 minutes, then stop the same way.
+
+- Tasks belong to the grant that started them. Another grant gets "unknown task" for its id, for `tasks/get` and `tasks/cancel` alike.
+- At most two tasks run per grant and four in total, since the per-request concurrency limits end when the call returns.
+- Results stay fetchable for 15 minutes from the task's start.
+- Tasks are held in memory and end with the app.
 
 ## Transport, authentication, and auditing
 

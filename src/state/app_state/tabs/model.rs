@@ -125,6 +125,9 @@ impl AppState {
                 }
                 self.current_view = View::Transfer;
             }
+            TabKey::Compare(_) => {
+                self.current_view = View::Compare;
+            }
             TabKey::Forge(tab) => {
                 self.set_selected_connection_internal(tab.connection_id);
                 self.conn.selected_database = Some(tab.database.clone());
@@ -995,6 +998,9 @@ impl AppState {
             TabKey::Transfer(key) => {
                 self.transfer_tabs.remove(&key.id);
             }
+            TabKey::Compare(key) => {
+                self.compare_tabs.remove(&key.id);
+            }
             TabKey::Forge(key) => {
                 self.forge_tabs.remove(&key.id);
             }
@@ -1155,6 +1161,7 @@ impl AppState {
                     tab.connection_id == connection_id && tab.database == database
                 }
                 TabKey::Transfer(_)
+                | TabKey::Compare(_)
                 | TabKey::AgentActivity
                 | TabKey::Connections
                 | TabKey::Settings
@@ -1337,6 +1344,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::Collection(_) => "collection",
         TabKey::Database(_) => "database",
         TabKey::Transfer(_) => "transfer",
+        TabKey::Compare(_) => "compare",
         TabKey::Forge(_) => "forge",
         TabKey::References(_) => "references",
         TabKey::Relations(_) => "relations",

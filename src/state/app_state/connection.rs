@@ -376,6 +376,7 @@ impl AppState {
                 super::types::TabKey::Forge(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::References(tab) => tab.connection_id == connection_id,
                 super::types::TabKey::Relations(tab) => tab.connection_id == connection_id,
+                super::types::TabKey::Compare(_) => false,
                 super::types::TabKey::AgentActivity
                 | super::types::TabKey::Connections
                 | super::types::TabKey::Settings
@@ -386,6 +387,24 @@ impl AppState {
 
         for index in indices.into_iter().rev() {
             self.close_tab(index, cx);
+        }
+
+        for tab in self.compare_tabs.values_mut() {
+            if tab
+                .results_config()
+                .sides
+                .iter()
+                .any(|side| side.connection_id == Some(connection_id))
+            {
+                if let Some(token) = &tab.cancellation {
+                    token.cancel();
+                }
+                if let Some(token) = &tab.sync.cancellation {
+                    token.cancel();
+                }
+                tab.detail_generation = tab.detail_generation.wrapping_add(1);
+                tab.detail_loading = false;
+            }
         }
 
         if let Some(tab) = self.tabs.preview.clone()

@@ -8,8 +8,17 @@ use crate::state::{AppEvent, AppState, StatusMessage, View};
 use super::AppCommands;
 
 impl AppCommands {
-    /// Connect to a saved connection by ID.
+    /// Connect to a saved connection by ID and show it.
     pub fn connect(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
+        Self::connect_with(state, connection_id, true, cx);
+    }
+
+    /// Connect without moving the main view, for pickers inside another tab.
+    pub fn connect_in_background(state: Entity<AppState>, connection_id: Uuid, cx: &mut App) {
+        Self::connect_with(state, connection_id, false, cx);
+    }
+
+    fn connect_with(state: Entity<AppState>, connection_id: Uuid, show: bool, cx: &mut App) {
         if !state.read(cx).connection_secrets_ready() {
             state.update(cx, |state, cx| {
                 let message = "Connection credentials are still loading or require recovery.";
@@ -97,7 +106,9 @@ impl AppCommands {
                                 latest.last_connected = saved.last_connected;
                                 state.update_connection(latest, cx);
                             }
-                            state.select_connection(Some(connection_id), cx);
+                            if show {
+                                state.select_connection(Some(connection_id), cx);
+                            }
                             state.update_workspace_from_state();
                             let connected = AppEvent::Connected(connection_id);
                             state.update_status_from_event(&connected);

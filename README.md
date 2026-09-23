@@ -70,7 +70,8 @@ The same requests come up again and again in MongoDB forums and feature trackers
 ### Moving data
 
 - **Export more than one collection at a time.** Export a whole database with include and exclude lists, as JSON, NDJSON, CSV, BSON, or Excel. Import JSON, NDJSON, CSV, and BSON.
-- **Copy data between environments safely.** Copy a collection or a database across connections, or sync a whole database. A sync takes a verified backup of the target first and can be reverted. Every transfer shows progress, can be cancelled, and is staged, so a failure does not replace existing data.
+- **Copy data between environments safely.** Copy a collection or a database across connections, or sync a whole database. A database sync takes a verified backup of the target first and can be reverted. Every transfer shows progress, can be cancelled, and is staged, so a failure does not replace existing data.
+- **Compare before changing.** Compare two collections by a match key, or two databases collection by collection. Inspect missing, changed, minor, and duplicate-key results side by side, and copy a single field across. Sync the documents you pick, or whole collections with Add missing, Add and update, or Mirror, after reviewing the inserts, replacements, and deletes. Changes have an encrypted, in-session undo until the tab closes or you compare again. Sync and undo require MongoDB 8.0+ on the target; older servers support comparison and read-only source use. See the [collection](docs/COMPARE_SYNC_PLAN.md) and [database](docs/COMPARE_DATABASE_PLAN.md) plans for how it works and its limits.
 
 ### Connections and workspace
 
@@ -78,7 +79,7 @@ The same requests come up again and again in MongoDB forums and feature trackers
 - **Make production hard to mistake.** Give a connection a colour and an environment, and its tabs carry that colour. Make it read-only, or require confirmation before any write to production.
 - **Get your session back.** Tabs, connections, and unsaved work are restored when you reopen the app.
 - **Stay on the keyboard.** The command palette (Cmd/Ctrl+K) reaches every command, database, and collection. Every shortcut can be remapped, and there are 15 themes.
-- **Work with a coding agent.** A built-in MCP server gives agents 25 tools on the connections you choose to share, with per-client grants, approval for writes, and an audit log.
+- **Work with a coding agent.** A built-in MCP server gives agents 27 tools on the connections you choose to share, with per-client grants, approval for writes, and an audit log.
 
 ### Not there yet
 

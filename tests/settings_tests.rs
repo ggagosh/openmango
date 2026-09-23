@@ -129,6 +129,7 @@ fn test_workspace_tab_forge_roundtrip() {
         collection: String::new(),
         kind: WorkspaceTabKind::Forge,
         transfer: None,
+        compare: None,
         filter_raw: String::new(),
         filter_compiled_raw: String::new(),
         sort_raw: String::new(),

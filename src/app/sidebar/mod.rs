@@ -173,6 +173,7 @@ impl Sidebar {
                     this.refresh_tree(cx);
                 }
                 AppEvent::DocumentsLoaded { .. }
+                | AppEvent::CompareChanged { .. }
                 | AppEvent::DocumentsLoadFailed { .. }
                 | AppEvent::DocumentInserted { .. }
                 | AppEvent::DocumentInsertFailed { .. }

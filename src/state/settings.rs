@@ -25,6 +25,7 @@ pub struct AppSettings {
     pub mcp: McpSettings,
     #[serde(default = "default_interactive_query_timeout_ms")]
     pub interactive_query_timeout_ms: u64,
+    /// The key of the What's New notes last shown (`changelog::current_key`), despite the name.
     #[serde(default = "default_current_version")]
     pub last_seen_version: String,
     #[serde(default = "default_true")]

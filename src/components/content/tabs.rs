@@ -81,6 +81,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) database_view: Option<&'a Entity<DatabaseView>>,
     pub(crate) transfer_view: Option<&'a Entity<TransferView>>,
     pub(crate) forge_view: Option<&'a Entity<ForgeView>>,
+    pub(crate) compare_view: Option<&'a Entity<crate::views::CompareView>>,
     pub(crate) references_view: Option<&'a Entity<ReferencesView>>,
     pub(crate) relations_view: Option<&'a Entity<RelationsView>>,
     pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
@@ -161,6 +162,7 @@ fn tab_connection_id(tab: &TabKey) -> Option<uuid::Uuid> {
         TabKey::Collection(key) => Some(key.connection_id),
         TabKey::Database(key) => Some(key.connection_id),
         TabKey::Transfer(key) => key.connection_id,
+        TabKey::Compare(key) => key.connection_id,
         TabKey::Forge(key) => Some(key.connection_id),
         _ => None,
     }
@@ -261,6 +263,7 @@ impl Render for OpenTabsBar {
                     TabKey::Forge(key) => {
                         (key.database.clone(), IconName::SquareTerminal.into(), false)
                     }
+                    TabKey::Compare(_) => ("Compare".into(), IconName::Search.into(), false),
                     TabKey::References(key) => {
                         (key.collection.clone(), crate::assets::AppIcon::Workflow.into(), false)
                     }
@@ -622,6 +625,10 @@ impl Render for OpenTabsBar {
 
 pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
     let content = match host.current_view {
+        View::Compare => host
+            .compare_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
         View::Database => host
             .database_view
             .map(|view| view.clone().into_any_element())

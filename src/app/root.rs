@@ -532,19 +532,19 @@ impl AppRoot {
         })
         .detach();
 
-        // Show "What's New" dialog if build changed since last launch
+        // Show "What's New" when the notes it leads with changed since they were last seen, so a
+        // nightly build with the same highlights does not open it again.
         {
-            let current_sha = env!("OPENMANGO_GIT_SHA");
+            let key = crate::changelog::current_key();
             let last_seen = &state.read(cx).settings.last_seen_version;
-            // Skip if SHA matches, or if last_seen is a legacy semver value
-            // (pre-SHA migration) — treat those as "already seen"
+            // A semver value predates this tracking; treat those notes as seen.
             let is_legacy_version = last_seen.contains('.');
-            let force_changelog = std::env::var("OPENMANGO_SHOW_CHANGELOG").is_ok();
-            let should_show = force_changelog || (!is_legacy_version && last_seen != current_sha);
+            let force_changelog = crate::changelog::forced();
+            let should_show =
+                force_changelog || (!is_legacy_version && !key.is_empty() && *last_seen != key);
             if !force_changelog && is_legacy_version {
-                // Migrate legacy semver value to current SHA silently
                 state.update(cx, |state, _cx| {
-                    state.settings.last_seen_version = current_sha.to_string();
+                    state.settings.last_seen_version = key;
                     state.save_settings();
                 });
             } else if should_show {
@@ -882,7 +882,7 @@ impl Render for AppRoot {
             View::Database => key_context.push_str(" Database"),
             View::Databases => key_context.push_str(" Databases"),
             View::Collections => key_context.push_str(" Collections"),
-            View::Transfer => {}
+            View::Transfer | View::Compare => {}
             View::Forge => key_context.push_str(" Forge"),
             View::References => key_context.push_str(" References"),
             View::Relations => key_context.push_str(" Relations"),
@@ -1053,6 +1053,10 @@ impl Render for AppRoot {
                 if opened {
                     this.ai_view.update(cx, |view, cx| view.focus_input(window, cx));
                 }
+            }))
+            .on_action(cx.listener(|this, _: &crate::keyboard::OpenCompare, window, cx| {
+                this.state.update(cx, |state, cx| state.open_compare_tab(None, cx));
+                this.focus_current_content(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenForge, window, cx| {
                 let opened = this.state.update(cx, |state, cx| {

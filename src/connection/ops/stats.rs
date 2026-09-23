@@ -25,6 +25,22 @@ pub async fn collection_stats_async(
         .ok_or_else(|| crate::error::Error::Parse("No collection stats returned".to_string()))
 }
 
+/// Document count and data size from `$collStats` storage stats. Both come from metadata.
+pub fn storage_count_and_size(stats: &Document) -> (Option<u64>, Option<u64>) {
+    let Ok(storage) = stats.get_document("storageStats") else {
+        return (None, None);
+    };
+    let number = |name| {
+        storage
+            .get_i64(name)
+            .ok()
+            .or_else(|| storage.get_i32(name).ok().map(i64::from))
+            .or_else(|| storage.get_f64(name).ok().map(|n| n as i64))
+            .and_then(|n| u64::try_from(n).ok())
+    };
+    (number("count"), number("size"))
+}
+
 impl ConnectionManager {
     /// Fetch collection stats (runs in Tokio runtime)
     pub fn collection_stats(

@@ -127,6 +127,14 @@ impl AppState {
         if on_screen { self.record_error(report) } else { self.report_error(report) }
     }
 
+    pub fn report_compare_error(&mut self, id: Uuid, report: ErrorReport) -> u64 {
+        if self.active_compare_tab_id() == Some(id) {
+            self.record_error(report)
+        } else {
+            self.report_error(report)
+        }
+    }
+
     pub fn set_connection_failure(&mut self, connection_id: Uuid, message: Option<String>) {
         match message {
             Some(message) => self.error_log.connection_failures.insert(connection_id, message),

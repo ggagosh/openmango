@@ -27,7 +27,7 @@ use crate::state::{
 };
 use crate::theme::{islands, sizing, spacing};
 
-use select_states::ConnectionItem;
+pub(crate) use select_states::ConnectionItem;
 
 pub struct TransferView {
     state: Entity<AppState>,
@@ -366,6 +366,7 @@ impl Render for TransferView {
                     id: *id,
                     name: SharedString::from(identity.display_name()),
                     identity: identity.clone(),
+                    closed: false,
                 })
                 .collect();
 

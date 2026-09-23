@@ -143,6 +143,7 @@ pub(crate) fn build_database_menu(
     let database_for_import = database.clone();
     let database_for_transfer_copy = database.clone();
     let database_for_forge = database.clone();
+    let database_for_compare = database.clone();
     let database_for_copy = database;
 
     menu = menu
@@ -174,6 +175,28 @@ pub(crate) fn build_database_menu(
                     }
                 })
                 .action(Box::new(OpenForge)),
+        )
+        .item(
+            PopupMenuItem::new("Compare with…")
+                .icon(crate::views::compare::app_icon("git-compare-arrows"))
+                .on_click({
+                    let state = state.clone();
+                    let connection_id = node_id.connection_id();
+                    let database = database_for_compare.clone();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_scoped_compare_tab(
+                                crate::state::compare::CompareScope::Databases,
+                                Some(crate::state::compare::CompareEndpoint {
+                                    connection_id: Some(connection_id),
+                                    database: database.clone(),
+                                    collection: String::new(),
+                                }),
+                                cx,
+                            );
+                        })
+                    }
+                }),
         )
         .item(
             PopupMenuItem::new("Create collection…")
@@ -619,6 +642,27 @@ pub(crate) fn build_collection_menu(
                                 cx,
                             );
                         });
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Compare with…")
+                .icon(crate::views::compare::app_icon("git-compare-arrows"))
+                .on_click({
+                    let state = state.clone();
+                    let database = database.clone();
+                    let collection = collection.clone();
+                    move |_, _, cx| {
+                        state.update(cx, |state, cx| {
+                            state.open_compare_tab(
+                                Some(crate::state::compare::CompareEndpoint {
+                                    connection_id: Some(connection_id),
+                                    database: database.clone(),
+                                    collection: collection.clone(),
+                                }),
+                                cx,
+                            )
+                        })
                     }
                 }),
         )

@@ -42,6 +42,7 @@ pub mod model_select;
 pub mod node_commands;
 pub mod query_library;
 mod status_bar;
+pub mod tri_checkbox;
 mod unsaved_guard;
 pub mod updater;
 pub use busy_button::busy_label;

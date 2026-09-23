@@ -1,5 +1,6 @@
 mod audit;
 mod bridge;
+mod compare;
 pub(crate) mod policy;
 mod server;
 
