@@ -855,15 +855,14 @@ variant that holds both cursors and compares `cursor.current()` borrows with no 
 ## 11. Later
 
 Shipped since: comparing two documents picked in a collection view, links from the skipped
-count that open those documents, and connecting a saved connection from the pickers.
+count that open those documents, connecting a saved connection from the pickers, and whole-database
+compare with index differences and sync by collection (`docs/COMPARE_DATABASE_PLAN.md`).
 
 - Undo that survives a restart (decision 5 is "for now"): needs a persisted key, so it belongs with
   the keychain-backed History key, and a list of past syncs to undo from.
 - Per-field copy in the document diff (Studio 3T's differentiator): a `$set`/`$unset` on one path.
 - Arrays compared without order (2 votes). Export the difference list as CSV (1 vote).
 - Saved comparisons, then scheduling, once tasks exist (`docs/features.md:43-44`).
-- Whole-database compare: a list of collection pairs with counts, skipping identical ones (a
-  Studio 3T complaint is that it opens a tab per pair, including the boring ones).
-- Compare indexes and validators (2 votes combined).
+- Compare validators (indexes are compared in database scope).
 - A server-side hashing fast path for slow links, if `$hash` proves safe.
 - An MCP tool for compare, read-only first.
