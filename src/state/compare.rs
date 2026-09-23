@@ -1,7 +1,7 @@
 //! Per-tab comparison data. Only the setup is persisted; documents and results stay in memory.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mongodb::IndexModel;
 use mongodb::bson::{Bson, DateTime, Document};
@@ -13,7 +13,9 @@ use crate::connection::CancellationToken;
 use crate::connection::ops::compare::{
     CompareCounts, CompareMessage, CompareSummary, DiffKind, DiffRow, SortPlan,
 };
-use crate::connection::ops::compare_database::{CollectionPair, PairKind};
+use crate::connection::ops::compare_database::{
+    CollectionKind, CollectionPair, PairKind, PairMessage, PairScan,
+};
 
 /// What a Compare tab pairs: two collections, or every collection of two databases.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +57,8 @@ pub struct CompareConfig {
     pub fields: Vec<String>,
     pub filter: String,
     pub ignore: Vec<String>,
+    /// Database scope: collections left out of the content scan.
+    pub skip: Vec<String>,
 }
 
 impl Default for CompareConfig {
@@ -65,6 +69,7 @@ impl Default for CompareConfig {
             fields: vec!["_id".into()],
             filter: String::new(),
             ignore: Vec::new(),
+            skip: Vec::new(),
         }
     }
 }
@@ -87,6 +92,56 @@ impl CompareConfig {
     pub fn ignore_set(&self) -> IgnoreSet {
         let ignore = IgnoreSet::new(&self.ignore);
         if self.fields == ["_id"] { ignore } else { ignore.ignoring_id() }
+    }
+}
+
+/// Where one collection of a database comparison is in the content scan.
+#[derive(Clone, Debug, Default)]
+pub enum PairProgress {
+    /// Not scanned: on one side only, a view or time-series, or before the listing.
+    #[default]
+    Unscheduled,
+    Waiting,
+    Scanning(CompareCounts),
+    Done(CompareSummary),
+    Skipped,
+    Cancelled,
+    Failed(String),
+}
+
+/// What a collection's row says, from its presence and its progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairStatus {
+    LeftOnly,
+    RightOnly,
+    NotComparable(CollectionKind),
+    Waiting,
+    Scanning,
+    Different,
+    Minor,
+    Identical,
+    Skipped,
+    Cancelled,
+    Failed,
+}
+
+/// Segments: All, left only, right only, different, minor, identical, not compared.
+pub const PAIR_SEGMENTS: usize = 7;
+
+impl PairStatus {
+    /// All holds what differs and what is still to come; every other segment holds one outcome.
+    pub fn segments(self) -> (bool, Option<usize>) {
+        match self {
+            Self::LeftOnly => (true, Some(1)),
+            Self::RightOnly => (true, Some(2)),
+            Self::Different => (true, Some(3)),
+            Self::Minor => (false, Some(4)),
+            Self::Identical => (false, Some(5)),
+            Self::Waiting | Self::Scanning => (true, None),
+            Self::NotComparable(_) | Self::Skipped | Self::Cancelled | Self::Failed => {
+                (false, Some(6))
+            }
+        }
     }
 }
 
@@ -149,10 +204,15 @@ pub struct CompareTabState {
     pub detail_cache: std::collections::HashMap<usize, Arc<CompareDetail>>,
     /// Database scope: every collection name on either side, alphabetical.
     pub pairs: Vec<CollectionPair>,
-    /// All, left only, right only, in both, not compared.
-    pub pair_segments: [Vec<usize>; 5],
+    pub pair_progress: Vec<PairProgress>,
+    pub pair_tokens: Vec<Option<CancellationToken>>,
+    /// Rebuilt when a run ends or the segment changes, never mid-run: rows must not move
+    /// under the pointer while collections settle.
+    pub pair_segments: [Vec<usize>; PAIR_SEGMENTS],
     pub pair_segment: usize,
     pub pair_selected: Option<usize>,
+    pub pair_current: Option<usize>,
+    pub pair_elapsed: Option<Duration>,
 }
 
 impl Default for CompareTabState {
@@ -163,9 +223,7 @@ impl Default for CompareTabState {
 
 impl Drop for CompareTabState {
     fn drop(&mut self) {
-        if let Some(cancellation) = &self.cancellation {
-            cancellation.cancel();
-        }
+        self.cancel_run();
     }
 }
 
@@ -202,9 +260,23 @@ impl CompareTabState {
             detail_generation: 0,
             detail_cache: Default::default(),
             pairs: Vec::new(),
+            pair_progress: Vec::new(),
+            pair_tokens: Vec::new(),
             pair_segments: Default::default(),
             pair_segment: 0,
             pair_selected: None,
+            pair_current: None,
+            pair_elapsed: None,
+        }
+    }
+
+    /// Stops the scan and every collection in it, including the one being read.
+    pub fn cancel_run(&self) {
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
+        for token in self.pair_tokens.iter().flatten() {
+            token.cancel();
         }
     }
 
@@ -258,27 +330,214 @@ impl CompareTabState {
         self.detail_generation = self.detail_generation.wrapping_add(1);
         self.detail_cache.clear();
         self.pairs.clear();
+        self.pair_progress.clear();
+        self.pair_tokens.clear();
         self.pair_segments = Default::default();
         self.pair_selected = None;
+        self.pair_current = None;
+        self.pair_elapsed = None;
     }
 
-    /// The database listing arrived: it replaces whatever the previous run showed.
-    pub fn receive_pairs(&mut self, result: Result<Vec<CollectionPair>, String>) {
+    /// The database listing arrived: it replaces whatever the previous run showed. Returns the
+    /// collections to scan, smallest first; the run stays busy until they are done.
+    pub fn receive_pairs(&mut self, result: Result<Vec<CollectionPair>, String>) -> Vec<PairScan> {
         if self.pending_reset {
             self.reset_results();
         }
+        let pairs = match result {
+            Ok(pairs) => pairs,
+            Err(error) => {
+                self.error = Some(error);
+                self.finish_scan();
+                return Vec::new();
+            }
+        };
+        let skip = self.results_config().skip.clone();
+        self.pair_progress = vec![PairProgress::Unscheduled; pairs.len()];
+        self.pair_tokens = vec![None; pairs.len()];
+        let mut scans = Vec::new();
+        for (index, pair) in pairs.iter().enumerate() {
+            if pair.kind() != PairKind::Both {
+                continue;
+            }
+            if skip.contains(&pair.name) {
+                self.pair_progress[index] = PairProgress::Skipped;
+                continue;
+            }
+            let cancellation = CancellationToken::new();
+            self.pair_progress[index] = PairProgress::Waiting;
+            self.pair_tokens[index] = Some(cancellation.clone());
+            scans.push(PairScan { index, name: pair.name.clone(), cancellation });
+        }
+        // Smallest first, so the first results arrive in seconds; unknown sizes go last.
+        scans.sort_by_key(|scan| {
+            let [left, right] = &pairs[scan.index].sides;
+            let size = |side: &Option<_>| {
+                side.as_ref()
+                    .and_then(|side: &crate::connection::ops::compare_database::SideCollection| {
+                        side.estimated
+                    })
+                    .unwrap_or(u64::MAX)
+            };
+            size(left).max(size(right))
+        });
+        self.pairs = pairs;
+        self.rebuild_pair_segments();
+        // Cancelled while listing: the scan passes over every collection and says so.
+        if self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) {
+            scans.iter().for_each(|scan| scan.cancellation.cancel());
+        }
+        if scans.is_empty() {
+            self.finish_scan();
+        }
+        scans
+    }
+
+    /// Scan one collection again, after a sync in its own tab or a failure.
+    pub fn recheck_pair(&mut self, index: usize) -> Option<PairScan> {
+        if self.running || self.pairs.get(index)?.kind() != PairKind::Both {
+            return None;
+        }
+        let cancellation = CancellationToken::new();
+        self.pair_progress[index] = PairProgress::Waiting;
+        self.pair_tokens[index] = Some(cancellation.clone());
+        self.running = true;
+        self.cancellation = Some(CancellationToken::new());
+        Some(PairScan { index, name: self.pairs[index].name.clone(), cancellation })
+    }
+
+    pub fn receive_pair(&mut self, message: PairMessage) {
+        let cancelled = self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled);
+        match message {
+            PairMessage::Started(index) => {
+                self.pair_progress[index] = PairProgress::Scanning(Default::default());
+                self.pair_current = Some(index);
+            }
+            PairMessage::Progress(index, counts) => {
+                if matches!(self.pair_progress[index], PairProgress::Scanning(_)) {
+                    self.pair_progress[index] = PairProgress::Scanning(counts);
+                }
+            }
+            PairMessage::Done(index, summary) => {
+                self.pair_progress[index] = match summary.cancelled {
+                    true if cancelled => PairProgress::Cancelled,
+                    true => PairProgress::Skipped,
+                    false => PairProgress::Done(summary),
+                };
+                self.pair_tokens[index] = None;
+                self.pair_current = None;
+            }
+            PairMessage::Failed(index, error) => {
+                self.pair_progress[index] = PairProgress::Failed(error);
+                self.pair_tokens[index] = None;
+                self.pair_current = None;
+            }
+        }
+    }
+
+    /// Skip one collection: now if it is waiting, or when its scan stops.
+    pub fn skip_pair(&mut self, index: usize) {
+        if let Some(token) = self.pair_tokens.get_mut(index).and_then(Option::take) {
+            token.cancel();
+        }
+        if matches!(self.pair_progress.get(index), Some(PairProgress::Waiting)) {
+            self.pair_progress[index] = PairProgress::Skipped;
+        }
+    }
+
+    /// The scan ended, finished or cancelled: collections it never reached say why.
+    pub fn finish_scan(&mut self) {
+        let cancelled = self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled);
+        for progress in &mut self.pair_progress {
+            if matches!(progress, PairProgress::Waiting | PairProgress::Scanning(_)) {
+                *progress = if cancelled { PairProgress::Cancelled } else { PairProgress::Skipped };
+            }
+        }
+        self.pair_tokens.iter_mut().for_each(|token| *token = None);
+        self.pair_current = None;
         self.running = false;
         self.cancellation = None;
-        match result {
-            Ok(pairs) => {
-                for (index, pair) in pairs.iter().enumerate() {
-                    self.pair_segments[0].push(index);
-                    self.pair_segments[pair_segment_for(pair.kind())].push(index);
-                }
-                self.pairs = pairs;
-            }
-            Err(error) => self.error = Some(error),
+        if self.pair_elapsed.is_none() {
+            self.pair_elapsed = self.started.map(|started| started.elapsed());
         }
+        self.rebuild_pair_segments();
+    }
+
+    pub fn pair_status(&self, index: usize) -> PairStatus {
+        match self.pairs[index].kind() {
+            PairKind::LeftOnly => PairStatus::LeftOnly,
+            PairKind::RightOnly => PairStatus::RightOnly,
+            PairKind::NotComparable(kind) => PairStatus::NotComparable(kind),
+            PairKind::Both => match &self.pair_progress[index] {
+                PairProgress::Unscheduled | PairProgress::Waiting => PairStatus::Waiting,
+                PairProgress::Scanning(_) => PairStatus::Scanning,
+                PairProgress::Done(summary) => {
+                    let c = summary.counts;
+                    if c.different + c.only_left + c.only_right > 0 {
+                        PairStatus::Different
+                    } else if c.minor > 0 {
+                        PairStatus::Minor
+                    } else {
+                        PairStatus::Identical
+                    }
+                }
+                PairProgress::Skipped => PairStatus::Skipped,
+                PairProgress::Cancelled => PairStatus::Cancelled,
+                PairProgress::Failed(_) => PairStatus::Failed,
+            },
+        }
+    }
+
+    pub fn rebuild_pair_segments(&mut self) {
+        self.pair_segments = Default::default();
+        for index in 0..self.pairs.len() {
+            let (all, segment) = self.pair_status(index).segments();
+            if all {
+                self.pair_segments[0].push(index);
+            }
+            if let Some(segment) = segment {
+                self.pair_segments[segment].push(index);
+            }
+        }
+    }
+
+    /// Live counts for the segment buttons; the lists themselves hold still until the run ends.
+    pub fn pair_segment_counts(&self) -> [usize; PAIR_SEGMENTS] {
+        let mut counts = [0; PAIR_SEGMENTS];
+        for index in 0..self.pairs.len() {
+            let (all, segment) = self.pair_status(index).segments();
+            counts[0] += usize::from(all);
+            if let Some(segment) = segment {
+                counts[segment] += 1;
+            }
+        }
+        counts
+    }
+
+    /// Documents read so far, and the estimated total of what the scan will read.
+    pub fn pair_scan_reads(&self) -> (u64, Option<u64>) {
+        let mut read = 0;
+        let mut total = Some(0u64);
+        for (pair, progress) in self.pairs.iter().zip(&self.pair_progress) {
+            let counts = match progress {
+                PairProgress::Scanning(counts) => Some(*counts),
+                PairProgress::Done(summary) => Some(summary.counts),
+                _ => None,
+            };
+            if let Some(counts) = counts {
+                read += counts.left_read + counts.right_read;
+            }
+            if matches!(
+                progress,
+                PairProgress::Waiting | PairProgress::Scanning(_) | PairProgress::Done(_)
+            ) {
+                total = total
+                    .zip(pair.sides[0].as_ref().and_then(|side| side.estimated))
+                    .zip(pair.sides[1].as_ref().and_then(|side| side.estimated))
+                    .map(|((total, left), right)| total + left + right);
+            }
+        }
+        (read, total)
     }
 
     pub fn visible_pairs(&self) -> &[usize] {
@@ -369,15 +628,6 @@ impl CompareTabState {
             }
         }
         self.rows.iter().position(|row| matches(&row.key, text))
-    }
-}
-
-pub fn pair_segment_for(kind: PairKind) -> usize {
-    match kind {
-        PairKind::LeftOnly => 1,
-        PairKind::RightOnly => 2,
-        PairKind::Both => 3,
-        PairKind::NotComparable(_) => 4,
     }
 }
 

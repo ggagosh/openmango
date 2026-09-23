@@ -188,12 +188,10 @@ impl AppCommands {
             let result =
                 task.await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
             cx.update(|cx| {
-                state.update(cx, |app, cx| {
-                    let Some(tab) = app.compare_tab_mut(id).filter(|tab| tab.run == run) else {
-                        return;
-                    };
+                let scans = state.update(cx, |app, cx| {
+                    let tab = app.compare_tab_mut(id).filter(|tab| tab.run == run)?;
                     let error = result.as_ref().err().cloned();
-                    tab.receive_pairs(result);
+                    let scans = tab.receive_pairs(result);
                     if let Some(error) = error {
                         app.report_compare_error(
                             id,
@@ -202,7 +200,11 @@ impl AppCommands {
                     }
                     cx.emit(AppEvent::CompareChanged { compare_id: id });
                     cx.notify();
-                })
+                    Some(scans)
+                });
+                if let Some(scans) = scans {
+                    Self::scan_database_pairs(state, id, run, scans, cx);
+                }
             });
         })
         .detach();
@@ -227,11 +229,99 @@ impl AppCommands {
     }
 
     pub fn cancel_compare(state: &Entity<AppState>, id: Uuid, cx: &App) {
-        if let Some(token) =
-            state.read(cx).compare_tab(id).and_then(|tab| tab.cancellation.as_ref())
-        {
-            token.cancel();
+        if let Some(tab) = state.read(cx).compare_tab(id) {
+            tab.cancel_run();
         }
+    }
+
+    /// Pass two, and Recheck: the content scan of `scans`, one collection at a time.
+    fn scan_database_pairs(
+        state: Entity<AppState>,
+        id: Uuid,
+        run: u64,
+        scans: Vec<crate::connection::ops::compare_database::PairScan>,
+        cx: &mut App,
+    ) {
+        use crate::connection::ops::compare_database::compare_pairs_async;
+        if scans.is_empty() {
+            return;
+        }
+        let request = {
+            let app = state.read(cx);
+            app.compare_tab(id).and_then(|tab| {
+                let config = tab.results_config();
+                let clients = config
+                    .sides
+                    .each_ref()
+                    .map(|side| side.connection_id.and_then(|id| app.active_connection_client(id)));
+                let [Some(left), Some(right)] = clients else {
+                    return None;
+                };
+                Some((
+                    [left, right],
+                    config.sides.each_ref().map(|side| side.database.clone()),
+                    crate::bson::compare::IgnoreSet::new(&config.ignore),
+                    app.connection_manager().runtime_handle(),
+                ))
+            })
+        };
+        let Some((clients, databases, ignore, runtime)) = request else {
+            state.update(cx, |app, cx| {
+                if let Some(tab) = app.compare_tab_mut(id).filter(|tab| tab.run == run) {
+                    tab.cancel_run();
+                    tab.finish_scan();
+                    tab.error = Some("Reconnect both connections to compare".into());
+                }
+                cx.notify();
+            });
+            return;
+        };
+        let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+        let task = runtime.spawn(compare_pairs_async(clients, databases, scans, ignore, sender));
+        cx.spawn(async move |cx| {
+            while let Some(message) = receiver.next().await {
+                cx.update(|cx| {
+                    state.update(cx, |app, cx| {
+                        if let Some(tab) = app.compare_tab_mut(id).filter(|tab| tab.run == run) {
+                            tab.receive_pair(message);
+                            cx.notify();
+                        }
+                    })
+                });
+            }
+            let _ = task.await;
+            cx.update(|cx| {
+                state.update(cx, |app, cx| {
+                    if let Some(tab) = app.compare_tab_mut(id).filter(|tab| tab.run == run) {
+                        tab.finish_scan();
+                        cx.emit(AppEvent::CompareChanged { compare_id: id });
+                        cx.notify();
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
+    pub fn skip_database_pair(state: &Entity<AppState>, id: Uuid, index: usize, cx: &mut App) {
+        state.update(cx, |app, cx| {
+            if let Some(tab) = app.compare_tab_mut(id) {
+                tab.skip_pair(index);
+                cx.notify();
+            }
+        });
+    }
+
+    pub fn recheck_database_pair(state: Entity<AppState>, id: Uuid, index: usize, cx: &mut App) {
+        let Some((run, scan)) = state.update(cx, |app, cx| {
+            let tab = app.compare_tab_mut(id)?;
+            let scan = tab.recheck_pair(index)?;
+            cx.notify();
+            Some((tab.run, scan))
+        }) else {
+            return;
+        };
+        Self::scan_database_pairs(state, id, run, vec![scan], cx);
     }
 
     pub fn load_compare_metadata(state: Entity<AppState>, id: Uuid, side: usize, cx: &mut App) {

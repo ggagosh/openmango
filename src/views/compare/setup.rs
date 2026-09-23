@@ -26,6 +26,7 @@ pub(super) struct Controls {
     sides: [EndpointControls; 2],
     fields: Entity<InputState>,
     ignore: Entity<InputState>,
+    skip: Entity<InputState>,
     filter: Entity<InputState>,
     pub find: Entity<InputState>,
     suggestions: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -193,13 +194,16 @@ impl CompareView {
                 .default_value(config.filter)
         });
         let find = cx.new(|cx| InputState::new(window, cx).placeholder("Find key…"));
-        for (input, is_key) in [(&fields, true), (&ignore, false)] {
+        let skip = cx.new(|cx| InputState::new(window, cx).placeholder("Skip collection…"));
+        for (input, list) in
+            [(&fields, TokenList::Match), (&ignore, TokenList::Ignore), (&skip, TokenList::Skip)]
+        {
             self.control_subscriptions.push(cx.subscribe_in(
                 input,
                 window,
                 move |this, input, event, window, cx| {
                     if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
-                        add_tokens(&this.state, id, input, is_key, window, cx);
+                        add_tokens(&this.state, id, input, list, window, cx);
                     }
                 },
             ));
@@ -251,6 +255,7 @@ impl CompareView {
             sides,
             fields,
             ignore,
+            skip,
             filter,
             find,
             suggestions,
@@ -677,12 +682,24 @@ impl CompareView {
                 if config.ignore.len() == 1 { "" } else { "s" }
             ));
         }
+        if databases && !config.skip.is_empty() {
+            settings_summary.push_str(&format!(
+                " · {} collection{} skipped",
+                config.skip.len(),
+                if config.skip.len() == 1 { "" } else { "s" }
+            ));
+        }
         if changed {
             // On the summary line rather than a new row: the header must not grow on Swap.
             settings_summary.push_str(" · Setup changed, compare again");
         }
         let state = self.state.clone();
-        let inputs = [controls.fields.clone(), controls.ignore.clone(), controls.filter.clone()];
+        let inputs = [
+            controls.fields.clone(),
+            controls.ignore.clone(),
+            controls.filter.clone(),
+            controls.skip.clone(),
+        ];
         let suggestions = controls.suggestions.clone();
         let has_suggestions = !controls.suggestion_fields.is_empty();
         let popover = gpui_kit::component::popover::Popover::new(SharedString::from(format!(
@@ -742,8 +759,13 @@ impl CompareView {
                 .child(div().flex().justify_end().child(
                     Button::new("compare-settings-done").small().primary().label("Done").on_click(
                         move |_, window, cx| {
-                            add_tokens(&done_state, id, &done_inputs[0], true, window, cx);
-                            add_tokens(&done_state, id, &done_inputs[1], false, window, cx);
+                            for (input, list) in [
+                                (&done_inputs[0], TokenList::Match),
+                                (&done_inputs[1], TokenList::Ignore),
+                                (&done_inputs[3], TokenList::Skip),
+                            ] {
+                                add_tokens(&done_state, id, input, list, window, cx);
+                            }
                             popover.update(cx, |popover, cx| popover.dismiss(window, cx))
                         },
                     ),
@@ -963,7 +985,7 @@ impl CompareView {
 fn settings_panel(
     state: Entity<AppState>,
     id: Uuid,
-    inputs: &[Entity<InputState>; 3],
+    inputs: &[Entity<InputState>; 4],
     suggestions: &Entity<SelectState<SearchableVec<SharedString>>>,
     has_suggestions: bool,
     _window: &Window,
@@ -974,7 +996,7 @@ fn settings_panel(
         return div().id("compare-settings-panel").child("This comparison was closed.");
     };
     let config = tab.config.clone();
-    let [fields, ignore, filter] = inputs;
+    let [fields, ignore, filter, skip] = inputs;
     let databases = config.scope == CompareScope::Databases;
     let mut matching = setting_group("Match documents by", cx);
     if databases {
@@ -996,8 +1018,13 @@ fn settings_panel(
                 .w_full(),
             );
         }
-        matching =
-            matching.child(token_editor(state.clone(), id, &config.fields, true, fields, cx));
+        matching = matching.child(token_editor(
+            state.clone(),
+            id,
+            &config.fields,
+            TokenList::Match,
+            fields,
+        ));
         matching = matching.child(note(
             if config.fields.len() > 1 {
                 "Every key field must match."
@@ -1043,7 +1070,7 @@ fn settings_panel(
         _ => scope.child(note("A MongoDB filter, applied to both collections.", cx)),
     };
     let ignoring = setting_group("Ignore fields", cx)
-        .child(token_editor(state, id, &config.ignore, false, ignore, cx))
+        .child(token_editor(state.clone(), id, &config.ignore, TokenList::Ignore, ignore))
         .child(note(
             if !databases && config.fields != ["_id"] {
                 "_id is ignored automatically when matching by another key."
@@ -1062,6 +1089,16 @@ fn settings_panel(
         .child(matching)
         .when(!databases, |panel| panel.child(scope))
         .child(ignoring)
+        .when(databases, |panel| {
+            panel.child(
+                setting_group("Skip collections", cx)
+                    .child(token_editor(state, id, &config.skip, TokenList::Skip, skip))
+                    .child(note(
+                        "Listed but not compared, for example a large log collection.",
+                        cx,
+                    )),
+            )
+        })
 }
 
 fn setting_group(title: &'static str, cx: &App) -> Div {
@@ -1074,15 +1111,41 @@ fn setting_group(title: &'static str, cx: &App) -> Div {
     )
 }
 
-/// Chips for the current fields, then the input that adds more, on one wrapping row.
+/// The three editable lists of the Settings popover.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TokenList {
+    Match,
+    Ignore,
+    Skip,
+}
+
+impl TokenList {
+    fn ids(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Match => ("match-token", "add-match", "Custom match field"),
+            Self::Ignore => ("ignore-token", "add-ignore", "Field to ignore"),
+            Self::Skip => ("skip-token", "add-skip", "Collection to skip"),
+        }
+    }
+
+    fn items(self, config: &mut crate::state::compare::CompareConfig) -> &mut Vec<String> {
+        match self {
+            Self::Match => &mut config.fields,
+            Self::Ignore => &mut config.ignore,
+            Self::Skip => &mut config.skip,
+        }
+    }
+}
+
+/// Chips for the current entries, then the input that adds more, on one wrapping row.
 fn token_editor(
     state: Entity<AppState>,
     id: Uuid,
-    fields: &[String],
-    key: bool,
+    entries: &[String],
+    list: TokenList,
     input: &Entity<InputState>,
-    _cx: &App,
 ) -> Div {
+    let (token_id, add_id, label) = list.ids();
     let input_for_add = input.clone();
     let add_state = state.clone();
     // Contain this input's Enter, but leave the indexed-key selector's own Enter handling intact.
@@ -1094,25 +1157,24 @@ fn token_editor(
         .items_center()
         .gap(spacing::xs())
         .on_action(|_: &gpui_kit::component::input::Enter, _, _| {})
-        .children(fields.iter().enumerate().map(|(index, field)| {
+        .children(entries.iter().enumerate().map(|(index, entry)| {
             let state = state.clone();
-            Button::new((if key { "match-token" } else { "ignore-token" }, index))
+            Button::new((token_id, index))
                 .outline()
                 .xsmall()
                 .max_w_full()
                 .min_w_0()
-                .label(field.clone())
+                .label(entry.clone())
                 .icon(IconName::Close)
-                .tooltip(format!("Remove {field}"))
+                .tooltip(format!("Remove {entry}"))
                 .on_click(move |_, _, cx| {
                     state.update(cx, |app, cx| {
                         app.update_compare_config(
                             id,
                             |config| {
-                                let fields =
-                                    if key { &mut config.fields } else { &mut config.ignore };
-                                if index < fields.len() {
-                                    fields.remove(index);
+                                let items = list.items(config);
+                                if index < items.len() {
+                                    items.remove(index);
                                 }
                             },
                             cx,
@@ -1127,20 +1189,12 @@ fn token_editor(
                 .flex()
                 .items_center()
                 .gap(spacing::xs())
-                .child(Input::new(input).small().flex_1().min_w_0().aria_label(if key {
-                    "Custom match field"
-                } else {
-                    "Field to ignore"
-                }))
-                .child(
-                    Button::new(if key { "add-match" } else { "add-ignore" })
-                        .small()
-                        .outline()
-                        .label("Add")
-                        .on_click(move |_, window, cx| {
-                            add_tokens(&add_state, id, &input_for_add, key, window, cx)
-                        }),
-                ),
+                .child(Input::new(input).small().flex_1().min_w_0().aria_label(label))
+                .child(Button::new(add_id).small().outline().label("Add").on_click(
+                    move |_, window, cx| {
+                        add_tokens(&add_state, id, &input_for_add, list, window, cx)
+                    },
+                )),
         )
 }
 
@@ -1148,7 +1202,7 @@ fn add_tokens(
     state: &Entity<AppState>,
     id: Uuid,
     input: &Entity<InputState>,
-    key: bool,
+    list: TokenList,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -1160,13 +1214,13 @@ fn add_tokens(
         app.update_compare_config(
             id,
             |config| {
-                if key {
-                    config.add_match_fields(&value);
-                } else {
-                    for field in value.split(',').map(str::trim).filter(|field| !field.is_empty()) {
-                        if !config.ignore.iter().any(|existing| existing == field) {
-                            config.ignore.push(field.to_owned());
-                        }
+                if list == TokenList::Match {
+                    return config.add_match_fields(&value);
+                }
+                let items = list.items(config);
+                for entry in value.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+                    if !items.iter().any(|existing| existing == entry) {
+                        items.push(entry.to_owned());
                     }
                 }
             },

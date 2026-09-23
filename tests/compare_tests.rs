@@ -460,3 +460,75 @@ async fn database_listing_pairs_collections_by_name_with_kinds_and_sizes() {
     assert_eq!(orders.each_ref().map(|side| side.estimated), [Some(2), Some(1)]);
     assert!(orders.iter().all(|side| side.bytes.is_some_and(|bytes| bytes > 0)));
 }
+
+#[tokio::test]
+async fn database_scan_counts_each_collection_with_one_comparator_and_honours_skips() {
+    use openmango::bson::compare::IgnoreSet;
+    use openmango::connection::ops::compare_database::{
+        PairMessage, PairScan, compare_pairs_async,
+    };
+    let mongo = MongoTestContainer::start().await;
+    let left = mongo.database("scan_left");
+    let right = mongo.database("scan_right");
+    let seed = |database: &mongodb::Database, name: &str, documents: Vec<Document>| {
+        let collection = database.collection::<Document>(name);
+        async move { collection.insert_many(documents).await.unwrap() }
+    };
+    seed(&left, "same", vec![doc! {"_id": 1}, doc! {"_id": 2}]).await;
+    seed(&right, "same", vec![doc! {"_id": 1}, doc! {"_id": 2}]).await;
+    seed(&left, "changed", vec![doc! {"_id": 1, "v": "a"}, doc! {"_id": 2, "v": "b"}]).await;
+    seed(
+        &right,
+        "changed",
+        vec![doc! {"_id": 1, "v": "a"}, doc! {"_id": 2, "v": "c"}, doc! {"_id": 3}],
+    )
+    .await;
+    seed(&left, "reordered", vec![doc! {"_id": 1, "a": 1, "b": 2}]).await;
+    seed(&right, "reordered", vec![doc! {"_id": 1, "b": 2, "a": 1}]).await;
+    seed(&left, "stamped", vec![doc! {"_id": 1, "v": 1, "updatedAt": 1}]).await;
+    seed(&right, "stamped", vec![doc! {"_id": 1, "v": 1, "updatedAt": 2}]).await;
+    seed(&left, "skipped", vec![doc! {"_id": 1}]).await;
+    seed(&right, "skipped", vec![doc! {"_id": 2}]).await;
+
+    let names = ["same", "changed", "reordered", "stamped", "skipped"];
+    let scans: Vec<_> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| PairScan {
+            index,
+            name: name.to_string(),
+            cancellation: CancellationToken::new(),
+        })
+        .collect();
+    scans[4].cancellation.cancel();
+    let (sender, receiver) = futures::channel::mpsc::unbounded();
+    let ((), messages) = tokio::join!(
+        compare_pairs_async(
+            [mongo.client.clone(), mongo.client.clone()],
+            [left.name().to_string(), right.name().to_string()],
+            scans,
+            IgnoreSet::new(&["updatedAt".to_string()]),
+            sender,
+        ),
+        receiver.collect::<Vec<_>>(),
+    );
+    let mut done = std::collections::BTreeMap::new();
+    for message in messages {
+        match message {
+            PairMessage::Done(index, summary) => {
+                done.insert(names[index], summary.counts);
+            }
+            PairMessage::Failed(index, error) => panic!("{}: {error}", names[index]),
+            PairMessage::Started(_) | PairMessage::Progress(..) => {}
+        }
+    }
+    assert!(!done.contains_key("skipped"), "a skipped collection is never read");
+    let counts = |name| {
+        let c = done[name];
+        (c.identical, c.different, c.minor, c.only_left, c.only_right)
+    };
+    assert_eq!(counts("same"), (2, 0, 0, 0, 0));
+    assert_eq!(counts("changed"), (1, 1, 0, 0, 1));
+    assert_eq!(counts("reordered"), (0, 0, 1, 0, 0));
+    assert_eq!(counts("stamped"), (1, 0, 0, 0, 0), "ignored fields apply to every collection");
+}

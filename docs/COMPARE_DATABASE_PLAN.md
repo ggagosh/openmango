@@ -37,6 +37,12 @@ list and detail (`src/views/compare/database.rs`), and Open comparison. Until pa
 segments are **All · Left only · Right only · In both · Not compared**, and All lists every
 collection. PR 2 replaces In both with the verdict segments of §3.3.
 
+**PR 2, contents: built.** Pass two (`compare_pairs_async`), the seven segments, progress with Skip
+beside the collection being read and Cancel, Recheck and Retry in the detail, the breakdown and
+the "no `_id` matched" note (moved here from PR 3), and Skip collections in Settings. One change
+from the design below: rows do not leave All while a run lasts. Counts are live, but the lists are
+rebuilt when the run ends or the segment changes, so nothing moves under the pointer.
+
 ---
 
 ## 1. What the evidence says
@@ -66,7 +72,8 @@ The common case is still "same database, other server". It takes three actions a
 
 The list fills with every collection at once. Rows then settle one by one as the scan reaches
 them, smallest first, so the first verdicts arrive in seconds. Collections that turn out identical
-leave the default view. The user can open any row while the scan continues.
+leave the default view when the run ends, so nothing moves under the pointer while it runs. The
+user can open any row while the scan continues.
 
 To fix a collection: select it, press `enter` (or **Open comparison**). Its own tab opens and
 runs. Sync there as today, come back, press **Recheck**.
@@ -316,8 +323,7 @@ Three PRs on the existing stack, each shippable:
    collections exist where, and how big.
 2. **Contents.** Pass two, progress, Skip, Cancel, results and segments, Identical hidden,
    Recheck, Skip collections.
-3. **Details.** Index differences in the detail, Copy to… for one-sided collections, and the
-   "no `_id` matched" note.
+3. **Details.** Index differences in the detail, and Copy to… for one-sided collections.
 
 ---
 

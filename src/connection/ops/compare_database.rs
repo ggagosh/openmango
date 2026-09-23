@@ -2,10 +2,17 @@
 
 use std::time::Duration;
 
+use futures::channel::mpsc::UnboundedSender;
 use futures::{StreamExt, TryStreamExt};
 use mongodb::Client;
+use mongodb::bson::{Document, RawDocumentBuf};
 use mongodb::results::CollectionType;
 
+use crate::bson::compare::IgnoreSet;
+use crate::connection::CancellationToken;
+use crate::connection::ops::compare::{
+    CompareCounts, CompareMessage, CompareOptions, CompareSummary, compare_collections_async,
+};
 use crate::connection::ops::stats::{collection_stats_async, storage_count_and_size};
 use crate::error::Result;
 use crate::models::is_system_collection;
@@ -94,6 +101,68 @@ pub async fn list_side(
         .buffered(STATS_CONCURRENCY)
         .collect()
         .await)
+}
+
+#[derive(Debug)]
+pub enum PairMessage {
+    Started(usize),
+    Progress(usize, CompareCounts),
+    /// `cancelled` in the summary means the collection was skipped or the run cancelled.
+    Done(usize, CompareSummary),
+    Failed(usize, String),
+}
+
+/// One collection to scan: its index in the listing, its name, and the token that skips it.
+pub struct PairScan {
+    pub index: usize,
+    pub name: String,
+    pub cancellation: CancellationToken,
+}
+
+/// Pass two: the collection comparison, once per collection, one at a time, in the order given.
+/// Differences are counted and never stored. A collection whose token is cancelled before its
+/// turn is passed over without a message; cancelling every token stops the run.
+pub async fn compare_pairs_async(
+    clients: [Client; 2],
+    databases: [String; 2],
+    scans: Vec<PairScan>,
+    ignore: IgnoreSet,
+    sender: UnboundedSender<PairMessage>,
+) {
+    for PairScan { index, name, cancellation } in scans {
+        if sender.is_closed() {
+            return;
+        }
+        if cancellation.is_cancelled() {
+            continue;
+        }
+        let _ = sender.unbounded_send(PairMessage::Started(index));
+        let [left, right] = [0, 1].map(|side| {
+            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&name)
+        });
+        let options = CompareOptions {
+            fields: vec!["_id".into()],
+            filter: Document::new(),
+            ignore: ignore.clone(),
+            row_limit: 0,
+        };
+        let (progress, mut messages) = futures::channel::mpsc::unbounded();
+        let forward = async {
+            while let Some(message) = messages.next().await {
+                if let CompareMessage::Progress { counts, .. } = message {
+                    let _ = sender.unbounded_send(PairMessage::Progress(index, counts));
+                }
+            }
+        };
+        let (result, ()) = tokio::join!(
+            compare_collections_async(left, right, options, cancellation, progress),
+            forward
+        );
+        let _ = sender.unbounded_send(match result {
+            Ok(summary) => PairMessage::Done(index, summary),
+            Err(error) => PairMessage::Failed(index, error.to_string()),
+        });
+    }
 }
 
 /// Every name on either side, in the sidebar's order: case-insensitive, then exact.

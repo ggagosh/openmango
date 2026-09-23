@@ -896,18 +896,88 @@ fn database_scope_loads_old_setups_and_segments_the_listing() {
 
     let mut tab = CompareTabState::new(config);
     tab.begin();
-    tab.receive_pairs(Ok(listing()));
-    assert!(!tab.running);
-    // All, left only, right only, in both, not compared.
-    assert_eq!(tab.pair_segments.each_ref().map(Vec::len), [4, 1, 1, 1, 1]);
+    let scans = tab.receive_pairs(Ok(listing()));
+    assert_eq!(scans.iter().map(|scan| scan.index).collect::<Vec<_>>(), [1]);
+    assert!(tab.running, "the content scan follows the listing");
+    // All, left only, right only, different, minor, identical, not compared.
+    assert_eq!(tab.pair_segments.each_ref().map(Vec::len), [3, 1, 1, 0, 0, 0, 1]);
     assert_eq!(tab.find_pair("ORD"), Some(1));
     assert_eq!(tab.find_pair("missing"), None);
     // A second run keeps the listing on screen until its own result arrives.
+    tab.finish_scan();
     tab.begin();
     assert_eq!(tab.pairs.len(), 4);
     tab.receive_pairs(Err("listCollections refused".into()));
     assert!(tab.pairs.is_empty());
+    assert!(!tab.running);
     assert_eq!(tab.error.as_deref(), Some("listCollections refused"));
+}
+
+fn summary(
+    identical: u64,
+    different: u64,
+    cancelled: bool,
+) -> crate::connection::ops::compare::CompareSummary {
+    crate::connection::ops::compare::CompareSummary {
+        counts: crate::connection::ops::compare::CompareCounts {
+            identical,
+            different,
+            left_read: identical + different,
+            right_read: identical + different,
+            ..Default::default()
+        },
+        skipped: None,
+        truncated: false,
+        cancelled,
+        elapsed: std::time::Duration::from_millis(5),
+    }
+}
+
+#[test]
+fn database_scan_settles_rows_in_place_and_says_why_a_collection_was_not_compared() {
+    use crate::connection::ops::compare_database::PairMessage;
+    use crate::state::compare::{PairProgress, PairStatus};
+    let mut tab = CompareTabState::new(database_config([uuid::Uuid::new_v4(); 2]));
+    tab.begin();
+    tab.receive_pairs(Ok(listing()));
+    tab.receive_pair(PairMessage::Started(1));
+    assert_eq!(tab.pair_status(1), PairStatus::Scanning);
+    tab.receive_pair(PairMessage::Done(1, summary(10, 0, false)));
+    assert_eq!(tab.pair_status(1), PairStatus::Identical);
+    assert!(tab.pair_segments[0].contains(&1), "rows hold still while the run lasts");
+    assert_eq!(tab.pair_segment_counts()[5], 1, "while the counts are already live");
+    tab.finish_scan();
+    assert!(!tab.running);
+    assert!(!tab.pair_segments[0].contains(&1), "identical collections leave All at the end");
+    assert_eq!(tab.pair_segments[5], [1]);
+    assert!(tab.pair_elapsed.is_some());
+
+    // Recheck, then skip before its turn: skipped at once, and its reader never starts.
+    let scan = tab.recheck_pair(1).unwrap();
+    assert!(tab.running && matches!(tab.pair_progress[1], PairProgress::Waiting));
+    tab.skip_pair(1);
+    assert!(scan.cancellation.is_cancelled());
+    assert_eq!(tab.pair_status(1), PairStatus::Skipped);
+    tab.finish_scan();
+
+    // Cancel: the collection being read and those never reached both say Cancelled.
+    let scan = tab.recheck_pair(1).unwrap();
+    tab.receive_pair(PairMessage::Started(1));
+    tab.cancel_run();
+    assert!(scan.cancellation.is_cancelled());
+    tab.receive_pair(PairMessage::Done(1, summary(3, 0, true)));
+    tab.finish_scan();
+    assert_eq!(tab.pair_status(1), PairStatus::Cancelled);
+    assert_eq!(tab.pair_segments[6].len(), 2, "the view and the cancelled collection");
+
+    // A collection under Skip collections is never scheduled.
+    let mut config = database_config([uuid::Uuid::new_v4(); 2]);
+    config.skip = vec!["orders".into()];
+    let mut tab = CompareTabState::new(config);
+    tab.begin();
+    assert!(tab.receive_pairs(Ok(listing())).is_empty());
+    assert!(!tab.running);
+    assert_eq!(tab.pair_status(1), PairStatus::Skipped);
 }
 
 #[gpui_kit::test]
@@ -1009,4 +1079,21 @@ fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     draw(cx);
     assert_eq!(selected(cx), Some(3), "Find jumps to a collection by part of its name");
+
+    // While a collection is read, Skip sits beside its name in the status line.
+    state.update(cx, |state, _| {
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.slow = true;
+        tab.receive_pair(crate::connection::ops::compare_database::PairMessage::Started(1));
+    });
+    draw(cx);
+    let skip = cx
+        .update(|window, _| gpui_kit::base::test_support::snapshots(window))
+        .into_iter()
+        .find(|node| node.label() == Some("Skip orders"))
+        .expect("Skip beside the collection being read")
+        .bounds();
+    cx.simulate_click(skip.center(), gpui_kit::Modifiers::default());
+    draw(cx);
+    assert!(state.update(cx, |state, _| state.compare_tab(id).unwrap().pair_tokens[1].is_none()));
 }
