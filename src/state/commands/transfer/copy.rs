@@ -47,11 +47,11 @@ impl AppCommands {
             return;
         }
 
-        let Some(src_client) = Self::active_client(&state, src_conn_id, cx) else {
+        let Some(src_client) = Self::transfer_client(&state, transfer_id, src_conn_id, cx) else {
             return;
         };
 
-        let Some(dest_client) = Self::active_client(&state, dest_conn_id, cx) else {
+        let Some(dest_client) = Self::transfer_client(&state, transfer_id, dest_conn_id, cx) else {
             return;
         };
 
@@ -179,6 +179,7 @@ impl AppCommands {
                     Err(e) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: e.to_string(),
+                            transient: e.is_transient(),
                         });
                         return;
                     }
@@ -422,8 +423,9 @@ impl AppCommands {
                                     });
                                 }
                                 TransferProgressMessage::Cancelled { .. } => {}
-                                TransferProgressMessage::Failed { error } => {
+                                TransferProgressMessage::Failed { error, transient } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
@@ -511,6 +513,7 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
                             error: err.to_string(),
                             processed,
+                            transient: err.is_transient(),
                         });
                     }
                 }
@@ -560,8 +563,13 @@ impl AppCommands {
                                     state.set_status_message(Some(StatusMessage::info(message)));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed { error, processed } => {
+                                CollectionProgressMessage::Failed {
+                                    error,
+                                    processed,
+                                    transient,
+                                } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count =
                                             tab.runtime.progress_count.max(processed);

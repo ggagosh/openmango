@@ -32,7 +32,9 @@ pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text, stages_from_pipeline};
 pub(crate) use sessions::SessionStore;
-pub use tasks::{ActiveRun, RunStop, TasksState, UndoLog};
+pub use tasks::{
+    ActiveRun, Attention, Fix, RunStop, ScheduleSettings, TaskNotice, TasksState, UndoLog,
+};
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
     CollectionProgress, CollectionStats, CollectionSubview, CollectionTransferStatus,
@@ -43,8 +45,8 @@ pub use types::{
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
     InsertMode, NavHistory, ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField,
     SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
-    TabKey, TargetWriteMode, TransferConfig, TransferFormat, TransferMode, TransferOptions,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    TabKey, TargetWriteMode, TaskClient, TransferConfig, TransferFormat, TransferMode,
+    TransferOptions, TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 

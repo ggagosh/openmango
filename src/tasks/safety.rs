@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::model::{Run, RunStatus, RunTrigger};
+use super::model::{Run, RunStatus};
 use crate::helpers::format_number;
 
 /// The safety limit's three numbers, kept per task.
@@ -85,7 +85,7 @@ impl StopReason {
 pub fn check(limit: &SafetyLimit, planned: &[Planned], history: &[Run]) -> Vec<StopReason> {
     let successful: Vec<&Run> = history
         .iter()
-        .filter(|run| run.trigger == RunTrigger::Manual && run.status == RunStatus::Succeeded)
+        .filter(|run| run.trigger.is_run() && run.status == RunStatus::Succeeded)
         .take(HISTORY_RUNS)
         .collect();
     let mut reasons = Vec::new();
@@ -133,6 +133,7 @@ pub fn check(limit: &SafetyLimit, planned: &[Planned], history: &[Run]) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::model::RunTrigger;
     use uuid::Uuid;
 
     fn plan(name: &str, replaces: u64, deletes: u64, target: u64) -> Planned {

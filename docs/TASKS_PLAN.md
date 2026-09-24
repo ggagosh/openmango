@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety) and PR 2b (recovery for Compare and Sync) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. Everything planned is built, PRs 1 through 7; see Implementation status. Still to try on real machines: the background runner's system entries and the system notifications on each system.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -85,7 +85,7 @@ the engines tasks call directly, 2c covers transfers.
 
 - **Own connections.** Compare, Sync and Undo runs open connections of their own, each SSH tunnel
   keyed by a fresh id, and close them when the run ends. They never open or disturb the sidebar's.
-  Transfers still use the sidebar's until 2c.
+  Transfers got theirs in 2c.
 - **Which failures are retried** follows section 7.1, decided where the error happens
   (`Error::is_transient`) and carried in the engines' messages as `Failure`. A DNS failure always
   counts as one that can pass; telling a typo from an outage by the task's history is left out.
@@ -98,8 +98,191 @@ the engines tasks call directly, 2c covers transfers.
   driver retries once, the run retries after that, and the run succeeds. A "not authorized" error
   fails at once.
 
-**PR 2c, recovery for transfers — next.** Their own connections, retries, and resuming Copy and
-Import from where they stopped (section 7.3).
+**PR 2c, recovery for transfers — built.**
+
+- **Own connections.** Export, Import and Copy runs, and the document counts their safety check
+  reads, use connections the run opens, including the address the BSON tools reach through the
+  run's own tunnel. The Transfer tab's code runs them unchanged, through a tab state no tab shows.
+- **Retries** use 2b's numbers, but a retry starts the whole transfer over. That is only safe when
+  starting over gives the same result: an export, or an import or copy with "Clear target first"
+  or "Drop target first". Any other import or copy fails after the first failure, and the log says
+  why. A retry on a Production target keeps the write the first try was confirmed for.
+- **Not built: resuming from where a transfer stopped** (section 7.3, the last `_id` or line of a
+  confirmed batch). Starting over covers the transfers that can repeat safely; resuming comes when
+  scheduled imports and copies that append need it.
+- **Tests:** `failCommand` makes an export's read time out three times; the run starts over and
+  writes the whole file, and the sidebar's connection stays closed. A copy that appends, failing
+  the same way, isn't run again.
+
+**PR 3a, schedules while OpenMango is open — built.** PR 3 was split: 3a runs tasks on their
+schedules safely, 3b adds needs attention, notifications and the outage rules (section 7.4).
+
+- **The schedule editor** opens from Schedule… among the task's actions, not from the Save as
+  task dialog. It holds the rule, a calendar that dims the days it doesn't run beside the next
+  three run times, the safety limit's three numbers for a task that writes, the Production opt-in,
+  and "Keep only the newest 30 files" for an export. Pause and Resume sit beside Schedule…; a
+  resumed schedule doesn't catch up. The details list Schedule and Safety in the same label and
+  value list as the reference peek.
+- **Rules:** Every… counts from midnight, so every 2 hours runs at 00:00, 02:00 and so on, however
+  the schedule was set. A monthly day a month doesn't have runs on its last day. Both clock changes
+  follow section 5.1, with `chrono-tz` in the tests.
+- **The scheduler** (`src/state/commands/task_schedule.rs`) waits for the earliest due run, but
+  looks at the clock at least once a minute: timers don't count time the computer sleeps, so a run
+  due during sleep starts within a minute of waking. A due time found more than 2 minutes late is
+  a Catch-up; waiting in the queue behind another run doesn't make one.
+- **The queue** starts a scheduled run only when no task is running. A task still running when it
+  comes due is recorded as ⏭ Skipped, and so is a catch-up skipped because the next run is close.
+- **Approval** records each connection's identity hash, the one Agent Activity uses. It includes
+  the connection's name, so renaming a connection asks for approval again. A problem shows in the
+  task's details with Approve again, which asks first when the target is Production or protected.
+- **Scheduled runs never ask.** The safety limit stops them before writing, recorded as ⚠ Failed
+  with its reasons and a Run anyway… button that goes through Run now. The approval stands in for
+  the Production write confirmation: a run grants itself exactly the writes it makes. Retrying
+  stops when the task's next run is due.
+- **Scheduled exports** get their run's time in the file name unless the path already has a
+  `${date}`, `${datetime}` or `${time}` placeholder. Keeping the newest 30 deletes only files named
+  that way.
+- **Tests:** next-run rules for every preset, month ends and both clock changes; the queue, the
+  catch-up, skipping and pausing; approval and its revocation; the editor in a window, including
+  the question before scheduled Production writes; and in Docker, a scheduled Mirror stopped by the
+  limit, then writing into Production without a question, and scheduled exports keeping two files.
+
+**PR 3b, problems and notifications — built.** Section 4.3's list, less the parts that belong to
+the background runner (PR 4), and section 7.4.
+
+- **Needs attention** (`AppState::task_attention`) applies to scheduled tasks only: whoever
+  pressed Run now saw the result. A task needs attention when a connection it uses was deleted,
+  signing in failed, its approval no longer matches, the safety limit stopped its last run, or its
+  last run failed, was partly done or was cut short. A run records whether its failure can pass
+  (`Run::failure`); such a failure needs attention only at the third in a row. Only a failure of
+  the whole run is sorted that way: a collection that ran out of retries counts as lasting, so the
+  shortcut can only add attention, never hide it.
+- **The details** show the reason with its fix: Approve again, Edit, Resume, Run anyway… or Show
+  run. A Needs attention filter sits above the list while any task needs it, the row shows ⚠, and
+  the sidebar's Tasks button carries a count like Agent Activity's.
+- **Notifications** use the app's error notification, with Open task, which selects the task. A
+  scheduled run that fails notifies unless the run before it failed the same way; the first one
+  that succeeds after a failure says "works again" in the status bar. Schedule… has "Also notify when
+  a scheduled run succeeds". Runs someone started don't notify.
+- **A failed sign-in** pauses a scheduled task, from any run. Saving the connection resumes it,
+  since every edit gives the connection a new secret id; so does Resume.
+- **Fix to PR 2:** connecting wrapped every error in plain text, so a run whose server couldn't be
+  reached at the start failed at once instead of waiting and retrying. `Error::Connect` keeps the
+  helpful text and the error it came from.
+
+**PR 4, the background runner and macOS — built, not yet verified on a real login session.**
+
+- **The lock** (`src/tasks/lock.rs`) is `tasks.lock` in the config folder, held with
+  `File::try_lock`. The app takes it before its scheduler starts anything; an app that opens
+  while the runner works waits for it, looking once a minute, then reads the tasks and runs again.
+  Whoever takes it marks runs no process is finishing as interrupted, except its own. The run store
+  has a 5-second busy timeout, since both processes can write it.
+- **Both processes can write `tasks.json`** while the runner works and the app is open. The
+  runner writes the list as it is on disk with only its own fields: when a task last ran, and the
+  sign-in pause. The app, while it waits for the lock, keeps the later "last ran" from disk. So
+  neither loses the other's changes, and no run happens twice.
+- **`openmango --run-due-tasks`** (`src/app/background.rs`) takes the lock and reads `tasks.json`
+  before starting gpui, and returns at once when the app is open or nothing is due. Otherwise it
+  starts gpui without a window, reads the passwords of the connections the due tasks use, changing
+  nothing in the keychain, opens the run history, and runs the due tasks that may run while
+  OpenMango is closed through the same scheduler. It exits when nothing runs or waits. Its runs
+  log "Started while OpenMango was closed." It sends no notifications yet.
+- **macOS:** the launch agent is `Contents/Library/LaunchAgents/com.openmango.app.tasks.plist`
+  (StartInterval 900, RunAtLoad), written by `scripts/release_macos.sh` and registered with
+  `SMAppService` through `objc2` (`src/helpers/background_runner.rs`). It's registered when the
+  first task turns on "Run even when OpenMango is closed" and removed when the last one turns it
+  off or is deleted. `SMAppService` needs macOS 13 and an app bundle, so on macOS 11 and 12, and
+  in `cargo run` builds, the option is shown switched off with why. A task set to run while closed
+  needs attention when the agent is off in Login Items, with Open Login Items.
+- **At launch** the app asks the system about the entry only when a task uses it or one is known
+  to be registered; on Windows and Linux asking starts a program. The schedule editor asks when it
+  opens, to show whether the option is available.
+- **Verified:** a `--run-due-tasks` run with no window, from a dev build signed with the
+  development identity, read a Sync task's connection passwords from the keychain without a
+  prompt, ran the task and recorded it (2026-09-24).
+- **Not verified yet:** registering the launch agent, the Login Items flow and a launchd-started
+  run, which need the app built as a bundle.
+
+**PR 5, Windows — built, checked on the Windows CI machines, not yet on a signed-in PC.**
+
+- **The entry** is the Task Scheduler task `OpenMango\Run due tasks`, created with the system's
+  `schtasks.exe /Create /XML` from a definition in `src/helpers/background_runner.rs`, so no new
+  crate. Its settings are section 5.3's: every 15 minutes, `StartWhenAvailable`, the battery
+  settings off, `IgnoreNew` for a start while one still runs, and `ExecutionTimeLimit` of 25
+  hours, one above a run's own limit. Its start boundary is one minute past a quarter hour, so a
+  task due on the quarter hour runs a minute later instead of up to 15.
+- **It runs as the signed-in user, only while they're signed in** (`InteractiveToken`). That is
+  what lets it read the passwords Credential Manager keeps for them, like the macOS agent, which
+  also runs only in the user's session. It needs no administrator rights and stores no password.
+- **Status** comes from `schtasks /Query /XML`: missing is not registered, `<Enabled>false` is
+  switched off, which needs attention with Open Task Scheduler. The XML is read for its markup,
+  not the localized text `schtasks` prints otherwise.
+- **The installed program is a Windows GUI program**, so a start shows no window. Development
+  builds are console programs and would flash one every 15 minutes, and a running runner would
+  stop cargo from replacing the program, so they don't add the task; `cargo run --
+  --run-due-tasks` tries the runner, as on macOS.
+- **Uninstalling** deletes the task (`[UninstallRun]` in `resources/windows/openmango.iss`).
+- **Checked:** the module compiles and passes clippy for Windows. On the Windows CI machines, a
+  unit test adds a throwaway task with the real `schtasks`, reads it back as on, disables it,
+  reads it as switched off, and deletes it; the package check adds the task and makes sure the
+  uninstaller removes it.
+- **Not verified yet:** Task Scheduler actually starting the installed program, and that run
+  reading the passwords, which need a Windows PC with OpenMango installed and a signed-in user.
+
+**PR 6, Linux — built, checked on the Linux CI machines, not yet in a desktop session.**
+
+- **The entry** is a systemd user timer and service in `~/.config/systemd/user`:
+  `openmango-tasks.timer` with `OnCalendar=*:1/15` and `Persistent=true`, and
+  `openmango-tasks.service`, a oneshot that starts the AppImage with `--run-due-tasks`
+  (`TimeoutStartSec=25h`, and `APPIMAGE_EXTRACT_AND_RUN=1` when OpenMango runs that way). A
+  oneshot still running isn't started again. Written by `src/helpers/background_runner.rs`, then
+  `systemctl --user daemon-reload` and `enable --now`; removing disables it and deletes both.
+- **It runs while the user is signed in**, since the user's systemd manager stops at sign-out
+  unless lingering is on. `Persistent` makes up a start missed while it didn't run, once.
+- **Only the AppImage** can have it, through `helpers::linux::appimage_path`, the file the updater
+  also uses. When the AppImage has moved, or the service differs from what this version writes,
+  the status reads as not registered and the timer is written again.
+- **Status** from `systemctl --user is-enabled`; `disabled` or `masked` needs attention. Without
+  a systemd user session (`systemctl --user show-environment` fails), the option is shown off
+  with why. There's no settings window for timers, so the fix button is Turn on, which writes and
+  enables the timer again.
+- **A locked keyring** (section 5.3): gpui unlocks the Secret Service collection before reading,
+  which shows a dialog. With no window, the run would wait for an answer while holding the task
+  lock, and an OpenMango opened meanwhile would wait too. So the runner first asks the default
+  collection's `Locked` property with `busctl`, and when it's locked, logs it and exits. Changed
+  from the plan: the due runs aren't recorded as waiting; they stay due, for the next start or
+  for OpenMango when it opens, which asks to unlock the keyring as usual.
+- **Every system:** the runner's status is read again, off the main thread, whenever OpenMango's
+  window becomes active, so switching it back on in Login Items, Task Scheduler or systemd clears
+  the attention without a restart.
+- **Checked:** the module compiles and passes clippy for Linux. On the Linux CI machines,
+  `systemd-analyze verify` accepts both units, and a unit test covers quoting the AppImage path.
+- **Not verified yet:** the timer starting the AppImage in a desktop session, reading the
+  passwords from an unlocked keyring, and skipping while it's locked.
+
+**PR 7, system notifications — built.** Section 4.3's notifications, from the system itself.
+
+- **What's sent:** the news a scheduled run already gives in OpenMango (PR 3b): its first failure
+  in an outage, a paused schedule after a failed sign-in, working again, and a success when the
+  task asks for it. Each is collected as the run ends (`TaskNotice`) and posted once, one per
+  task: a newer one replaces the older.
+- **In the app**, only when its window isn't active; otherwise its own notification or the
+  status bar already says it. Changed from the plan, which kept an open app to in-app messages.
+  These have an Open task button.
+- **From the background runner**, always, after its runs, then a two-second wait before it
+  exits, since macOS takes the notification after the call returns. Without a button: the runner
+  has exited by the time someone clicks, and on Windows and Linux a click only reaches the
+  process that posted. On macOS clicking one starts OpenMango, which registers its handler while
+  it launches, so the click opens the task.
+- **Clicks** anywhere on a notification, or Open task, select the task in the Tasks tab and bring
+  OpenMango forward.
+- **Permission (macOS):** gpui asks the first time a notification is posted, and has no way to ask
+  earlier. Changed from the plan, which asked when a task is first set to run while closed.
+- **Checked:** a unit test with gpui's test platform: nothing posted while someone's looking,
+  Open task only from the app, a newer notification replacing the older, and a click selecting
+  the task.
+- **Not verified yet:** the notifications on a real desktop on each system, and a click on a
+  macOS notification starting OpenMango.
 
 ## 1. What the evidence says
 
@@ -392,8 +575,8 @@ Per platform:
 | Platform | Entry | Settings that matter |
 |---|---|---|
 | macOS | A launch agent bundled in the app and registered with `SMAppService` | Starts every 900 seconds. The app reads its status to warn when it's switched off in Login Items |
-| Windows | A Task Scheduler task, through the `planif` crate or `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
-| Linux | A systemd user timer and service | `OnCalendar=*:0/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
+| Windows | A Task Scheduler task, through `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
+| Linux | A systemd user timer and service | `OnCalendar=*:1/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
 
 **Passwords without a window.** The run reads them through the same keychain calls as the app:
 

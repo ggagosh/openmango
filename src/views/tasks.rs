@@ -1,12 +1,15 @@
 //! The Tasks tab: saved Transfer and Compare setups, run again with one click, with the result
 //! of every run.
 
-use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use uuid::Uuid;
@@ -14,28 +17,42 @@ use uuid::Uuid;
 use crate::components::{Button, open_confirm_dialog};
 use crate::helpers::format_number;
 use crate::keyboard::{EditSelectedTask, TaskNext, TaskPrevious};
+use crate::state::app_state::Fix;
 use crate::state::compare::CompareScope;
 use crate::state::{AppCommands, AppState, TabKey, TransferMode};
 use crate::tasks::model::{LogLevel, Run, RunStatus, RunTrigger, Task, TaskKind};
 use crate::theme::{islands, spacing};
 use crate::views::compare::app_icon;
+use crate::views::task_schedule::{open_schedule_dialog, run_time, tabular};
 
 pub struct TasksView {
     state: Entity<AppState>,
     selected: Option<Uuid>,
     /// The run whose details replace the history list.
     selected_run: Option<Uuid>,
+    /// The list shows only the tasks that need attention.
+    attention_only: bool,
     focus: FocusHandle,
     _subscription: Subscription,
 }
 
 impl TasksView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&state, |_, _, cx| cx.notify());
+        // A notification's Open task asks for a task through the app state.
+        let subscription = cx.observe(&state, |view, state, cx| {
+            if let Some(id) = state.update(cx, |app, _| app.tasks.focus.take()) {
+                view.selected = Some(id);
+                view.selected_run = None;
+                view.attention_only = false;
+            }
+            cx.notify()
+        });
+        let selected = state.update(cx, |app, _| app.tasks.focus.take());
         Self {
             state,
-            selected: None,
+            selected,
             selected_run: None,
+            attention_only: false,
             focus: cx.focus_handle(),
             _subscription: subscription,
         }
@@ -67,8 +84,17 @@ impl TasksView {
         }
     }
 
+    /// The tasks the list shows: all of them, or those that need attention.
+    fn shown(&self, app: &AppState) -> Vec<Task> {
+        let tasks = Self::sorted(app);
+        if !self.attention_only || app.tasks_needing_attention() == 0 {
+            return tasks;
+        }
+        tasks.into_iter().filter(|task| app.task_attention(task).is_some()).collect()
+    }
+
     fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let tasks = Self::sorted(self.state.read(cx));
+        let tasks = self.shown(self.state.read(cx));
         let Some(current) = self.current(&tasks) else {
             return;
         };
@@ -96,6 +122,9 @@ fn status_icon(status: RunStatus, cx: &App) -> AnyElement {
         }
         RunStatus::Interrupted => {
             app_icon("circle-stop").xsmall().text_color(theme.warning).into_any_element()
+        }
+        RunStatus::Skipped => {
+            app_icon("skip-forward").xsmall().text_color(theme.muted_foreground).into_any_element()
         }
     }
 }
@@ -139,7 +168,7 @@ fn run_summary(kind: TaskKind, run: &Run) -> String {
             let restored = run.writes().written as u64;
             return format!("Undo: {} put back", plural(restored, "document", "documents"));
         }
-        RunTrigger::Manual => {}
+        RunTrigger::Manual | RunTrigger::Schedule | RunTrigger::CatchUp => {}
     }
     match kind {
         TaskKind::Export | TaskKind::Import | TaskKind::Copy => {
@@ -215,10 +244,51 @@ fn collection_summary(kind: TaskKind, run: &crate::tasks::model::CollectionRun) 
     run_summary(kind, &single)
 }
 
-fn last_result(app: &AppState, task: &Task) -> String {
-    if app.tasks.starting.contains(&task.id) {
-        return "Starting…".into();
+/// The schedule in a few words, as the list shows it: "Daily at 02:00", "Manual" or "Paused".
+fn schedule_summary(task: &Task) -> String {
+    if task.paused && !task.schedule.is_manual() { "Paused".into() } else { task.schedule.label() }
+}
+
+/// When the task's schedule runs it next.
+fn next_run(task: &Task) -> Option<chrono::DateTime<chrono::Local>> {
+    let now = chrono::Local::now();
+    let from = task.schedule_from.map(|from| from.with_timezone(&chrono::Local));
+    task.schedule.next_after(&from.filter(|from| *from > now).unwrap_or(now))
+}
+
+/// Records the connections as they are now for the task's scheduled runs, after asking when it
+/// writes to a Production or protected connection.
+fn approve_again(state: Entity<AppState>, task: &Task, window: &mut Window, cx: &mut App) {
+    let id = task.id;
+    let target = state.read(cx).task_protected_target(task);
+    let approve = move |protected_writes: bool, cx: &mut App| {
+        state.update(cx, |app, cx| {
+            if let Err(error) = app.approve_task(id, protected_writes) {
+                app.set_status_message(Some(crate::state::StatusMessage::error(error)));
+            }
+            cx.notify();
+        })
+    };
+    match target {
+        Some(target) => open_confirm_dialog(
+            window,
+            cx,
+            format!("Allow scheduled writes to {target}?"),
+            format!(
+                "{target} is a Production or protected connection. Each scheduled run of “{}” \
+                 writes to it without asking. The safety limit still stops a run that would delete \
+                 or replace too much.",
+                task.name
+            ),
+            "Allow scheduled writes",
+            true,
+            move |_, cx| approve(true, cx),
+        ),
+        None => approve(false, cx),
     }
+}
+
+fn last_result(app: &AppState, task: &Task) -> String {
     match app.task_runs(task.id).first() {
         None => "Not run yet".into(),
         Some(run) if run.status == RunStatus::Running => "Running…".into(),
@@ -370,10 +440,22 @@ impl TasksView {
         let rows = tasks.iter().map(|task| {
             let id = task.id;
             let selected = current == Some(id);
-            let status = if app.task_is_running(id) || app.tasks.starting.contains(&id) {
+            let running = app.task_is_running(id);
+            let status = if running {
                 Some(RunStatus::Running)
             } else {
                 app.task_runs(id).first().map(|run| run.status)
+            };
+            let attention = !running && app.task_attention(task).is_some();
+            let icon = if attention {
+                Some(
+                    Icon::new(IconName::TriangleAlert)
+                        .xsmall()
+                        .text_color(cx.theme().danger)
+                        .into_any_element(),
+                )
+            } else {
+                status.map(|status| status_icon(status, cx))
             };
             let result = last_result(app, task);
             div()
@@ -391,13 +473,7 @@ impl TasksView {
                     view.select(id, cx);
                     view.focus.focus(window, cx);
                 }))
-                .child(
-                    div()
-                        .w(px(14.0))
-                        .pt(px(3.0))
-                        .flex_shrink_0()
-                        .children(status.map(|status| status_icon(status, cx))),
-                )
+                .child(div().w(px(14.0)).pt(px(3.0)).flex_shrink_0().children(icon))
                 .child(
                     div()
                         .flex_1()
@@ -414,7 +490,7 @@ impl TasksView {
                         .child(div().text_xs().text_color(muted).truncate().child(format!(
                             "{} · {}",
                             task.spec.kind().label(),
-                            task.spec.subject()
+                            schedule_summary(task)
                         )))
                         .child(div().text_xs().text_color(muted).truncate().child(result)),
                 )
@@ -435,7 +511,6 @@ impl TasksView {
         let app = self.state.read(cx);
         let id = task.id;
         let running = app.task_is_running(id);
-        let starting = app.tasks.starting.contains(&id);
         let muted = cx.theme().muted_foreground;
         let state = self.state.clone();
 
@@ -452,9 +527,8 @@ impl TasksView {
             Button::new("task-run")
                 .primary()
                 .icon(app_icon("play").xsmall())
-                .label(if starting { "Starting…" } else { "Run now" })
+                .label("Run now")
                 .small()
-                .disabled(starting)
                 .on_click({
                     let state = state.clone();
                     move |_, window, cx| AppCommands::run_task(state.clone(), id, window, cx)
@@ -464,8 +538,11 @@ impl TasksView {
             task.spec.kind(),
             TaskKind::Sync | TaskKind::Copy | TaskKind::Import | TaskKind::Export
         );
+        let scheduled = !task.schedule.is_manual();
+        let paused = task.paused;
         let actions = div()
             .flex()
+            .flex_wrap()
             .gap(spacing::xs())
             .child(run_button)
             .when(previewable, |actions| {
@@ -476,7 +553,7 @@ impl TasksView {
                         .small()
                         .ghost()
                         .tooltip("Work out what a run would change, without writing")
-                        .disabled(running || starting)
+                        .disabled(running)
                         .on_click({
                             let state = state.clone();
                             move |_, window, cx| {
@@ -497,12 +574,46 @@ impl TasksView {
                     }),
             )
             .child(
+                Button::new("task-schedule")
+                    .icon(app_icon("calendar-clock").xsmall())
+                    .label("Schedule…")
+                    .small()
+                    .ghost()
+                    .tooltip("When it runs by itself, and its safety limit")
+                    .on_click({
+                        let state = state.clone();
+                        move |_, window, cx| {
+                            open_schedule_dialog(state.clone(), id, window, cx);
+                        }
+                    }),
+            )
+            .when(scheduled, |actions| {
+                let state = state.clone();
+                actions.child(
+                    Button::new("task-pause")
+                        .icon(app_icon(if paused { "play" } else { "pause" }).xsmall())
+                        .label(if paused { "Resume" } else { "Pause" })
+                        .small()
+                        .ghost()
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |app, cx| {
+                                if let Err(error) = app.set_task_paused(id, !paused) {
+                                    app.set_status_message(Some(
+                                        crate::state::StatusMessage::error(error),
+                                    ));
+                                }
+                                cx.notify();
+                            })
+                        }),
+                )
+            })
+            .child(
                 Button::new("task-delete")
                     .icon(app_icon("trash").xsmall())
                     .label("Delete")
                     .small()
                     .ghost()
-                    .disabled(running || starting)
+                    .disabled(running)
                     .on_click({
                         let state = state.clone();
                         let name = task.name.clone();
@@ -548,10 +659,151 @@ impl TasksView {
                         task.spec.kind().label(),
                         task.spec.subject()
                     )))
-                    .child(div().pt(spacing::xs()).child(actions)),
+                    .child(div().pt(spacing::xs()).child(actions))
+                    .child(self.render_schedule(task, cx)),
             )
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
+    }
+
+    /// The Schedule and Safety rows, and why scheduled runs can't write when they can't.
+    fn render_schedule(&self, task: &Task, cx: &mut Context<Self>) -> AnyElement {
+        let app = self.state.read(cx);
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let id = task.id;
+        let scheduled = !task.schedule.is_manual();
+        let lines = |first: AnyElement, second: String| {
+            div()
+                .flex()
+                .flex_col()
+                .text_sm()
+                .child(first)
+                .child(div().text_color(muted).font_features(tabular()).child(second))
+                .into_any_element()
+        };
+
+        let queued = app.tasks.queue.iter().any(|(queued, ..)| *queued == id);
+        let value = if !scheduled {
+            lines("Manual".into_any_element(), "Runs when you choose Run now.".into())
+        } else if task.paused {
+            let first = div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(app_icon("pause").xsmall().text_color(muted))
+                .child("Paused")
+                .child(div().text_color(muted).child(format!("· {}", task.schedule.label())));
+            lines(first.into_any_element(), "Resume to run it on its schedule again.".into())
+        } else {
+            let next = if queued {
+                "Due now, waiting for another task to finish.".to_string()
+            } else {
+                next_run(task)
+                    .map_or("No run coming up.".into(), |at| format!("Next: {}", run_time(at)))
+            };
+            let closed =
+                if task.run_when_closed { " · also while OpenMango is closed" } else { "" };
+            let first = format!("{}, local time{closed}", task.schedule.label());
+            lines(first.into_any_element(), next)
+        };
+        // The same label and value list the reference peek uses.
+        let mut facts = DescriptionList::new()
+            .columns(1)
+            .label_width(px(110.0))
+            .child(DescriptionItem::new("Schedule").value(value));
+
+        if task.spec.write_connection().is_some() {
+            let limit = &task.safety;
+            let first = format!(
+                "More than {}% of a collection, or {} times the usual, deleted or replaced",
+                limit.percent, limit.jump
+            );
+            let mut second = format!(
+                "Run now asks first; a scheduled run stops before writing. Changes under {} \
+                 documents never count.",
+                format_number(limit.floor)
+            );
+            if let Some(target) = app.task_protected_target(task)
+                && task.approval.as_ref().is_some_and(|approval| approval.protected_writes)
+            {
+                second.push_str(&format!(" Scheduled runs may write to {target}."));
+            }
+            facts = facts.child(
+                DescriptionItem::new("Safety").value(lines(first.into_any_element(), second)),
+            );
+        }
+        let mut section = div().flex().flex_col().gap(spacing::sm()).pt(spacing::md()).child(facts);
+
+        let running = app.task_is_running(id);
+        let attention = app.task_attention(task).filter(|attention| {
+            !running || !matches!(attention.fix, Fix::ShowRun(_) | Fix::RunAnyway)
+        });
+        if let Some(attention) = attention {
+            let state = self.state.clone();
+            let task = task.clone();
+            let fix = match attention.fix {
+                Fix::Approve => Button::new("task-fix")
+                    .label("Approve again")
+                    .on_click(move |_, window, cx| approve_again(state.clone(), &task, window, cx)),
+                Fix::Edit => Button::new("task-fix")
+                    .label("Edit")
+                    .on_click(move |_, _, cx| state.update(cx, |app, cx| app.edit_task(id, cx))),
+                Fix::Resume => Button::new("task-fix").label("Resume").on_click(move |_, _, cx| {
+                    state.update(cx, |app, cx| {
+                        if let Err(error) = app.set_task_paused(id, false) {
+                            app.set_status_message(Some(crate::state::StatusMessage::error(error)));
+                        }
+                        cx.notify();
+                    })
+                }),
+                Fix::RunAnyway => {
+                    Button::new("task-fix").label("Run anyway…").on_click(move |_, window, cx| {
+                        AppCommands::run_task(state.clone(), id, window, cx)
+                    })
+                }
+                Fix::ShowRun(run_id) => Button::new("task-fix").label("Show run").on_click(
+                    cx.listener(move |view, _, _, cx| {
+                        view.selected_run = Some(run_id);
+                        cx.notify();
+                    }),
+                ),
+                Fix::RunnerSettings => Button::new("task-fix")
+                    .label(crate::helpers::background_runner::OPEN_SETTINGS)
+                    .on_click(move |_, _, cx| {
+                        crate::helpers::background_runner::open_settings();
+                        state.update(cx, |state, cx| state.refresh_background_runner(cx));
+                    }),
+            };
+            section = section.child(
+                div()
+                    .id("task-attention")
+                    .debug_selector(|| "task-attention".into())
+                    .flex()
+                    .items_start()
+                    .gap(spacing::sm())
+                    .p(spacing::sm())
+                    .rounded(crate::theme::borders::radius_md())
+                    .bg(theme.warning.opacity(0.1))
+                    .child(div().pt(px(3.0)).child(
+                        Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.warning),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .text_sm()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(attention.reason))
+                            .when(!attention.detail.is_empty(), |text| {
+                                text.child(div().text_color(muted).child(attention.detail))
+                            }),
+                    )
+                    .child(fix.small()),
+            );
+        }
+        section.into_any_element()
     }
 
     fn render_history(&self, task: &Task, cx: &mut Context<Self>) -> AnyElement {
@@ -603,6 +855,7 @@ impl TasksView {
                 .rounded(crate::theme::borders::radius_md())
                 .cursor_pointer()
                 .hover(|row| row.bg(cx.theme().list_hover))
+                .font_features(tabular())
                 .on_click(cx.listener(move |view, _, _, cx| {
                     view.selected_run = Some(run_id);
                     cx.notify();
@@ -709,10 +962,42 @@ impl TasksView {
                     .children(run.stops.iter().map(|stop| div().text_sm().child(stop.clone())))
                     .when(run.trigger == RunTrigger::Preview, |block| {
                         block.child(div().text_xs().text_color(muted).child(
-                            "Run now still runs it, after asking: the question explains why and \
-                             its answer is Run anyway.",
+                            "Run now asks first, and its answer is Run anyway. A scheduled run \
+                             stops here instead.",
                         ))
-                    }),
+                    })
+                    .when(
+                        matches!(run.trigger, RunTrigger::Schedule | RunTrigger::CatchUp)
+                            && !self.state.read(cx).task_is_running(task.id),
+                        |block| {
+                            let (state, task_id) = (self.state.clone(), task.id);
+                            block.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(
+                                        Button::new("task-run-anyway")
+                                            .label("Run anyway…")
+                                            .small()
+                                            .on_click(move |_, window, cx| {
+                                                AppCommands::run_task(
+                                                    state.clone(),
+                                                    task_id,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child("Runs it once now, after asking."),
+                                    ),
+                            )
+                        },
+                    ),
             );
         }
 
@@ -854,10 +1139,20 @@ impl TasksView {
 
 impl Render for TasksView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (tasks, appearance, load_error) = {
+        let (tasks, none, attention, appearance, load_error) = {
             let app = self.state.read(cx);
-            (Self::sorted(app), app.settings.appearance.clone(), app.tasks.load_error.clone())
+            (
+                self.shown(app),
+                app.tasks.tasks.is_empty(),
+                app.tasks_needing_attention(),
+                app.settings.appearance.clone(),
+                app.tasks.load_error.clone(),
+            )
         };
+        if attention == 0 {
+            // Nothing needs attention: the filter goes away, and doesn't come back on by itself.
+            self.attention_only = false;
+        }
         let current = self.current(&tasks);
         let header = div()
             .flex()
@@ -881,15 +1176,38 @@ impl Render for TasksView {
                             .child("Saved Transfer and Compare setups, run again with one click."),
                     ),
             )
-            .when(!tasks.is_empty(), |header| {
-                header.child(new_task_button(self.state.clone(), false))
-            });
+            .when(!none, |header| header.child(new_task_button(self.state.clone(), false)));
 
-        let body = if tasks.is_empty() {
+        let body = if none {
             self.render_empty(cx)
         } else {
             let task = tasks.iter().find(|task| Some(task.id) == current).cloned();
-            let list = self.render_list(&tasks, current, cx);
+            let only = self.attention_only && attention > 0;
+            let filter = (attention > 0).then(|| {
+                let choice = |id: &'static str, label: String, selected: bool| {
+                    Button::new(id).label(label).selected(selected).small()
+                };
+                div().px(spacing::sm()).pt(spacing::sm()).child(
+                    ButtonGroup::new("task-filter")
+                        .compact()
+                        .child(choice("task-filter-all", "All".into(), !only))
+                        .child(choice(
+                            "task-filter-attention",
+                            format!("Needs attention ({attention})"),
+                            only,
+                        ))
+                        .on_click(cx.listener(|view, selection: &Vec<usize>, _, cx| {
+                            view.attention_only = selection.first() == Some(&1);
+                            cx.notify();
+                        })),
+                )
+            });
+            let list = div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .children(filter)
+                .child(div().flex_1().min_h_0().child(self.render_list(&tasks, current, cx)));
             let detail = task
                 .map(|task| self.render_detail(&task, cx))
                 .unwrap_or_else(|| div().into_any_element());
@@ -924,7 +1242,7 @@ impl Render for TasksView {
             .on_action(cx.listener(|view, _: &TaskNext, _, cx| view.step(1, cx)))
             .on_action(cx.listener(|view, _: &TaskPrevious, _, cx| view.step(-1, cx)))
             .on_action(cx.listener(|view, _: &EditSelectedTask, _, cx| {
-                let tasks = Self::sorted(view.state.read(cx));
+                let tasks = view.shown(view.state.read(cx));
                 if let Some(id) = view.current(&tasks) {
                     view.state.update(cx, |app, cx| app.edit_task(id, cx));
                 }
@@ -1034,6 +1352,100 @@ mod tests {
         cx.simulate_keystrokes("up");
         draw(cx);
         assert!(cx.debug_bounds("task-run-detail").is_none());
+        assert!(cx.debug_bounds(selector(format!("task-run-{run_id}"))).is_none());
+    }
+
+    /// In a narrow window the actions wrap instead of running out of view.
+    #[gpui_kit::test]
+    fn the_actions_wrap_in_a_narrow_window(cx: &mut TestAppContext) {
+        let (_directory, state) = setup(cx);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+            Root::new(view, window, cx).bordered(false)
+        });
+        cx.simulate_resize(size(px(700.0), px(700.0)));
+        let mut config = CompareConfig { scope: CompareScope::Databases, ..Default::default() };
+        config.sides[0].database = "openmango_dbcompare_right_with_a_long_name".into();
+        config.sides[1].database = "openmango_dbcompare_left_with_a_long_name".into();
+        let mut task = Task::new(
+            "Sync".into(),
+            TaskSpec::Sync {
+                config,
+                target: Side::Right,
+                mode: SyncMode::AddMissing,
+                excluded: vec![],
+            },
+        );
+        task.schedule = crate::tasks::schedule::Schedule::Every { minutes: 20 };
+        state.update(cx, |app, cx| {
+            app.upsert_task(task).unwrap();
+            app.open_tasks_tab(cx);
+        });
+        draw(cx);
+        draw(cx);
+        let nodes = cx.update(|window, _| gpui_kit::base::test_support::snapshots(window));
+        let window = cx.update(|window, _| window.bounds().size.width);
+        for label in ["Run now", "Preview", "Edit", "Schedule…", "Pause", "Delete"] {
+            let button = nodes
+                .iter()
+                .find(|node| node.label() == Some(label))
+                .unwrap_or_else(|| panic!("{label} is on screen"));
+            assert!(button.bounds().right() <= window, "{label}: {:?}", button.bounds());
+        }
+    }
+
+    /// A scheduled task whose last run failed shows why, with its fix, and the list can show
+    /// only such tasks. Open, from a notification, selects the task it names.
+    #[gpui_kit::test]
+    fn a_task_that_needs_attention_shows_why_and_can_be_filtered(cx: &mut TestAppContext) {
+        let (_directory, state) = setup(cx);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+            Root::new(view, window, cx).bordered(false)
+        });
+        cx.simulate_resize(size(px(1200.0), px(800.0)));
+        let daily = |name: &str| {
+            let mut task = compare_task(name);
+            task.schedule = crate::tasks::schedule::Schedule::Every { minutes: 60 };
+            task
+        };
+        let (healthy, broken) = (daily("Alpha"), daily("Beta"));
+        let mut run = Run::start(broken.id, RunTrigger::Schedule);
+        run.error = Some("The filter isn't valid JSON".into());
+        run.finish(false);
+        let run_id = run.id;
+        state.update(cx, |app, cx| {
+            app.upsert_task(healthy.clone()).unwrap();
+            app.upsert_task(broken.clone()).unwrap();
+            app.record_task_run(run, true);
+            app.open_tasks_tab(cx);
+        });
+        draw(cx);
+        draw(cx);
+        let click = |label: &str, cx: &mut VisualTestContext| {
+            let nodes = cx.update(|window, _| gpui_kit::base::test_support::snapshots(window));
+            let node = nodes
+                .iter()
+                .find(|node| node.label() == Some(label))
+                .unwrap_or_else(|| panic!("{label} is on screen"));
+            cx.simulate_click(node.bounds().center(), Default::default());
+            draw(cx);
+        };
+        let row = |task: &Task, cx: &mut VisualTestContext| {
+            cx.debug_bounds(selector(format!("task-row-{}", task.id))).is_some()
+        };
+        assert!(cx.debug_bounds("task-attention").is_none(), "Alpha, selected first, is fine");
+
+        click("Needs attention (1)", cx);
+        assert!(!row(&healthy, cx) && row(&broken, cx), "only Beta is listed");
+        assert!(cx.debug_bounds("task-attention").is_some(), "Beta's details say why");
+        click("Show run", cx);
+        assert!(cx.debug_bounds("task-run-detail").is_some(), "the failed run opens");
+
+        state.update(cx, |app, cx| app.open_task(healthy.id, cx));
+        draw(cx);
+        assert!(row(&healthy, cx), "Open shows every task again");
+        assert!(cx.debug_bounds("task-attention").is_none(), "and selects Alpha");
         assert!(cx.debug_bounds(selector(format!("task-run-{run_id}"))).is_none());
     }
 

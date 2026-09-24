@@ -70,6 +70,12 @@ impl Render for Sidebar {
         );
 
         let pending_agent_actions = self.state.read(cx).pending_agent_actions();
+        let tasks_needing_attention = self.state.read(cx).tasks_needing_attention();
+        let tasks_tooltip = match tasks_needing_attention {
+            0 => "Tasks".to_string(),
+            1 => "Tasks (1 needs attention)".to_string(),
+            count => format!("Tasks ({count} need attention)"),
+        };
         let activity_tooltip = if pending_agent_actions == 0 {
             "Agent activity".to_string()
         } else {
@@ -226,14 +232,19 @@ impl Render for Sidebar {
                                     }),
                             )
                             .child(
-                                Button::new("tasks-btn")
-                                    .icon(crate::views::compare::app_icon("list-checks").xsmall())
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip("Tasks")
-                                    .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
-                                        state_for_tasks.update(cx, |state, cx| state.open_tasks_tab(cx));
-                                    }),
+                                div()
+                                    .relative()
+                                    .child(
+                                        Button::new("tasks-btn")
+                                            .icon(crate::views::compare::app_icon("list-checks").xsmall())
+                                            .ghost()
+                                            .xsmall()
+                                            .tooltip(tasks_tooltip)
+                                            .on_click(move |_: &ClickEvent, _window: &mut Window, cx: &mut App| {
+                                                state_for_tasks.update(cx, |state, cx| state.open_tasks_tab(cx));
+                                            }),
+                                    )
+                                    .children(count_badge(tasks_needing_attention, cx)),
                             )
                             .child(
                                 div()
@@ -250,31 +261,7 @@ impl Render for Sidebar {
                                                 });
                                             }),
                                     )
-                                    .when(pending_agent_actions > 0, |button| {
-                                        let label = if pending_agent_actions > 9 {
-                                            "9+".to_string()
-                                        } else {
-                                            pending_agent_actions.to_string()
-                                        };
-                                        button.child(
-                                            div()
-                                                .absolute()
-                                                .top(px(-3.0))
-                                                .right(px(-4.0))
-                                                .min_w(px(14.0))
-                                                .h(px(14.0))
-                                                .px(px(3.0))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .rounded_full()
-                                                .bg(cx.theme().danger)
-                                                .text_size(px(9.0))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(cx.theme().danger_foreground)
-                                                .child(label),
-                                        )
-                                    }),
+                                    .children(count_badge(pending_agent_actions, cx)),
                             )
                     ),
             )
@@ -1080,4 +1067,26 @@ impl Render for Sidebar {
 fn opaque_color(mut color: Hsla) -> Hsla {
     color.a = 1.0;
     color
+}
+
+/// A small red count on a sidebar button, like "3" or "9+".
+fn count_badge(count: usize, cx: &App) -> Option<Div> {
+    (count > 0).then(|| {
+        div()
+            .absolute()
+            .top(px(-3.0))
+            .right(px(-4.0))
+            .min_w(px(14.0))
+            .h(px(14.0))
+            .px(px(3.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(cx.theme().danger)
+            .text_size(px(9.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(cx.theme().danger_foreground)
+            .child(if count > 9 { "9+".to_string() } else { count.to_string() })
+    })
 }

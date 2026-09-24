@@ -51,3 +51,7 @@ Name: "{autodesktop}\OpenMango"; Filename: "{app}\OpenMango.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\OpenMango.exe"; Description: "{cm:LaunchProgram,OpenMango}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; The Task Scheduler entry OpenMango adds for tasks that run while it's closed, if there is one.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""OpenMango\Run due tasks"" /F"; Flags: runhidden; RunOnceId: "DeleteTasksRunner"
