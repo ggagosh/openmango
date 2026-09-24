@@ -100,7 +100,8 @@ pub(super) enum TransferProgressMessage {
     /// Transfer was cancelled after terminating an external BSON tool.
     Cancelled { termination_succeeded: bool },
     /// Transfer failed with error
-    Failed { error: String },
+    /// `transient`: trying again later can succeed, such as after a dropped connection.
+    Failed { error: String, transient: bool },
 }
 
 /// Simple progress messages for collection-level operations (not database-scope).
@@ -111,7 +112,7 @@ pub(super) enum CollectionProgressMessage {
     /// Operation completed with final count
     Completed(u64),
     /// Operation failed with the number of documents completed before failure.
-    Failed { error: String, processed: u64 },
+    Failed { error: String, processed: u64, transient: bool },
 }
 
 pub(super) fn transfer_message_matches_generation(
@@ -361,6 +362,40 @@ impl AppCommands {
             TransferConfigVariant::Export(c) => Self::execute_export(state, transfer_id, c, cx),
             TransferConfigVariant::Import(c) => Self::execute_import(state, transfer_id, c, cx),
             TransferConfigVariant::Copy(c) => Self::execute_copy(state, transfer_id, c, cx),
+        }
+    }
+
+    /// The client a transfer uses: a task run's own connection when it has one, otherwise the
+    /// sidebar's.
+    pub(super) fn transfer_client(
+        state: &Entity<AppState>,
+        transfer_id: Uuid,
+        connection_id: Uuid,
+        cx: &mut App,
+    ) -> Option<mongodb::Client> {
+        let own = state
+            .read(cx)
+            .transfer_tab(transfer_id)
+            .and_then(|tab| tab.runtime.clients.get(&connection_id))
+            .map(|own| own.client.clone());
+        own.or_else(|| Self::active_client(state, connection_id, cx))
+    }
+
+    /// The address the BSON tools use, over a task run's own connection when it has one.
+    pub(super) fn transfer_tool_uri(
+        state: &Entity<AppState>,
+        transfer_id: Uuid,
+        connection_id: Uuid,
+        cx: &mut App,
+    ) -> crate::error::Result<String> {
+        let app = state.read(cx);
+        let own = app
+            .transfer_tab(transfer_id)
+            .and_then(|tab| tab.runtime.clients.get(&connection_id))
+            .and_then(|own| own.tool_uri.clone());
+        match own {
+            Some(uri) => Ok(uri),
+            None => app.active_connection_tool_uri(connection_id),
         }
     }
 

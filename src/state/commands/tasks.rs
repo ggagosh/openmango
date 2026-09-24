@@ -144,7 +144,7 @@ impl AppCommands {
         let Some(task) = app.task(task_id).cloned() else {
             return;
         };
-        if app.task_is_running(task_id) || app.tasks.starting.contains(&task_id) {
+        if app.task_is_running(task_id) {
             return;
         }
         let connections = task.spec.connections();
@@ -158,79 +158,9 @@ impl AppCommands {
             );
             return;
         }
-        // Transfers run through the Transfer tab's code, which uses the sidebar's connections.
-        // Everything else opens connections of its own.
-        let closed: Vec<Uuid> = match task.spec {
-            TaskSpec::Transfer { .. } => {
-                connections.into_iter().filter(|id| !app.is_connected(*id)).collect()
-            }
-            _ => Vec::new(),
-        };
+        // Every run opens connections of its own, so nothing needs to be open in the sidebar.
         let window = window.window_handle();
-        if closed.is_empty() {
-            Self::start_task(state, task, launch, window, cx);
-            return;
-        }
-        state.update(cx, |app, cx| {
-            app.tasks.starting.insert(task_id);
-            cx.notify();
-        });
-        let waits: Vec<_> =
-            closed.into_iter().map(|id| Self::connect_and_wait(state.clone(), id, cx)).collect();
-        cx.spawn(async move |cx| {
-            let mut failure = None;
-            for wait in waits {
-                if let Err(error) = wait.await {
-                    failure = Some(error);
-                    break;
-                }
-            }
-            cx.update(|cx| {
-                state.update(cx, |app, cx| {
-                    app.tasks.starting.remove(&task_id);
-                    cx.notify();
-                });
-                match failure {
-                    Some(error) => Self::fail_before_start(
-                        &state,
-                        &task,
-                        launch,
-                        &format!("Could not connect: {error}"),
-                        cx,
-                    ),
-                    None => Self::start_task(state, task, launch, window, cx),
-                }
-            });
-        })
-        .detach();
-    }
-
-    /// Connects in the background and resolves when the connection is open or has failed.
-    fn connect_and_wait(
-        state: Entity<AppState>,
-        id: Uuid,
-        cx: &mut App,
-    ) -> Task<Result<(), String>> {
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        let sender = RefCell::new(Some(sender));
-        let subscription = cx.subscribe(&state, move |_, event: &AppEvent, _| {
-            let result = match event {
-                AppEvent::Connected(connected) if *connected == id => Ok(()),
-                AppEvent::ConnectionFailed { connection_id, error } if *connection_id == id => {
-                    Err(error.clone())
-                }
-                _ => return,
-            };
-            if let Some(sender) = sender.borrow_mut().take() {
-                let _ = sender.send(result);
-            }
-        });
-        Self::connect_in_background(state, id, cx);
-        cx.spawn(async move |_| {
-            let result = receiver.await.unwrap_or_else(|_| Err("the attempt stopped".into()));
-            drop(subscription);
-            result
-        })
+        Self::start_task(state, task, launch, window, cx);
     }
 
     fn start_task(
@@ -512,7 +442,9 @@ impl AppCommands {
         });
     }
 
-    /// Runs the transfer inside the task's run, through a Transfer tab state no tab shows.
+    /// Runs the transfer inside the task's run, on connections of its own, through a Transfer
+    /// tab state no tab shows. A transfer that starts over cleanly (an export, or an import or
+    /// copy that clears or drops its target first) is run again after a failure that can pass.
     fn start_transfer_run(
         state: Entity<AppState>,
         task_id: Uuid,
@@ -521,6 +453,34 @@ impl AppCommands {
         anyway: bool,
         cx: &mut App,
     ) {
+        let Some(task) = state.read(cx).task(task_id).cloned() else {
+            return;
+        };
+        let Some(reconnect) = Self::reconnect_for(&state, &task, cx) else {
+            return Self::fail_run(
+                &state,
+                task_id,
+                "A connection this task uses no longer exists.".into(),
+                cx,
+            );
+        };
+        let Some(RunStop::Token(cancellation)) =
+            state.read(cx).tasks.active.get(&task_id).map(|active| match &active.stop {
+                RunStop::Token(token) => RunStop::Token(token.clone()),
+                RunStop::Transfer(id) => RunStop::Transfer(*id),
+            })
+        else {
+            return;
+        };
+        if anyway {
+            Self::update_task_run(&state, task_id, None, cx, |run| {
+                run.log(LogLevel::Warning, "Run anyway: confirmed despite the safety limit.");
+            });
+        }
+        let restarts = tab.config.mode == TransferMode::Export
+            || tab.options.drop_before_import
+            || tab.options.clear_before_import;
+        let write_connection = task.spec.write_connection();
         let scope = tab.config.scope;
         let collection = match tab.config.mode {
             TransferMode::Import if tab.config.source_collection.is_empty() => {
@@ -528,137 +488,168 @@ impl AppCommands {
             }
             _ => tab.config.source_collection.clone(),
         };
-        let transfer_id = state.update(cx, |app, _| app.insert_task_transfer(tab));
-        let events = cx.subscribe(&state, move |state, event: &AppEvent, cx| {
-            let outcome = match event {
-                AppEvent::TransferCompleted { transfer_id: id, count } if *id == transfer_id => {
-                    TransferOutcome::Completed(*count)
-                }
-                AppEvent::TransferFailed { transfer_id: id, error } if *id == transfer_id => {
-                    TransferOutcome::Failed(error.clone())
-                }
-                AppEvent::TransferCancelled { transfer_id: id } if *id == transfer_id => {
-                    TransferOutcome::Cancelled
-                }
-                _ => return,
+
+        cx.spawn(async move |cx| {
+            let mut watch = Watch::new(cancellation.clone());
+            let log = Self::run_log(&state, task_id);
+            let connections = match open_connections(cx, &mut watch, &reconnect, log).await {
+                Ok(connections) => connections,
+                Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
             };
-            let collection = collection.clone();
-            // Finishing drops this subscription, so it happens after the event is delivered.
-            cx.defer(move |cx| {
-                Self::finish_transfer_run(
+            let mut connections = connections;
+            let mut tries = 1;
+            loop {
+                let (outcome, after) = Self::transfer_attempt(
+                    cx,
                     &state,
                     task_id,
-                    transfer_id,
-                    scope,
-                    &collection,
-                    outcome,
-                    cx,
+                    tab.clone(),
+                    confirmed_overwrite.clone(),
+                    &connections,
+                    (tries > 1).then_some(write_connection).flatten(),
                 )
-            });
-        });
-        state.update(cx, |app, cx| {
-            if let Some(active) = app.tasks.active.get_mut(&task_id) {
-                active.stop = RunStop::Transfer(transfer_id);
-                active.transfer_id = Some(transfer_id);
-                active._events = Some(events);
+                .await;
+                // Between attempts, Cancel stops the wait.
+                cx.update(|cx| {
+                    state.update(cx, |app, _| {
+                        if let Some(active) = app.tasks.active.get_mut(&task_id) {
+                            active.stop = RunStop::Token(cancellation.clone());
+                            active.transfer_id = None;
+                            active._events = None;
+                        }
+                    })
+                });
+                let transient = after.as_ref().is_some_and(|tab| tab.runtime.failure_transient);
+                let retry = matches!(outcome, TransferOutcome::Failed(_))
+                    && transient
+                    && restarts
+                    && tries < task_run::ATTEMPTS
+                    && !watch.over()
+                    && watch.may_retry();
+                if retry {
+                    let TransferOutcome::Failed(error) = &outcome else { unreachable!() };
+                    let wait = task_run::backoff(tries);
+                    Self::run_log(&state, task_id)(
+                        cx,
+                        format!(
+                            "{error}. Starting over (attempt {} of {}) after {} s.",
+                            tries + 1,
+                            task_run::ATTEMPTS,
+                            wait.as_secs()
+                        ),
+                    );
+                    task_run::pause(cx, wait, &watch.run).await;
+                    if !watch.over() {
+                        if let Ok(fresh) = reconnect.open(cx).await {
+                            connections = fresh;
+                        }
+                        tries += 1;
+                        continue;
+                    }
+                }
+                let not_restartable = matches!(outcome, TransferOutcome::Failed(_)) && transient && !restarts;
+                let cancelled = matches!(outcome, TransferOutcome::Cancelled) || watch.run.is_cancelled();
+                cx.update(|cx| {
+                    Self::update_task_run(&state, task_id, None, cx, |run| {
+                        record_transfer(run, scope, &collection, &outcome, after.as_ref());
+                        if not_restartable {
+                            run.log(
+                                LogLevel::Warning,
+                                "Not run again: without Clear or Drop target first, running it again could write documents twice.",
+                            );
+                        }
+                    })
+                });
+                drop(connections);
+                return cx.update(|cx| {
+                    Self::update_task_run(&state, task_id, Some(cancelled), cx, |_| {})
+                });
             }
-            cx.notify();
-        });
-        if anyway {
-            Self::update_task_run(&state, task_id, None, cx, |run| {
-                run.log(LogLevel::Warning, "Run anyway: confirmed despite the safety limit.");
-            });
-        }
-        match confirmed_overwrite {
-            Some(path) => {
-                Self::execute_confirmed_transfer(state.clone(), transfer_id, Some(path), cx)
-            }
-            None => Self::execute_transfer(state.clone(), transfer_id, cx),
-        }
-        // A transfer that couldn't start leaves its reason on the tab state and sends no event.
-        let refused = state.read(cx).transfer_tab(transfer_id).and_then(|tab| {
-            (!tab.runtime.is_running).then(|| {
-                tab.runtime
-                    .error_message
-                    .clone()
-                    .unwrap_or_else(|| "The transfer didn't start.".into())
-            })
-        });
-        if let Some(error) = refused {
-            let collection = String::new();
-            Self::finish_transfer_run(
-                &state,
-                task_id,
-                transfer_id,
-                scope,
-                &collection,
-                TransferOutcome::Failed(error),
-                cx,
-            );
-        }
+        })
+        .detach();
     }
 
-    fn finish_transfer_run(
+    /// One try at the transfer: a fresh hidden Transfer tab on the run's own connections, run
+    /// through the Transfer tab's code until it reports how it ended. `regrant` is the
+    /// connection a retry writes to: the run was confirmed once, so a retry grants itself the
+    /// Production write the confirmation gave the first try.
+    async fn transfer_attempt(
+        cx: &mut AsyncApp,
         state: &Entity<AppState>,
         task_id: Uuid,
-        transfer_id: Uuid,
-        scope: TransferScope,
-        collection: &str,
-        outcome: TransferOutcome,
-        cx: &mut App,
-    ) {
-        let tab = state.update(cx, |app, _| app.remove_task_transfer(transfer_id));
-        let cancelled = matches!(outcome, TransferOutcome::Cancelled);
-        Self::update_task_run(state, task_id, Some(cancelled), cx, |run| {
-            let progress = tab.as_ref().and_then(|tab| tab.runtime.database_progress.as_ref());
-            match (scope, progress) {
-                (TransferScope::Database, Some(progress)) => {
-                    for item in &progress.collections {
-                        let entry = run.collection_mut(&item.name);
-                        entry.documents = item.documents_processed;
-                        match &item.status {
-                            CollectionTransferStatus::Failed(error) => {
-                                entry.error = Some(error.clone())
-                            }
-                            CollectionTransferStatus::Cancelled => {
-                                entry.note = Some("Cancelled".into())
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let TransferOutcome::Failed(error) = &outcome
-                        && run.collections.iter().all(|entry| entry.error.is_none())
+        mut tab: TransferTabState,
+        confirmed_overwrite: Option<PathBuf>,
+        connections: &RunConnections,
+        regrant: Option<Uuid>,
+    ) -> (TransferOutcome, Option<TransferTabState>) {
+        tab.runtime.clients = connections.task_clients();
+        let (sender, receiver) = futures::channel::oneshot::channel::<TransferOutcome>();
+        let sender = std::rc::Rc::new(RefCell::new(Some(sender)));
+        let transfer_id = cx.update(|cx| {
+            let transfer_id = state.update(cx, |app, _| app.insert_task_transfer(tab));
+            let notify = sender.clone();
+            let events = cx.subscribe(state, move |_, event: &AppEvent, _| {
+                let outcome = match event {
+                    AppEvent::TransferCompleted { transfer_id: id, count }
+                        if *id == transfer_id =>
                     {
-                        run.error = Some(error.clone());
+                        TransferOutcome::Completed(*count)
                     }
-                }
-                (TransferScope::Database, None) => {
-                    if let TransferOutcome::Failed(error) = &outcome {
-                        run.error = Some(error.clone());
+                    AppEvent::TransferFailed { transfer_id: id, error } if *id == transfer_id => {
+                        TransferOutcome::Failed(error.clone())
                     }
-                }
-                _ if collection.is_empty() => {
-                    if let TransferOutcome::Failed(error) = &outcome {
-                        run.error = Some(error.clone());
+                    AppEvent::TransferCancelled { transfer_id: id } if *id == transfer_id => {
+                        TransferOutcome::Cancelled
                     }
+                    _ => return,
+                };
+                if let Some(sender) = notify.borrow_mut().take() {
+                    let _ = sender.send(outcome);
                 }
-                _ => {
-                    let processed = tab.as_ref().map_or(0, |tab| tab.runtime.progress_count);
-                    let entry = run.collection_mut(collection);
-                    match &outcome {
-                        TransferOutcome::Completed(count) => entry.documents = *count,
-                        TransferOutcome::Failed(error) => {
-                            entry.documents = processed;
-                            entry.error = Some(error.clone());
-                        }
-                        TransferOutcome::Cancelled => entry.documents = processed,
-                    }
+            });
+            state.update(cx, |app, cx| {
+                if let Some(active) = app.tasks.active.get_mut(&task_id) {
+                    active.stop = RunStop::Transfer(transfer_id);
+                    active.transfer_id = Some(transfer_id);
+                    active._events = Some(events);
                 }
+                if let Some(connection) = regrant
+                    && app.connection_requires_production_write_confirmation(connection)
+                {
+                    app.authorize_production_writes(connection, 1);
+                }
+                cx.notify();
+            });
+            match confirmed_overwrite {
+                Some(path) => {
+                    Self::execute_confirmed_transfer(state.clone(), transfer_id, Some(path), cx)
+                }
+                None => Self::execute_transfer(state.clone(), transfer_id, cx),
             }
-            if let TransferOutcome::Failed(error) = &outcome {
-                run.log(LogLevel::Error, error.clone());
+            if let Some(connection) = regrant {
+                state
+                    .update(cx, |app, _| app.revoke_production_write_authorizations(connection, 1));
             }
+            // A transfer that couldn't start leaves its reason on the tab state and sends no event.
+            let refused = state.read(cx).transfer_tab(transfer_id).and_then(|tab| {
+                (!tab.runtime.is_running).then(|| {
+                    tab.runtime
+                        .error_message
+                        .clone()
+                        .unwrap_or_else(|| "The transfer didn't start.".into())
+                })
+            });
+            if let Some(error) = refused
+                && let Some(sender) = sender.borrow_mut().take()
+            {
+                let _ = sender.send(TransferOutcome::Failed(error));
+            }
+            transfer_id
         });
+        let outcome = receiver.await.unwrap_or(TransferOutcome::Cancelled);
+        let after =
+            cx.update(|cx| state.update(cx, |app, _| app.remove_task_transfer(transfer_id)));
+        (outcome, after)
     }
 
     fn start_compare_run(
@@ -1635,6 +1626,32 @@ pub(crate) struct Self_;
 
 #[cfg(test)]
 impl Self_ {
+    /// Run now, for a task that asks nothing before it runs.
+    pub(crate) fn start_task_for_test(
+        state: &Entity<AppState>,
+        task: &SavedTask,
+        window: AnyWindowHandle,
+        cx: &mut App,
+    ) {
+        AppCommands::start_task(state.clone(), task.clone(), Launch::Run, window, cx);
+    }
+
+    /// Starts a transfer where confirming Run now leads, without the question.
+    pub(crate) fn start_transfer_for_test(
+        state: &Entity<AppState>,
+        task: &SavedTask,
+        cx: &mut App,
+    ) {
+        let TaskSpec::Transfer { config, options } = task.spec.clone() else {
+            panic!("a transfer task");
+        };
+        let mut tab = TransferTabState::from_settings(&state.read(cx).settings);
+        tab.config = config;
+        tab.options = options;
+        AppCommands::begin_task_run(state, task, RunTrigger::Manual, cx);
+        AppCommands::start_transfer_run(state.clone(), task.id, tab, None, false, cx);
+    }
+
     pub(crate) fn start_compare_run_for_test(
         state: &Entity<AppState>,
         task: &SavedTask,
@@ -1706,6 +1723,61 @@ fn confirmation(
     }
 }
 
+/// Writes how a transfer ended into the run, per collection where it went collection by
+/// collection.
+fn record_transfer(
+    run: &mut Run,
+    scope: TransferScope,
+    collection: &str,
+    outcome: &TransferOutcome,
+    tab: Option<&TransferTabState>,
+) {
+    let progress = tab.and_then(|tab| tab.runtime.database_progress.as_ref());
+    match (scope, progress) {
+        (TransferScope::Database, Some(progress)) => {
+            for item in &progress.collections {
+                let entry = run.collection_mut(&item.name);
+                entry.documents = item.documents_processed;
+                match &item.status {
+                    CollectionTransferStatus::Failed(error) => entry.error = Some(error.clone()),
+                    CollectionTransferStatus::Cancelled => entry.note = Some("Cancelled".into()),
+                    _ => {}
+                }
+            }
+            if let TransferOutcome::Failed(error) = outcome
+                && run.collections.iter().all(|entry| entry.error.is_none())
+            {
+                run.error = Some(error.clone());
+            }
+        }
+        (TransferScope::Database, None) => {
+            if let TransferOutcome::Failed(error) = outcome {
+                run.error = Some(error.clone());
+            }
+        }
+        _ if collection.is_empty() => {
+            if let TransferOutcome::Failed(error) = outcome {
+                run.error = Some(error.clone());
+            }
+        }
+        _ => {
+            let processed = tab.map_or(0, |tab| tab.runtime.progress_count);
+            let entry = run.collection_mut(collection);
+            match outcome {
+                TransferOutcome::Completed(count) => entry.documents = *count,
+                TransferOutcome::Failed(error) => {
+                    entry.documents = processed;
+                    entry.error = Some(error.clone());
+                }
+                TransferOutcome::Cancelled => entry.documents = processed,
+            }
+        }
+    }
+    if let TransferOutcome::Failed(error) = outcome {
+        run.log(LogLevel::Error, error.clone());
+    }
+}
+
 /// Whether a sync in `mode` has a deletes pass after its first.
 fn deletes_only_follows(mode: SyncMode) -> bool {
     mode == SyncMode::Mirror
@@ -1727,13 +1799,14 @@ fn totals_by_name(
     totals
 }
 
-/// The document counts a transfer's safety check needs, read without a tab.
+/// The document counts a transfer's safety check needs, read without a tab, on connections of
+/// its own.
 struct TransferCounts {
-    manager: std::sync::Arc<crate::connection::ConnectionManager>,
+    reconnect: Reconnect,
     mode: TransferMode,
     scope: TransferScope,
-    source: Option<(mongodb::Client, String, String)>,
-    target: Option<(mongodb::Client, String, String)>,
+    source: Option<(Uuid, String, String)>,
+    target: Option<(Uuid, String, String)>,
     file: PathBuf,
     whole_target: bool,
 }
@@ -1741,11 +1814,10 @@ struct TransferCounts {
 impl TransferCounts {
     fn new(app: &AppState, tab: &TransferTabState) -> Option<Self> {
         let config = &tab.config;
-        let client = |id: Option<Uuid>| id.and_then(|id| app.active_connection_client(id));
-        let source = client(config.source_connection_id)?;
+        let source_id = config.source_connection_id?;
         let (source, target) = match config.mode {
             TransferMode::Export => (
-                Some((source, config.source_database.clone(), config.source_collection.clone())),
+                Some((source_id, config.source_database.clone(), config.source_collection.clone())),
                 None,
             ),
             TransferMode::Import => {
@@ -1759,10 +1831,10 @@ impl TransferCounts {
                 } else {
                     config.destination_database.clone()
                 };
-                (None, Some((source, database, collection)))
+                (None, Some((source_id, database, collection)))
             }
             TransferMode::Copy => {
-                let destination = client(config.destination_connection_id)?;
+                let destination = config.destination_connection_id?;
                 let database = if config.destination_database.is_empty() {
                     config.source_database.clone()
                 } else {
@@ -1775,7 +1847,7 @@ impl TransferCounts {
                 };
                 (
                     Some((
-                        source,
+                        source_id,
                         config.source_database.clone(),
                         config.source_collection.clone(),
                     )),
@@ -1783,8 +1855,16 @@ impl TransferCounts {
                 )
             }
         };
+        let mut ids = vec![source_id];
+        if let Some((destination, ..)) = &target
+            && *destination != source_id
+        {
+            ids.push(*destination);
+        }
+        let saved =
+            ids.iter().map(|id| app.connection_by_id(*id).cloned()).collect::<Option<Vec<_>>>()?;
         Some(Self {
-            manager: app.connection_manager(),
+            reconnect: Reconnect { manager: app.connection_manager(), saved },
             mode: config.mode,
             scope: config.scope,
             source,
@@ -1796,22 +1876,24 @@ impl TransferCounts {
 
     /// Blocking: estimated counts, or dbStats for a whole database.
     fn count(self) -> Result<Planned, String> {
-        let documents =
-            |side: &Option<(mongodb::Client, String, String)>| -> Result<Option<u64>, String> {
-                let Some((client, database, collection)) = side else {
-                    return Ok(None);
-                };
-                let count = if self.scope == TransferScope::Database || collection.is_empty() {
-                    let stats =
-                        self.manager.database_stats(client, database).map_err(|e| e.to_string())?;
-                    stats.get("objects").and_then(mongodb::bson::Bson::as_i64).unwrap_or(0) as u64
-                } else {
-                    self.manager
-                        .estimated_document_count(client, database, collection)
-                        .map_err(|e| e.to_string())?
-                };
-                Ok(Some(count))
+        let manager = self.reconnect.manager.clone();
+        let connections = RunConnections::open(manager.clone(), &self.reconnect.saved)
+            .map_err(|failure| format!("Could not connect: {failure}"))?;
+        let documents = |side: &Option<(Uuid, String, String)>| -> Result<Option<u64>, String> {
+            let Some((id, database, collection)) = side else {
+                return Ok(None);
             };
+            let client = connections.client(*id).ok_or("The connection closed.")?;
+            let count = if self.scope == TransferScope::Database || collection.is_empty() {
+                let stats = manager.database_stats(&client, database).map_err(|e| e.to_string())?;
+                stats.get("objects").and_then(mongodb::bson::Bson::as_i64).unwrap_or(0) as u64
+            } else {
+                manager
+                    .estimated_document_count(&client, database, collection)
+                    .map_err(|e| e.to_string())?
+            };
+            Ok(Some(count))
+        };
         let source = match self.mode {
             // An empty file imports nothing; its size says so without reading it.
             TransferMode::Import => {
@@ -2394,6 +2476,95 @@ mod tests {
         let failed = run(cx);
         assert_eq!(failed.status, RunStatus::Failed, "{failed:?}");
         assert!(!failed.log.iter().any(|line| line.message.contains("Trying")));
+
+        let finished = |cx: &mut gpui_kit::TestAppContext, task: &SavedTask| -> Run {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            loop {
+                cx.run_until_parked();
+                let run = state.read_with(cx, |app, _| app.task_runs(task.id).first().cloned());
+                if let Some(run) = run.clone().filter(|run| run.status != RunStatus::Running) {
+                    return run;
+                }
+                assert!(Instant::now() < deadline, "the run didn't finish: {run:?}");
+                cx.executor().advance_clock(Duration::from_secs(1));
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        struct Blank;
+        impl gpui_kit::Render for Blank {
+            fn render(
+                &mut self,
+                _: &mut Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+            }
+        }
+        let window: AnyWindowHandle = cx.add_window(|_, _| Blank).into();
+        use crate::state::app_state::{TransferConfig, TransferOptions};
+        let transfer = |name: &str, config: TransferConfig| {
+            let task = SavedTask::new(
+                name.into(),
+                TaskSpec::Transfer { config, options: TransferOptions::default() },
+            );
+            (task.clone(), task)
+        };
+
+        // An export starts over after a failure that can pass, on its own connections.
+        let file = directory.path().join("orders.jsonl");
+        let (export, saved_export) = transfer(
+            "Export orders",
+            TransferConfig {
+                mode: TransferMode::Export,
+                scope: TransferScope::Collection,
+                source_connection_id: Some(saved.id),
+                source_database: "shop".into(),
+                source_collection: "orders".into(),
+                file_path: file.display().to_string(),
+                ..Default::default()
+            },
+        );
+        state.update(cx, |app, _| app.upsert_task(saved_export).unwrap());
+        fail(89, 3);
+        cx.update(|cx| Self_::start_task_for_test(&state, &export, window, cx));
+        let done = finished(cx, &export);
+        assert_eq!(done.status, RunStatus::Succeeded, "{done:?}");
+        assert!(
+            done.log.iter().any(|line| line.message.contains("Starting over")),
+            "{:?}",
+            done.log
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 2);
+        assert!(
+            state.read_with(cx, |app, _| !app.is_connected(saved.id)),
+            "a run never opens the sidebar's connection"
+        );
+
+        // A copy that appends isn't run again: repeating it could write documents twice.
+        let (copy, saved_copy) = transfer(
+            "Copy orders",
+            TransferConfig {
+                mode: TransferMode::Copy,
+                scope: TransferScope::Collection,
+                source_connection_id: Some(saved.id),
+                source_database: "shop".into(),
+                source_collection: "orders".into(),
+                destination_connection_id: Some(saved.id),
+                destination_database: "shop_backup".into(),
+                destination_collection: "orders".into(),
+                ..Default::default()
+            },
+        );
+        state.update(cx, |app, _| app.upsert_task(saved_copy).unwrap());
+        fail(89, 3);
+        cx.update(|cx| Self_::start_transfer_for_test(&state, &copy, cx));
+        let done = finished(cx, &copy);
+        assert_ne!(done.status, RunStatus::Succeeded, "{done:?}");
+        assert!(
+            done.log.iter().any(|line| line.message.contains("Not run again")),
+            "{:?}",
+            done.log
+        );
         docker.block_on(async move { drop(container) });
     }
 }

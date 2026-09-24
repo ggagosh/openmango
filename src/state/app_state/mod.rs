@@ -43,8 +43,8 @@ pub use types::{
     ExplainState, ExplainSummary, ExplainViewMode, ExtendedJsonMode, ForgeTabKey, ForgeTabState,
     InsertMode, NavHistory, ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField,
     SchemaFieldType, SessionData, SessionDocument, SessionKey, SessionState, SessionViewState,
-    TabKey, TargetWriteMode, TransferConfig, TransferFormat, TransferMode, TransferOptions,
-    TransferScope, TransferTabKey, TransferTabState, View,
+    TabKey, TargetWriteMode, TaskClient, TransferConfig, TransferFormat, TransferMode,
+    TransferOptions, TransferScope, TransferTabKey, TransferTabState, View,
 };
 pub use unsaved::{UnsavedChange, UnsavedInventory, UnsavedScope};
 

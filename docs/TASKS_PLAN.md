@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety) and PR 2b (recovery for Compare and Sync) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync) and PR 2c (recovery for transfers) are built; see Implementation status.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -85,7 +85,7 @@ the engines tasks call directly, 2c covers transfers.
 
 - **Own connections.** Compare, Sync and Undo runs open connections of their own, each SSH tunnel
   keyed by a fresh id, and close them when the run ends. They never open or disturb the sidebar's.
-  Transfers still use the sidebar's until 2c.
+  Transfers got theirs in 2c.
 - **Which failures are retried** follows section 7.1, decided where the error happens
   (`Error::is_transient`) and carried in the engines' messages as `Failure`. A DNS failure always
   counts as one that can pass; telling a typo from an outage by the task's history is left out.
@@ -98,8 +98,21 @@ the engines tasks call directly, 2c covers transfers.
   driver retries once, the run retries after that, and the run succeeds. A "not authorized" error
   fails at once.
 
-**PR 2c, recovery for transfers — next.** Their own connections, retries, and resuming Copy and
-Import from where they stopped (section 7.3).
+**PR 2c, recovery for transfers — built.**
+
+- **Own connections.** Export, Import and Copy runs, and the document counts their safety check
+  reads, use connections the run opens, including the address the BSON tools reach through the
+  run's own tunnel. The Transfer tab's code runs them unchanged, through a tab state no tab shows.
+- **Retries** use 2b's numbers, but a retry starts the whole transfer over. That is only safe when
+  starting over gives the same result: an export, or an import or copy with "Clear target first"
+  or "Drop target first". Any other import or copy fails after the first failure, and the log says
+  why. A retry on a Production target keeps the write the first try was confirmed for.
+- **Not built: resuming from where a transfer stopped** (section 7.3, the last `_id` or line of a
+  confirmed batch). Starting over covers the transfers that can repeat safely; resuming comes when
+  scheduled imports and copies that append need it.
+- **Tests:** `failCommand` makes an export's read time out three times; the run starts over and
+  writes the whole file, and the sidebar's connection stays closed. A copy that appends, failing
+  the same way, isn't run again.
 
 ## 1. What the evidence says
 

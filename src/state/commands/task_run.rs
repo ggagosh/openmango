@@ -46,7 +46,8 @@ pub(super) async fn pause(cx: &mut AsyncApp, duration: Duration, run: &Cancellat
 /// disturbs the connections open in the sidebar, and a retry can start from fresh ones.
 pub(super) struct RunConnections {
     manager: Arc<ConnectionManager>,
-    open: Vec<(Uuid, Uuid, Client)>,
+    /// Saved connection id, tunnel key, client, and the address the BSON tools use.
+    open: Vec<(Uuid, Uuid, Client, Option<String>)>,
 }
 
 impl RunConnections {
@@ -59,21 +60,39 @@ impl RunConnections {
         for connection in saved {
             // The tunnel is keyed by a fresh id, never the sidebar's, so neither stops the other.
             let key = Uuid::new_v4();
-            let (client, _) =
+            let (client, meta) =
                 connections.manager.connect_managed(key, connection).map_err(Failure::from)?;
-            connections.open.push((connection.id, key, client));
+            let tool_uri =
+                connections.manager.effective_uri_for_active_connection(connection, &meta).ok();
+            connections.open.push((connection.id, key, client, tool_uri));
         }
         Ok(connections)
     }
 
     pub(super) fn client(&self, id: Uuid) -> Option<Client> {
-        self.open.iter().find(|(connection, ..)| *connection == id).map(|(.., c)| c.clone())
+        self.open.iter().find(|(connection, ..)| *connection == id).map(|(_, _, c, _)| c.clone())
+    }
+
+    /// The clients, for a transfer to use instead of the sidebar's.
+    pub(super) fn task_clients(
+        &self,
+    ) -> std::collections::HashMap<Uuid, crate::state::app_state::TaskClient> {
+        self.open
+            .iter()
+            .map(|(id, _, client, tool_uri)| {
+                let own = crate::state::app_state::TaskClient {
+                    client: client.clone(),
+                    tool_uri: tool_uri.clone(),
+                };
+                (*id, own)
+            })
+            .collect()
     }
 }
 
 impl Drop for RunConnections {
     fn drop(&mut self) {
-        for (_, key, _) in self.open.drain(..) {
+        for (_, key, ..) in self.open.drain(..) {
             self.manager.disconnect(key);
         }
     }

@@ -216,9 +216,6 @@ fn collection_summary(kind: TaskKind, run: &crate::tasks::model::CollectionRun) 
 }
 
 fn last_result(app: &AppState, task: &Task) -> String {
-    if app.tasks.starting.contains(&task.id) {
-        return "Starting…".into();
-    }
     match app.task_runs(task.id).first() {
         None => "Not run yet".into(),
         Some(run) if run.status == RunStatus::Running => "Running…".into(),
@@ -370,7 +367,7 @@ impl TasksView {
         let rows = tasks.iter().map(|task| {
             let id = task.id;
             let selected = current == Some(id);
-            let status = if app.task_is_running(id) || app.tasks.starting.contains(&id) {
+            let status = if app.task_is_running(id) {
                 Some(RunStatus::Running)
             } else {
                 app.task_runs(id).first().map(|run| run.status)
@@ -435,7 +432,6 @@ impl TasksView {
         let app = self.state.read(cx);
         let id = task.id;
         let running = app.task_is_running(id);
-        let starting = app.tasks.starting.contains(&id);
         let muted = cx.theme().muted_foreground;
         let state = self.state.clone();
 
@@ -452,9 +448,8 @@ impl TasksView {
             Button::new("task-run")
                 .primary()
                 .icon(app_icon("play").xsmall())
-                .label(if starting { "Starting…" } else { "Run now" })
+                .label("Run now")
                 .small()
-                .disabled(starting)
                 .on_click({
                     let state = state.clone();
                     move |_, window, cx| AppCommands::run_task(state.clone(), id, window, cx)
@@ -476,7 +471,7 @@ impl TasksView {
                         .small()
                         .ghost()
                         .tooltip("Work out what a run would change, without writing")
-                        .disabled(running || starting)
+                        .disabled(running)
                         .on_click({
                             let state = state.clone();
                             move |_, window, cx| {
@@ -502,7 +497,7 @@ impl TasksView {
                     .label("Delete")
                     .small()
                     .ghost()
-                    .disabled(running || starting)
+                    .disabled(running)
                     .on_click({
                         let state = state.clone();
                         let name = task.name.clone();

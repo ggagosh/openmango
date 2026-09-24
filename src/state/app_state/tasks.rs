@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use gpui_kit::{Context, Subscription};
 use uuid::Uuid;
@@ -19,8 +19,6 @@ pub struct TasksState {
     /// Each task's runs, newest first, as last read from the store or recorded this session.
     pub runs: HashMap<Uuid, Vec<Run>>,
     pub active: HashMap<Uuid, ActiveRun>,
-    /// Tasks getting ready to run: opening connections, or listing collections to sync.
-    pub starting: HashSet<Uuid>,
     pub store: Option<RunStore>,
     /// Each task's last sync run, while it can still be undone: until the app closes or the task
     /// runs again.

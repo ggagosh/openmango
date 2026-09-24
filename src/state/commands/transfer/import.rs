@@ -40,7 +40,7 @@ impl AppCommands {
 
         // BSON tools must reuse the active SSH/SOCKS transport rather than the saved URI.
         let connection_uri = if matches!(config.format, TransferFormat::Bson) {
-            match state.read(cx).active_connection_tool_uri(connection_id) {
+            match Self::transfer_tool_uri(&state, transfer_id, connection_id, cx) {
                 Ok(uri) => Some(uri),
                 Err(error) => {
                     state.update(cx, |state, cx| {
@@ -64,7 +64,7 @@ impl AppCommands {
             // For BSON, we may still need client for drop_before_import with non-BSON formats
             None
         } else {
-            Self::active_client(&state, connection_id, cx)
+            Self::transfer_client(&state, transfer_id, connection_id, cx)
         };
 
         if !matches!(config.format, TransferFormat::Bson) && client.is_none() {
@@ -286,6 +286,7 @@ impl AppCommands {
                     Err(e) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: e.to_string(),
+                            transient: e.is_transient(),
                         });
                     }
                 }
@@ -398,8 +399,9 @@ impl AppCommands {
                                         );
                                     }
                                 }
-                                TransferProgressMessage::Failed { error } => {
+                                TransferProgressMessage::Failed { error, transient } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
@@ -510,6 +512,7 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
                             error: err.to_string(),
                             processed,
+                            transient: err.is_transient(),
                         });
                     }
                 }
@@ -559,8 +562,13 @@ impl AppCommands {
                                     state.set_status_message(Some(StatusMessage::info(message)));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed { error, processed } => {
+                                CollectionProgressMessage::Failed {
+                                    error,
+                                    processed,
+                                    transient,
+                                } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count =
                                             tab.runtime.progress_count.max(processed);
