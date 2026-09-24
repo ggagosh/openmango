@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync), PR 2c (recovery for transfers) and PR 3a (schedules while the app is open) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. Everything planned is built, PRs 1 through 7; see Implementation status. Still to try on real machines: the background runner's system entries and the system notifications on each system.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -194,6 +194,9 @@ the background runner (PR 4), and section 7.4.
   off or is deleted. `SMAppService` needs macOS 13 and an app bundle, so on macOS 11 and 12, and
   in `cargo run` builds, the option is shown switched off with why. A task set to run while closed
   needs attention when the agent is off in Login Items, with Open Login Items.
+- **At launch** the app asks the system about the entry only when a task uses it or one is known
+  to be registered; on Windows and Linux asking starts a program. The schedule editor asks when it
+  opens, to show whether the option is available.
 - **Verified:** a `--run-due-tasks` run with no window, from a dev build signed with the
   development identity, read a Sync task's connection passwords from the keychain without a
   prompt, ran the task and recorded it (2026-09-24).
@@ -256,6 +259,30 @@ the background runner (PR 4), and section 7.4.
   `systemd-analyze verify` accepts both units, and a unit test covers quoting the AppImage path.
 - **Not verified yet:** the timer starting the AppImage in a desktop session, reading the
   passwords from an unlocked keyring, and skipping while it's locked.
+
+**PR 7, system notifications — built.** Section 4.3's notifications, from the system itself.
+
+- **What's sent:** the news a scheduled run already gives in OpenMango (PR 3b): its first failure
+  in an outage, a paused schedule after a failed sign-in, working again, and a success when the
+  task asks for it. Each is collected as the run ends (`TaskNotice`) and posted once, one per
+  task: a newer one replaces the older.
+- **In the app**, only when its window isn't active; otherwise its own notification or the
+  status bar already says it. Changed from the plan, which kept an open app to in-app messages.
+  These have an Open task button.
+- **From the background runner**, always, after its runs, then a two-second wait before it
+  exits, since macOS takes the notification after the call returns. Without a button: the runner
+  has exited by the time someone clicks, and on Windows and Linux a click only reaches the
+  process that posted. On macOS clicking one starts OpenMango, which registers its handler while
+  it launches, so the click opens the task.
+- **Clicks** anywhere on a notification, or Open task, select the task in the Tasks tab and bring
+  OpenMango forward.
+- **Permission (macOS):** gpui asks the first time a notification is posted, and has no way to ask
+  earlier. Changed from the plan, which asked when a task is first set to run while closed.
+- **Checked:** a unit test with gpui's test platform: nothing posted while someone's looking,
+  Open task only from the app, a newer notification replacing the older, and a click selecting
+  the task.
+- **Not verified yet:** the notifications on a real desktop on each system, and a click on a
+  macOS notification starting OpenMango.
 
 ## 1. What the evidence says
 

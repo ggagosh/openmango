@@ -613,7 +613,11 @@ impl AppRoot {
         crate::theme::sync_system_theme(&state, window, cx);
         subscriptions.push(cx.observe_in(&state, window, |this, _, window, cx| {
             this.notify_new_errors(window, cx);
+            if !this.state.read(cx).tasks.notices.is_empty() {
+                AppState::post_task_notices(&this.state, window.is_window_active(), true, cx);
+            }
         }));
+        AppState::open_tasks_from_notifications(state.clone(), cx);
         // Many failure paths emit an event without notifying, so check on events too.
         subscriptions.push(cx.subscribe_in(
             &state,

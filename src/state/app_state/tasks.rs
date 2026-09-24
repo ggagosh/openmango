@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use gpui_kit::{AppContext as _, Context, Subscription};
+use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
@@ -44,6 +44,45 @@ pub struct TasksState {
     pub background: bool,
     /// The system entry that starts the background runner, as last seen.
     pub runner: RunnerStatus,
+    /// What scheduled runs said as they ended, for a system notification when nobody is looking
+    /// at OpenMango. Taken by whoever posts them.
+    pub notices: Vec<TaskNotice>,
+}
+
+/// A scheduled run's news: its first failure in an outage, working again, or a success asked
+/// for. It also shows in OpenMango, as a notification or in the status bar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskNotice {
+    pub task_id: Uuid,
+    pub title: String,
+    pub body: String,
+}
+
+impl TaskNotice {
+    const TAG: &str = "task-";
+
+    /// As a system notification, one per task. `open_button` only where a click on it can
+    /// reach an OpenMango that's running; clicking the notification opens the task either way.
+    pub fn system_notification(&self, open_button: bool) -> gpui_kit::SystemNotification {
+        gpui_kit::SystemNotification {
+            tag: format!("{}{}", Self::TAG, self.task_id).into(),
+            title: self.title.clone().into(),
+            body: self.body.clone().into(),
+            actions: if open_button {
+                vec![gpui_kit::SystemNotificationAction {
+                    id: "open".into(),
+                    label: "Open task".into(),
+                }]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// The task a clicked notification is about.
+    pub fn task_in(tag: &str) -> Option<Uuid> {
+        tag.strip_prefix(Self::TAG)?.parse().ok()
+    }
 }
 
 /// What the schedule editor sets on a task.
@@ -382,6 +421,36 @@ impl AppState {
         self.tasks.tasks.iter().filter(|task| self.task_attention(task).is_some()).count()
     }
 
+    /// Posts what scheduled runs said as system notifications, and returns whether there were
+    /// any. While someone is `looking` at OpenMango, its own notification or the status bar
+    /// already says it, so it's dropped. `open_button` only where a click can reach this process.
+    pub fn post_task_notices(
+        state: &Entity<Self>,
+        looking: bool,
+        open_button: bool,
+        cx: &mut App,
+    ) -> bool {
+        let notices = state.update(cx, |app, _| std::mem::take(&mut app.tasks.notices));
+        if looking {
+            return false;
+        }
+        for notice in &notices {
+            cx.show_system_notification(notice.system_notification(open_button));
+        }
+        !notices.is_empty()
+    }
+
+    /// A click on a task's system notification opens the task. That includes a click that
+    /// starts OpenMango: macOS hands it over once this is registered, while the app launches.
+    pub fn open_tasks_from_notifications(state: Entity<Self>, cx: &mut App) {
+        cx.on_system_notification_response(move |response, cx| {
+            if let Some(id) = TaskNotice::task_in(&response.tag) {
+                state.update(cx, |app, cx| app.open_task(id, cx));
+                cx.activate(true);
+            }
+        });
+    }
+
     /// After a run ends: a failed sign-in pauses the task's schedule, and a scheduled run says
     /// how it went once per outage, when it works again, and each time when asked to.
     fn task_run_ended(&mut self, run: &Run) {
@@ -418,18 +487,28 @@ impl AppState {
             } else {
                 (format!("“{}” failed", task.name), failure_text(run))
             };
+            self.tasks.notices.push(TaskNotice {
+                task_id: task.id,
+                title: title.clone(),
+                body: message.clone(),
+            });
             self.report_error_with_action(
                 crate::error::ErrorReport::new(title, message),
                 super::ErrorAction::OpenTask(task.id),
             );
         } else if run.status == RunStatus::Succeeded {
-            let text = if previous.is_some_and(Run::failed) {
-                format!("“{}” works again.", task.name)
+            let (text, body) = if previous.is_some_and(Run::failed) {
+                (format!("“{}” works again.", task.name), "Its last scheduled run succeeded.")
             } else if task.notify_success {
-                format!("“{}” ran on its schedule.", task.name)
+                (format!("“{}” ran on its schedule.", task.name), "The run succeeded.")
             } else {
                 return;
             };
+            self.tasks.notices.push(TaskNotice {
+                task_id: task.id,
+                title: text.trim_end_matches('.').to_string(),
+                body: body.to_string(),
+            });
             self.set_status_message(Some(crate::state::StatusMessage::info(text)));
         }
     }
