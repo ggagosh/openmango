@@ -41,7 +41,7 @@ pub fn run_due_tasks() {
     let now = Utc::now();
     let due: Vec<&Task> = tasks.iter().filter(|task| due_while_closed(task, now)).collect();
     if due.is_empty() {
-        return;
+        return log::info!("Nothing set to run while OpenMango is closed is due");
     }
     log::info!("{} task(s) due while OpenMango is closed", due.len());
     let connections: Vec<uuid::Uuid> =
@@ -78,6 +78,7 @@ pub fn run_due_tasks() {
                     while !cx.update(|cx| idle(&state, cx)) {
                         cx.background_executor().timer(Duration::from_secs(1)).await;
                     }
+                    log::info!("Done; each run is in its task's history");
                 }
                 // Without the history nothing could be recorded, so nothing runs.
                 Err(error) => log::error!("Task run history can't be opened: {error:#}"),
