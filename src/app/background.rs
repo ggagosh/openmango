@@ -84,6 +84,12 @@ pub fn run_due_tasks() {
                     while !cx.update(|cx| idle(&state, cx)) {
                         cx.background_executor().timer(Duration::from_secs(1)).await;
                     }
+                    // No Open task button: this process has exited by the time someone clicks.
+                    // Clicking the notification still opens OpenMango on macOS.
+                    if cx.update(|cx| AppState::post_task_notices(&state, false, false, cx)) {
+                        // macOS takes the notification after the call returns.
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
+                    }
                     log::info!("Done; each run is in its task's history");
                 }
                 // Without the history nothing could be recorded, so nothing runs.

@@ -26,8 +26,8 @@ pub use app_state::{
     ExtendedJsonMode, ForgeTabKey, ForgeTabState, InsertMode, KeybindingCapture, NavHistory,
     ReferencesTabKey, SchemaAnalysis, SchemaCardinality, SchemaField, SchemaFieldType, SessionData,
     SessionDocument, SessionKey, SessionState, SessionViewState, TabKey, TargetWriteMode,
-    TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState, UnsavedChange,
-    UnsavedInventory, UnsavedScope, View,
+    TaskNotice, TransferFormat, TransferMode, TransferScope, TransferTabKey, TransferTabState,
+    UnsavedChange, UnsavedInventory, UnsavedScope, View,
 };
 pub use commands::AppCommands;
 pub(crate) use commands::view_pipeline;

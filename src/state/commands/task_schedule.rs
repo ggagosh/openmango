@@ -354,6 +354,75 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn scheduled_runs_post_system_notifications_that_open_the_task(cx: &mut TestAppContext) {
+        use crate::state::TaskNotice;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_app_identity("com.openmango.app", "OpenMango");
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let source = SavedConnection::new("Source".into(), "mongodb://localhost:1".into());
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                ConfigManager::with_config_dir(directory.path().into()),
+            );
+            app.connections = vec![source.clone()];
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        let mut config = CompareConfig::default();
+        config.sides[0].connection_id = Some(source.id);
+        config.sides[1].connection_id = Some(source.id);
+        let task = daily("Nightly", TaskSpec::Compare { config });
+        let run = |status: RunStatus| {
+            let mut run = Run::start(task.id, RunTrigger::Schedule);
+            run.status = status;
+            run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
+            run.finished_at = Some(Utc::now());
+            run
+        };
+        cx.update(|cx| AppState::open_tasks_from_notifications(state.clone(), cx));
+        let post = |looking: bool, open_button: bool, cx: &mut TestAppContext| {
+            cx.update(|cx| AppState::post_task_notices(&state, looking, open_button, cx))
+        };
+
+        // Someone looking at OpenMango sees its own notification; nothing is posted or kept.
+        state.update(cx, |app, _| {
+            app.upsert_task(task.clone()).unwrap();
+            app.record_task_run(run(RunStatus::Failed), true);
+        });
+        assert!(!post(true, true, cx));
+        assert!(cx.shown_system_notifications().is_empty());
+
+        // Otherwise the system shows it, one per task, with Open task.
+        state.update(cx, |app, _| app.record_task_run(run(RunStatus::Succeeded), true));
+        assert!(post(false, true, cx));
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].title.as_ref(), "“Nightly” works again");
+        assert_eq!(TaskNotice::task_in(&shown[0].tag), Some(task.id));
+        assert_eq!(shown[0].actions[0].label.as_ref(), "Open task");
+
+        // The background runner's have no button: it has exited by the time someone clicks.
+        state.update(cx, |app, _| app.record_task_run(run(RunStatus::Failed), true));
+        assert!(post(false, false, cx));
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown[1].title.as_ref(), "“Nightly” failed");
+        assert!(shown[1].actions.is_empty());
+        assert_eq!(cx.delivered_system_notifications().len(), 1, "the newer one replaced it");
+        assert!(!post(false, true, cx), "each is posted once");
+
+        // Clicking one opens the task.
+        cx.simulate_system_notification_response(gpui_kit::SystemNotificationResponse {
+            tag: shown[1].tag.clone(),
+            action_id: None,
+        });
+        assert_eq!(state.read_with(cx, |app, _| app.tasks.focus), Some(task.id));
+    }
+
+    #[gpui_kit::test]
     fn an_outage_notifies_once_and_needs_attention_after_three_failed_runs(
         cx: &mut TestAppContext,
     ) {

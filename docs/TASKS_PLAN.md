@@ -257,6 +257,30 @@ the background runner (PR 4), and section 7.4.
 - **Not verified yet:** the timer starting the AppImage in a desktop session, reading the
   passwords from an unlocked keyring, and skipping while it's locked.
 
+**PR 7, system notifications — built.** Section 4.3's notifications, from the system itself.
+
+- **What's sent:** the news a scheduled run already gives in OpenMango (PR 3b): its first failure
+  in an outage, a paused schedule after a failed sign-in, working again, and a success when the
+  task asks for it. Each is collected as the run ends (`TaskNotice`) and posted once, one per
+  task: a newer one replaces the older.
+- **In the app**, only when its window isn't active; otherwise its own notification or the
+  status bar already says it. Changed from the plan, which kept an open app to in-app messages.
+  These have an Open task button.
+- **From the background runner**, always, after its runs, then a two-second wait before it
+  exits, since macOS takes the notification after the call returns. Without a button: the runner
+  has exited by the time someone clicks, and on Windows and Linux a click only reaches the
+  process that posted. On macOS clicking one starts OpenMango, which registers its handler while
+  it launches, so the click opens the task.
+- **Clicks** anywhere on a notification, or Open task, select the task in the Tasks tab and bring
+  OpenMango forward.
+- **Permission (macOS):** gpui asks the first time a notification is posted, and has no way to ask
+  earlier. Changed from the plan, which asked when a task is first set to run while closed.
+- **Checked:** a unit test with gpui's test platform: nothing posted while someone's looking,
+  Open task only from the app, a newer notification replacing the older, and a click selecting
+  the task.
+- **Not verified yet:** the notifications on a real desktop on each system, and a click on a
+  macOS notification starting OpenMango.
+
 ## 1. What the evidence says
 
 **DBeaver**, the closest comparable desktop database tool:
