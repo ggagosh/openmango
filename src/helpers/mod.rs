@@ -1,4 +1,5 @@
 pub mod auto_pair;
+pub mod background_runner;
 pub mod connection_io;
 pub mod crypto;
 pub mod format;

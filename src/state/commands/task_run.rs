@@ -227,9 +227,7 @@ where
         };
         if attempt == ATTEMPTS || !watch.may_retry() {
             for index in &pending {
-                finished
-                    .failed
-                    .insert(index.to_owned(), Failure { message: reason.clone(), transient: true });
+                finished.failed.insert(index.to_owned(), Failure::temporary(reason.clone()));
             }
             return finished;
         }
@@ -427,6 +425,20 @@ mod tests {
         drop(sender);
         cx.run_until_parked();
         assert_eq!(stalled.get(), Some(true));
+    }
+
+    #[test]
+    fn a_server_that_cant_be_reached_is_a_failure_that_can_pass() {
+        let closed = SavedConnection::new(
+            "Closed".into(),
+            "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200".into(),
+        );
+        let Err(failure) = RunConnections::open(Arc::new(ConnectionManager::new()), &[closed])
+        else {
+            panic!("nothing listens on port 1");
+        };
+        assert!(failure.transient, "{failure}");
+        assert!(!failure.sign_in);
     }
 
     #[test]
