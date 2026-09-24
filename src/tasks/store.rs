@@ -53,6 +53,8 @@ impl RunStore {
         // The key comes first: SQLCipher reads nothing until it is set.
         let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
         connection.pragma_update(None, "key", format!("x'{hex}'"))?;
+        // The app and the background runner can both write; one waits for the other.
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -124,15 +126,16 @@ impl RunStore {
         Ok(())
     }
 
-    /// Marks runs still recorded as running as interrupted: the app stopped during them.
-    pub fn mark_interrupted(&self) -> Result<usize> {
+    /// Marks runs still recorded as running as interrupted, except `keep`: the process that ran
+    /// them stopped during them.
+    pub fn mark_interrupted(&self, keep: &[Uuid]) -> Result<usize> {
         let running: Vec<Run> = {
             let connection = self.lock()?;
             let mut statement = connection.prepare("SELECT payload FROM runs")?;
             let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
             rows.filter_map(|row| row.ok())
                 .filter_map(|payload| serde_json::from_str::<Run>(&payload).ok())
-                .filter(|run| run.status == RunStatus::Running)
+                .filter(|run| run.status == RunStatus::Running && !keep.contains(&run.id))
                 .collect()
         };
         for mut run in running.iter().cloned() {
@@ -185,7 +188,7 @@ mod tests {
         store.save(&run).unwrap();
         assert_eq!(store.runs(task).unwrap().len(), 1);
 
-        assert_eq!(store.mark_interrupted().unwrap(), 1);
+        assert_eq!(store.mark_interrupted(&[]).unwrap(), 1);
         let saved = &store.runs(task).unwrap()[0];
         assert_eq!(saved.status, RunStatus::Interrupted);
         assert_eq!(saved.log.len(), 1);

@@ -421,6 +421,9 @@ impl AppCommands {
     ) -> (Uuid, CancellationToken) {
         let mut run = Run::start(task.id, trigger);
         run.log(LogLevel::Info, format!("{}: {}", trigger.label(), task.spec.subject()));
+        if state.read(cx).tasks.background {
+            run.log(LogLevel::Info, "Started while OpenMango was closed.");
+        }
         let run_id = run.id;
         let cancellation = CancellationToken::new();
         // A scheduled run stops retrying when the task's next run is due.
@@ -2488,7 +2491,14 @@ mod tests {
                 app.connections[0].environment =
                     Some(crate::models::ConnectionEnvironment::Production);
                 app.connections[0].confirm_production_writes = true;
-                app.set_task_schedule(task.id, daily.clone(), safety, keep, true, false).unwrap();
+                let settings = crate::state::app_state::ScheduleSettings {
+                    schedule: daily.clone(),
+                    safety,
+                    keep_files: keep,
+                    protected_writes: true,
+                    ..Default::default()
+                };
+                app.set_task_schedule(task.id, settings).unwrap();
                 app.mark_task_due(task.id, from);
             });
         };

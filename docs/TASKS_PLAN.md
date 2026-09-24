@@ -170,6 +170,33 @@ the background runner (PR 4), and section 7.4.
   reached at the start failed at once instead of waiting and retrying. `Error::Connect` keeps the
   helpful text and the error it came from.
 
+**PR 4, the background runner and macOS — built, not yet verified on a real login session.**
+
+- **The lock** (`src/tasks/lock.rs`) is `tasks.lock` in the config folder, held with
+  `File::try_lock`. The app takes it before its scheduler starts anything; an app that opens
+  while the runner works waits for it, looking once a minute, then reads the tasks and runs again.
+  Whoever takes it marks runs no process is finishing as interrupted, except its own. The run store
+  has a 5-second busy timeout, since both processes can write it.
+- **Both processes can write `tasks.json`** while the runner works and the app is open. The
+  runner writes the list as it is on disk with only its own fields: when a task last ran, and the
+  sign-in pause. The app, while it waits for the lock, keeps the later "last ran" from disk. So
+  neither loses the other's changes, and no run happens twice.
+- **`openmango --run-due-tasks`** (`src/app/background.rs`) takes the lock and reads `tasks.json`
+  before starting gpui, and returns at once when the app is open or nothing is due. Otherwise it
+  starts gpui without a window, reads the passwords of the connections the due tasks use, changing
+  nothing in the keychain, opens the run history, and runs the due tasks that may run while
+  OpenMango is closed through the same scheduler. It exits when nothing runs or waits. Its runs
+  log "Started while OpenMango was closed." It sends no notifications yet.
+- **macOS:** the launch agent is `Contents/Library/LaunchAgents/com.openmango.app.tasks.plist`
+  (StartInterval 900, RunAtLoad), written by `scripts/release_macos.sh` and registered with
+  `SMAppService` through `objc2` (`src/helpers/background_runner.rs`). It's registered when the
+  first task turns on "Run even when OpenMango is closed" and removed when the last one turns it
+  off or is deleted. `SMAppService` needs macOS 13 and an app bundle, so on macOS 11 and 12, and
+  in `cargo run` builds, the option is shown switched off with why. A task set to run while closed
+  needs attention when the agent is off in Login Items, with Open Login Items.
+- **Not verified yet:** reading passwords from a run without a window, and the Login Items flow,
+  on a real bundle. Both need the app built as a bundle and run on a logged-in Mac.
+
 ## 1. What the evidence says
 
 **DBeaver**, the closest comparable desktop database tool:

@@ -5,6 +5,7 @@ use gpui_kit::{Context, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
+use crate::helpers::background_runner::{self, RunnerStatus};
 use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::compare::{CompareScope, CompareTaskLink};
 use crate::tasks::model::{Approval, FailureKind, Run, RunStatus, RunTrigger, Task, TaskSpec};
@@ -34,6 +35,30 @@ pub struct TasksState {
     pub queue: Vec<(Uuid, DateTime<Utc>, bool)>,
     /// The task the Tasks tab should select next, e.g. from a notification's Open.
     pub focus: Option<Uuid>,
+    /// Makes this process the one that starts scheduled runs. Until it is held, another
+    /// OpenMango process is running tasks and this one waits.
+    pub lock: Option<crate::tasks::lock::SchedulerLock>,
+    /// The lock couldn't be used at all, so this process schedules without it.
+    pub unlocked: bool,
+    /// This is the background runner: only tasks that may run while OpenMango is closed start.
+    pub background: bool,
+    /// The system entry that starts the background runner, as last seen.
+    pub runner: RunnerStatus,
+}
+
+/// What the schedule editor sets on a task.
+#[derive(Clone, Debug, Default)]
+pub struct ScheduleSettings {
+    pub schedule: Schedule,
+    pub safety: SafetyLimit,
+    /// A scheduled export keeps only this many of its newest files.
+    pub keep_files: Option<u32>,
+    /// Scheduled runs may write to a Production or protected connection.
+    pub protected_writes: bool,
+    /// A scheduled run that succeeds says so too.
+    pub notify_success: bool,
+    /// The background runner may start its runs while OpenMango is closed.
+    pub run_when_closed: bool,
 }
 
 /// Why a task needs attention, and the button that fixes it.
@@ -56,6 +81,8 @@ pub enum Fix {
     RunAnyway,
     /// Show the failed run's details.
     ShowRun(Uuid),
+    /// Open System Settings at Login Items, where the background runner is switched on.
+    LoginItems,
 }
 
 /// Runs in a row that fail for a reason that can pass before a task needs attention anyway.
@@ -149,7 +176,9 @@ impl AppState {
         {
             log::warn!("Could not delete the task's runs: {error:#}");
         }
-        self.save_tasks()
+        self.save_tasks()?;
+        self.sync_background_runner();
+        Ok(())
     }
 
     /// Sets when the task runs by itself, with its safety limit. A schedule for a task that
@@ -159,23 +188,48 @@ impl AppState {
     pub fn set_task_schedule(
         &mut self,
         id: Uuid,
-        schedule: Schedule,
-        safety: SafetyLimit,
-        keep_files: Option<u32>,
-        protected_writes: bool,
-        notify_success: bool,
+        settings: ScheduleSettings,
     ) -> Result<(), String> {
         let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
-        task.approval = (!schedule.is_manual() && task.spec.write_connection().is_some())
-            .then(|| self.task_approval(&task, protected_writes));
-        task.schedule = schedule;
-        task.safety = safety;
-        task.keep_files = keep_files;
-        task.notify_success = notify_success;
+        let scheduled = !settings.schedule.is_manual();
+        task.approval = (scheduled && task.spec.write_connection().is_some())
+            .then(|| self.task_approval(&task, settings.protected_writes));
+        task.schedule = settings.schedule;
+        task.safety = settings.safety;
+        task.keep_files = settings.keep_files;
+        task.notify_success = settings.notify_success;
+        task.run_when_closed = scheduled && settings.run_when_closed;
         task.paused = false;
         task.paused_by_sign_in = false;
         task.schedule_from = Some(Utc::now());
-        self.upsert_task(task)
+        self.upsert_task(task)?;
+        self.sync_background_runner();
+        Ok(())
+    }
+
+    /// Sets up the system entry that starts the background runner while any task may run with
+    /// OpenMango closed, and removes it once none may.
+    pub(crate) fn sync_background_runner(&mut self) {
+        let wanted =
+            self.tasks.tasks.iter().any(|task| task.run_when_closed && !task.schedule.is_manual());
+        let status = background_runner::status();
+        let result = match (wanted, status) {
+            (true, RunnerStatus::NotRegistered) => background_runner::register(),
+            (false, RunnerStatus::Enabled | RunnerStatus::NeedsApproval) => {
+                background_runner::unregister().map(|()| RunnerStatus::NotRegistered)
+            }
+            _ => Ok(status),
+        };
+        self.tasks.runner = match result {
+            Ok(status) => status,
+            Err(error) => {
+                self.report_error(crate::error::ErrorReport::new(
+                    "Couldn't set up running tasks while OpenMango is closed",
+                    error,
+                ));
+                background_runner::status()
+            }
+        };
     }
 
     /// Records the connections a task uses as they are now, for its scheduled runs to write.
@@ -251,6 +305,17 @@ impl AppState {
                 detail: "Scheduled runs fail until you approve the connections as they are now."
                     .into(),
                 fix: Fix::Approve,
+            });
+        }
+        if task.run_when_closed && self.tasks.runner != RunnerStatus::Enabled {
+            let detail = match self.tasks.runner {
+                RunnerStatus::Unavailable(why) => why.to_string(),
+                _ => "Switch OpenMango on in System Settings, under Login Items.".into(),
+            };
+            return Some(Attention {
+                reason: "It can't run while OpenMango is closed.".into(),
+                detail,
+                fix: Fix::LoginItems,
             });
         }
         if task.paused {
@@ -396,7 +461,36 @@ impl AppState {
         None
     }
 
-    fn save_tasks(&self) -> Result<(), String> {
+    fn save_tasks(&mut self) -> Result<(), String> {
+        // While the background runner holds the lock, the app can be open too, and both write.
+        let scheduler = self.tasks.lock.is_some() || self.tasks.unlocked;
+        if (self.tasks.background || !scheduler)
+            && let Ok(mut saved) = self.config.load_tasks()
+        {
+            if self.tasks.background {
+                // The runner changes only when a task last ran and the sign-in pause; the rest
+                // of the list is whatever the app has saved.
+                for task in &mut saved {
+                    let Some(mine) = self.tasks.tasks.iter().find(|mine| mine.id == task.id) else {
+                        continue;
+                    };
+                    task.schedule_from = task.schedule_from.max(mine.schedule_from);
+                    if mine.paused_by_sign_in {
+                        (task.paused, task.paused_by_sign_in) = (true, true);
+                    }
+                }
+                self.tasks.tasks = saved;
+            } else {
+                // The runner may have handled a due time since the list was read: keep the
+                // later one, so no run happens twice.
+                for task in &mut self.tasks.tasks {
+                    let on_disk = saved.iter().find(|saved| saved.id == task.id);
+                    if let Some(from) = on_disk.and_then(|saved| saved.schedule_from) {
+                        task.schedule_from = task.schedule_from.max(Some(from));
+                    }
+                }
+            }
+        }
         self.config.save_tasks(&self.tasks.tasks).map_err(|error| format!("{error:#}"))
     }
 
@@ -433,14 +527,26 @@ impl AppState {
         self.transfer_tabs.remove(&id)
     }
 
-    /// Takes the opened run store, marks runs cut short last time and loads every task's runs.
+    /// Takes the opened run store and loads every task's runs.
     pub(crate) fn attach_task_runs(&mut self, store: RunStore, note: Option<String>) {
-        match store.mark_interrupted() {
-            Ok(0) => {}
-            Ok(count) => {
-                log::warn!("{count} task run(s) were interrupted when the app last closed")
+        self.tasks.store = Some(store);
+        self.tasks.store_note = note;
+        self.read_task_runs();
+    }
+
+    /// Reads every task's runs from the store. The process that starts scheduled runs first marks
+    /// the runs no process is finishing any more as interrupted.
+    fn read_task_runs(&mut self) {
+        let Some(store) = self.tasks.store.clone() else {
+            return;
+        };
+        if self.tasks.lock.is_some() || self.tasks.unlocked {
+            let active: Vec<Uuid> = self.tasks.active.values().map(|run| run.run_id).collect();
+            match store.mark_interrupted(&active) {
+                Ok(0) => {}
+                Ok(count) => log::warn!("{count} task run(s) were cut short"),
+                Err(error) => log::warn!("Could not mark interrupted task runs: {error:#}"),
             }
-            Err(error) => log::warn!("Could not mark interrupted task runs: {error:#}"),
         }
         for task in &self.tasks.tasks {
             match store.runs(task.id) {
@@ -450,8 +556,30 @@ impl AppState {
                 Err(error) => log::warn!("Could not read the runs of {}: {error:#}", task.name),
             }
         }
-        self.tasks.store = Some(store);
-        self.tasks.store_note = note;
+    }
+
+    /// Makes this process the one that starts scheduled runs, unless another OpenMango process
+    /// is. Taking over from the background runner reads again what it recorded.
+    pub(crate) fn take_scheduler_lock(&mut self) -> bool {
+        if self.tasks.lock.is_some() || self.tasks.unlocked {
+            return true;
+        }
+        match self.config.take_scheduler_lock() {
+            Ok(Some(lock)) => self.tasks.lock = Some(lock),
+            Ok(None) => return false,
+            Err(error) => {
+                log::warn!("Scheduled runs start without the lock, which can't be used: {error}");
+                self.tasks.unlocked = true;
+            }
+        }
+        if self.tasks.load_error.is_none() {
+            match self.config.load_tasks() {
+                Ok(tasks) => self.tasks.tasks = tasks,
+                Err(error) => log::warn!("Could not read tasks again: {error:#}"),
+            }
+        }
+        self.read_task_runs();
+        true
     }
 
     /// What saving this Transfer tab as a task would store.

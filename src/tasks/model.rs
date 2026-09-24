@@ -35,6 +35,9 @@ pub struct Task {
     /// A scheduled run that succeeds says so too, not only one that fails.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notify_success: bool,
+    /// The background runner starts its scheduled runs while OpenMango is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_when_closed: bool,
     /// The due time handled last, or when the schedule was set or resumed. The next run is the
     /// schedule's first time after it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,6 +75,7 @@ impl Task {
             paused: false,
             paused_by_sign_in: false,
             notify_success: false,
+            run_when_closed: false,
             schedule_from: None,
             approval: None,
             keep_files: None,

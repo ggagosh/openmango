@@ -493,6 +493,9 @@ impl AppRoot {
         Self::hydrate_connection_secrets(state.clone(), cx);
         Self::open_ai_memory(&state, cx);
         Self::open_task_runs(&state, cx);
+        // Registers the background runner if a task needs it and it went missing, and notes
+        // whether it's switched off in Login Items.
+        state.update(cx, |state, _| state.sync_background_runner());
         Self::start_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;
         let mcp_access_signature = Self::mcp_access_signature(state.read(cx));
