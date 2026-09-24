@@ -44,6 +44,12 @@ pub fn run_due_tasks() {
         return log::info!("Nothing set to run while OpenMango is closed is due");
     }
     log::info!("{} task(s) due while OpenMango is closed", due.len());
+    // Reading the passwords would ask to unlock the keyring, with nobody to answer. The due runs
+    // stay due for the next start, or for OpenMango when it opens.
+    #[cfg(target_os = "linux")]
+    if crate::helpers::background_runner::keyring_locked() {
+        return log::info!("The keyring is locked; trying again at the next start");
+    }
     let connections: Vec<uuid::Uuid> =
         due.iter().flat_map(|task| task.spec.connections()).collect();
 
@@ -77,6 +83,12 @@ pub fn run_due_tasks() {
                     // Runs go one at a time; the queue empties as each one ends.
                     while !cx.update(|cx| idle(&state, cx)) {
                         cx.background_executor().timer(Duration::from_secs(1)).await;
+                    }
+                    // No Open task button: this process has exited by the time someone clicks.
+                    // Clicking the notification still opens OpenMango on macOS.
+                    if cx.update(|cx| AppState::post_task_notices(&state, false, false, cx)) {
+                        // macOS takes the notification after the call returns.
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
                     }
                     log::info!("Done; each run is in its task's history");
                 }

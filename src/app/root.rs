@@ -613,7 +613,11 @@ impl AppRoot {
         crate::theme::sync_system_theme(&state, window, cx);
         subscriptions.push(cx.observe_in(&state, window, |this, _, window, cx| {
             this.notify_new_errors(window, cx);
+            if !this.state.read(cx).tasks.notices.is_empty() {
+                AppState::post_task_notices(&this.state, window.is_window_active(), true, cx);
+            }
         }));
+        AppState::open_tasks_from_notifications(state.clone(), cx);
         // Many failure paths emit an event without notifying, so check on events too.
         subscriptions.push(cx.subscribe_in(
             &state,
@@ -626,6 +630,13 @@ impl AppRoot {
         cx.defer_in(window, |this, window, cx| this.notify_new_errors(window, cx));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             crate::theme::sync_system_theme(&this.state, window, cx);
+        }));
+        // The background runner is switched on and off in Login Items, Task Scheduler or
+        // systemd; coming back to OpenMango picks that up.
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.state.update(cx, |state, cx| state.refresh_background_runner(cx));
+            }
         }));
         subscriptions.push(cx.observe(&state, |this, state, cx| {
             let enabled = state.read(cx).settings.mcp.enabled;

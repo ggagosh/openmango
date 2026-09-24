@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync), PR 2c (recovery for transfers) and PR 3a (schedules while the app is open) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. Everything planned is built, PRs 1 through 7; see Implementation status. Still to try on real machines: the background runner's system entries and the system notifications on each system.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -194,6 +194,9 @@ the background runner (PR 4), and section 7.4.
   off or is deleted. `SMAppService` needs macOS 13 and an app bundle, so on macOS 11 and 12, and
   in `cargo run` builds, the option is shown switched off with why. A task set to run while closed
   needs attention when the agent is off in Login Items, with Open Login Items.
+- **At launch** the app asks the system about the entry only when a task uses it or one is known
+  to be registered; on Windows and Linux asking starts a program. The schedule editor asks when it
+  opens, to show whether the option is available.
 - **Verified:** a `--run-due-tasks` run with no window, from a dev build signed with the
   development identity, read a Sync task's connection passwords from the keychain without a
   prompt, ran the task and recorded it (2026-09-24).
@@ -225,6 +228,61 @@ the background runner (PR 4), and section 7.4.
   uninstaller removes it.
 - **Not verified yet:** Task Scheduler actually starting the installed program, and that run
   reading the passwords, which need a Windows PC with OpenMango installed and a signed-in user.
+
+**PR 6, Linux — built, checked on the Linux CI machines, not yet in a desktop session.**
+
+- **The entry** is a systemd user timer and service in `~/.config/systemd/user`:
+  `openmango-tasks.timer` with `OnCalendar=*:1/15` and `Persistent=true`, and
+  `openmango-tasks.service`, a oneshot that starts the AppImage with `--run-due-tasks`
+  (`TimeoutStartSec=25h`, and `APPIMAGE_EXTRACT_AND_RUN=1` when OpenMango runs that way). A
+  oneshot still running isn't started again. Written by `src/helpers/background_runner.rs`, then
+  `systemctl --user daemon-reload` and `enable --now`; removing disables it and deletes both.
+- **It runs while the user is signed in**, since the user's systemd manager stops at sign-out
+  unless lingering is on. `Persistent` makes up a start missed while it didn't run, once.
+- **Only the AppImage** can have it, through `helpers::linux::appimage_path`, the file the updater
+  also uses. When the AppImage has moved, or the service differs from what this version writes,
+  the status reads as not registered and the timer is written again.
+- **Status** from `systemctl --user is-enabled`; `disabled` or `masked` needs attention. Without
+  a systemd user session (`systemctl --user show-environment` fails), the option is shown off
+  with why. There's no settings window for timers, so the fix button is Turn on, which writes and
+  enables the timer again.
+- **A locked keyring** (section 5.3): gpui unlocks the Secret Service collection before reading,
+  which shows a dialog. With no window, the run would wait for an answer while holding the task
+  lock, and an OpenMango opened meanwhile would wait too. So the runner first asks the default
+  collection's `Locked` property with `busctl`, and when it's locked, logs it and exits. Changed
+  from the plan: the due runs aren't recorded as waiting; they stay due, for the next start or
+  for OpenMango when it opens, which asks to unlock the keyring as usual.
+- **Every system:** the runner's status is read again, off the main thread, whenever OpenMango's
+  window becomes active, so switching it back on in Login Items, Task Scheduler or systemd clears
+  the attention without a restart.
+- **Checked:** the module compiles and passes clippy for Linux. On the Linux CI machines,
+  `systemd-analyze verify` accepts both units, and a unit test covers quoting the AppImage path.
+- **Not verified yet:** the timer starting the AppImage in a desktop session, reading the
+  passwords from an unlocked keyring, and skipping while it's locked.
+
+**PR 7, system notifications — built.** Section 4.3's notifications, from the system itself.
+
+- **What's sent:** the news a scheduled run already gives in OpenMango (PR 3b): its first failure
+  in an outage, a paused schedule after a failed sign-in, working again, and a success when the
+  task asks for it. Each is collected as the run ends (`TaskNotice`) and posted once, one per
+  task: a newer one replaces the older.
+- **In the app**, only when its window isn't active; otherwise its own notification or the
+  status bar already says it. Changed from the plan, which kept an open app to in-app messages.
+  These have an Open task button.
+- **From the background runner**, always, after its runs, then a two-second wait before it
+  exits, since macOS takes the notification after the call returns. Without a button: the runner
+  has exited by the time someone clicks, and on Windows and Linux a click only reaches the
+  process that posted. On macOS clicking one starts OpenMango, which registers its handler while
+  it launches, so the click opens the task.
+- **Clicks** anywhere on a notification, or Open task, select the task in the Tasks tab and bring
+  OpenMango forward.
+- **Permission (macOS):** gpui asks the first time a notification is posted, and has no way to ask
+  earlier. Changed from the plan, which asked when a task is first set to run while closed.
+- **Checked:** a unit test with gpui's test platform: nothing posted while someone's looking,
+  Open task only from the app, a newer notification replacing the older, and a click selecting
+  the task.
+- **Not verified yet:** the notifications on a real desktop on each system, and a click on a
+  macOS notification starting OpenMango.
 
 ## 1. What the evidence says
 
@@ -518,7 +576,7 @@ Per platform:
 |---|---|---|
 | macOS | A launch agent bundled in the app and registered with `SMAppService` | Starts every 900 seconds. The app reads its status to warn when it's switched off in Login Items |
 | Windows | A Task Scheduler task, through `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
-| Linux | A systemd user timer and service | `OnCalendar=*:0/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
+| Linux | A systemd user timer and service | `OnCalendar=*:1/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
 
 **Passwords without a window.** The run reads them through the same keychain calls as the app:
 

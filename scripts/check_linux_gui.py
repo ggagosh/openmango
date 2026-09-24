@@ -14,7 +14,9 @@ screenshot = Path(sys.argv[2]).resolve()
 screenshot.parent.mkdir(parents=True, exist_ok=True)
 
 if not os.environ.get("OPENMANGO_GUI_TEST_SESSION"):
-    with tempfile.TemporaryDirectory(prefix="openmango-gui-") as directory:
+    # The document portal mounts `run/doc`; when the session ends before it unmounts, the mount
+    # is left disconnected and can't be removed. That's after the checks, so it doesn't fail them.
+    with tempfile.TemporaryDirectory(prefix="openmango-gui-", ignore_cleanup_errors=True) as directory:
         env = os.environ.copy()
         env.update(
             OPENMANGO_GUI_TEST_SESSION="1",
