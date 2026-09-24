@@ -156,7 +156,8 @@ impl ScheduleEditor {
             keep_files: task.keep_files.is_some(),
             notify_success: task.notify_success,
             run_when_closed: task.run_when_closed,
-            runner: state.read(cx).tasks.runner,
+            // Asked here, since the app only asks at launch when a task uses it.
+            runner: crate::helpers::background_runner::status(),
             protected_writes: task
                 .approval
                 .as_ref()
