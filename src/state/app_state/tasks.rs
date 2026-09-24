@@ -210,8 +210,16 @@ impl AppState {
     /// Sets up the system entry that starts the background runner while any task may run with
     /// OpenMango closed, and removes it once none may.
     pub(crate) fn sync_background_runner(&mut self) {
+        let wanted = self.wants_background_runner();
+        // Nothing wants one and none is known to be there, so the system isn't asked: on Windows
+        // and Linux that starts a program, at every launch.
+        let known =
+            matches!(self.tasks.runner, RunnerStatus::Enabled | RunnerStatus::NeedsApproval);
+        if !wanted && !known {
+            return;
+        }
         let status = background_runner::status();
-        let result = match (self.wants_background_runner(), status) {
+        let result = match (wanted, status) {
             (true, RunnerStatus::NotRegistered) => background_runner::register(),
             (false, RunnerStatus::Enabled | RunnerStatus::NeedsApproval) => {
                 background_runner::unregister().map(|()| RunnerStatus::NotRegistered)
